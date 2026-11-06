@@ -345,6 +345,19 @@ La transición preserva la identidad: `issue`, `grill` y `superseded-by` conserv
 | POL-coverage | 1/1 | FALLA (74% < 80%) | pnpm test -- --coverage; PR en draft |
 ```
 
+### Contrato OMI antes del PR
+
+Solo con `.omi/project.json` en el repo. Por cada service que el run tocó, levantarlo localmente con el comando del contrato, en el puerto declarado en `.omi/project.json`, y exigir que `/health` y `/version` respondan `200`:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:<port>/health"
+curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:<port>/version"
+```
+
+El resultado entra al `Resultado de ejecucion` como fila `POL-omi-contract`, con los códigos observados. Si no da `200`, es FALLA de política: el PR sale en draft con la medición al tope del body, igual que cualquier otra política. Con un service que no se puede levantar localmente, la fila queda `pendiente humano`, con el motivo; no se declara verificada por inspección del código. Este chequeo no reemplaza a `omi_publish_version`, que vuelve a validar el contrato al publicar.
+
+Con `## Impacto OMI` en la spec, el reporte final lista lo que `/skill:ship` va a tener que sincronizar.
+
 ## Fase 5 — PR
 
 Saltear con `--no-pr` (el run termina con el branch committeado, lo dice y registra `run.committed`; también cuando degrada a commit local).

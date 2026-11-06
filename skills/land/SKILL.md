@@ -240,6 +240,10 @@ SDD-LAND DETENIDO
 - reanudar: <comando exacto, por ejemplo /skill:land <PR>>
 ```
 
+### Siguiente etapa: ship
+
+Con `.omi/project.json` en el repo, lo mergeado todavía no llegó a usuarios. Después del reporte, proponer `/skill:ship` con `ask_user_question`: `Publicar y desplegar` encadena la etapa, y `Terminar` cierra acá. Mergear no autoriza desplegar: sin la respuesta del humano, no se encadena. Sin `.omi/project.json` esta etapa no aplica.
+
 ## Log de eventos
 
 <!-- omi-events:start -->

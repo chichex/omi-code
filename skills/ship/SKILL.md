@@ -1,6 +1,7 @@
 ---
 name: ship
-description: Lleva a producción lo que ya se mergeó en un proyecto vinculado a OMI. Publica la versión, sincroniza variables y jobs en stage, despliega en stage verificando salud y logs, y propone promover a prod con confirmación humana. Usar SIEMPRE que el usuario quiera publicar, deployar, shippear, "subir a stage", "pasar a prod", o después de /skill:land cuando el cambio tiene que llegar a usuarios. Exige .omi/project.json: si no existe, correr /skill:init primero.
+description: >-
+  Lleva a producción lo que ya se mergeó en un proyecto vinculado a OMI. Publica la versión, sincroniza variables y jobs en stage, despliega en stage verificando salud y logs, y propone promover a prod con confirmación humana. Usar SIEMPRE que el usuario quiera publicar, deployar, shippear, "subir a stage", "pasar a prod", o después de /skill:land cuando el cambio tiene que llegar a usuarios. Exige .omi/project.json: si no existe, correr /skill:init primero.
 ---
 
 Cierra el ciclo después de `/skill:land`: lo mergeado llega a stage y, con confirmación humana, a prod. Cada paso se verifica antes de pasar al siguiente.

@@ -449,6 +449,18 @@ Cablear el contrato de forma idempotente para ambos harnesses:
 
 En un repo que mantuvo `.sdd/` (`Mantener .sdd/`) o que sigue en `.chiche/`, la línea o el bloque nombra la ruta del contrato en uso (por ejemplo, `@.sdd/project.md` / "leer `.sdd/project.md`"), y una referencia que ya apunta a la ruta en uso nunca se duplica.
 
+## Vínculo con OMI
+
+Si el repo se despliega en OMI, `init` deja también el vínculo. Se saltea si no aplica: un repo puede tener contrato sin ser un proyecto de OMI.
+
+1. **Sesión.** Correr `omi_project_status`. `not_logged_in` significa que hace falta `omi login`, que corre el humano: avisarlo y terminar el resto de `init`. `project_not_linked` significa que hay que vincular.
+2. **Services.** Detectar cada service desplegable: `Dockerfile`, puerto y ruta. Un repo con un service va con `path: "."`; un monorepo lleva una entrada por service.
+3. **Vincular.** Preguntar organización y proyecto con `ask_user_question` y correr `omi_link_project`. Escribe `.omi/project.json`, que se versiona, y descarga el kit: `Dockerfile` si falta, `.omi/kit/<service>/` y `.github/workflows/omi-<service>.yml`. Con `create: true` crea en OMI lo que falte, bajo confirmación humana.
+4. **Contrato.** Revisar que el service responda `/health` y `/version`, según `.omi/kit/<service>/contract.md`. Si falta, anotarlo en `## Gaps`: no se implementa en `init`.
+5. **Secret de CI.** El workflow del kit usa `OMI_REGISTRY_PASSWORD`. Recordarle al humano que lo cargue en GitHub: su valor no pasa por esta sesión.
+
+El contrato suma, en `## Ambientes`, la organización, el proyecto y los services de OMI, sin secretos.
+
 ## Reporte
 
 ```text
