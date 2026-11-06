@@ -177,3 +177,30 @@ test("launchTui_marca la sesión como agéntica para los procesos hijos", async 
 	assert.equal(process.env.OMI_AGENT_SESSION, "1");
 	delete process.env.OMI_AGENT_SESSION;
 });
+
+test("launchTui_en un binario instalado toma skills y assets de ~/.omi/runtime", async (t) => {
+	const home = await tempDir(t);
+	const runtime = join(home, ".omi/runtime");
+	await mkdir(join(runtime, "skills/ship"), { recursive: true });
+	await writeFile(join(runtime, "skills/ship/SKILL.md"), "---\nname: ship\ndescription: d\n---\n");
+	const calls: Call[] = [];
+	const previous = { package: process.env.PI_PACKAGE_DIR, runtime: process.env.OMI_RUNTIME_DIR };
+	t.after(() => {
+		for (const [name, value] of [["PI_PACKAGE_DIR", previous.package], ["OMI_RUNTIME_DIR", previous.runtime]] as const) {
+			if (value === undefined) delete process.env[name];
+			else process.env[name] = value;
+		}
+	});
+	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi(calls), compiled: true });
+	assert.deepEqual(calls[0]?.args, ["--skill", join(runtime, "skills/ship")]);
+	assert.equal(process.env.PI_PACKAGE_DIR, runtime);
+	assert.equal(process.env.OMI_RUNTIME_DIR, runtime);
+});
+
+test("launchTui_en desarrollo ignora una instalación vieja en ~/.omi/runtime", async (t) => {
+	const home = await tempDir(t);
+	await mkdir(join(home, ".omi/runtime/skills/viejo"), { recursive: true });
+	const calls: Call[] = [];
+	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi(calls), compiled: false });
+	assert.ok(!calls[0]?.args.some((arg) => arg.includes(".omi/runtime")));
+});

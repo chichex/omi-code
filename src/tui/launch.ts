@@ -2,11 +2,11 @@
 
 import { mkdir, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { Io } from "../cli/io.ts";
 import { EXIT_OK } from "../core/errors.ts";
 import { agentDir } from "../core/paths.ts";
+import { resolveRuntime } from "../core/runtime.ts";
 import { AGENT_SESSION_ENV } from "../guardrails/surfaces.ts";
 import { runPiImportOnboarding } from "../onboarding/pi-import.ts";
 import { CATALOG } from "../tools/catalog.ts";
@@ -17,9 +17,9 @@ export type PiMain = (args: string[], options: { extensionFactories?: InlineExte
 export interface LaunchDeps {
 	piMain?: PiMain;
 	skillsDir?: string;
+	/** Fuerza la resolución de assets de un binario instalado. */
+	compiled?: boolean;
 }
-
-const DEFAULT_SKILLS_DIR = fileURLToPath(new URL("../../skills", import.meta.url));
 
 async function embeddedSkills(dir: string): Promise<string[]> {
 	let names: string[];
@@ -48,9 +48,14 @@ export async function launchTui(args: string[], io: Io, deps: LaunchDeps = {}): 
 	process.env.PI_CODING_AGENT_DIR = dir;
 	// Lo heredan los comandos que corra el agente: ahí `--yes` no puede valer.
 	process.env[AGENT_SESSION_ENV] = "1";
+	const runtime = await resolveRuntime(io.homeDir, deps.compiled);
+	if (runtime.packageDir !== undefined) {
+		process.env.PI_PACKAGE_DIR = runtime.packageDir;
+		process.env.OMI_RUNTIME_DIR = runtime.packageDir;
+	}
 	const piMain = deps.piMain ?? (await import("@earendil-works/pi-coding-agent")).main;
 
-	const skills = await embeddedSkills(deps.skillsDir ?? DEFAULT_SKILLS_DIR);
+	const skills = await embeddedSkills(deps.skillsDir ?? runtime.skillsDir);
 	const skillArgs = skills.flatMap((path) => ["--skill", path]);
 	await piMain([...skillArgs, ...args], { extensionFactories: [omiToolsExtension(io)] });
 	return EXIT_OK;
