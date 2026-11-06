@@ -28,7 +28,12 @@ const PI_ASSETS: readonly [source: string, target: string][] = [
 	["dist/core/export-html/vendor", "export-html/vendor"],
 ];
 
-const OMI_ASSETS = ["skills", "agents", "themes"];
+/** Assets propios. Los agentes son los que usa la extensión subagent. */
+const OMI_ASSETS: readonly [source: string, target: string][] = [
+	["skills", "skills"],
+	["themes", "themes"],
+	["extensions/subagent/agents", "agents"],
+];
 
 async function exists(path: string): Promise<boolean> {
 	return stat(path).then(
@@ -78,8 +83,8 @@ async function stageRuntime(stage: string): Promise<void> {
 		if (name.endsWith(".json")) await cp(join(themes, name), join(stage, "theme", name));
 	}
 	await cp(join(ROOT, "node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm"), join(stage, "photon_rs_bg.wasm"));
-	for (const name of OMI_ASSETS) {
-		if (await exists(join(ROOT, name))) await cp(join(ROOT, name), join(stage, name), { recursive: true });
+	for (const [source, target] of OMI_ASSETS) {
+		await cp(join(ROOT, source), join(stage, target), { recursive: true });
 	}
 }
 
@@ -103,7 +108,8 @@ export async function buildRelease(targets: readonly Platform[], out: string): P
 		const binary = join(out, names.binary);
 		compile(work, entries, platform, binary);
 		await cp(binary, join(stage, "omi"));
-		execFileSync("tar", ["-czf", join(out, names.runtime), "-C", stage, "."]);
+		// Sin xattrs: los de macOS llenan de advertencias el tar de Linux al instalar.
+		execFileSync("tar", ["--no-xattrs", "-czf", join(out, names.runtime), "-C", stage, "."], { env: { ...process.env, COPYFILE_DISABLE: "1" } });
 		artifacts.push(names.binary, names.runtime);
 	}
 	await cp(join(ROOT, "install.sh"), join(out, "install.sh"));

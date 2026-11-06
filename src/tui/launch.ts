@@ -10,6 +10,7 @@ import { resolveRuntime } from "../core/runtime.ts";
 import { AGENT_SESSION_ENV } from "../guardrails/surfaces.ts";
 import { runPiImportOnboarding } from "../onboarding/pi-import.ts";
 import { CATALOG } from "../tools/catalog.ts";
+import { embeddedExtensions } from "./extensions.ts";
 import { registerCatalogTools } from "./tools.ts";
 
 export type PiMain = (args: string[], options: { extensionFactories?: InlineExtension[] }) => Promise<void>;
@@ -19,6 +20,13 @@ export interface LaunchDeps {
 	skillsDir?: string;
 	/** Fuerza la resolución de assets de un binario instalado. */
 	compiled?: boolean;
+}
+
+function isDirectory(path: string): Promise<boolean> {
+	return stat(path).then(
+		(info) => info.isDirectory(),
+		() => false,
+	);
 }
 
 async function embeddedSkills(dir: string): Promise<string[]> {
@@ -57,6 +65,7 @@ export async function launchTui(args: string[], io: Io, deps: LaunchDeps = {}): 
 
 	const skills = await embeddedSkills(deps.skillsDir ?? runtime.skillsDir);
 	const skillArgs = skills.flatMap((path) => ["--skill", path]);
-	await piMain([...skillArgs, ...args], { extensionFactories: [omiToolsExtension(io)] });
+	const themeArgs = (await isDirectory(runtime.themesDir)) ? ["--theme", runtime.themesDir] : [];
+	await piMain([...skillArgs, ...themeArgs, ...args], { extensionFactories: [...embeddedExtensions(), omiToolsExtension(io)] });
 	return EXIT_OK;
 }

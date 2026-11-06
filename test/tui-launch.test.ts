@@ -5,6 +5,7 @@ import { test } from "node:test";
 import { agentDir, piAgentDir } from "../src/core/paths.ts";
 import { launchTui, type PiMain } from "../src/tui/launch.ts";
 import { CATALOG } from "../src/tools/catalog.ts";
+import { embeddedExtensions } from "../src/tui/extensions.ts";
 import { registerCatalogTools } from "../src/tui/tools.ts";
 import { tempDir, testIo } from "./helpers/io.ts";
 import { linkedProject } from "./helpers/project.ts";
@@ -14,16 +15,22 @@ interface Call {
 	args: string[];
 	agentDirEnv: string | undefined;
 	tools: string[];
+	extensions: string[];
 }
 
 function fakePi(calls: Call[]): PiMain {
 	return async (args, options) => {
 		const tools: string[] = [];
+		const names: string[] = [];
 		for (const extension of options.extensionFactories ?? []) {
-			const factory = typeof extension === "function" ? extension : extension.factory;
+			if (typeof extension === "function") continue;
+			names.push(extension.name);
+			// Las portadas necesitan el runtime real de Pi: las prueba embedded-extensions.test.ts.
+			if (extension.name !== "omi-tools") continue;
+			const { factory } = extension;
 			await factory({ registerTool: (tool: { name: string }) => tools.push(tool.name), on: () => {} } as never);
 		}
-		calls.push({ args, agentDirEnv: process.env.PI_CODING_AGENT_DIR, tools });
+		calls.push({ args, agentDirEnv: process.env.PI_CODING_AGENT_DIR, tools, extensions: names });
 	};
 }
 
@@ -55,7 +62,17 @@ test("launchTui_pasa a Pi cada skill embebido con --skill", async (t) => {
 	await writeFile(join(skills, "README.md"), "no es un skill");
 	const calls: Call[] = [];
 	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi(calls), skillsDir: skills });
-	assert.deepEqual(calls[0]?.args, ["--skill", join(skills, "grill"), "--skill", join(skills, "tdd")]);
+	assert.deepEqual(calls[0]?.args.slice(0, 4), ["--skill", join(skills, "grill"), "--skill", join(skills, "tdd")]);
+});
+
+test("launchTui_precarga las extensiones embebidas y el theme", async (t) => {
+	const home = await tempDir(t);
+	const calls: Call[] = [];
+	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi(calls), skillsDir: await tempDir(t) });
+	assert.deepEqual(calls[0]?.extensions, [...embeddedExtensions().map((extension) => (extension as { name: string }).name), "omi-tools"]);
+	const theme = calls[0]?.args.indexOf("--theme") ?? -1;
+	assert.ok(theme >= 0);
+	assert.match(calls[0]?.args[theme + 1] ?? "", /themes$/);
 });
 
 test("launchTui_ofrece importar Pi antes de arrancar", async (t) => {
