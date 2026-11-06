@@ -29,8 +29,8 @@ export class UsageError extends OmiError {
 export class GuardrailError extends OmiError {
 	readonly diff: string | undefined;
 
-	constructor(message: string, diff?: string) {
-		super(GUARDRAIL_CONFIRMATION_REQUIRED, message, { exitCode: EXIT_USAGE });
+	constructor(message: string, diff?: string, code: string = GUARDRAIL_CONFIRMATION_REQUIRED) {
+		super(code, message, { exitCode: EXIT_USAGE, ...(diff === undefined ? {} : { hint: diff }) });
 		this.diff = diff;
 	}
 }
@@ -42,4 +42,12 @@ export class ApiError extends OmiError {
 		super(code, message, { exitCode: EXIT_ERROR, ...(hint === undefined ? {} : { hint }) });
 		this.status = status;
 	}
+}
+
+/** Texto de un error para un agente: el código y el hint son lo accionable. */
+export function describeError(error: unknown): string {
+	if (error instanceof OmiError) {
+		return [`${error.code}: ${error.message}`, ...(error.hint === undefined ? [] : [error.hint])].join("\n");
+	}
+	return error instanceof Error ? error.message : String(error);
 }
