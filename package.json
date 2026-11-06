@@ -14,7 +14,8 @@
   "scripts": {
     "omi": "node bin/omi.ts",
     "test": "node --test --test-reporter=spec \"test/**/*.test.ts\"",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:packaging": "OMI_PACKAGING_SMOKE=1 node --test --test-timeout=300000 test/packaging-smoke.test.ts"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "1.5.0",

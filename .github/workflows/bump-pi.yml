@@ -1,0 +1,54 @@
+# Sube Pi una vez por semana. Sólo abre el PR si typecheck y tests pasan con la versión nueva.
+name: Bump Pi
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+      - run: npm ci
+      - name: Buscar versión nueva
+        id: pi
+        run: |
+          current=$(node -p "require('./package.json').dependencies['@earendil-works/pi-coding-agent']")
+          latest=$(npm view @earendil-works/pi-coding-agent version)
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          if [ "$current" = "$latest" ]; then echo "changed=false" >> "$GITHUB_OUTPUT"; else echo "changed=true" >> "$GITHUB_OUTPUT"; fi
+      - name: Actualizar los paquetes de Pi a la misma versión
+        if: steps.pi.outputs.changed == 'true'
+        run: |
+          version=${{ steps.pi.outputs.latest }}
+          packages=$(node -p "Object.keys(require('./package.json').dependencies).filter((name) => name.startsWith('@earendil-works/')).map((name) => name + '@$version').join(' ')")
+          npm install --save-exact $packages
+      - if: steps.pi.outputs.changed == 'true'
+        run: npm run typecheck
+      - if: steps.pi.outputs.changed == 'true'
+        run: npm test
+      - name: Abrir el PR y dejarlo en auto-merge
+        if: steps.pi.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=${{ steps.pi.outputs.latest }}
+          branch="chore/bump-pi-$version"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add package.json package-lock.json
+          git commit -m "chore: subir Pi a $version"
+          git push origin "$branch"
+          gh pr create --title "chore: subir Pi a $version" --body "Typecheck y tests pasaron con Pi $version."
+          gh pr merge "$branch" --squash --auto
