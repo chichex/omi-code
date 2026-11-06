@@ -59,12 +59,9 @@ function isNotFound(error: unknown, code: string): boolean {
 	return error instanceof ApiError && error.status === 404 && error.code === code;
 }
 
-/** Con una respuesta del humano alcanza para todo lo que falte en esta corrida. */
 async function mayCreate(request: LinkRequest, context: LinkContext, what: string): Promise<boolean> {
 	if (request.create === true) return true;
-	const approved = (await context.confirmCreate?.(what)) ?? false;
-	request.create = approved;
-	return approved;
+	return (await context.confirmCreate?.(what)) ?? false;
 }
 
 function missing(what: string): OmiError {

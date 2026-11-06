@@ -7,6 +7,7 @@ import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-ag
 import type { Io } from "../cli/io.ts";
 import { EXIT_OK } from "../core/errors.ts";
 import { agentDir } from "../core/paths.ts";
+import { AGENT_SESSION_ENV } from "../guardrails/surfaces.ts";
 import { runPiImportOnboarding } from "../onboarding/pi-import.ts";
 import { CATALOG } from "../tools/catalog.ts";
 import { registerCatalogTools } from "./tools.ts";
@@ -45,6 +46,8 @@ export async function launchTui(args: string[], io: Io, deps: LaunchDeps = {}): 
 	await mkdir(dir, { recursive: true, mode: 0o700 });
 	// Pi lee esta variable al resolver sus rutas: tiene que estar antes de importarlo.
 	process.env.PI_CODING_AGENT_DIR = dir;
+	// Lo heredan los comandos que corra el agente: ahí `--yes` no puede valer.
+	process.env[AGENT_SESSION_ENV] = "1";
 	const piMain = deps.piMain ?? (await import("@earendil-works/pi-coding-agent")).main;
 
 	const skills = await embeddedSkills(deps.skillsDir ?? DEFAULT_SKILLS_DIR);

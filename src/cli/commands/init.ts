@@ -2,6 +2,7 @@
 
 import { basename } from "node:path";
 import { EXIT_OK, UsageError } from "../../core/errors.ts";
+import { isAgentSession } from "../../guardrails/surfaces.ts";
 import { linkProject, type LinkContext, type LinkRequest, type ServiceRequest } from "../../project/init.ts";
 import { parseFlags } from "../flags.ts";
 import type { Io } from "../io.ts";
@@ -53,13 +54,21 @@ export async function initCommand(args: string[], io: Io): Promise<number> {
 		...(values.org === undefined ? {} : { organizationSlug: values.org }),
 		...(values.name === undefined ? {} : { projectName: values.name }),
 		...(values.env === undefined ? {} : { environments: values.env.split(",").map((name) => name.trim()) }),
-		...(values.create === undefined ? {} : { create: values.create }),
+		// Dentro de una sesión agéntica crear pasa por la tool, que lo somete al guardrail.
+		...(values.create === undefined || isAgentSession(io) ? {} : { create: values.create }),
 	};
+	let approved = false;
 	const context: LinkContext = {
 		io,
 		...(values.api === undefined ? {} : { apiUrl: values.api }),
 		...(io.interactive
-			? { confirmCreate: async (what: string) => /^s/i.test((await io.prompt(`${what} no existe en OMI. ¿Crearlo? [s/N] `)).trim()) }
+			? {
+					// Una respuesta alcanza para todo lo que falte en esta corrida.
+					confirmCreate: async (what: string) => {
+						approved ||= /^s/i.test((await io.prompt(`${what} no existe en OMI. ¿Crear lo que falte? [s/N] `)).trim());
+						return approved;
+					},
+				}
 			: {}),
 	};
 	const result = await linkProject(request, context);

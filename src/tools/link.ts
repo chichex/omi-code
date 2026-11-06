@@ -1,6 +1,7 @@
 // omi_link_project: la misma lógica de `omi init`, expuesta como tool.
 
 import { Type } from "typebox";
+import { enforce } from "../guardrails/policy.ts";
 import { linkProject } from "../project/init.ts";
 import { defineTool } from "./types.ts";
 
@@ -26,11 +27,20 @@ export const linkProjectTool = defineTool({
 	label: "OMI: vincular proyecto",
 	description: "Vincula el repo con un proyecto de OMI: escribe .omi/project.json y descarga el kit de publicación de cada service.",
 	parameters: Parameters,
-	run: async (params, runtime) => {
-		const result = await linkProject(params, {
+	run: async ({ create, ...request }, runtime) => {
+		// `create` del modelo sólo habilita la pregunta: cada alta la aprueba el guardrail.
+		const result = await linkProject(request, {
 			io: runtime.io,
 			...(runtime.apiUrl === undefined ? {} : { apiUrl: runtime.apiUrl }),
 			...(runtime.signal === undefined ? {} : { signal: runtime.signal }),
+			...(create === true
+				? {
+						confirmCreate: async (what: string) => {
+							await enforce({ operation: "link_create", summary: `Crear en OMI: ${what}`, diff: `+ ${what}` }, runtime.guard);
+							return true;
+						},
+					}
+				: {}),
 		});
 		const names = result.link.services.map((service) => service.name).join(", ");
 		return { text: `Vinculado ${result.link.organizationSlug}/${result.link.projectSlug}: ${names}`, data: result };

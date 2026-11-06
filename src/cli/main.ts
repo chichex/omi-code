@@ -4,7 +4,7 @@ import pkg from "../../package.json" with { type: "json" };
 import { EXIT_ERROR, EXIT_OK, OmiError, UsageError } from "../core/errors.ts";
 import type { Io } from "./io.ts";
 import { reportError } from "./output.ts";
-import { COMMANDS, HELP_ROWS } from "./commands.ts";
+import { COMMANDS, HELP_ROWS, USAGE } from "./commands.ts";
 
 export interface CliDeps {
 	launchTui(args: string[], io: Io): Promise<number>;
@@ -47,6 +47,11 @@ export async function run(argv: string[], io: Io, deps: Partial<CliDeps> = {}): 
 			return EXIT_OK;
 		}
 		if (first === undefined || first.startsWith("-")) return await launchTui(argv, io);
+		const usage = USAGE[first];
+		if (usage !== undefined && (rest.includes("--help") || rest.includes("-h"))) {
+			io.out(usage);
+			return EXIT_OK;
+		}
 		if (first === "mcp") return await serveMcp(rest, io);
 		const command = COMMANDS[first];
 		if (command === undefined) throw new UsageError(`subcomando desconocido: ${first}`, "corré `omi --help`");

@@ -60,6 +60,17 @@ test("omi --help_lista todos los subcomandos del corte", async (t) => {
 	}
 });
 
+test("omi <subcomando> --help_muestra su uso sin ejecutarlo", async (t) => {
+	const home = await tempDir(t);
+	for (const name of ["deploy", "env", "logs", "mcp"]) {
+		const io = testIo({ homeDir: home });
+		const deps = recordingDeps();
+		assert.equal(await run([name, "--help"], io, deps), 0);
+		assert.match(io.output(), new RegExp(`omi ${name}`));
+		assert.equal(deps.mcp, 0);
+	}
+});
+
 test("binario_responde --version y --help en un proceso real", () => {
 	const version = spawnSync(process.execPath, [bin, "--version"], { encoding: "utf8" });
 	assert.equal(version.status, 0, version.stderr);

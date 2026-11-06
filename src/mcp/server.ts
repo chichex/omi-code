@@ -5,7 +5,10 @@ import { createInterface } from "node:readline";
 import pkg from "../../package.json" with { type: "json" };
 import { Value } from "typebox/value";
 import type { Io } from "../cli/io.ts";
-import { EXIT_OK, OmiError } from "../core/errors.ts";
+import { parseFlags } from "../cli/flags.ts";
+import { EXIT_OK, describeError } from "../core/errors.ts";
+import { processRunner, type Runner } from "../core/exec.ts";
+import { mcpGuard } from "../guardrails/surfaces.ts";
 import { CATALOG } from "../tools/catalog.ts";
 import type { OmiTool, ToolRuntime } from "../tools/types.ts";
 
@@ -29,6 +32,9 @@ export interface McpServerOptions {
 	tools: readonly OmiTool[];
 	io: Io;
 	write(message: JsonRpcMessage): void;
+	/** Autoriza operar stage: lo decide quien configura el servidor, no el modelo. */
+	stageAuthorized?: boolean;
+	runner?: Runner;
 }
 
 export interface McpServer {
@@ -39,11 +45,9 @@ function failure(text: string): { isError: true; content: [{ type: "text"; text:
 	return { isError: true, content: [{ type: "text", text }] };
 }
 
-function describeError(error: unknown): string {
-	if (error instanceof OmiError) {
-		return [`${error.code}: ${error.message}`, ...(error.hint === undefined ? [] : [error.hint])].join("\n");
-	}
-	return error instanceof Error ? error.message : String(error);
+function readAcceptance(result: unknown): boolean {
+	const answer = result as { action?: unknown; content?: { confirmar?: unknown } } | undefined;
+	return answer?.action === "accept" && answer.content?.confirmar === true;
 }
 
 export function createMcpServer(options: McpServerOptions): McpServer {
@@ -51,6 +55,27 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 	const respond = (id: JsonRpcMessage["id"], result: unknown): void => write({ jsonrpc: "2.0", id: id ?? null, result });
 	const fail = (id: JsonRpcMessage["id"], code: number, message: string): void =>
 		write({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });
+
+	let canElicit = false;
+	let nextElicitation = 0;
+	const pending = new Map<string, (accepted: boolean) => void>();
+	const elicit = (message: string): Promise<boolean> =>
+		new Promise((resolve) => {
+			nextElicitation += 1;
+			const id = `omi-elicit-${nextElicitation}`;
+			pending.set(id, resolve);
+			write({
+				jsonrpc: "2.0",
+				id,
+				method: "elicitation/create",
+				params: {
+					message,
+					requestedSchema: { type: "object", properties: { confirmar: { type: "boolean", title: "Confirmar" } }, required: ["confirmar"] },
+				},
+			});
+		});
+	const guard = mcpGuard({ stageAuthorized: options.stageAuthorized ?? false, canElicit: () => canElicit, elicit });
+	const runner = options.runner ?? processRunner;
 
 	async function callTool(message: JsonRpcMessage): Promise<void> {
 		const name = message.params?.name;
@@ -65,10 +90,14 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			respond(message.id, failure(`invalid_arguments: ${detail}`));
 			return;
 		}
-		const runtime: ToolRuntime = { io };
+		const runtime: ToolRuntime = { io, guard, runner };
 		try {
 			const result = await tool.run(args, runtime);
-			respond(message.id, { content: [{ type: "text", text: result.text }], structuredContent: result.data });
+			respond(message.id, {
+				content: [{ type: "text", text: result.text }],
+				structuredContent: result.data,
+				...(result.failed === true ? { isError: true } : {}),
+			});
 		} catch (error) {
 			respond(message.id, failure(describeError(error)));
 		}
@@ -77,9 +106,18 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 	return {
 		async handle(message) {
 			const isRequest = message.id !== undefined && message.id !== null;
+			if (message.method === undefined) {
+				// Respuesta del cliente a una elicitación: el error también cuenta como un no.
+				const resolve = pending.get(String(message.id));
+				pending.delete(String(message.id));
+				resolve?.(readAcceptance(message.result));
+				return;
+			}
 			switch (message.method) {
 				case "initialize": {
 					const requested = String(message.params?.protocolVersion ?? "");
+					const capabilities = message.params?.capabilities as { elicitation?: unknown } | undefined;
+					canElicit = capabilities?.elicitation !== undefined;
 					respond(message.id, {
 						protocolVersion: SUPPORTED_PROTOCOL_VERSIONS.includes(requested) ? requested : LATEST_PROTOCOL_VERSION,
 						capabilities: { tools: {} },
@@ -105,9 +143,10 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 	};
 }
 
-export async function serveMcp(_args: string[], io: Io): Promise<number> {
+export async function serveMcp(args: string[], io: Io): Promise<number> {
+	const { values } = parseFlags(args, { "authorize-stage": { type: "boolean" } });
 	const write = (message: JsonRpcMessage): void => void process.stdout.write(`${JSON.stringify(message)}\n`);
-	const server = createMcpServer({ tools: CATALOG, io, write });
+	const server = createMcpServer({ tools: CATALOG, io, write, stageAuthorized: values["authorize-stage"] === true });
 	const pending = new Set<Promise<void>>();
 	const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 	for await (const line of lines) {

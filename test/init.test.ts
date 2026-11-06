@@ -8,6 +8,8 @@ import { credentialsPath } from "../src/core/paths.ts";
 import { parseProjectLink } from "../src/project/link.ts";
 import { tempDir, testIo } from "./helpers/io.ts";
 import { serviceView, startMockOmi, type MockOmi } from "./helpers/mock-omi.ts";
+import { allowAll, humanless } from "./helpers/project.ts";
+import { fakeRunner } from "./helpers/runner.ts";
 
 async function setup(t: TestContext): Promise<{ home: string; repo: string; omi: MockOmi }> {
 	const home = await tempDir(t);
@@ -150,6 +152,13 @@ test("init_interactivo pregunta antes de crear", async (t) => {
 	assert.ok(omi.projects.has("nueva"));
 });
 
+test("init --create_no crea desde una sesión agéntica", async (t) => {
+	const { home, repo, omi } = await setup(t);
+	const io = testIo({ homeDir: home, cwd: repo, env: { OMI_AGENT_SESSION: "1" } });
+	assert.equal(await run(["init", "--project", "nueva", "--service", "api", "--create"], io), 1);
+	assert.equal(omi.requests.filter((request) => request.method === "POST").length, 0);
+});
+
 test("init_rechaza una organización a la que no pertenece", async (t) => {
 	const { home, repo } = await setup(t);
 	const io = testIo({ homeDir: home, cwd: repo });
@@ -185,8 +194,35 @@ test("omi_link_project_es la misma lógica vista como tool", async (t) => {
 	assert.ok(tool);
 	const result = await tool.run(
 		{ projectSlug: "tienda", services: [{ name: "api" }] },
-		{ io: testIo({ homeDir: home, cwd: repo }) },
+		{ io: testIo({ homeDir: home, cwd: repo }), guard: humanless(), runner: fakeRunner() },
 	);
 	assert.match(result.text, /tienda/);
 	assert.equal((await stat(join(repo, ".omi/project.json"))).isFile(), true);
+});
+
+test("omi_link_project_crear en OMI exige un humano aunque el modelo pida create", async (t) => {
+	const { CATALOG } = await import("../src/tools/catalog.ts");
+	const { home, repo, omi } = await setup(t);
+	const tool = CATALOG.find((candidate) => candidate.name === "omi_link_project");
+	assert.ok(tool);
+	await assert.rejects(
+		tool.run(
+			{ projectSlug: "nueva", services: [{ name: "api" }], create: true },
+			{ io: testIo({ homeDir: home, cwd: repo }), guard: humanless(true), runner: fakeRunner() },
+		),
+		/requiere confirmación humana/,
+	);
+	assert.equal(omi.requests.filter((request) => request.method === "POST").length, 0);
+});
+
+test("omi_link_project_con el humano de acuerdo crea lo que falta", async (t) => {
+	const { CATALOG } = await import("../src/tools/catalog.ts");
+	const { home, repo, omi } = await setup(t);
+	const tool = CATALOG.find((candidate) => candidate.name === "omi_link_project");
+	assert.ok(tool);
+	await tool.run(
+		{ projectSlug: "nueva", services: [{ name: "api" }], create: true },
+		{ io: testIo({ homeDir: home, cwd: repo }), guard: allowAll(), runner: fakeRunner() },
+	);
+	assert.ok(omi.projects.has("nueva"));
 });
