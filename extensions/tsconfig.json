@@ -11,5 +11,6 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": [".", "../src/tui/extensions.ts"]
+  "include": [".", "../src/tui/extensions.ts"],
+  "exclude": ["embedded.d.ts"]
 }
