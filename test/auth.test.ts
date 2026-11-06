@@ -1,0 +1,149 @@
+import assert from "node:assert/strict";
+import { readFile, stat } from "node:fs/promises";
+import { test } from "node:test";
+import { loadCredentials, saveCredentials } from "../src/auth/credentials.ts";
+import { run } from "../src/cli/main.ts";
+import { credentialsPath } from "../src/core/paths.ts";
+import { tempDir, testIo } from "./helpers/io.ts";
+import { MOCK_EMAIL, MOCK_PASSWORD, startMockOmi } from "./helpers/mock-omi.ts";
+
+test("login_con --password-stdin guarda la sesión con modo 0600", async (t) => {
+	const home = await tempDir(t);
+	const omi = await startMockOmi(t);
+	const io = testIo({ homeDir: home, stdin: `${MOCK_PASSWORD}\n` });
+
+	const code = await run(["login", "--email", MOCK_EMAIL, "--password-stdin", "--api", omi.url], io);
+
+	assert.equal(code, 0, io.errors());
+	const path = credentialsPath(home);
+	assert.equal((await stat(path)).mode & 0o777, 0o600);
+	assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
+		apiUrl: omi.url,
+		token: "prs_1",
+		expiresAt: "2026-11-12T00:00:00Z",
+		user: { id: "usr_ada", name: "Ada", email: MOCK_EMAIL },
+		defaultOrganizationSlug: "acme",
+	});
+	assert.deepEqual(omi.requests[0]?.body, { email: MOCK_EMAIL, password: MOCK_PASSWORD });
+	assert.doesNotMatch(io.output() + io.errors(), /prs_1|correct horse/);
+});
+
+test("login_interactivo pide email y contraseña", async (t) => {
+	const home = await tempDir(t);
+	const omi = await startMockOmi(t);
+	const io = testIo({ homeDir: home, interactive: true, answers: [MOCK_EMAIL, MOCK_PASSWORD], env: { OMI_API_URL: omi.url } });
+	assert.equal(await run(["login"], io), 0, io.errors());
+	assert.equal(io.prompts.length, 2);
+	assert.equal((await loadCredentials(credentialsPath(home)))?.apiUrl, omi.url);
+});
+
+test("login_no interactivo sin --password-stdin es error de uso", async (t) => {
+	const home = await tempDir(t);
+	const io = testIo({ homeDir: home });
+	assert.equal(await run(["login", "--email", MOCK_EMAIL], io), 2);
+	assert.match(io.errors(), /--password-stdin/);
+});
+
+test("login_con credenciales inválidas sale con 1 y no guarda nada", async (t) => {
+	const home = await tempDir(t);
+	const omi = await startMockOmi(t);
+	const io = testIo({ homeDir: home, stdin: "mala" });
+	assert.equal(await run(["login", "--email", MOCK_EMAIL, "--password-stdin", "--api", omi.url], io), 1);
+	assert.match(io.errors(), /email o contraseña incorrectos/);
+	assert.equal(await loadCredentials(credentialsPath(home)), null);
+});
+
+test("login_contra una API sin token en el cuerpo explica la dependencia con #140", async (t) => {
+	const home = await tempDir(t);
+	const omi = await startMockOmi(t);
+	omi.route("POST /api/v1/sessions", () => ({
+		status: 200,
+		body: { user_id: "usr_ada", name: "Ada", email: MOCK_EMAIL, organizations: [] },
+	}));
+	const io = testIo({ homeDir: home, stdin: MOCK_PASSWORD });
+	assert.equal(await run(["login", "--email", MOCK_EMAIL, "--password-stdin", "--api", omi.url], io), 1);
+	assert.match(io.errors(), /chichex\/omi#140/);
+	assert.equal(await loadCredentials(credentialsPath(home)), null);
+});
+
+async function loggedIn(t: Parameters<typeof tempDir>[0]) {
+	const home = await tempDir(t);
+	const omi = await startMockOmi(t);
+	const io = testIo({ homeDir: home, stdin: MOCK_PASSWORD });
+	assert.equal(await run(["login", "--email", MOCK_EMAIL, "--password-stdin", "--api", omi.url], io), 0, io.errors());
+	return { home, omi };
+}
+
+test("whoami_valida la sesión con Authorization Bearer", async (t) => {
+	const { home, omi } = await loggedIn(t);
+	const io = testIo({ homeDir: home });
+	assert.equal(await run(["whoami"], io), 0, io.errors());
+	assert.match(io.output(), /Ada/);
+	assert.match(io.output(), /acme/);
+	assert.equal(omi.requests.at(-1)?.authorization, "Bearer prs_1");
+	assert.equal(omi.requests.at(-1)?.path, "/api/v1/me");
+});
+
+test("whoami --json_no expone el token", async (t) => {
+	const { home } = await loggedIn(t);
+	const io = testIo({ homeDir: home });
+	assert.equal(await run(["whoami", "--json"], io), 0, io.errors());
+	const output = JSON.parse(io.output()) as { email: string; organizations: { slug: string }[] };
+	assert.equal(output.email, MOCK_EMAIL);
+	assert.equal(output.organizations[0]?.slug, "acme");
+	assert.doesNotMatch(io.output(), /prs_/);
+});
+
+for (const [name, code, status] of [
+	["una sesión vencida", "session_expired", "expired"],
+	["un token desconocido", "authentication_required", undefined],
+] as const) {
+	test(`whoami_ante ${name} indica correr omi login`, async (t) => {
+		const { home, omi } = await loggedIn(t);
+		if (status === undefined) omi.sessions.clear();
+		else omi.sessions.set("prs_1", status);
+		const io = testIo({ homeDir: home });
+		assert.equal(await run(["whoami", "--json"], io), 1);
+		const report = JSON.parse(io.errors()) as { error: { code: string; hint: string } };
+		assert.equal(report.error.code, code);
+		assert.match(report.error.hint, /omi login/);
+	});
+}
+
+test("whoami_sin sesión guardada indica correr omi login", async (t) => {
+	const home = await tempDir(t);
+	const io = testIo({ homeDir: home });
+	assert.equal(await run(["whoami"], io), 1);
+	assert.match(io.errors(), /omi login/);
+});
+
+test("logout_revoca la sesión con Bearer y borra las credenciales", async (t) => {
+	const { home, omi } = await loggedIn(t);
+	const io = testIo({ homeDir: home });
+	assert.equal(await run(["logout"], io), 0, io.errors());
+	const last = omi.requests.at(-1);
+	assert.equal(`${last?.method} ${last?.path}`, "DELETE /api/v1/sessions/current");
+	assert.equal(last?.authorization, "Bearer prs_1");
+	assert.equal(omi.sessions.size, 0);
+	assert.equal(await loadCredentials(credentialsPath(home)), null);
+});
+
+test("logout_conserva las credenciales si no pudo revocar", async (t) => {
+	const home = await tempDir(t);
+	const path = credentialsPath(home);
+	await saveCredentials(path, {
+		apiUrl: "http://127.0.0.1:9",
+		token: "prs_x",
+		expiresAt: "2026-11-12T00:00:00Z",
+		user: { id: "u", name: "n", email: "e" },
+		defaultOrganizationSlug: "acme",
+	});
+	const io = testIo({ homeDir: home });
+	assert.equal(await run(["logout"], io), 1);
+	assert.notEqual(await loadCredentials(path), null);
+});
+
+test("logout_sin sesión no falla", async (t) => {
+	const home = await tempDir(t);
+	assert.equal(await run(["logout"], testIo({ homeDir: home })), 0);
+});
