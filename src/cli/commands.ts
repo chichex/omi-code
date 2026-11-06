@@ -1,8 +1,8 @@
 // Tabla de subcomandos. Cada entrada es un adaptador delgado sobre el core.
 
-import { EXIT_ERROR } from "../core/errors.ts";
 import { loginCommand, logoutCommand, whoamiCommand } from "./commands/auth.ts";
 import { initCommand } from "./commands/init.ts";
+import { upgradeCommand } from "./commands/upgrade.ts";
 import {
 	deployCommand,
 	envCommand,
@@ -53,7 +53,6 @@ export const USAGE: Readonly<Record<string, string>> = {
 };
 
 export const COMMANDS: Readonly<Record<string, Command | undefined>> = {
-	...Object.fromEntries(HELP_ROWS.filter(([name]) => name !== "mcp").map(([name]) => [name, notImplemented(name)])),
 	login: loginCommand,
 	logout: logoutCommand,
 	whoami: whoamiCommand,
@@ -66,11 +65,5 @@ export const COMMANDS: Readonly<Record<string, Command | undefined>> = {
 	deploy: deployCommand,
 	promote: promoteCommand,
 	logs: logsCommand,
+	upgrade: upgradeCommand,
 };
-
-function notImplemented(name: string): Command {
-	return async (_args, io) => {
-		io.err(`omi: ${name} todavía no está disponible`);
-		return EXIT_ERROR;
-	};
-}
