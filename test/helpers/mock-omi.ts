@@ -20,6 +20,8 @@ export interface MockResponse {
 	/** Texto plano en vez de JSON, como los 404 y 405 de http.ServeMux. */
 	text?: string;
 	headers?: Record<string, string>;
+	/** Respuesta en streaming: escribe directo sobre la conexión. */
+	stream?: (response: ServerResponse) => void;
 }
 
 export class Problem {
@@ -59,8 +61,10 @@ export interface MockOmi {
 	readonly organization: { organization_id: string; name: string; slug: string; role: string };
 	/** Registra o pisa una ruta: `GET /api/v1/...{param}`. */
 	route(spec: string, handler: RouteHandler): void;
-	/** Hace que las próximas N mutaciones de services respondan con recibo 202. */
+	/** Hace que las próximas N mutaciones en cola respondan con recibo 202. */
 	queueNext(count: number): void;
+	/** Responde el éxito, o el recibo 202 si hay mutaciones en cola pendientes. */
+	queued(status: number, body: unknown): MockResponse;
 	close(): Promise<void>;
 }
 
@@ -182,8 +186,8 @@ interface QueueState {
 const SERVICE_NAME = /^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
-function baseRoutes(queue: QueueState): [string, RouteHandler][] {
-	const maybeQueued = (status: number, body: unknown): MockResponse => {
+function queuedResponder(queue: QueueState): (status: number, body: unknown) => MockResponse {
+	return (status, body) => {
 		if (queue.pending === 0) return { status, body };
 		queue.pending -= 1;
 		queue.nextReceipt += 1;
@@ -191,6 +195,10 @@ function baseRoutes(queue: QueueState): [string, RouteHandler][] {
 		queue.receipts.set(id, { state: "en_espera", result: body, polls: 0 });
 		return { status: 202, body: { mutation_id: id, state: "en_espera" } };
 	};
+}
+
+function baseRoutes(queue: QueueState): [string, RouteHandler][] {
+	const maybeQueued = queuedResponder(queue);
 	return [
 		[
 			"POST /api/v1/sessions",
@@ -295,6 +303,11 @@ function baseRoutes(queue: QueueState): [string, RouteHandler][] {
 	];
 }
 
+export const requireSessionFor = requireSession;
+export const requireProjectFor = requireProject;
+export const requireServiceFor = requireService;
+export const strictBodyOf = strictBody;
+
 function compile(spec: string): { method: string; pattern: RegExp; names: string[] } {
 	const [method = "", path = ""] = spec.split(" ");
 	const names: string[] = [];
@@ -318,6 +331,10 @@ async function readBody(request: IncomingMessage): Promise<unknown> {
 }
 
 function send(response: ServerResponse, reply: MockResponse): void {
+	if (reply.stream !== undefined) {
+		reply.stream(response);
+		return;
+	}
 	if (reply.text !== undefined) {
 		response.writeHead(reply.status, { "Content-Type": "text/plain; charset=utf-8", ...reply.headers });
 		response.end(`${reply.text}\n`);
@@ -350,6 +367,7 @@ export async function startMockOmi(t: TestContext): Promise<MockOmi> {
 		queueNext: (count) => {
 			queue.pending = count;
 		},
+		queued: queuedResponder(queue),
 		close: async () => {},
 	};
 

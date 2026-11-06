@@ -61,13 +61,13 @@ export class OmiClient {
 	readonly apiUrl: string;
 	readonly #token: string | undefined;
 	readonly #fetch: typeof fetch;
-	readonly #pollIntervalMs: number;
+	readonly pollIntervalMs: number;
 
 	constructor(options: ClientOptions) {
 		this.apiUrl = options.apiUrl.replace(/\/+$/, "");
 		this.#token = options.token;
 		this.#fetch = options.fetch ?? fetch;
-		this.#pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+		this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 	}
 
 	/** Pide un recurso y valida la respuesta. `path` es relativo a /api/v1. */
@@ -104,6 +104,11 @@ export class OmiClient {
 		return this.#send("GET", path, { signal, stream: true });
 	}
 
+	/** Pausa entre consultas de un polling. */
+	async wait(signal?: AbortSignal, intervalMs: number = this.pollIntervalMs): Promise<void> {
+		await sleep(intervalMs, undefined, signal === undefined ? undefined : { signal });
+	}
+
 	async #awaitReceipt(mutationID: string, projectPath: string, signal: AbortSignal | undefined): Promise<unknown> {
 		const deadline = Date.now() + QUEUED_MUTATION_DEADLINE_MS;
 		const path = `${projectPath}/queued-mutations/${encodeURIComponent(mutationID)}`;
@@ -113,7 +118,7 @@ export class OmiClient {
 			if (receipt.state === "fallida") {
 				throw new ApiError(receipt.error?.code ?? "mutation_failed", receipt.error?.message ?? "la mutación falló", 409);
 			}
-			await sleep(this.#pollIntervalMs, undefined, signal === undefined ? undefined : { signal });
+			await this.wait(signal);
 		}
 		throw new OmiError("mutation_timeout", `la mutación ${mutationID} no terminó a tiempo`, {
 			hint: "revisá su estado en OMI antes de reintentar",
