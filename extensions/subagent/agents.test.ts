@@ -1,0 +1,271 @@
+import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { test } from "node:test";
+
+import { discoverAgents, formatAgentList, PACKAGE_AGENTS_DIR, packageAgentsDir, parseAgentFrontmatter } from "./agents.ts";
+
+// Issue #44 CA-2: descubrimiento de agentes por scope. `package` se resuelve
+// relativo al archivo de la extension (import.meta.url), `user` a
+// <getAgentDir()>/agents, `project` al <configDirName>/agents mas cercano hacia
+// arriba desde cwd, y `all` combina los tres con precedencia project > user >
+// package. Un .md invalido se ignora sin descartar los demas.
+
+const REPO_ROOT = resolve(fileURLToPath(new URL("../../", import.meta.url)));
+
+// Cada archivo de test corre en su proceso: una variable heredada no cambia el `package` esperado.
+delete process.env.OMI_RUNTIME_DIR;
+
+function agentMarkdown(name: string, extra = ""): string {
+	return `---\nname: ${name}\ndescription: "Agente ${name}"\n${extra}---\n\nSos ${name}.\n`;
+}
+
+interface Fixture {
+	root: string;
+	packageAgentsDir: string;
+	agentDir: string;
+	projectRoot: string;
+	cwd: string;
+}
+
+async function fixture(): Promise<Fixture> {
+	const root = await mkdtemp(join(tmpdir(), "omi-subagent-agents-"));
+	const packageAgentsDir = join(root, "package", "agents");
+	const agentDir = join(root, "pi-agent");
+	const projectRoot = join(root, "project");
+	const cwd = join(projectRoot, "src", "deep");
+	await mkdir(packageAgentsDir, { recursive: true });
+	await mkdir(join(agentDir, "agents"), { recursive: true });
+	await mkdir(join(projectRoot, ".pi", "agents"), { recursive: true });
+	await mkdir(cwd, { recursive: true });
+	await writeFile(join(packageAgentsDir, "alpha.md"), agentMarkdown("alpha"));
+	await writeFile(join(packageAgentsDir, "beta.md"), agentMarkdown("beta"));
+	await writeFile(join(agentDir, "agents", "beta.md"), agentMarkdown("beta", "tools: read, bash\n"));
+	await writeFile(join(agentDir, "agents", "gamma.md"), agentMarkdown("gamma"));
+	await writeFile(join(projectRoot, ".pi", "agents", "gamma.md"), agentMarkdown("gamma", "model: openai/gpt-x\n"));
+	await writeFile(join(projectRoot, ".pi", "agents", "delta.md"), agentMarkdown("delta", "tools: [grep, find]\n"));
+	return { root, packageAgentsDir, agentDir, projectRoot, cwd };
+}
+
+function deps(fx: Fixture) {
+	return { packageAgentsDir: fx.packageAgentsDir, getAgentDir: () => fx.agentDir, configDirName: ".pi" };
+}
+
+function names(agents: Array<{ name: string; source: string }>): string[] {
+	return agents.map((agent) => `${agent.name}(${agent.source})`).sort();
+}
+
+test("OMI_RUNTIME_DIR reemplaza el directorio de los agentes del paquete y se lee al usarse", async (t) => {
+	const fx = await fixture();
+	const previous = process.env.OMI_RUNTIME_DIR;
+	t.after(async () => {
+		if (previous === undefined) delete process.env.OMI_RUNTIME_DIR;
+		else process.env.OMI_RUNTIME_DIR = previous;
+		await rm(fx.root, { recursive: true, force: true });
+	});
+	delete process.env.OMI_RUNTIME_DIR;
+	assert.equal(packageAgentsDir(), PACKAGE_AGENTS_DIR);
+	process.env.OMI_RUNTIME_DIR = join(fx.root, "package");
+	assert.equal(packageAgentsDir(), fx.packageAgentsDir);
+	const result = discoverAgents(REPO_ROOT, "package", {});
+	assert.equal(result.packageAgentsDir, fx.packageAgentsDir);
+	assert.deepEqual(names(result.agents), ["alpha(package)", "beta(package)"]);
+});
+
+test("CA-2: `package` es el default y se resuelve relativo a la extension, con los tres agentes bundleados", () => {
+	assert.equal(PACKAGE_AGENTS_DIR, join(REPO_ROOT, "extensions", "subagent", "agents"));
+	const result = discoverAgents(REPO_ROOT, "package", {});
+	assert.equal(result.packageAgentsDir, PACKAGE_AGENTS_DIR);
+	assert.deepEqual(names(result.agents), ["implementer(package)", "reviewer(package)", "scout(package)"]);
+	for (const agent of result.agents) {
+		assert.equal(agent.filePath, join(PACKAGE_AGENTS_DIR, `${agent.name}.md`));
+		assert.ok(agent.systemPrompt.trim().length > 0, `${agent.name}: body no vacio`);
+		assert.equal(agent.model, undefined, `${agent.name}: sin model (hereda el de la sesion)`);
+	}
+});
+
+test("CA-2: cada scope lee solo su directorio y `all` aplica precedencia project > user > package", async () => {
+	const fx = await fixture();
+	try {
+		const pkg = discoverAgents(fx.cwd, "package", deps(fx));
+		assert.deepEqual(names(pkg.agents), ["alpha(package)", "beta(package)"]);
+
+		const user = discoverAgents(fx.cwd, "user", deps(fx));
+		assert.deepEqual(names(user.agents), ["beta(user)", "gamma(user)"]);
+		assert.equal(user.userAgentsDir, join(fx.agentDir, "agents"));
+
+		const project = discoverAgents(fx.cwd, "project", deps(fx));
+		assert.deepEqual(names(project.agents), ["delta(project)", "gamma(project)"]);
+		assert.equal(project.projectAgentsDir, join(fx.projectRoot, ".pi", "agents"), "el .pi/agents mas cercano hacia arriba");
+
+		const all = discoverAgents(fx.cwd, "all", deps(fx));
+		assert.deepEqual(names(all.agents), ["alpha(package)", "beta(user)", "delta(project)", "gamma(project)"]);
+		const gamma = all.agents.find((agent) => agent.name === "gamma");
+		assert.equal(gamma?.model, "openai/gpt-x", "gana la definicion del proyecto");
+		const beta = all.agents.find((agent) => agent.name === "beta");
+		assert.deepEqual(beta?.tools, ["read", "bash"], "gana la definicion del usuario sobre la del package");
+		const delta = all.agents.find((agent) => agent.name === "delta");
+		assert.deepEqual(delta?.tools, ["grep", "find"], "tools acepta la forma de lista YAML");
+	} finally {
+		await rm(fx.root, { recursive: true, force: true });
+	}
+});
+
+test("CA-2: sin .pi/agents hacia arriba, `project` esta vacio y `all` no lo necesita; configDirName es inyectable", async () => {
+	const fx = await fixture();
+	try {
+		const elsewhere = join(fx.root, "elsewhere");
+		await mkdir(elsewhere, { recursive: true });
+		const project = discoverAgents(elsewhere, "project", deps(fx));
+		assert.equal(project.projectAgentsDir, null);
+		assert.deepEqual(project.agents, []);
+		const all = discoverAgents(elsewhere, "all", deps(fx));
+		assert.deepEqual(names(all.agents), ["alpha(package)", "beta(user)", "gamma(user)"]);
+
+		// Distribuciones rebrandeadas usan otro CONFIG_DIR_NAME.
+		await mkdir(join(fx.projectRoot, ".otro", "agents"), { recursive: true });
+		await writeFile(join(fx.projectRoot, ".otro", "agents", "omega.md"), agentMarkdown("omega"));
+		const rebranded = discoverAgents(fx.cwd, "project", { ...deps(fx), configDirName: ".otro" });
+		assert.deepEqual(names(rebranded.agents), ["omega(project)"]);
+	} finally {
+		await rm(fx.root, { recursive: true, force: true });
+	}
+});
+
+test("CA-2: un .md sin name o description string se ignora sin descartar los demas", async () => {
+	const fx = await fixture();
+	try {
+		await writeFile(join(fx.packageAgentsDir, "sin-name.md"), '---\ndescription: "x"\n---\nBody.\n');
+		await writeFile(join(fx.packageAgentsDir, "sin-description.md"), "---\nname: sin-description\n---\nBody.\n");
+		await writeFile(join(fx.packageAgentsDir, "description-lista.md"), "---\nname: lista\ndescription: [a, b]\n---\nBody.\n");
+		await writeFile(join(fx.packageAgentsDir, "sin-frontmatter.md"), "Solo prosa.\n");
+		await writeFile(join(fx.packageAgentsDir, "README.txt"), "no es .md\n");
+		const result = discoverAgents(fx.cwd, "package", deps(fx));
+		assert.deepEqual(names(result.agents), ["alpha(package)", "beta(package)"]);
+	} finally {
+		await rm(fx.root, { recursive: true, force: true });
+	}
+});
+
+test("CA-2: el parser de frontmatter es inyectable (index.ts inyecta el de Pi) y el default entiende strings, comillas y listas", () => {
+	const parsed = parseAgentFrontmatter('---\nname: x\ndescription: "Con: dos puntos"\ntools: read, bash\nmodel: a/b\n---\n\nBody\n');
+	assert.deepEqual(parsed.frontmatter, { name: "x", description: "Con: dos puntos", tools: "read, bash", model: "a/b" });
+	assert.equal(parsed.body.trim(), "Body");
+	const list = parseAgentFrontmatter("---\nname: y\ndescription: 'simple'\ntools: [read, grep]\n---\n");
+	assert.deepEqual(list.frontmatter, { name: "y", description: "simple", tools: ["read", "grep"] });
+	assert.deepEqual(parseAgentFrontmatter("sin frontmatter"), { frontmatter: {}, body: "sin frontmatter" });
+});
+
+// Presupuesto de tiempo por agente: `timeout` en segundos. El parser YAML de
+// Pi lo entrega como number y el default como string; ambos valen. Cualquier
+// otra cosa (0, negativo, texto) se ignora: el agente queda sin timeout.
+test("timeout: `timeout` del frontmatter se lee en segundos, como number o string; valores invalidos quedan sin timeout", async () => {
+	const fx = await fixture();
+	try {
+		await writeFile(join(fx.packageAgentsDir, "rapido.md"), agentMarkdown("rapido", "timeout: 300\n"));
+		await writeFile(join(fx.packageAgentsDir, "roto.md"), agentMarkdown("roto", "timeout: nunca\n"));
+		await writeFile(join(fx.packageAgentsDir, "cero.md"), agentMarkdown("cero", "timeout: 0\n"));
+		const byName = (agents: Array<{ name: string; timeoutSeconds?: number }>, name: string) =>
+			agents.find((agent) => agent.name === name)?.timeoutSeconds;
+		const found = discoverAgents(fx.cwd, "package", deps(fx)).agents;
+		assert.equal(byName(found, "rapido"), 300);
+		assert.equal(byName(found, "roto"), undefined);
+		assert.equal(byName(found, "cero"), undefined);
+		assert.equal(byName(found, "alpha"), undefined, "sin `timeout` no hay limite");
+
+		const yaml = discoverAgents(fx.cwd, "package", {
+			...deps(fx),
+			parseFrontmatter: <T extends Record<string, unknown>>() => ({ frontmatter: { name: "n", description: "d", timeout: 120 } as unknown as T, body: "b" }),
+		}).agents;
+		assert.equal(byName(yaml, "n"), 120, "number del parser YAML de Pi");
+	} finally {
+		await rm(fx.root, { recursive: true, force: true });
+	}
+});
+
+// Un `timeout` presente pero malformado no puede degradar en silencio a "sin
+// limite": el agente lleva un `timeoutWarning` que la tool expone.
+test("timeout: un `timeout` presente pero malformado deja timeoutWarning con el valor crudo; ausente o valido no avisa", async () => {
+	const fx = await fixture();
+	try {
+		const malformed: Record<string, string> = {
+			m1: "300s",
+			m2: "5m",
+			m3: "2.5",
+			m4: "-1",
+			m5: "0",
+			m6: "300 # comentario",
+		};
+		for (const [name, value] of Object.entries(malformed)) {
+			await writeFile(join(fx.packageAgentsDir, `${name}.md`), agentMarkdown(name, `timeout: ${value}\n`));
+		}
+		await writeFile(join(fx.packageAgentsDir, "ok.md"), agentMarkdown("ok", "timeout: 300\n"));
+		const found = discoverAgents(fx.cwd, "package", deps(fx)).agents as Array<{ name: string; timeoutSeconds?: number; timeoutWarning?: string }>;
+		for (const [name, value] of Object.entries(malformed)) {
+			const agent = found.find((candidate) => candidate.name === name)!;
+			assert.equal(agent.timeoutSeconds, undefined, `${name}: sigue sin timeout efectivo`);
+			assert.match(agent.timeoutWarning ?? "", new RegExp(`"${value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`), `${name}: el aviso cita el valor`);
+			assert.match(agent.timeoutWarning ?? "", /entero positivo/, `${name}: dice que forma vale`);
+		}
+		assert.equal(found.find((agent) => agent.name === "ok")?.timeoutWarning, undefined);
+		assert.equal(found.find((agent) => agent.name === "alpha")?.timeoutWarning, undefined, "sin `timeout` no hay aviso");
+
+		const yaml = (value: unknown) =>
+			discoverAgents(fx.cwd, "package", {
+				...deps(fx),
+				parseFrontmatter: <T extends Record<string, unknown>>() => ({ frontmatter: { name: "n", description: "d", timeout: value } as unknown as T, body: "b" }),
+			}).agents[0] as { timeoutSeconds?: number; timeoutWarning?: string };
+		assert.match(yaml(null).timeoutWarning ?? "", /null/, "`timeout:` vacio del parser YAML tambien avisa");
+		assert.match(yaml(2.5).timeoutWarning ?? "", /2\.5/);
+		assert.equal(yaml(120).timeoutWarning, undefined);
+	} finally {
+		await rm(fx.root, { recursive: true, force: true });
+	}
+});
+
+test("timeout: el prompt del scout no hardcodea minutos (el limite vive en el frontmatter)", () => {
+	const scout = discoverAgents(REPO_ROOT, "package", {}).agents.find((agent) => agent.name === "scout");
+	assert.ok(scout);
+	assert.doesNotMatch(scout.systemPrompt, /\b\d+\s*(minutos?|min|segundos?|s)\b/i, "sin numero de tiempo en el body");
+	assert.match(scout.systemPrompt, /presupuesto de tiempo/);
+	assert.match(scout.systemPrompt, /~30 lecturas/);
+	assert.match(scout.systemPrompt, /## Start Here/);
+});
+
+test("timeout: el scout bundleado declara un presupuesto de tiempo; implementer y reviewer no", () => {
+	const agents = discoverAgents(REPO_ROOT, "package", {}).agents;
+	const scout = agents.find((agent) => agent.name === "scout");
+	assert.ok(scout?.timeoutSeconds && scout.timeoutSeconds > 0 && scout.timeoutSeconds <= 600, "scout con timeout de hasta 10 min");
+	for (const name of ["implementer", "reviewer"]) {
+		assert.equal(agents.find((agent) => agent.name === name)?.timeoutSeconds, undefined, `${name}: runs largos, sin timeout`);
+	}
+});
+
+test("CA-2: un parser inyectado reemplaza al default", async () => {
+	const fx = await fixture();
+	try {
+		const calls: string[] = [];
+		const result = discoverAgents(fx.cwd, "package", {
+			...deps(fx),
+			parseFrontmatter: <T extends Record<string, unknown>>(content: string) => {
+				calls.push(content);
+				return { frontmatter: { name: "inyectado", description: "d" } as Record<string, unknown> as T, body: "b" };
+			},
+		});
+		assert.equal(calls.length, 2, "un parseo por .md del package");
+		assert.deepEqual(names(result.agents), ["inyectado(package)"]);
+	} finally {
+		await rm(fx.root, { recursive: true, force: true });
+	}
+});
+
+test("formatAgentList resume nombre, fuente y description con tope", () => {
+	const agents = [
+		{ name: "a", description: "uno", source: "package" as const, systemPrompt: "", filePath: "/a.md" },
+		{ name: "b", description: "dos", source: "user" as const, systemPrompt: "", filePath: "/b.md" },
+	];
+	assert.deepEqual(formatAgentList(agents, 1), { text: "a (package): uno", remaining: 1 });
+	assert.deepEqual(formatAgentList([], 5), { text: "none", remaining: 0 });
+});
