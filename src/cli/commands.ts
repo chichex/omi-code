@@ -44,7 +44,7 @@ export const USAGE: Readonly<Record<string, string>> = {
 	env: "omi env list --env <stage|prod> [--service <nombre>]\nomi env set --env <stage|prod> [NOMBRE=valor...] [--unset NOMBRE] [--secret NOMBRE[=VARIABLE_LOCAL]] [--yes]",
 	resources: "omi resources list [--env <stage|prod>]\nomi resources postgres <create|replace|delete|retry|recover> [--env <e>] [--slug <s>] [--mode <externa|local>] [--resource-id <id>] [--connection-env <VARIABLE>] [--pg-version <v>] [--size <S|M|L>] [--yes]",
 	jobs: "omi jobs <list|get|runs|create|update|delete|run|pause|resume> [nombre] [--service <s>] [--path </ruta>] [--schedule <cron>] [--timezone <iana>] [--timeout <s>] [--env <e>] [--yes]\nomi jobs template --language <go|ts|python> [--path </ruta>]\nomi jobs check <archivo>",
-	publish: "omi publish --version <X.Y.Z> [--service <nombre>] [--via <tag|direct>] [--timeout <s>] [--yes]",
+	publish: "omi publish --version <X.Y.Z> [--service <nombre>] [--via <tag|direct>] [--timeout <s>] [--wait-only] [--yes]",
 	deploy: "omi deploy --env <stage|prod> --version <X.Y.Z> [--service <nombre>] [--yes]",
 	promote: "omi promote [--service <nombre>] [--yes]",
 	logs: "omi logs --env <stage|prod> [--service <nombre>] [--lines <n>] [--duration <s>]\nomi logs --env <stage|prod> --crash [--id <ilog>] [--deployment <dep>]",

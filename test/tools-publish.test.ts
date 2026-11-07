@@ -120,7 +120,7 @@ test("omi_publish_version_tolera fallas transitorias del registry mientras esper
 	assert.equal(calls, 2);
 });
 
-for (const version of ["v1.2.0", "1.2", "latest", "1.2.0+build"]) {
+for (const version of ["v1.2.0", "1.2", "latest", "1.2.0+build", "1.0.0-rc.01", "1.0.0-01"]) {
 	test(`omi_publish_version_rechaza la versión ${version}`, async (t) => {
 		const linked = await linkedProject(t);
 		await assert.rejects(linked.call("omi_publish_version", { ...publish, version }), (error: OmiError) => error.exitCode === 2);
@@ -150,6 +150,7 @@ test("omi_publish_version --via direct_construye con labels y empuja con regctl 
 	const image = "registry-acme.ohmyinfra.test/acme/tienda/api:1.2.0";
 	const build = runner.commands.find((command) => command.command === "docker" && command.args[0] === "build");
 	const buildArgs = build?.args.join(" ") ?? "";
+	assert.match(buildArgs, /--platform linux\/amd64/);
 	assert.match(buildArgs, /--build-arg VERSION=1\.2\.0/);
 	assert.match(buildArgs, /--build-arg GIT_COMMIT=abc123/);
 	assert.match(buildArgs, /--build-arg BUILD_DATE=\d{4}-\d{2}-\d{2}T/);
@@ -193,6 +194,43 @@ test("omi_publish_version --via direct_sin credencial no construye nada", async 
 		(error: OmiError) => error.code === "secret_input_unavailable",
 	);
 	assert.equal(runner.commands.some((command) => command.command === "docker"), false);
+});
+
+test("omi_publish_version directo no reconstruye una versión ya publicada", async (t) => {
+	const linked = await linkedProject(t);
+	await writeFile(join(linked.repo, "Dockerfile"), "FROM scratch\n");
+	const service = linked.project.services.get("api");
+	assert.ok(service);
+	service.view.versions = [{ tag: "1.2.0", prerelease: false }];
+	const runner = directRunner();
+	await assert.rejects(linked.call("omi_publish_version", { ...publish, via: "direct", timeoutSeconds: 0 }, {
+		runner, io: linked.io({ env: { OMI_REGISTRY_PASSWORD: "x" } }),
+	}), (error: OmiError) => error.code === "version_exists");
+	assert.equal(runner.commands.some((command) => command.command === "docker" || command.command === "regctl"), false);
+});
+
+test("omi_publish_version retoma sólo la espera después de un timeout, sin tocar tags ni construir", async (t) => {
+	const linked = await linkedProject(t);
+	await gitRepo(t, linked);
+	await assert.rejects(linked.call("omi_publish_version", { ...publish, timeoutSeconds: 0 }, { runner: processRunner }),
+		(error: OmiError) => error.code === "version_not_detected");
+	linked.workloads.scan = { tag: "1.2.0", afterRefreshes: 1, refreshes: 0 };
+	const runner = fakeRunner(() => { throw new Error("waitOnly no debe correr comandos"); });
+	const result = await linked.call("omi_publish_version", { ...publish, waitOnly: true }, { runner });
+	assert.match(result.text, /detectada/);
+	assert.equal(runner.commands.length, 0);
+});
+
+test("omi_publish_version reintenta registry_not_ready sin volver a publicar", async (t) => {
+	const linked = await linkedProject(t);
+	await gitRepo(t, linked);
+	let calls = 0;
+	linked.omi.route("POST /api/v1/organizations/{organizationID}/projects/{projectSlug}/services/{serviceName}/versions/refresh", () => {
+		calls += 1;
+		return calls === 1 ? { status: 409, body: { error: { code: "registry_not_ready", message: "todavía no" } } } : { status: 200, body: { versions: [{ tag: "1.2.0" }] } };
+	});
+	await linked.call("omi_publish_version", publish, { runner: processRunner });
+	assert.equal(calls, 2);
 });
 
 test("omi_publish_version_sin sesión autorizada ni humano queda bloqueada", async (t) => {

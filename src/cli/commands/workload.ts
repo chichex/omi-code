@@ -133,10 +133,10 @@ async function singleService(io: Io): Promise<string | undefined> {
 }
 
 export async function publishCommand(args: string[], io: Io): Promise<number> {
-	const { values } = parseFlags(args, { ...SERVICE, ...YES, version: { type: "string" }, via: { type: "string" }, timeout: { type: "string" } });
+	const { values } = parseFlags(args, { ...SERVICE, ...YES, version: { type: "string" }, via: { type: "string" }, timeout: { type: "string" }, "wait-only": { type: "boolean" } });
 	return runToolCommand(
 		"omi_publish_version",
-		{ service: values.service, version: values.version, via: values.via, timeoutSeconds: toInteger(values.timeout, "--timeout") },
+		{ service: values.service, version: values.version, via: values.via, timeoutSeconds: toInteger(values.timeout, "--timeout"), waitOnly: values["wait-only"] },
 		io,
 		values,
 	);

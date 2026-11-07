@@ -25,13 +25,13 @@ async function awaitVersion(scope: Scope, service: string, version: string, time
 			if (versions.some((candidate) => candidate.tag === version)) return;
 		} catch (error) {
 			// El registry puede fallar un rato: sólo un 4xx dice que no tiene sentido seguir.
-			if (!(error instanceof ApiError && error.status >= 500)) throw error;
+			if (!(error instanceof ApiError && (error.status >= 500 || error.code === "registry_not_ready"))) throw error;
 		}
 		runtime.progress?.(`esperando que OMI detecte ${version}`);
 		await scope.client.wait(runtime.signal, scope.client.pollIntervalMs * REFRESH_BACKOFF);
 	} while (Date.now() < deadline);
 	throw new OmiError("version_not_detected", `OMI no detectó ${version} a tiempo`, {
-		hint: "revisá el workflow, las labels OCI y que la versión coincida con el tag",
+		hint: "revisá el workflow, las labels OCI y que la versión coincida con el tag; retomá con `omi publish --version " + version + " --service " + service + " --wait-only` sin volver a publicar",
 	});
 }
 
@@ -45,12 +45,20 @@ export const publishVersionTool = defineTool({
 		version: Type.String({ description: "Semver sin v, por ejemplo 1.4.2" }),
 		via: Type.Optional(Type.Union([Type.Literal("tag"), Type.Literal("direct")])),
 		timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
+		waitOnly: Type.Optional(Type.Boolean({ description: "Retoma sólo la espera de una publicación anterior; no construye ni modifica tags" })),
 	}),
 	run: async (params, runtime) => {
 		assertVersion(params.version);
 		const scope = await openScope(runtime);
 		const service = linkedService(scope.link, params.service);
 		const via = params.via ?? "tag";
+		if (params.waitOnly === true) {
+			await awaitVersion(scope, service.name, params.version, params.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS, runtime);
+			return { text: `${service.name} ${params.version} detectada por OMI`, data: { service: service.name, version: params.version, waitOnly: true } };
+		}
+		if (via === "direct" && (await readService(scope, service.name)).versions.some((version) => version.tag === params.version)) {
+			throw new OmiError("version_exists", `la versión ${params.version} ya está publicada; no se sobrescribe`, { hint: "elegí otra versión o retomá con --wait-only" });
+		}
 		const root = runtime.io.cwd;
 		await assertCleanTree(root, runtime.runner);
 		await assertServiceContract(root, service, runtime.runner);
