@@ -81,11 +81,47 @@ test("onboarding_no ofrece nada si ~/.omi/agent ya tiene proveedores", async (t)
 	for (const existing of ["auth.json", "models.json"]) {
 		const home = await homeWithPi(t);
 		await mkdir(agentDir(home), { recursive: true });
-		await writeFile(join(agentDir(home), existing), "{}");
+		await writeFile(join(agentDir(home), existing), existing === "auth.json" ? '{"anthropic":{"key":"local-key"}}' : '{"providers":{"local":{"baseUrl":"http://localhost"}}}');
 		const io = testIo({ homeDir: home, interactive: true });
 		assert.equal((await runPiImportOnboarding(io)).status, "skipped");
 		assert.equal(io.prompts.length, 0);
 	}
+});
+
+test("onboarding ofrece importar después de un arranque no interactivo que dejó auth vacío", async (t) => {
+	const home = await homeWithPi(t);
+	await mkdir(agentDir(home), { recursive: true });
+	await writeFile(join(agentDir(home), "auth.json"), "{}");
+	await writeFile(join(agentDir(home), "models.json"), '{"providers":{}}');
+	const io = testIo({ homeDir: home, interactive: true, answers: ["s"] });
+	assert.equal((await runPiImportOnboarding(io)).status, "imported");
+	assert.equal(io.prompts.length, 1);
+	assert.match(await readFile(join(agentDir(home), "auth.json"), "utf8"), /sk-falsa/);
+});
+
+test("onboarding normaliza las fuentes absorbidas y conserva la base de paths locales", async (t) => {
+	const home = await homeWithPi(t);
+	const packages = [
+		{ source: "git:github.com/chichex/skills", skills: [] },
+		"git:github.com/chichex/chiche@v2", "https://github.com/chichex/skills.git@main",
+		"https://github.com/chichex/chiche", "git:git@github.com:chichex/chiche.git@feature/x",
+		"./pi-tools", { source: "../other-tools", extensions: [] }, "npm:unrelated",
+	];
+	await writeFile(join(piAgentDir(home), "settings.json"), `\uFEFF${JSON.stringify({ packages, extensions: ["./ext.ts"] })}`);
+	await runPiImportOnboarding(testIo({ homeDir: home, interactive: true, answers: ["s"] }));
+	const imported = JSON.parse(await readFile(join(agentDir(home), "settings.json"), "utf8"));
+	assert.deepEqual(imported.packages, [join(piAgentDir(home), "pi-tools"), { source: join(home, ".pi/other-tools"), extensions: [] }, "npm:unrelated"]);
+	assert.deepEqual(imported.extensions, [join(piAgentDir(home), "ext.ts")]);
+});
+
+test("onboarding tolera temporales de una importación interrumpida", async (t) => {
+	const home = await homeWithPi(t);
+	await mkdir(agentDir(home), { recursive: true });
+	await writeFile(join(agentDir(home), "auth.json.tmp"), "stale");
+	const result = await runPiImportOnboarding(testIo({ homeDir: home, interactive: true, answers: ["s"] }));
+	assert.equal(result.status, "imported");
+	assert.match(await readFile(join(agentDir(home), "auth.json"), "utf8"), /sk-falsa/);
+	assert.equal((await stat(join(agentDir(home), "auth.json"))).mode & 0o777, 0o600);
 });
 
 test("onboarding_no ofrece nada si Pi no está configurado", async (t) => {
