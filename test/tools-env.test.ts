@@ -197,8 +197,33 @@ test("omi_env_set_muestra al humano el diff exacto sin valores de secretos", asy
 	assert.equal(seen.length, 1);
 	assert.match(seen[0] ?? "", /~ LOG_LEVEL: info → debug/);
 	assert.match(seen[0] ?? "", /- TOKEN \(secreto\)/);
-	assert.match(seen[0] ?? "", /\+ NUEVO \(secreto\)/);
+	assert.match(seen[0] ?? "", /\+ NUEVO \(secreto\).*\$CLAVE/);
 	assert.doesNotMatch(seen[0] ?? "", /no-mostrar/);
+});
+
+test("omi_env_set preserva cambios ajenos hechos durante la confirmación", async (t) => {
+	const linked = await linkedProject(t);
+	seedVariables(linked);
+	await linked.call("omi_env_set", { environment: "stage", set: [{ name: "LOG_LEVEL", value: "debug" }] }, {
+		guard: { ...humanless(), canAsk: true, ask: async () => {
+			stage(linked).variables.push({ name: "FEATURE_X", secret: false, value: "on" });
+			return true;
+		} },
+	});
+	assert.ok(stage(linked).variables.some((v) => v.name === "FEATURE_X" && v.value === "on"));
+	assert.ok(stage(linked).variables.some((v) => v.name === "LOG_LEVEL" && v.value === "debug"));
+});
+
+test("omi_env_set rechaza sobrescribir un target que cambió mientras se aprobaba el diff", async (t) => {
+	const linked = await linkedProject(t);
+	seedVariables(linked);
+	await assert.rejects(linked.call("omi_env_set", { environment: "stage", unset: ["LOG_LEVEL"] }, {
+		guard: { ...humanless(), canAsk: true, ask: async () => {
+			stage(linked).variables[0] = { name: "LOG_LEVEL", secret: true, value: null };
+			return true;
+		} },
+	}), (error: OmiError) => error.code === "variables_changed");
+	assert.deepEqual(linked.mutations(), []);
 });
 
 test("omi_env_set_rechaza un ambiente que el service no tiene", async (t) => {
