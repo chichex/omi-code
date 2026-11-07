@@ -84,6 +84,11 @@ test("bump-pi.yml_es programado y sólo abre el PR después de los tests", async
 	const test = workflow.indexOf("run: npm test");
 	assert.ok(test > 0 && test < workflow.indexOf("gh pr create"));
 	assert.match(workflow, /--save-exact/);
+	assert.match(workflow, /setup-bun/);
+	const packaging = workflow.indexOf("run: npm run test:packaging");
+	assert.ok(packaging > 0 && packaging < workflow.indexOf("gh pr create"));
+	assert.doesNotMatch(workflow, /gh pr merge/);
+	assert.match(workflow, /git ls-remote.*--heads/);
 });
 
 test("release.yml_compila con bun y verifica que el tag coincida", async () => {

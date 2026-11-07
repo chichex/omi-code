@@ -1,4 +1,5 @@
-# Sube Pi una vez por semana. Sólo abre el PR si typecheck y tests pasan con la versión nueva.
+# Propone un bump semanal sólo tras typecheck, tests y packaging en este mismo workflow.
+# GITHUB_TOKEN no dispara CI por pull_request: no se depende de ese evento ni se mergea solo.
 name: Bump Pi
 
 on:
@@ -19,6 +20,9 @@ jobs:
         with:
           node-version: 22.19.0
           cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
       - run: npm ci
       - name: Buscar versión nueva
         id: pi
@@ -37,18 +41,25 @@ jobs:
         run: npm run typecheck
       - if: steps.pi.outputs.changed == 'true'
         run: npm test
-      - name: Abrir el PR y dejarlo en auto-merge
+      - if: steps.pi.outputs.changed == 'true'
+        run: npm run test:packaging
+      - name: Abrir el PR para revisión humana
         if: steps.pi.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version=${{ steps.pi.outputs.latest }}
           branch="chore/bump-pi-$version"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            echo "La rama $branch ya existe; no se pisa ni se duplica el PR." >> "$GITHUB_STEP_SUMMARY"
+            gh pr list --head "$branch" --json url --jq '.[].url' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "$branch"
           git add package.json package-lock.json
           git commit -m "chore: subir Pi a $version"
           git push origin "$branch"
-          gh pr create --title "chore: subir Pi a $version" --body "Typecheck y tests pasaron con Pi $version."
-          gh pr merge "$branch" --squash --auto
+          gh pr create --head "$branch" --title "chore: subir Pi a $version" --body "Typecheck, tests y empaquetado pasaron con Pi $version en $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. Requiere revisión y merge humanos; el token del bot no dispara CI de pull_request."
+          echo "Bump verificado; revisión y merge pendientes del humano." >> "$GITHUB_STEP_SUMMARY"
