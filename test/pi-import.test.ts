@@ -124,6 +124,43 @@ test("onboarding tolera temporales de una importación interrumpida", async (t) 
 	assert.equal((await stat(join(agentDir(home), "auth.json"))).mode & 0o777, 0o600);
 });
 
+test("onboarding importa snapshots y handoffs de grills sin pisar sesiones existentes", async (t) => {
+	const home = await homeWithPi(t);
+	const source = join(piAgentDir(home), "grill-sessions");
+	const target = join(agentDir(home), "grill-sessions");
+	await mkdir(source, { recursive: true });
+	await mkdir(target, { recursive: true });
+	await writeFile(join(source, "paused.json"), '{"id":"paused","status":"paused"}', { mode: 0o600 });
+	await writeFile(join(source, "paused.md"), "handoff de Pi\n");
+	await writeFile(join(source, "existing.json"), "vieja de Pi");
+	await writeFile(join(target, "existing.json"), "sesión de OMI");
+	const before = await snapshot(source);
+	const io = testIo({ homeDir: home, interactive: true, answers: ["s"] });
+	const result = await runPiImportOnboarding(io);
+	assert.match(io.prompts[0] ?? "", /grill/);
+	assert.ok(result.files.includes("grill-sessions/paused.json"));
+	assert.equal(await readFile(join(target, "paused.json"), "utf8"), '{"id":"paused","status":"paused"}');
+	assert.equal(await readFile(join(target, "paused.md"), "utf8"), "handoff de Pi\n");
+	assert.equal(await readFile(join(target, "existing.json"), "utf8"), "sesión de OMI");
+	assert.deepEqual(await snapshot(source), before);
+});
+
+test("onboarding ofrece grills a una instalación que ya importó proveedores sin sobrescribirlos", async (t) => {
+	const home = await homeWithPi(t);
+	await mkdir(join(piAgentDir(home), "grill-sessions"));
+	await writeFile(join(piAgentDir(home), "grill-sessions/paused.json"), '{"id":"paused"}');
+	await mkdir(agentDir(home), { recursive: true });
+	await writeFile(join(agentDir(home), "auth.json"), '{"local":{"key":"no-pisar"}}');
+	await writeFile(join(home, ".omi/onboarding.json"), '{"piImport":"imported"}');
+	const io = testIo({ homeDir: home, interactive: true, answers: ["s"] });
+	assert.equal((await runPiImportOnboarding(io)).status, "imported");
+	assert.equal(await readFile(join(agentDir(home), "auth.json"), "utf8"), '{"local":{"key":"no-pisar"}}');
+	assert.equal(await readFile(join(agentDir(home), "grill-sessions/paused.json"), "utf8"), '{"id":"paused"}');
+	const again = testIo({ homeDir: home, interactive: true });
+	assert.equal((await runPiImportOnboarding(again)).status, "skipped");
+	assert.deepEqual(again.prompts, []);
+});
+
 test("onboarding_no ofrece nada si Pi no está configurado", async (t) => {
 	const home = await tempDir(t);
 	const io = testIo({ homeDir: home, interactive: true });

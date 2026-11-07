@@ -2,11 +2,11 @@
 
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { copyFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, link, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { Io } from "../cli/io.ts";
 import { agentDir, omiHome, sourcePiAgentDir } from "../core/paths.ts";
-import { exists } from "../core/files.ts";
+import { exists, isDirectory } from "../core/files.ts";
 
 const IMPORTABLE_FILES = ["auth.json", "models.json", "settings.json"] as const;
 const PROVIDER_FILES = ["auth.json", "models.json"] as const;
@@ -66,7 +66,7 @@ async function hasProviders(dir: string): Promise<boolean> {
 	return false;
 }
 
-async function importFile(source: string, target: string, name: string): Promise<void> {
+async function importFile(source: string, target: string, name: string, overwrite = true): Promise<boolean> {
 	const temporary = `${target}.${randomUUID()}.tmp`;
 	const { mode } = await stat(source);
 	try {
@@ -75,35 +75,71 @@ async function importFile(source: string, target: string, name: string): Promise
 		} else {
 			await copyFile(source, temporary, constants.COPYFILE_EXCL);
 		}
-		await rename(temporary, target);
+		if (overwrite) await rename(temporary, target);
+		else {
+			try { await link(temporary, target); }
+			catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") return false; throw error; }
+		}
+		return true;
 	} finally {
 		await rm(temporary, { force: true });
 	}
 }
 
-async function rememberDecision(homeDir: string, decision: PiImportResult["status"]): Promise<void> {
+interface ImportDecision { piImport?: string; grillImport?: string }
+
+async function previousDecision(homeDir: string): Promise<ImportDecision | null> {
+	try {
+		const value: unknown = JSON.parse(await readFile(join(omiHome(homeDir), ONBOARDING_MARKER), "utf8"));
+		if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+		const data = value as Record<string, unknown>;
+		for (const key of ["piImport", "grillImport"]) if (data[key] !== undefined && !["imported", "declined", "skipped"].includes(String(data[key]))) return null;
+		return { ...(data.piImport === undefined ? {} : { piImport: String(data.piImport) }), ...(data.grillImport === undefined ? {} : { grillImport: String(data.grillImport) }) };
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "ENOENT" ? {} : null;
+	}
+}
+
+async function rememberDecision(homeDir: string, decision: ImportDecision): Promise<void> {
 	await mkdir(omiHome(homeDir), { recursive: true, mode: 0o700 });
-	await writeFile(join(omiHome(homeDir), ONBOARDING_MARKER), `${JSON.stringify({ piImport: decision })}\n`);
+	await writeFile(join(omiHome(homeDir), ONBOARDING_MARKER), `${JSON.stringify(decision)}\n`);
+}
+
+async function missingGrillFiles(source: string, target: string): Promise<string[]> {
+	const directory = join(source, "grill-sessions");
+	if (!(await isDirectory(directory))) return [];
+	const files: string[] = [];
+	for (const entry of await readdir(directory, { withFileTypes: true })) {
+		if (!entry.isFile() || !/\.(json|md)$/.test(entry.name)) continue;
+		const stem = entry.name.replace(/\.(json|md)$/, "");
+		if (await exists(join(target, "grill-sessions", `${stem}.json`)) || await exists(join(target, "grill-sessions", `${stem}.md`))) continue;
+		files.push(`grill-sessions/${entry.name}`);
+	}
+	return files.sort();
 }
 
 export async function runPiImportOnboarding(io: Io): Promise<PiImportResult> {
 	const source = sourcePiAgentDir(io.homeDir);
 	const target = agentDir(io.homeDir);
 	if (!io.interactive) return SKIPPED;
-	if (await exists(join(omiHome(io.homeDir), ONBOARDING_MARKER))) return SKIPPED;
-	if (await hasProviders(target)) return SKIPPED;
-	const files = await existingFiles(source, IMPORTABLE_FILES);
+	const previous = await previousDecision(io.homeDir);
+	if (previous === null) { io.err("aviso: onboarding.json ilegible; se omite la importación sin sobrescribirlo"); return SKIPPED; }
+	const config = previous.piImport !== undefined || await hasProviders(target) ? [] : await existingFiles(source, IMPORTABLE_FILES);
+	const grills = previous.grillImport === undefined ? await missingGrillFiles(source, target) : [];
+	const files = [...config, ...grills];
 	if (files.length === 0) return SKIPPED;
 
-	const answer = await io.prompt(`Encontré configuración de Pi (${files.join(", ")}). ¿Importarla a ~/.omi/agent? [S/n] `);
+	const answer = await io.prompt(`Encontré configuración de Pi (${files.join(", ")}). ¿Importarla a ${target}? [S/n] `);
 	if (/^n/i.test(answer.trim())) {
-		await rememberDecision(io.homeDir, "declined");
+		await rememberDecision(io.homeDir, { piImport: previous.piImport ?? "declined", grillImport: "declined" });
 		return { status: "declined", files: [] };
 	}
 	await mkdir(target, { recursive: true, mode: 0o700 });
+	const imported: string[] = [];
 	for (const name of files) {
-		await importFile(join(source, name), join(target, name), name);
+		if (name.startsWith("grill-sessions/")) await mkdir(join(target, "grill-sessions"), { recursive: true, mode: 0o700 });
+		if (await importFile(join(source, name), join(target, name), name, !name.startsWith("grill-sessions/"))) imported.push(name);
 	}
-	await rememberDecision(io.homeDir, "imported");
-	return { status: "imported", files };
+	await rememberDecision(io.homeDir, { piImport: previous.piImport ?? (config.length > 0 ? "imported" : "skipped"), grillImport: "imported" });
+	return { status: "imported", files: imported };
 }
