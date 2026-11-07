@@ -13,10 +13,10 @@ test("la plantilla Python verifica firma y frescura en el runtime real", async (
 import handler, hashlib, hmac, json
 handler.time.time = lambda: 1793858403
 answers = []
-for ts in ["1793858403", "1793858102", "1793858704", "invalid", ""]:
+for ts in ["1793858403", "1793858102", "1793858704", "invalid", "", "9" * 5000]:
     signature = "sha256=" + hmac.new(b"clave", (ts + ".hola").encode(), hashlib.sha256).hexdigest()
     answers.append(handler.verify_omi_job({"X-Omi-Timestamp": ts, "X-Omi-Signature": signature}, b"hola"))
 print(json.dumps(answers))
 `], { cwd: dir, env: { ...process.env, OMI_TRIGGER_SECRET: "clave" }, encoding: "utf8" });
-	assert.deepEqual(JSON.parse(result), [true, false, false, false, false]);
+	assert.deepEqual(JSON.parse(result), [true, false, false, false, false, false]);
 });
