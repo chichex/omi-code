@@ -11,8 +11,12 @@ export function registerCatalogTools(pi: ExtensionAPI, catalog: readonly OmiTool
 			label: tool.label,
 			description: tool.description,
 			parameters: tool.parameters,
-			async execute(_toolCallId, params, signal) {
-				const result = await tool.run(params, { io, ...(signal === undefined ? {} : { signal }) });
+			async execute(_toolCallId, params, signal, _onUpdate, context) {
+				const result = await tool.run(params, {
+					io,
+					...(signal === undefined ? {} : { signal }),
+					...(context.hasUI ? { confirmCreate: (what: string) => context.ui.confirm("Crear en OMI", what, signal === undefined ? {} : { signal }) } : {}),
+				});
 				return { content: [{ type: "text", text: result.text }], details: result.data };
 			},
 		});

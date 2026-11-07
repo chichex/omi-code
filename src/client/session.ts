@@ -63,8 +63,8 @@ export async function openSession(io: Io, apiUrl?: string): Promise<Session> {
 }
 
 /** omi-api no tiene rutas de organizaciones: el slug se resuelve con la lista de /me. */
-export async function resolveOrganization(client: OmiClient, slug: string): Promise<Principal["organizations"][number]> {
-	const principal = await client.request("GET", "/me", PrincipalSchema);
+export async function resolveOrganization(client: OmiClient, slug: string, signal?: AbortSignal): Promise<Principal["organizations"][number]> {
+	const principal = await client.request("GET", "/me", PrincipalSchema, signal === undefined ? {} : { signal });
 	if (principal.organizations.length === 0) {
 		throw new OmiError("organization_required", "no pertenecés a ninguna organización", { hint: "creá una organización en OMI antes de vincular el repo" });
 	}

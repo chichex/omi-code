@@ -1,6 +1,7 @@
 // omi_link_project: la misma lógica de `omi init`, expuesta como tool.
 
 import { Type } from "typebox";
+import { GuardrailError } from "../core/errors.ts";
 import { linkProject } from "../project/init.ts";
 import { defineTool } from "./types.ts";
 
@@ -18,7 +19,7 @@ const Parameters = Type.Object({
 		{ minItems: 1 },
 	),
 	environments: Type.Optional(Type.Array(Type.Union([Type.Literal("stage"), Type.Literal("prod")]), { minItems: 1 })),
-	create: Type.Optional(Type.Boolean({ description: "Crea en OMI el proyecto o los services que falten" })),
+	create: Type.Optional(Type.Boolean({ description: "Solicita al humano aprobar la creación; no constituye aprobación" })),
 });
 
 export const linkProjectTool = defineTool({
@@ -26,9 +27,15 @@ export const linkProjectTool = defineTool({
 	label: "OMI: vincular proyecto",
 	description: "Vincula el repo con un proyecto de OMI: escribe .omi/project.json y descarga el kit de publicación de cada service.",
 	parameters: Parameters,
-	run: async (params, runtime) => {
-		const result = await linkProject(params, {
+	run: async ({ create, ...request }, runtime) => {
+		const result = await linkProject(request, {
 			io: runtime.io,
+			confirmCreate: async (what) => {
+				if (create !== true || runtime.confirmCreate === undefined || !(await runtime.confirmCreate(what))) {
+					throw new GuardrailError(`Crear ${what} requiere confirmación humana en la TUI o desde la CLI del humano`);
+				}
+				return true;
+			},
 			...(runtime.apiUrl === undefined ? {} : { apiUrl: runtime.apiUrl }),
 			...(runtime.signal === undefined ? {} : { signal: runtime.signal }),
 		});

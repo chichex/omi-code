@@ -16,6 +16,8 @@ export interface ToolRuntime {
 	readonly apiUrl?: string;
 	/** Avance de una operación larga: pasos de un deploy, líneas de log. */
 	progress?(text: string): void;
+	/** Canal de aprobación del humano; nunca viene de los parámetros del modelo. */
+	confirmCreate?(what: string): Promise<boolean>;
 	/** Corte de la operación desde la superficie que la lanzó. */
 	signal?: AbortSignal;
 }

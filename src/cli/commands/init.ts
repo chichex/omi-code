@@ -55,11 +55,15 @@ export async function initCommand(args: string[], io: Io): Promise<number> {
 		...(values.env === undefined ? {} : { environments: values.env.split(",").map((name) => name.trim()) }),
 		...(values.create === undefined ? {} : { create: values.create }),
 	};
+	let approved = false;
 	const context: LinkContext = {
 		io,
 		...(values.api === undefined ? {} : { apiUrl: values.api }),
 		...(io.interactive
-			? { confirmCreate: async (what: string) => /^s/i.test((await io.prompt(`${what} no existe en OMI. ¿Crearlo? [s/N] `)).trim()) }
+			? { confirmCreate: async (what: string) => {
+				approved ||= /^s/i.test((await io.prompt(`${what} no existe en OMI. ¿Crear lo que falte para ${projectSlug} (${services.map((s) => s.name).join(", ")})? [s/N] `)).trim());
+				return approved;
+			} }
 			: {}),
 	};
 	const result = await linkProject(request, context);
