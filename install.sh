@@ -7,7 +7,8 @@
 
 set -eu
 
-BASE="${OMI_INSTALL_BASE:-https://github.com/chichex/omi-code/releases/latest/download}"
+DEFAULT_BASE="https://github.com/chichex/omi-code/releases/latest/download"
+BASE="${OMI_INSTALL_BASE:-$DEFAULT_BASE}"
 TARGET="${OMI_HOME:-$HOME/.omi}"
 
 die() {
@@ -38,7 +39,11 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/omi-install.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 
 fetch() {
-	curl -fsSL "$BASE/$1" -o "$work/$1" || die "no se pudo descargar $1"
+	if [ "$BASE" = "$DEFAULT_BASE" ] && command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+		gh release download --repo chichex/omi-code --pattern "$1" --dir "$work" || die "no se pudo descargar $1 con gh"
+	else
+		curl -fsSL "$BASE/$1" -o "$work/$1" || die "no se pudo descargar $1; si el repo es privado, usá gh autenticado"
+	fi
 }
 
 sha256() {

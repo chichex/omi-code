@@ -7,7 +7,7 @@ import { OmiError } from "../core/errors.ts";
 import { exists } from "../core/files.ts";
 import type { Runner } from "../core/exec.ts";
 import { omiHome } from "../core/paths.ts";
-import { assetNames, fetchLatestRelease, isNewer, parseChecksums, type LatestRelease } from "./release.ts";
+import { assetNames, fetchLatestRelease, githubReleaseHeaders, isNewer, parseChecksums, type LatestRelease } from "./release.ts";
 
 const DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
 
@@ -16,13 +16,15 @@ export interface UpgradeOptions {
 	current: string;
 	platform: string;
 	releasesUrl: string;
+	/** GH_TOKEN/GITHUB_TOKEN: sólo se envía a la API de releases del repo, nunca se persiste. */
+	token?: string;
 	runner: Runner;
 }
 
-async function download(url: string, target: string): Promise<void> {
+async function download(url: string, target: string, token?: string): Promise<void> {
 	let response: Response;
 	try {
-		response = await fetch(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+		response = await fetch(url, { headers: githubReleaseHeaders(url, token, "application/octet-stream"), signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
 	} catch (error) {
 		throw new OmiError("download_failed", `no se pudo descargar ${url}`, { cause: error });
 	}
@@ -121,14 +123,14 @@ async function install(layout: Layout, downloaded: { binary: string; runtime: st
 	}
 }
 
-export async function checkUpgrade(options: Pick<UpgradeOptions, "current" | "releasesUrl">): Promise<{ current: string; latest: string; updateAvailable: boolean }> {
-	const release = await fetchLatestRelease(options.releasesUrl);
+export async function checkUpgrade(options: Pick<UpgradeOptions, "current" | "releasesUrl" | "token">): Promise<{ current: string; latest: string; updateAvailable: boolean }> {
+	const release = await fetchLatestRelease(options.releasesUrl, options.token);
 	return { current: options.current, latest: release.version, updateAvailable: isNewer(options.current, release.version) };
 }
 
 export async function runUpgrade(options: UpgradeOptions): Promise<{ current: string; latest: string; updated: boolean }> {
 	const { current, platform, runner, homeDir } = options;
-	const release = await fetchLatestRelease(options.releasesUrl);
+	const release = await fetchLatestRelease(options.releasesUrl, options.token);
 	const report = { current, latest: release.version };
 	if (!isNewer(current, release.version)) return { ...report, updated: false };
 	const assets = assetUrls(release, platform);
@@ -140,9 +142,9 @@ export async function runUpgrade(options: UpgradeOptions): Promise<{ current: st
 	let preserveBackups = false;
 	try {
 		const downloaded = { binary: join(work, "omi"), runtime: join(work, "runtime.tar.gz"), checksums: join(work, "checksums.txt") };
-		await download(assets.checksums.url, downloaded.checksums);
-		await download(assets.binary.url, downloaded.binary);
-		await download(assets.runtime.url, downloaded.runtime);
+		await download(assets.checksums.url, downloaded.checksums, options.token);
+		await download(assets.binary.url, downloaded.binary, options.token);
+		await download(assets.runtime.url, downloaded.runtime, options.token);
 		const checksums = parseChecksums(await readFile(downloaded.checksums, "utf8"));
 		await assertChecksum(downloaded.binary, assets.binary.name, checksums);
 		await assertChecksum(downloaded.runtime, assets.runtime.name, checksums);

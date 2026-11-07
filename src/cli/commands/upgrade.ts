@@ -11,7 +11,9 @@ import { printJson } from "../output.ts";
 
 export async function upgradeCommand(args: string[], io: Io): Promise<number> {
 	const { values } = parseFlags(args, { check: { type: "boolean" } });
+	const token = io.env.GH_TOKEN || io.env.GITHUB_TOKEN;
 	const options: Omit<UpgradeOptions, "platform"> = {
+		...(token === undefined ? {} : { token }),
 		homeDir: io.homeDir,
 		current: pkg.version,
 		releasesUrl: io.env.OMI_RELEASES_URL ?? RELEASES_URL,

@@ -14,16 +14,37 @@ Códigos de salida: `0` ok, `1` error de ejecución o API, `2` error de uso o gu
 
 ## Instalación
 
-No hace falta Node ni Bun.
+No hace falta Node ni Bun. Tiene que existir una release publicada.
+**Mientras el repo sea privado**, usá `gh` previamente autenticado y con acceso:
+
+```sh
+tmp="$(mktemp -d)"
+gh release download --repo chichex/omi-code --pattern install.sh --dir "$tmp"
+sh "$tmp/install.sh"
+rm -rf "$tmp"
+```
+
+El instalador descarga los assets con `gh` autenticado. Cuando el repo sea público también se podrá usar:
 
 ```sh
 curl -fsSL https://github.com/chichex/omi-code/releases/latest/download/install.sh | sh
-omi login
 ```
 
-`omi upgrade` actualiza a la última release y `omi upgrade --check` sólo informa. Hasta que `chichex/omi#140` esté desplegado, `omi login` no funciona contra producción.
+Se instala en `~/.omi`; `OMI_HOME=/ruta/absoluta` permite otra raíz. El binario instalado la infiere de su ubicación.
+
+`omi upgrade` actualiza a la última release y `omi upgrade --check` sólo informa.
+Para releases privadas necesita `GH_TOKEN` o `GITHUB_TOKEN` con acceso. Por ejemplo, desde una terminal del humano:
+
+```sh
+GH_TOKEN="$(gh auth token)" omi upgrade --check
+```
+
+El token sólo se envía a la API de releases de este repo; no se imprime ni se guarda.
+`omi login` inicia la sesión de OMI, que es distinta de la autenticación de GitHub. Hasta que `chichex/omi#140` esté desplegado, `omi login` no funciona contra producción.
 
 ## Guardrails
+
+Son controles locales para las superficies soportadas, no aislamiento de un proceso hostil (ver «Alcance de los guardrails»).
 
 | Operación | Quién decide |
 |---|---|
@@ -32,6 +53,8 @@ omi login
 | Cualquier cosa en prod, secretos, Postgres, bajas | humano, siempre |
 
 En la TUI, `/skill:ship` autoriza stage para la sesión. En `omi mcp`, lo hace el flag `--authorize-stage` y la aprobación humana llega por elicitación del cliente MCP. En la CLI sin terminal, `--yes` aprueba; dentro de una sesión agéntica, no vale.
+
+El bump semanal de Pi abre un PR sólo tras typecheck, tests y empaquetado en el mismo workflow. La revisión y el merge son humanos.
 
 ## Desarrollo
 

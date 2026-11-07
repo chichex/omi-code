@@ -9,7 +9,7 @@ import { test, type TestContext } from "node:test";
 import { run } from "../src/cli/main.ts";
 import type { OmiError } from "../src/core/errors.ts";
 import { processRunner, type Runner } from "../src/core/exec.ts";
-import { assetNames, currentPlatform, isNewer, parseChecksums } from "../src/upgrade/release.ts";
+import { RELEASES_URL, assetNames, currentPlatform, isNewer, parseChecksums } from "../src/upgrade/release.ts";
 import { checkUpgrade, runUpgrade } from "../src/upgrade/upgrade.ts";
 import { tempDir, testIo } from "./helpers/io.ts";
 
@@ -133,6 +133,38 @@ test("checkUpgrade_no descarga nada", async (t) => {
 test("checkUpgrade_sin releases explica que puede ser un repo privado", async (t) => {
 	const release = await releaseServer(t, { status: 404 });
 	await assert.rejects(checkUpgrade(options("/nada", release)), (error: OmiError) => error.code === "release_not_found" && /privado/.test(error.hint ?? ""));
+});
+
+test("upgrade de un repo privado usa el token sólo en la API de GitHub y descarga sus assets autenticados", async (t) => {
+	const home = await installed(t);
+	const release = await releaseServer(t);
+	const seen: { url: string; authorization: string | null; accept: string | null }[] = [];
+	t.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+		const url = String(input);
+		const headers = new Headers(init?.headers);
+		seen.push({ url, authorization: headers.get("Authorization"), accept: headers.get("Accept") });
+		if (headers.get("Authorization") !== "Bearer gh_fake") return new Response("", { status: 401 });
+		if (url === RELEASES_URL) return Response.json({ tag_name: "v9.9.9", assets: [...release.files.keys()].map((name) => ({
+			name, browser_download_url: `https://github.com/chichex/omi-code/releases/download/v9.9.9/${name}`,
+			url: `https://api.github.com/repos/chichex/omi-code/releases/assets/${name}`,
+		})) });
+		const content = release.files.get(url.split("/").at(-1) ?? "");
+		return content === undefined ? new Response("", { status: 404 }) : new Response(content);
+	});
+	const report = await runUpgrade({ ...options(home, release), releasesUrl: RELEASES_URL, token: "gh_fake" });
+	assert.equal(report.updated, true);
+	assert.equal(seen.length, 4);
+	assert.ok(seen.every((request) => request.url.startsWith("https://api.github.com/") && request.authorization === "Bearer gh_fake"));
+	assert.ok(seen.slice(1).every((request) => request.accept === "application/octet-stream"));
+	assert.doesNotMatch(JSON.stringify(report), /gh_fake/);
+});
+
+test("upgrade no envía el token de GitHub a un endpoint alternativo", async (t) => {
+	t.mock.method(globalThis, "fetch", async (_input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+		assert.equal(new Headers(init?.headers).has("Authorization"), false);
+		return Response.json({ tag_name: "v9.9.9", assets: [] });
+	});
+	assert.equal((await checkUpgrade({ current: "0.1.0", releasesUrl: "https://untrusted.invalid/latest", token: "gh_fake" })).updateAvailable, true);
 });
 
 test("runUpgrade_verifica y reemplaza binario y runtime", async (t) => {

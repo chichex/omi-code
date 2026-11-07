@@ -14,7 +14,7 @@ const REQUEST_TIMEOUT_MS = 30_000;
 
 const ReleaseSchema = Type.Object({
 	tag_name: Type.String(),
-	assets: Type.Array(Type.Object({ name: Type.String(), browser_download_url: Type.String() })),
+	assets: Type.Array(Type.Object({ name: Type.String(), browser_download_url: Type.String(), url: Type.Optional(Type.String()) })),
 });
 
 export interface LatestRelease {
@@ -58,16 +58,23 @@ export function parseChecksums(text: string): Map<string, string> {
 	return entries;
 }
 
-export async function fetchLatestRelease(url: string): Promise<LatestRelease> {
+/** Nunca manda un token de GitHub a un mirror, al sitio web ni a otro repositorio. */
+export function githubReleaseHeaders(url: string, token?: string, accept = "application/vnd.github+json"): Record<string, string> {
+	const parsed = new URL(url);
+	const trusted = parsed.protocol === "https:" && parsed.hostname === "api.github.com" && parsed.pathname.startsWith("/repos/chichex/omi-code/releases/");
+	return { Accept: accept, ...(token && trusted ? { Authorization: `Bearer ${token}` } : {}) };
+}
+
+export async function fetchLatestRelease(url: string, token?: string): Promise<LatestRelease> {
 	let response: Response;
 	try {
-		response = await fetch(url, { headers: { Accept: "application/vnd.github+json" }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+		response = await fetch(url, { headers: githubReleaseHeaders(url, token), signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
 	} catch (error) {
 		throw new OmiError("release_unreachable", "no se pudo consultar GitHub Releases", { cause: error });
 	}
 	if (response.status === 404) {
 		throw new OmiError("release_not_found", "no hay releases publicadas de omi-code", {
-			hint: "si el repo sigue privado, GitHub responde 404 sin credenciales",
+			hint: "si el repo sigue privado, definí GH_TOKEN (o GITHUB_TOKEN) con acceso; verificá también que exista una release",
 		});
 	}
 	if (!response.ok) throw new OmiError("release_unreachable", `GitHub Releases respondió ${response.status}`);
@@ -75,6 +82,6 @@ export async function fetchLatestRelease(url: string): Promise<LatestRelease> {
 	if (!Value.Check(ReleaseSchema, payload)) throw new OmiError("release_unreachable", "GitHub Releases respondió algo inesperado");
 	return {
 		version: payload.tag_name.replace(/^v/, ""),
-		assets: new Map(payload.assets.map((asset) => [asset.name, asset.browser_download_url])),
+		assets: new Map(payload.assets.map((asset) => [asset.name, token && asset.url !== undefined ? asset.url : asset.browser_download_url])),
 	};
 }

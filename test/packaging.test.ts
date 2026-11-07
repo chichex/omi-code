@@ -46,6 +46,34 @@ test("install.sh_instala binario y runtime en ~/.omi", async (t) => {
 	assert.equal((await stat(join(home, ".omi/runtime/omi"))).isFile(), true);
 });
 
+test("install.sh usa gh autenticado para los assets de un repo privado", async (t) => {
+	const home = await tempDir(t);
+	const release = await fakeRelease(t);
+	const tools = await tempDir(t);
+	await writeFile(join(tools, "curl"), "#!/bin/sh\necho descarga-sin-autenticar >&2\nexit 99\n", { mode: 0o755 });
+	await writeFile(join(tools, "gh"), `#!/bin/sh
+if [ "$1" = auth ]; then exit 0; fi
+if [ "$1" = release ] && [ "$2" = download ]; then
+  shift 2
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --pattern) asset=$2; shift 2 ;;
+      --dir) dest=$2; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  cp "$FAKE_RELEASE/$asset" "$dest/$asset"
+  exit $?
+fi
+exit 1
+`, { mode: 0o755 });
+	const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, PATH: `${tools}:${process.env.PATH}`, FAKE_RELEASE: release };
+	delete env.OMI_INSTALL_BASE;
+	const result = spawnSync("sh", [installScript], { encoding: "utf8", env });
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(execFileSync(join(home, ".omi/bin/omi"), ["--version"], { encoding: "utf8" }), "1.0.0\n");
+});
+
 test("install.sh_cae al bundle si el binario suelto no arranca", async (t) => {
 	const home = await tempDir(t);
 	const result = install(await fakeRelease(t, { binary: "#!/bin/sh\nexit 137\n" }), home);
