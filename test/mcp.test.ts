@@ -224,6 +224,18 @@ test("mcp_stage queda bloqueado salvo sesión autorizada con --authorize-stage",
 	assert.equal(open.mutations().length, 1);
 });
 
+test("MCP anidado en una sesión agéntica no concede stage ni acepta autoelicitación", async (t) => {
+	const linked = await linkedProject(t);
+	const sent: JsonRpcMessage[] = [];
+	const mcp = createMcpServer({ tools: CATALOG, io: linked.io({ env: { OMI_AGENT_SESSION: "1" } }), stageAuthorized: true, elicitationTimeoutMs: 10, write: (message) => sent.push(message) });
+	t.after(() => mcp.close());
+	await initialize(mcp, { elicitation: {} });
+	await mcp.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: envStage });
+	assert.equal((sent.at(-1)?.result as { isError?: boolean }).isError, true);
+	assert.equal(sent.some((m) => m.method === "elicitation/create"), false);
+	assert.deepEqual(linked.mutations(), []);
+});
+
 test("mcp_una lectura pasa sin autorización", async (t) => {
 	const linked = await linkedProject(t);
 	const { mcp, sent } = linkedServer(linked);

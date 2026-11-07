@@ -89,6 +89,19 @@ test("init agrega los ambientes pedidos a un service existente", async (t) => {
 	assert.deepEqual(omi.projects.get("x")?.services.get("api")?.view.environments.map((e) => e.name), ["stage", "prod"]);
 });
 
+test("init agéntico bloquea --create con y sin TTY sin sugerir reintentar el mismo flag", async (t) => {
+	const { omi, io } = await setup(t);
+	for (const interactive of [false, true]) {
+		const { testIo } = await import("./helpers/io.ts");
+		const nested = testIo({ homeDir: io.homeDir, cwd: io.cwd, env: { OMI_AGENT_SESSION: "1" }, interactive, answers: ["s"] });
+		assert.equal(await run(["init", "--project", "x", "--service", "api", "--create", "--json"], nested), 2);
+		assert.match(nested.errors(), /guardrail_confirmation_required/);
+		assert.doesNotMatch(nested.errors(), /volvé a correr con --create/);
+		assert.deepEqual(nested.prompts, []);
+	}
+	assert.equal(omi.requests.filter((r) => r.method === "POST").length, 0);
+});
+
 test("init cancelado no hace requests ni escribe archivos", async (t) => {
 	const { repo, omi, io } = await setup(t);
 	const signal = AbortSignal.abort(new Error("cancelled"));

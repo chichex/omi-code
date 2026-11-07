@@ -9,7 +9,7 @@ import type { Io } from "../cli/io.ts";
 import { parseFlags } from "../cli/flags.ts";
 import { EXIT_OK, OmiError, describeError } from "../core/errors.ts";
 import { processRunner, type Runner } from "../core/exec.ts";
-import { mcpGuard } from "../guardrails/surfaces.ts";
+import { isAgentSession, mcpGuard } from "../guardrails/surfaces.ts";
 import { CATALOG } from "../tools/catalog.ts";
 import type { OmiTool, ToolRuntime } from "../tools/types.ts";
 
@@ -94,7 +94,8 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 				},
 			});
 		});
-	const guard = mcpGuard({ stageAuthorized: options.stageAuthorized ?? false, canElicit: () => canElicit, elicit });
+	const agent = isAgentSession(io);
+	const guard = mcpGuard({ stageAuthorized: !agent && (options.stageAuthorized ?? false), canElicit: () => !agent && canElicit, elicit });
 	const runner = options.runner ?? processRunner;
 
 	async function callTool(message: JsonRpcMessage): Promise<void> {

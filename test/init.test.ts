@@ -155,7 +155,7 @@ test("init_interactivo pregunta antes de crear", async (t) => {
 test("init --create_no crea desde una sesión agéntica", async (t) => {
 	const { home, repo, omi } = await setup(t);
 	const io = testIo({ homeDir: home, cwd: repo, env: { OMI_AGENT_SESSION: "1" } });
-	assert.equal(await run(["init", "--project", "nueva", "--service", "api", "--create"], io), 1);
+	assert.equal(await run(["init", "--project", "nueva", "--service", "api", "--create"], io), 2);
 	assert.equal(omi.requests.filter((request) => request.method === "POST").length, 0);
 });
 

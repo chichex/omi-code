@@ -28,7 +28,7 @@ export function cliGuard(io: Io, options: { yes: boolean }): Guard {
 	return sessionGuard(
 		{
 			surface: "cli",
-			canAsk: io.interactive,
+			canAsk: io.interactive && !agent,
 			preApproved: options.yes && !agent,
 			ask: async (action: GuardedAction) => {
 				io.err(`\n${action.summary}\n${action.diff}\n`);
