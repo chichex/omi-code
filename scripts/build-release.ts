@@ -6,8 +6,10 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { exists } from "../src/core/files.ts";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { PLATFORMS, assetNames, type Platform } from "../src/upgrade/release.ts";
@@ -34,13 +36,6 @@ const OMI_ASSETS: readonly [source: string, target: string][] = [
 	["themes", "themes"],
 	["extensions/subagent/agents", "agents"],
 ];
-
-async function exists(path: string): Promise<boolean> {
-	return stat(path).then(
-		() => true,
-		() => false,
-	);
-}
 
 function sha256(content: Buffer): string {
 	return createHash("sha256").update(content).digest("hex");
@@ -95,9 +90,15 @@ async function writeChecksums(out: string, names: readonly string[]): Promise<vo
 }
 
 export async function buildRelease(targets: readonly Platform[], out: string): Promise<string[]> {
-	const work = join(out, ".build");
-	await rm(out, { recursive: true, force: true });
-	await mkdir(work, { recursive: true });
+	out = resolve(out);
+	const canonical = await realpath(out).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return out; throw error; });
+	const repo = relative(canonical, resolve(ROOT));
+	if (canonical === homedir() || (repo !== ".." && !repo.startsWith("../") && !isAbsolute(repo)) || await exists(join(canonical, ".git"))) {
+		throw new Error(`unsafe_release_output: ${out} es el home, un checkout o un ancestro del repo; elegí un directorio de artifacts`);
+	}
+	await mkdir(out, { recursive: true });
+	const work = await mkdtemp(join(out, ".build-"));
+	try {
 	const entries = await writeEntries(work);
 	const stage = join(work, "runtime");
 	await stageRuntime(stage);
@@ -114,8 +115,10 @@ export async function buildRelease(targets: readonly Platform[], out: string): P
 	}
 	await cp(join(ROOT, "install.sh"), join(out, "install.sh"));
 	await writeChecksums(out, artifacts);
-	await rm(work, { recursive: true, force: true });
 	return [...artifacts, "install.sh", "checksums.txt"];
+	} finally {
+		await rm(work, { recursive: true, force: true });
+	}
 }
 
 function parseTargets(value: string | undefined): Platform[] {

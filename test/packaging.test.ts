@@ -54,6 +54,13 @@ test("install.sh_cae al bundle si el binario suelto no arranca", async (t) => {
 	assert.equal(execFileSync(join(home, ".omi/bin/omi"), ["--version"], { encoding: "utf8" }), "1.0.0\n");
 });
 
+test("install.sh fallback no interpreta caracteres de shell del HOME", async (t) => {
+	const home = join(await tempDir(t), "home $unknown ' \" \\ `false`");
+	const result = install(await fakeRelease(t, { binary: "#!/bin/sh\nexit 137\n" }), home);
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(execFileSync(join(home, ".omi/bin/omi"), ["--version"], { encoding: "utf8" }), "1.0.0\n");
+});
+
 test("install.sh_falla con un mensaje claro si nada arranca", async (t) => {
 	const home = await tempDir(t);
 	const broken = "#!/bin/sh\nexit 137\n";
@@ -86,6 +93,23 @@ test("release.yml_compila con bun y verifica que el tag coincida", async () => {
 	assert.match(workflow, /scripts\/build-release\.ts/);
 	assert.match(workflow, /GITHUB_REF_NAME/);
 	assert.ok(workflow.indexOf("npm test") < workflow.indexOf("gh release create"));
+});
+
+test("buildRelease no borra archivos previos del directorio de salida", async (t) => {
+	const { buildRelease } = await import("../scripts/build-release.ts");
+	const out = await tempDir(t);
+	await writeFile(join(out, "keep.txt"), "user data\n");
+	await buildRelease([], out);
+	assert.equal(await readFile(join(out, "keep.txt"), "utf8"), "user data\n");
+});
+
+test("buildRelease rechaza un checkout Git como salida sin tocarlo", async (t) => {
+	const { buildRelease } = await import("../scripts/build-release.ts");
+	const out = await tempDir(t);
+	await mkdir(join(out, ".git"));
+	await writeFile(join(out, "keep.txt"), "user data\n");
+	await assert.rejects(buildRelease([], out), /unsafe_release_output/);
+	assert.equal(await readFile(join(out, "keep.txt"), "utf8"), "user data\n");
 });
 
 test("build-release_declara las cuatro plataformas", async () => {

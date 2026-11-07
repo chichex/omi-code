@@ -76,9 +76,14 @@ chmod +x "$TARGET/bin/omi.new"
 sign "$TARGET/bin/omi.new"
 mv "$TARGET/bin/omi.new" "$TARGET/bin/omi"
 
+# Cita POSIX: una ruta es dato, no código de shell.
+shell_quote() {
+	printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
 # Fallback: si el binario suelto no arranca, se usa el del bundle.
 if ! "$TARGET/bin/omi" --version >/dev/null 2>&1; then
-	printf '#!/bin/sh\nexec "%s" "$@"\n' "$TARGET/runtime/omi" >"$TARGET/bin/omi.new"
+	printf '#!/bin/sh\nexec %s "$@"\n' "$(shell_quote "$TARGET/runtime/omi")" >"$TARGET/bin/omi.new"
 	chmod +x "$TARGET/bin/omi.new"
 	mv "$TARGET/bin/omi.new" "$TARGET/bin/omi"
 	"$TARGET/bin/omi" --version >/dev/null 2>&1 || die "omi no arranca en esta máquina"
