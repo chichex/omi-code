@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -80,6 +81,17 @@ test("omi_jobs_manage_un job de un service con prod desplegado exige un humano",
 	assert.deepEqual(linked.mutations(), []);
 });
 
+test("mover un job de un service con prod desplegado a otro sin prod sigue exigiendo humano", async (t) => {
+	const linked = await linkedProject(t, [["api", 8080], ["worker", 8080]]);
+	await linked.call("omi_jobs_manage", JOB);
+	deployProd(linked);
+	const before = linked.mutations().length;
+	await assert.rejects(linked.call("omi_jobs_manage", { action: "update", name: "facturar", service: "worker" }, { guard: humanless(true) }),
+		(error: OmiError) => error.code === GUARDRAIL_CONFIRMATION_REQUIRED);
+	assert.equal(linked.mutations().length, before);
+	assert.equal(linked.workloads.jobs.get("facturar")?.service, "api");
+});
+
 test("omi_jobs_manage_operar prod directamente exige un humano", async (t) => {
 	const linked = await linkedProject(t);
 	await linked.call("omi_jobs_manage", JOB);
@@ -130,10 +142,11 @@ for (const [language, source] of unsigned) {
 
 test("checkHandler_exige comparar en tiempo constante", () => {
 	const naive = 'const s = process.env.OMI_TRIGGER_SECRET; const t = req.headers["x-omi-timestamp"]; const g = req.headers["x-omi-signature"]; if (createHmac("sha256", s).update(t + ".").digest("hex") === g) {}';
-	assert.deepEqual(checkHandler(naive, "ts"), ["comparación en tiempo constante (timingSafeEqual)"]);
+	assert.deepEqual(checkHandler(naive, "ts"), ["comparación en tiempo constante (timingSafeEqual)", "antigüedad de X-Omi-Timestamp"]);
 });
 
 test("la plantilla ts verifica los vectores generados por trigger.Sign de Go", async (t) => {
+	t.mock.method(Date, "now", () => 1793858403_000);
 	const dir = await tempDir(t);
 	const file = join(dir, "handler.ts");
 	await writeFile(file, handlerTemplate("ts", "/jobs/x"));
@@ -148,5 +161,20 @@ test("la plantilla ts verifica los vectores generados por trigger.Sign de Go", a
 		const headers = { "x-omi-timestamp": "1793858403", "x-omi-signature": signature };
 		assert.equal(verifyOmiJob(headers, Buffer.from(body)), true);
 		assert.equal(verifyOmiJob({ ...headers, "x-omi-timestamp": "1793858404" }, Buffer.from(body)), false);
+	}
+});
+
+test("la plantilla ts rechaza firmas válidas fuera de la ventana temporal y timestamps inválidos", async (t) => {
+	t.mock.method(Date, "now", () => 1793858403_000);
+	const file = join(await tempDir(t), "handler.ts");
+	await writeFile(file, handlerTemplate("ts", "/jobs/x"));
+	const { verifyOmiJob } = await import(file);
+	const previous = process.env.OMI_TRIGGER_SECRET;
+	t.after(() => { if (previous === undefined) delete process.env.OMI_TRIGGER_SECRET; else process.env.OMI_TRIGGER_SECRET = previous; });
+	process.env.OMI_TRIGGER_SECRET = "clave";
+	for (const timestamp of ["1793858102", "1793858704", "not-a-date", "", "1e9"]) {
+		const body = Buffer.from("hola");
+		const signature = `sha256=${createHmac("sha256", "clave").update(`${timestamp}.`).update(body).digest("hex")}`;
+		assert.equal(verifyOmiJob({ "x-omi-timestamp": timestamp, "x-omi-signature": signature }, body), false, timestamp);
 	}
 });

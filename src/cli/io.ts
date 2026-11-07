@@ -1,6 +1,8 @@
 // Frontera de E/S de la CLI: los comandos no tocan process ni la terminal directamente.
 
 import { homedir } from "node:os";
+import { isAbsolute } from "node:path";
+import { UsageError } from "../core/errors.ts";
 import { createInterface } from "node:readline/promises";
 
 export interface Io {
@@ -68,10 +70,12 @@ async function askHidden(question: string): Promise<string> {
 }
 
 export function processIo(): Io {
+	const homeDir = process.env.HOME ?? homedir();
+	if (!isAbsolute(homeDir)) throw new UsageError("HOME debe ser una ruta absoluta y no vacía");
 	return {
 		env: process.env,
 		cwd: process.cwd(),
-		homeDir: process.env.HOME ?? homedir(),
+		homeDir,
 		interactive: Boolean(process.stdin.isTTY && process.stderr.isTTY),
 		out: (text) => process.stdout.write(`${text}\n`),
 		err: (text) => process.stderr.write(`${text}\n`),

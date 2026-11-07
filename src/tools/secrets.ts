@@ -3,7 +3,14 @@
 import { OmiError } from "../core/errors.ts";
 import type { ToolRuntime } from "./types.ts";
 
+export function secretSource(fromEnv: string | undefined): string {
+	if (fromEnv === undefined) return "ingreso oculto del humano";
+	if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(fromEnv)) throw new OmiError("secret_source_invalid", "nombre de variable local inválido");
+	return `$${fromEnv}`;
+}
+
 export async function readSecretValue(name: string, fromEnv: string | undefined, runtime: ToolRuntime): Promise<string> {
+	secretSource(fromEnv);
 	if (fromEnv !== undefined) {
 		const value = runtime.io.env[fromEnv];
 		if (value === undefined || value === "") {

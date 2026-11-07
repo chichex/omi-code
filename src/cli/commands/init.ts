@@ -2,7 +2,8 @@
 
 import { basename } from "node:path";
 import { EXIT_OK, UsageError } from "../../core/errors.ts";
-import { isAgentSession } from "../../guardrails/surfaces.ts";
+import { cliGuard, isAgentSession } from "../../guardrails/surfaces.ts";
+import { enforce } from "../../guardrails/policy.ts";
 import { linkProject, type LinkContext, type LinkRequest, type ServiceRequest } from "../../project/init.ts";
 import { parseFlags } from "../flags.ts";
 import type { Io } from "../io.ts";
@@ -54,22 +55,21 @@ export async function initCommand(args: string[], io: Io): Promise<number> {
 		...(values.org === undefined ? {} : { organizationSlug: values.org }),
 		...(values.name === undefined ? {} : { projectName: values.name }),
 		...(values.env === undefined ? {} : { environments: values.env.split(",").map((name) => name.trim()) }),
-		// Dentro de una sesión agéntica crear pasa por la tool, que lo somete al guardrail.
-		...(values.create === undefined || isAgentSession(io) ? {} : { create: values.create }),
 	};
 	let approved = false;
+	const guard = cliGuard(io, { yes: values.create === true });
 	const context: LinkContext = {
 		io,
 		...(values.api === undefined ? {} : { apiUrl: values.api }),
-		...(io.interactive
-			? {
-					// Una respuesta alcanza para todo lo que falte en esta corrida.
-					confirmCreate: async (what: string) => {
-						approved ||= /^s/i.test((await io.prompt(`${what} no existe en OMI. ¿Crear lo que falte? [s/N] `)).trim());
-						return approved;
-					},
-				}
-			: {}),
+		confirmCreate: async (what: string) => {
+			if (approved) return true;
+			// Una CLI humana sin terminal ni --create conserva su diagnóstico de uso.
+			if (!io.interactive && values.create !== true && !isAgentSession(io)) return false;
+			await enforce({ operation: "link_create", summary: `Crear lo que falte en OMI para ${projectSlug}`,
+				diff: `Proyecto: ${projectSlug}\nServices: ${services.map((s) => s.name).join(", ")}\nAmbientes: ${request.environments?.join(", ") ?? "stage"}\n+ ${what}` }, guard);
+			approved = true;
+			return true;
+		},
 	};
 	const result = await linkProject(request, context);
 	if (values.json === true) {

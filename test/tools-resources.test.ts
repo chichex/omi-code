@@ -114,6 +114,26 @@ test("omi_postgres_manage_una operación fallida sale con error y su motivo", as
 	);
 });
 
+test("omi_postgres_manage muestra el origen de la conexión sin exponer su valor", async (t) => {
+	const linked = await linkedProject(t);
+	const seen: string[] = [];
+	await linked.call("omi_postgres_manage", { action: "create", environment: "stage", slug: "app", connectionFromEnv: "MI_DB" }, {
+		io: connectionIo(linked), guard: { ...humanless(), canAsk: true, ask: async (action) => { seen.push(action.diff); return true; } },
+	});
+	assert.match(seen.join("\n"), /\$MI_DB/);
+	assert.doesNotMatch(seen.join("\n"), /clave-real/);
+});
+
+test("omi_postgres_manage sale con un diagnóstico accionable si la recuperación requiere otra conexión", async (t) => {
+	const linked = await linkedProject(t);
+	linked.omi.route("GET /api/v1/organizations/{organizationID}/projects/{projectSlug}/resource-operations/{operationID}", () => ({
+		status: 200, body: { id: "rop_1", resource_id: "res_app", state: "reconciliando", error: "el baseline se restauró; aportá otra conexión para completar la recuperación" },
+	}));
+	await assert.rejects(linked.call("omi_postgres_manage", { action: "create", environment: "stage", slug: "app", mode: "local" }, {
+		signal: AbortSignal.timeout(500),
+	}), (error: OmiError) => error.code === "resource_recovery_required" && /otra conexión/.test(error.message));
+});
+
 test("omi_postgres_manage_una alta externa exige conexión por variable local", async (t) => {
 	const linked = await linkedProject(t);
 	await assert.rejects(

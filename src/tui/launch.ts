@@ -67,5 +67,5 @@ export async function launchTui(args: string[], io: Io, deps: LaunchDeps = {}): 
 	const skillArgs = skills.flatMap((path) => ["--skill", path]);
 	const themeArgs = (await isDirectory(runtime.themesDir)) ? ["--theme", runtime.themesDir] : [];
 	await piMain([...skillArgs, ...themeArgs, ...args], { extensionFactories: [...embeddedExtensions(), omiToolsExtension(io)] });
-	return EXIT_OK;
+	return typeof process.exitCode === "number" ? process.exitCode : EXIT_OK;
 }

@@ -34,6 +34,18 @@ function fakePi(calls: Call[]): PiMain {
 	};
 }
 
+for (const exitCode of [1, 2]) {
+	test(`launchTui conserva el código ${exitCode} devuelto por Pi`, async (t) => {
+		const previous = process.exitCode;
+		t.after(() => { process.exitCode = previous; });
+		const home = await tempDir(t);
+		const result = await launchTui([], testIo({ homeDir: home }), {
+			skillsDir: await tempDir(t), piMain: async () => { process.exitCode = exitCode; },
+		});
+		assert.equal(result, exitCode);
+	});
+}
+
 test("launchTui_usa ~/.omi/agent como configuración global de Pi", async (t) => {
 	const home = await tempDir(t);
 	const calls: Call[] = [];
@@ -184,6 +196,25 @@ test("registerCatalogTools_transmite el progreso como actualización de la tool"
 	const updates: string[] = [];
 	await tools.get("omi_logs_tail")?.execute("1", { service: "api", environment: "stage" }, undefined, (update) => updates.push(update.content[0]?.text ?? ""), { hasUI: false });
 	assert.deepEqual(updates, ["uno", "uno\ndos"]);
+});
+
+test("el progreso de una tool tiene una cola acotada en la TUI", async (t) => {
+	const { Type } = await import("typebox");
+	const { defineTool } = await import("../src/tools/types.ts");
+	const { pi, tools } = fakeExtensionApi();
+	const tool = defineTool({ name: "progress", label: "progress", description: "progress", parameters: Type.Object({}), run: async (_params, runtime) => {
+		for (let i = 0; i < 500; i++) runtime.progress?.(`${i}:` + "x".repeat(200));
+		return { text: "done", data: {} };
+	} });
+	registerCatalogTools(pi, [tool], testIo({ homeDir: await tempDir(t) }), fakeRunner());
+	let maxLines = 0;
+	let last = "";
+	await tools.get("progress")?.execute("1", {}, undefined, (update) => {
+		last = update.content[0]?.text ?? "";
+		maxLines = Math.max(maxLines, last.split("\n").length);
+	}, { hasUI: false });
+	assert.ok(maxLines <= 50, `historial reenviado: ${maxLines}`);
+	assert.match(last, /499:/);
 });
 
 test("launchTui_marca la sesión como agéntica para los procesos hijos", async (t) => {

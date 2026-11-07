@@ -48,7 +48,7 @@ export async function publishDirect(request: DirectPublish): Promise<void> {
 			runner,
 			"docker",
 			[
-				"build",
+				"build", "--platform", "linux/amd64",
 				"--build-arg", `VERSION=${version}`,
 				"--build-arg", `GIT_COMMIT=${commit}`,
 				"--build-arg", `BUILD_DATE=${created}`,

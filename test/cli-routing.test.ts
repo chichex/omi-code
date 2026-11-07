@@ -51,6 +51,20 @@ test("omi con un subcomando desconocido_sale con 2 y no abre la TUI", async (t) 
 	assert.deepEqual(deps.tui, []);
 });
 
+for (const command of ["toString", "constructor", "__proto__", "valueOf"]) {
+	test(`omi ${command} es un subcomando desconocido, no un miembro del prototipo`, async (t) => {
+		const io = testIo({ homeDir: await tempDir(t) });
+		assert.equal(await run([command], io, recordingDeps()), 2);
+		assert.match(io.errors(), /subcomando desconocido/);
+	});
+}
+
+test("el manifiesto no ofrece un bin TypeScript instalable bajo node_modules", async () => {
+	const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+	assert.equal(manifest.private, true);
+	assert.equal(manifest.bin, undefined);
+});
+
 test("omi --help_lista todos los subcomandos del corte", async (t) => {
 	const home = await tempDir(t);
 	const io = testIo({ homeDir: home });

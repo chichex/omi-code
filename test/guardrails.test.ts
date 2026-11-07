@@ -143,6 +143,12 @@ test("cliGuard_dentro de una sesión agéntica --yes no vale y stage no está au
 	assert.equal(nested.stageAuthorized, false);
 });
 
+test("cliGuard en sesión agéntica no confía en un TTY ni consume su respuesta", async () => {
+	const io = testIo({ homeDir: "/h", env: { OMI_AGENT_SESSION: "1" }, interactive: true, answers: ["s"] });
+	await assert.rejects(enforce(action("deploy", "prod"), cliGuard(io, { yes: true })), /confirmación humana/);
+	assert.deepEqual(io.prompts, []);
+});
+
 test("cliGuard_interactivo muestra el diff por stderr y pregunta", async () => {
 	const io = testIo({ homeDir: "/h", interactive: true, answers: ["s"] });
 	const cli = cliGuard(io, { yes: false });

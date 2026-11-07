@@ -33,6 +33,7 @@ export function registerCatalogTools(pi: ExtensionAPI, catalog: readonly OmiTool
 					...(signal === undefined ? {} : { signal }),
 					progress: (text) => {
 						lines.push(text);
+						if (lines.length > 50) lines.shift();
 						onUpdate?.({ content: [{ type: "text", text: lines.join("\n") }], details: undefined });
 					},
 				};

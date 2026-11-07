@@ -7,7 +7,7 @@ import { OmiError, UsageError } from "../core/errors.ts";
 import { enforce } from "../guardrails/policy.ts";
 import { ENV_PORT, RESERVED_ENV_PREFIX, RESOURCE_ENV_PREFIX } from "../protocol/constants.ts";
 import { environmentOf, environmentPath, linkedService, openScope, readService } from "./scope.ts";
-import { readSecretValue } from "./secrets.ts";
+import { readSecretValue, secretSource } from "./secrets.ts";
 import { defineTool } from "./types.ts";
 
 const VARIABLE_NAME = /^[A-Z_][A-Z0-9_]*$/;
@@ -131,12 +131,17 @@ export const envSetTool = defineTool({
 			...(params.unset === undefined ? {} : { unset: params.unset }),
 			secrets: placeholders,
 		});
+		const sources = new Map((params.secrets ?? []).map((secret) => [secret.name, secretSource(secret.fromEnv)]));
+		const approvalDiff = preview.diff.map((line) => {
+			const name = line.split(" ")[1] ?? "";
+			return sources.has(name) ? `${line} ← ${sources.get(name)}` : line;
+		});
 		await enforce(
 			{
 				operation: preview.touchesSecrets ? "secrets" : "variables",
 				environment: params.environment,
 				summary: `Variables de ${service.name} en ${params.environment}`,
-				diff: preview.diff.join("\n"),
+				diff: approvalDiff.join("\n"),
 			},
 			runtime.guard,
 		);
@@ -147,7 +152,14 @@ export const envSetTool = defineTool({
 			assertValueSize(name, value);
 			secrets.push({ name, value });
 		}
-		const plan = planVariables(environment.variables, {
+		// La aprobación y la entrada oculta pueden demorar: rebasear el cambio sobre la foto reciente.
+		const latest = environmentOf(await readService(scope, service.name), params.environment);
+		const change = { ...(params.set === undefined ? {} : { set: params.set }), ...(params.unset === undefined ? {} : { unset: params.unset }), secrets: placeholders };
+		const rebased = planVariables(latest.variables, change);
+		if (JSON.stringify(rebased.diff) !== JSON.stringify(preview.diff) || rebased.touchesSecrets !== preview.touchesSecrets) {
+			throw new OmiError("variables_changed", "las variables afectadas cambiaron durante la aprobación", { hint: "reintentá para confirmar el diff actualizado" });
+		}
+		const plan = planVariables(latest.variables, {
 			...(params.set === undefined ? {} : { set: params.set }),
 			...(params.unset === undefined ? {} : { unset: params.unset }),
 			secrets,

@@ -2,6 +2,7 @@
 
 import { Type } from "typebox";
 import { enforce } from "../guardrails/policy.ts";
+import { GuardrailError } from "../core/errors.ts";
 import { linkProject } from "../project/init.ts";
 import { defineTool } from "./types.ts";
 
@@ -19,7 +20,7 @@ const Parameters = Type.Object({
 		{ minItems: 1 },
 	),
 	environments: Type.Optional(Type.Array(Type.Union([Type.Literal("stage"), Type.Literal("prod")]), { minItems: 1 })),
-	create: Type.Optional(Type.Boolean({ description: "Crea en OMI el proyecto o los services que falten" })),
+	create: Type.Optional(Type.Boolean({ description: "Solicita al humano aprobar la creación; no constituye aprobación" })),
 });
 
 export const linkProjectTool = defineTool({
@@ -31,16 +32,13 @@ export const linkProjectTool = defineTool({
 		// `create` del modelo sólo habilita la pregunta: cada alta la aprueba el guardrail.
 		const result = await linkProject(request, {
 			io: runtime.io,
+			confirmCreate: async (what) => {
+				if (create !== true) throw new GuardrailError(`Crear ${what} requiere confirmación humana; solicitá la aprobación desde omi_link_project con create`);
+				await enforce({ operation: "link_create", summary: `Crear en OMI: ${what}`, diff: `+ ${what}` }, runtime.guard);
+				return true;
+			},
 			...(runtime.apiUrl === undefined ? {} : { apiUrl: runtime.apiUrl }),
 			...(runtime.signal === undefined ? {} : { signal: runtime.signal }),
-			...(create === true
-				? {
-						confirmCreate: async (what: string) => {
-							await enforce({ operation: "link_create", summary: `Crear en OMI: ${what}`, diff: `+ ${what}` }, runtime.guard);
-							return true;
-						},
-					}
-				: {}),
 		});
 		const names = result.link.services.map((service) => service.name).join(", ");
 		return { text: `Vinculado ${result.link.organizationSlug}/${result.link.projectSlug}: ${names}`, data: result };
