@@ -25,6 +25,23 @@ npm test
 npm run omi -- --help
 ```
 
+## Publicación y reintentos
+
+El modo directo construye para `linux/amd64`, igual que el workflow del kit en su runner predeterminado.
+No sobrescribe una versión que OMI ya detectó. Si la espera del registry vence después del push,
+`omi publish --version X.Y.Z --service api --wait-only` retoma sólo el polling, sin construir ni tocar tags.
+
+## Alcance de los guardrails
+
+Las confirmaciones protegen las operaciones realizadas por las superficies soportadas; **no son un sandbox**.
+Un agente con bash y acceso al mismo filesystem puede quitar variables de entorno, fabricar un TTY,
+leer el token local o actuar como su propio cliente MCP. Ni un TTY ni una respuesta MCP `accept` prueban identidad humana.
+No confíes en estos checks como barrera frente a código hostil con acceso a credenciales de producción.
+
+El aislamiento y la autorización fuera del control del agente quedan pendientes en [CLI #5](https://github.com/chichex/omi-code/issues/5)
+y [MCP #6](https://github.com/chichex/omi-code/issues/6). Las sesiones identificadas como agénticas no aceptan `--yes`,
+`--create`, pseudo-terminales ni `--authorize-stage` como aprobación; ocultar esa identidad sigue fuera de la garantía actual.
+
 ## Licencia
 
 MIT.
