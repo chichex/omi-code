@@ -3,7 +3,7 @@
 ## Stack
 
 TypeScript ESM sobre Node 22.19 o superior, sin transpilar en desarrollo (type stripping nativo).
-Tests con `node --test`. Embebe `@earendil-works/pi-coding-agent`; el binario sale de `bun build --compile`.
+Tests con `node --test`; el probe de la plantilla Python usa `python3` (sólo verificación, no dependencia del binario). Embebe `@earendil-works/pi-coding-agent`; el binario sale de `bun build --compile`.
 Dependencias runtime fijadas a versión exacta. Diseño UI: no aplica (CLI, TUI de Pi y MCP).
 
 ## Comandos
@@ -11,11 +11,11 @@ Dependencias runtime fijadas a versión exacta. Diseño UI: no aplica (CLI, TUI 
 | Acción | Comando | cwd | Estado | Duración típica | Notas |
 |---|---|---|---|---|---|
 | deps | `npm ci` | . | verificado 2026-11-05 | ~5s | un worktree nuevo no trae `node_modules` |
-| typecheck | `npm run typecheck` | . | verificado 2026-11-05 | ~2s | dos proyectos: raíz estricta y `extensions/` con su `tsconfig` |
-| test | `npm test` | . | verificado 2026-11-05 | ~8s | mock de omi-api en `test/helpers/mock-omi.ts`; `smoke.test.ts` usa Pi y procesos reales; incluye `extensions/**/*.test.ts` |
-| empaquetado | `npm run test:packaging` | . | verificado 2026-11-05 | ~12s | requiere bun; compila para el host, instala en un HOME temporal y arranca el binario |
-| release local | `node scripts/build-release.ts --out <dir>` | . | verificado 2026-11-05 | ~25s | las cuatro plataformas; `--targets` acota |
-| censo de protocolo | `OMI_REPO=<checkout de chichex/omi> npm test` | . | verificado 2026-11-05 | ~6s | activa la comparación de `src/protocol/constants.ts` contra el código Go |
+| typecheck | `npm run typecheck` | . | verificado 2026-11-07 | ~2s | dos proyectos: raíz estricta y `extensions/` con su `tsconfig` |
+| test | `npm test` | . | verificado 2026-11-07 | ~8s | mock de omi-api en `test/helpers/mock-omi.ts`; `smoke.test.ts` usa Pi y procesos reales; incluye `extensions/**/*.test.ts`; requiere `python3` para el handler; los 2 smoke de packaging se corren aparte |
+| empaquetado | `npm run test:packaging` | . | verificado 2026-11-07 | ~12s | requiere bun; compila para el host, instala en un HOME temporal (también raíz personalizada), verifica versión/assets de Pi y entorno de procesos hijos |
+| release local | `node scripts/build-release.ts --out <dir>` | . | verificado 2026-11-07 | ~25s | las cuatro plataformas; `--targets` acota |
+| censo de protocolo | `OMI_REPO=<checkout de chichex/omi> npm test` | . | verificado 2026-11-07 | ~6s | activa la comparación de `src/protocol/constants.ts` contra el código Go |
 | correr | `npm run omi -- --help` | . | verificado 2026-11-05 | <1s | |
 
 ## Ambientes
@@ -72,10 +72,14 @@ done
 - `#extensions/*`, `extensions/embedded.d.ts` y `resolvePackageJsonImports: false`: cortan el typecheck estricto en el código portado. No usar `paths`: bun los respeta, empaqueta la declaración y las factories quedan `undefined`.
 - En macOS un binario de bun muere con exit 137 hasta refirmarlo ad hoc: lo hacen `install.sh` y `omi upgrade`, y decide el probe de arranque.
 - Los skills y extensiones vienen de `chichex/skills` en `553cf06`. El marcador `Chiche-Tracking` no se renombró: es formato de archivos existentes.
+- 2026-11-07, feedback: `OMI_HOME` es una raíz absoluta; un binario instalado infiere la raíz por su ubicación. `PI_PACKAGE_DIR` y `OMI_RUNTIME_DIR` pertenecen sólo al host y se quitan de bash, Runner y subagentes.
+- 2026-11-07, feedback: el bump de Pi verifica packaging en su propio workflow y deja el merge al humano; no depende de eventos de PR creados con `GITHUB_TOKEN`.
+- 2026-11-07, feedback: instalación privada con `gh` autenticado; upgrade con `GH_TOKEN`/`GITHUB_TOKEN` enviado sólo a la API de releases de este repo, nunca persistido.
 
 ## Gaps
 
 - Depende de `chichex/omi#140` para funcionar contra producción.
 - Sin cobertura automática contra una `omi-api` real: los tests usan un doble que copia el contrato.
+- Los guardrails locales no aíslan a un agente con bash y acceso al Bearer. Diferidos por decisión humana: aislamiento CLI en #5 y confianza de aprobación MCP en #6; los hilos de review siguen abiertos.
 - `/skill:init --update` migra `.sdd/` a `.omi/`, pero no `.chiche/` a `.omi/`. Este repo sigue con `.chiche/project.md`, que se lee por compatibilidad.
 - El contrato de `/version` se verifica estático al publicar (`git grep`): OMI no lo valida.

@@ -58,7 +58,7 @@ El bump semanal de Pi abre un PR sólo tras typecheck, tests y empaquetado en el
 
 ## Desarrollo
 
-Requiere Node 22.19 o superior. TypeScript corre sin transpilar desde el checkout.
+Requiere Node 22.19 o superior y `python3` para verificar la plantilla del handler Python en los tests. TypeScript corre sin transpilar desde el checkout.
 No se distribuye por npm: Node no ejecuta TypeScript dentro de `node_modules`.
 El paquete es privado para impedir publicaciones accidentales; la distribución para usuarios es el binario de release.
 
