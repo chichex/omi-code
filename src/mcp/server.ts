@@ -1,6 +1,7 @@
 // Cara MCP: JSON-RPC 2.0 delimitado por líneas sobre stdio, con el mismo catálogo que la TUI.
 // stdout es del protocolo: cualquier texto para humanos va a stderr.
 
+import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import pkg from "../../package.json" with { type: "json" };
 import { Value } from "typebox/value";
@@ -34,11 +35,15 @@ export interface McpServerOptions {
 	write(message: JsonRpcMessage): void;
 	/** Autoriza operar stage: lo decide quien configura el servidor, no el modelo. */
 	stageAuthorized?: boolean;
+	apiUrl?: string;
+	/** Plazo del diálogo humano; al vencer se rechaza, nunca se aprueba. */
+	elicitationTimeoutMs?: number;
 	runner?: Runner;
 }
 
 export interface McpServer {
 	handle(message: JsonRpcMessage): Promise<void>;
+	close(): void;
 }
 
 function failure(text: string): { isError: true; content: [{ type: "text"; text: string }] } {
@@ -65,13 +70,20 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 		write({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });
 
 	let canElicit = false;
-	let nextElicitation = 0;
+	let closed = false;
+	const elicitationTimeoutMs = options.elicitationTimeoutMs ?? 120_000;
 	const pending = new Map<string, (accepted: boolean) => void>();
 	const elicit = (message: string): Promise<boolean> =>
 		new Promise((resolve) => {
-			nextElicitation += 1;
-			const id = `omi-elicit-${nextElicitation}`;
-			pending.set(id, resolve);
+			if (closed) { resolve(false); return; }
+			const id = `omi-elicit-${randomUUID()}`;
+			const finish = (accepted: boolean): void => {
+				clearTimeout(timeout);
+				pending.delete(id);
+				resolve(accepted);
+			};
+			const timeout = setTimeout(() => finish(false), elicitationTimeoutMs);
+			pending.set(id, finish);
 			write({
 				jsonrpc: "2.0",
 				id,
@@ -98,7 +110,7 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 			respond(message.id, failure(`invalid_arguments: ${detail}`));
 			return;
 		}
-		const runtime: ToolRuntime = { io, guard, runner };
+		const runtime: ToolRuntime = { io, guard, runner, ...(options.apiUrl === undefined ? {} : { apiUrl: options.apiUrl }) };
 		try {
 			const result = await tool.run(args, runtime);
 			respond(message.id, {
@@ -112,7 +124,13 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 	}
 
 	return {
+		close() {
+			closed = true;
+			for (const finish of pending.values()) finish(false);
+			pending.clear();
+		},
 		async handle(message) {
+			if (closed) return;
 			const isRequest = message.id !== undefined && message.id !== null;
 			if (message.method === undefined) {
 				// Respuesta del cliente a una elicitación: el error también cuenta como un no.
@@ -154,9 +172,12 @@ export function createMcpServer(options: McpServerOptions): McpServer {
 export async function serveMcp(args: string[], io: Io): Promise<number> {
 	const { values } = parseFlags(args, { "authorize-stage": { type: "boolean" } });
 	const write = (message: JsonRpcMessage): void => void process.stdout.write(`${JSON.stringify(message)}\n`);
-	const server = createMcpServer({ tools: CATALOG, io, write, stageAuthorized: values["authorize-stage"] === true });
+	const server = createMcpServer({ tools: CATALOG, io, write, stageAuthorized: values["authorize-stage"] === true,
+		...(values.api === undefined ? {} : { apiUrl: values.api }),
+	});
 	const pending = new Set<Promise<void>>();
 	const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
+	try {
 	for await (const line of lines) {
 		if (line.trim() === "") continue;
 		let message: JsonRpcMessage;
@@ -170,6 +191,9 @@ export async function serveMcp(args: string[], io: Io): Promise<number> {
 		pending.add(task);
 		void task.finally(() => pending.delete(task));
 	}
-	await Promise.all(pending);
+	} finally {
+		server.close();
+		await Promise.all(pending);
+	}
 	return EXIT_OK;
 }

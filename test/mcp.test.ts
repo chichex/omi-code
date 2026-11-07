@@ -135,6 +135,24 @@ function publishVersion(linked: Linked): void {
 	if (view !== undefined) view.versions = [{ tag: "1.1.0", prerelease: false }];
 }
 
+for (const reason of ["timeout", "close"]) {
+	test(`mcp cancela la elicitación pendiente por ${reason}`, async (t) => {
+		const sent: JsonRpcMessage[] = [];
+		const { enforce } = await import("../src/guardrails/policy.ts");
+		const tool = defineTool({ name: "mutate", label: "mutate", description: "mutate", parameters: Type.Object({}), run: async (_params, runtime) => {
+			await enforce({ operation: "deploy", environment: "prod", summary: "deploy", diff: "prod" }, runtime.guard);
+			throw new Error("no debe aprobarse");
+		} });
+		const mcp = createMcpServer({ tools: [tool], io: testIo({ homeDir: await tempDir(t) }), write: (message) => sent.push(message), elicitationTimeoutMs: 10 });
+		await initialize(mcp, { elicitation: {} });
+		const call = mcp.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "mutate", arguments: {} } });
+		if (reason === "close") mcp.close?.();
+		const result = await Promise.race([call.then(() => "completed"), new Promise((resolve) => setTimeout(() => resolve("hung"), 100))]);
+		assert.equal(result, "completed");
+		assert.equal((sent.at(-1)?.result as { isError?: boolean }).isError, true);
+	});
+}
+
 test("mcp_sin aprobación rechaza prod con guardrail_confirmation_required", async (t) => {
 	const linked = await linkedProject(t);
 	publishVersion(linked);
