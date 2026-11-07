@@ -77,15 +77,20 @@ interface Layout {
 	work: string;
 }
 
-async function swap(active: string, replacement: string, backup: string): Promise<void> {
-	if (await exists(active)) await rename(active, backup);
+async function swap(active: string, replacement: string, backup: string, undo: (() => Promise<void>)[]): Promise<void> {
+	if (await exists(active)) {
+		await rename(active, backup);
+		undo.push(() => rename(backup, active));
+	}
 	await rename(replacement, active);
+	undo.push(() => rm(active, { recursive: true, force: true }));
 }
 
 /** Con el binario suelto roto, un shim apunta al del runtime: mismo fallback que install.sh. */
 async function activate(layout: Layout, runner: Runner): Promise<void> {
 	if (await starts(layout.binary, runner)) return;
-	const shim = `#!/bin/sh\nexec "${join(layout.runtime, "omi")}" "$@"\n`;
+	const executable = join(layout.runtime, "omi").replaceAll("'", "'\\''");
+	const shim = `#!/bin/sh\nexec '${executable}' "$@"\n`;
 	await writeFile(layout.binary, shim, { mode: 0o755 });
 	if (!(await starts(layout.binary, runner))) throw new OmiError("upgrade_failed", "la versión nueva no arranca");
 }
@@ -102,20 +107,27 @@ async function install(layout: Layout, downloaded: { binary: string; runtime: st
 	const previousBinary = join(layout.work, "previous-omi");
 	const previousRuntime = join(layout.work, "previous-runtime");
 	await mkdir(join(layout.binary, ".."), { recursive: true });
-	await swap(layout.runtime, unpacked, previousRuntime);
-	await swap(layout.binary, downloaded.binary, previousBinary);
+	const undo: (() => Promise<void>)[] = [];
 	try {
+		await swap(layout.runtime, unpacked, previousRuntime, undo);
+		await swap(layout.binary, downloaded.binary, previousBinary, undo);
 		await activate(layout, runner);
 	} catch (error) {
-		await rm(layout.binary, { force: true });
-		await rm(layout.runtime, { recursive: true, force: true });
-		if (await exists(previousBinary)) await rename(previousBinary, layout.binary);
-		if (await exists(previousRuntime)) await rename(previousRuntime, layout.runtime);
+		const failures: unknown[] = [];
+		for (const restore of undo.reverse()) {
+			try { await restore(); } catch (failure) { failures.push(failure); }
+		}
+		if (failures.length > 0) {
+			throw new OmiError("upgrade_rollback_failed", "falló el upgrade y no se pudo restaurar toda la instalación", {
+				hint: `se conservaron los backups en ${layout.work}; restauralos antes de reintentar`,
+				cause: new AggregateError([error, ...failures]),
+			});
+		}
 		throw error;
 	}
 }
 
-export async function checkUpgrade(options: UpgradeOptions): Promise<{ current: string; latest: string; updateAvailable: boolean }> {
+export async function checkUpgrade(options: Pick<UpgradeOptions, "current" | "releasesUrl">): Promise<{ current: string; latest: string; updateAvailable: boolean }> {
 	const release = await fetchLatestRelease(options.releasesUrl);
 	return { current: options.current, latest: release.version, updateAvailable: isNewer(options.current, release.version) };
 }
@@ -131,6 +143,7 @@ export async function runUpgrade(options: UpgradeOptions): Promise<{ current: st
 	await mkdir(home, { recursive: true, mode: 0o700 });
 	// Dentro de ~/.omi: rename sólo es atómico en el mismo sistema de archivos.
 	const work = await mkdtemp(join(home, "upgrade-"));
+	let preserveBackups = false;
 	try {
 		const downloaded = { binary: join(work, "omi"), runtime: join(work, "runtime.tar.gz"), checksums: join(work, "checksums.txt") };
 		await download(assets.checksums.url, downloaded.checksums);
@@ -141,7 +154,10 @@ export async function runUpgrade(options: UpgradeOptions): Promise<{ current: st
 		await assertChecksum(downloaded.runtime, assets.runtime.name, checksums);
 		await install({ binary: join(home, "bin", "omi"), runtime: join(home, "runtime"), work }, downloaded, platform, runner);
 		return { ...report, updated: true };
+	} catch (error) {
+		preserveBackups = error instanceof OmiError && error.code === "upgrade_rollback_failed";
+		throw error;
 	} finally {
-		await rm(work, { recursive: true, force: true });
+		if (!preserveBackups) await rm(work, { recursive: true, force: true });
 	}
 }

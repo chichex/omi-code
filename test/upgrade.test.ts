@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
@@ -78,8 +78,8 @@ async function releaseServer(t: TestContext, options: { tag?: string; corrupt?: 
 }
 
 /** Instalación vieja: binario y runtime que el upgrade tiene que reemplazar o preservar. */
-async function installed(t: TestContext): Promise<string> {
-	const home = await tempDir(t);
+async function installed(t: TestContext, name = ""): Promise<string> {
+	const home = join(await tempDir(t), name);
 	await mkdir(join(home, ".omi/bin"), { recursive: true });
 	await writeFile(join(home, ".omi/bin/omi"), "#!/bin/sh\necho 0.1.0\n", { mode: 0o755 });
 	await mkdir(join(home, ".omi/runtime/skills/ship"), { recursive: true });
@@ -222,6 +222,57 @@ test("runUpgrade_en macOS firma el binario antes de instalarlo", async (t) => {
 	await runUpgrade({ ...options(home, release, runner), platform: "darwin-arm64" });
 	// El binario suelto y el del runtime: cualquiera de los dos puede quedar activo.
 	assert.deepEqual(seen, ["--remove-signature", "--force", "--remove-signature", "--force"]);
+});
+
+test("upgrade restaura runtime si falla el segundo swap", async (t) => {
+	const home = await installed(t);
+	const release = await releaseServer(t);
+	await chmod(join(home, ".omi/bin"), 0o500);
+	try { await assert.rejects(runUpgrade(options(home, release))); }
+	finally { await chmod(join(home, ".omi/bin"), 0o755); }
+	assert.match(await readFile(join(home, ".omi/bin/omi"), "utf8"), /0\.1\.0/);
+	assert.equal(await readFile(join(home, ".omi/runtime/skills/ship/SKILL.md"), "utf8"), "viejo\n");
+});
+
+test("upgrade conserva backups y explica su ubicación si falla el rollback", async (t) => {
+	const home = await installed(t);
+	const release = await releaseServer(t);
+	const runner: Runner = { run: async (command, args, opts) => {
+		if (command === join(home, ".omi/bin/omi")) {
+			await chmod(join(home, ".omi"), 0o500);
+			return { code: 137, stdout: "", stderr: "broken" };
+		}
+		return processRunner.run(command, args, opts);
+	} };
+	try {
+		await assert.rejects(runUpgrade(options(home, release, runner)), (error: OmiError) => error.code === "upgrade_rollback_failed" && /upgrade-/.test(error.hint ?? ""));
+	} finally { await chmod(join(home, ".omi"), 0o700); }
+	const work = (await readdir(join(home, ".omi"))).find((name) => name.startsWith("upgrade-"));
+	assert.ok(work);
+	assert.equal(await readFile(join(home, ".omi", work, "previous-runtime/skills/ship/SKILL.md"), "utf8"), "viejo\n");
+});
+
+test("upgrade fallback ejecuta correctamente rutas con caracteres de shell", async (t) => {
+	const home = await installed(t, "home $unknown ' \" \\ `false`");
+	const release = await releaseServer(t);
+	const names = assetNames(PLATFORM);
+	const broken = Buffer.from("#!/bin/sh\nexit 137\n");
+	release.files.set(names.binary, broken);
+	release.files.set(names.checksums, Buffer.from((release.files.get(names.checksums)?.toString() ?? "").replace(/^\S+(  omi-linux-x64\n)/m, `${sha256(broken)}$1`)));
+	await runUpgrade(options(home, release));
+	assert.equal(execFileSync(join(home, ".omi/bin/omi"), { encoding: "utf8" }), "9.9.9\n");
+});
+
+test("omi upgrade --check no exige una plataforma con binario", async (t) => {
+	const home = await installed(t);
+	const release = await releaseServer(t);
+	const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+	assert.ok(descriptor);
+	Object.defineProperty(process, "platform", { value: "win32" });
+	try {
+		const io = testIo({ homeDir: home, env: { OMI_RELEASES_URL: `${release.url}/latest` } });
+		assert.equal(await run(["upgrade", "--check", "--json"], io), 0, io.errors());
+	} finally { Object.defineProperty(process, "platform", descriptor); }
 });
 
 test("omi upgrade --check_por la CLI", async (t) => {

@@ -11,10 +11,9 @@ import { printJson } from "../output.ts";
 
 export async function upgradeCommand(args: string[], io: Io): Promise<number> {
 	const { values } = parseFlags(args, { check: { type: "boolean" } });
-	const options: UpgradeOptions = {
+	const options: Omit<UpgradeOptions, "platform"> = {
 		homeDir: io.homeDir,
 		current: pkg.version,
-		platform: currentPlatform(),
 		releasesUrl: io.env.OMI_RELEASES_URL ?? RELEASES_URL,
 		runner: processRunner,
 	};
@@ -24,7 +23,7 @@ export async function upgradeCommand(args: string[], io: Io): Promise<number> {
 		else io.out(report.updateAvailable ? `Hay una versión nueva: ${report.current} → ${report.latest}` : `omi ${report.current} está al día`);
 		return EXIT_OK;
 	}
-	const report = await runUpgrade(options);
+	const report = await runUpgrade({ ...options, platform: currentPlatform() });
 	if (values.json === true) printJson(report, io);
 	else io.out(report.updated ? `omi actualizado: ${report.current} → ${report.latest}` : `omi ${report.current} está al día`);
 	return EXIT_OK;
