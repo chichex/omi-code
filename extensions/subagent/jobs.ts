@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
 import type { AgentConfig, AgentSource } from "./agents.ts";
+import { childEnvironment } from "../lib/process-environment.ts";
 
 export const KILL_GRACE_MS = 5000;
 export const MAX_PARALLEL_TASKS = 8;
@@ -501,7 +502,7 @@ export async function launchAgent(
 	try {
 		proc = deps.spawn(invocation.command, invocation.args, {
 			cwd: options.cwd,
-			env: { ...(deps.env ?? process.env), PI_SUBAGENT_DEPTH: "1" },
+			env: { ...childEnvironment(deps.env ?? process.env), PI_SUBAGENT_DEPTH: "1" },
 			shell: false,
 			stdio: ["ignore", "pipe", "pipe"],
 		});

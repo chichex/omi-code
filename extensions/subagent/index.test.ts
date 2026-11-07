@@ -418,7 +418,7 @@ async function settles(condition: () => boolean, iterations = 100): Promise<bool
 }
 
 test("CA-3: el hijo se lanza con --mode json -p --no-session, modelo y thinking de la sesion, --tools, prompt temporal 0600 y el task literal al final", async () => {
-	const h = harness();
+	const h = harness({ env: { PATH: "/usr/bin", PI_PACKAGE_DIR: "/installed/pi", OMI_RUNTIME_DIR: "/installed/omi", OMI_AGENT_SESSION: "1" } });
 	const pending = h.execute("call-1", { agent: "reviewer", task: "/skill:code-review 85 --no-publish" }, undefined, undefined, h.ctx);
 	await until(() => h.calls.length === 1, "spawn del reviewer");
 	const call = h.calls[0]!;
@@ -446,6 +446,9 @@ test("CA-3: el hijo se lanza con --mode json -p --no-session, modelo y thinking 
 	assert.deepEqual(call.options.stdio, ["ignore", "pipe", "pipe"]);
 	assert.equal(call.options.env.PI_SUBAGENT_DEPTH, "1");
 	assert.equal(call.options.env.PATH, "/usr/bin", "hereda el env base");
+	assert.equal(call.options.env.PI_PACKAGE_DIR, undefined);
+	assert.equal(call.options.env.OMI_RUNTIME_DIR, undefined);
+	assert.equal(call.options.env.OMI_AGENT_SESSION, "1");
 	assert.ok(existsSync(promptPath), "el prompt temporal existe mientras corre el hijo");
 	assert.equal(statSync(promptPath).mode & 0o777, 0o600);
 	assert.equal(readFileSync(promptPath, "utf8"), "\nSos reviewer. Doctrina de reviewer.\n");

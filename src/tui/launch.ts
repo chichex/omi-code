@@ -12,6 +12,7 @@ import { AGENT_SESSION_ENV } from "../guardrails/surfaces.ts";
 import { runPiImportOnboarding } from "../onboarding/pi-import.ts";
 import { CATALOG } from "../tools/catalog.ts";
 import { registerCatalogTools } from "./tools.ts";
+import { runtimeShellExtension } from "./runtime-shell.ts";
 
 export type PiMain = (args: string[], options: { extensionFactories?: InlineExtension[] }) => Promise<void>;
 
@@ -60,6 +61,7 @@ export async function launchTui(args: string[], io: Io, deps: LaunchDeps = {}): 
 	const skills = await embeddedSkills(deps.skillsDir ?? runtime.skillsDir);
 	const skillArgs = skills.flatMap((path) => ["--skill", path]);
 	const themeArgs = (await isDirectory(runtime.themesDir)) ? ["--theme", runtime.themesDir] : [];
-	await piMain([...skillArgs, ...themeArgs, ...args], { extensionFactories: [omiToolsExtension(io), ...embeddedExtensions()] });
+	const processExtensions = runtime.packageDir === undefined ? [] : [await runtimeShellExtension(io)];
+	await piMain([...skillArgs, ...themeArgs, ...args], { extensionFactories: [omiToolsExtension(io), ...processExtensions, ...embeddedExtensions()] });
 	return typeof process.exitCode === "number" ? process.exitCode : EXIT_OK;
 }

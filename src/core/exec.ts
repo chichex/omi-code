@@ -1,6 +1,7 @@
 // Ejecuta procesos externos (git, docker, regctl). Es una frontera: los tests la reemplazan.
 
 import { spawn } from "node:child_process";
+import { childEnvironment } from "../../extensions/lib/process-environment.ts";
 
 export interface CommandResult {
 	code: number;
@@ -25,7 +26,7 @@ export const processRunner: Runner = {
 		new Promise((resolve, reject) => {
 			const child = spawn(command, args, {
 				...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-				...(options.env === undefined ? {} : { env: { ...process.env, ...options.env } }),
+				env: childEnvironment({ ...process.env, ...options.env }),
 				...(options.signal === undefined ? {} : { signal: options.signal }),
 				stdio: ["pipe", "pipe", "pipe"],
 			});

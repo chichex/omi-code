@@ -37,12 +37,18 @@ function rpc(binary: string, home: string, command: unknown, extraArgs: string[]
 	return new Promise((resolve, reject) => {
 		const child = spawn(binary, ["--mode", "rpc", "--no-session", ...extraArgs], { env: { ...process.env, HOME: home, OMI_HOME: "" }, stdio: ["pipe", "pipe", "ignore"] });
 		let output = "";
+		const timeout = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("RPC no respondió")); }, 10000);
 		child.stdout.on("data", (chunk: Buffer) => {
 			output += chunk.toString("utf8");
+			for (const line of output.split("\n").slice(0, -1)) {
+				if (!line.startsWith("{")) continue;
+				const message = JSON.parse(line) as { id?: unknown; type?: string };
+				if (message.type === "response" && message.id === (command as { id?: unknown }).id && !child.stdin.writableEnded) child.stdin.end();
+			}
 		});
-		child.on("error", reject);
-		child.on("close", () => resolve(output.split("\n").filter((line) => line.startsWith("{")).map((line) => JSON.parse(line) as Record<string, unknown>)));
-		child.stdin.end(`${JSON.stringify(command)}\n`);
+		child.on("error", (error) => { clearTimeout(timeout); reject(error); });
+		child.on("close", () => { clearTimeout(timeout); resolve(output.split("\n").filter((line) => line.startsWith("{")).map((line) => JSON.parse(line) as Record<string, unknown>)); });
+		child.stdin.write(`${JSON.stringify(command)}\n`);
 	});
 }
 
@@ -67,6 +73,10 @@ test("release real_compila, instala y arranca sin Node ni repo", { skip: !enable
 	const metadata = commands.find((command) => command.name === "runtime-probe") as { description?: string } | undefined;
 	const observed = JSON.parse(metadata?.description ?? "null");
 	assert.deepEqual(observed, { version: pkg.dependencies["@earendil-works/pi-coding-agent"], packageDir: await realpath(join(installRoot, "runtime")), examples: true });
+	const shell = await rpc(binary, home, { id: "env", type: "bash", command: 'printf "%s|%s|%s" "${PI_PACKAGE_DIR-unset}" "${OMI_RUNTIME_DIR-unset}" "${OMI_AGENT_SESSION-unset}"' });
+	const shellResponse = shell.find((line) => line.id === "env" && line.type === "response");
+	assert.ok(shellResponse?.data, JSON.stringify(shell));
+	assert.equal((shellResponse.data as { output: string }).output, "unset|unset|1");
 });
 
 test("omi upgrade --check_corre desde el binario instalado", { skip: !enabled }, async (t) => {
