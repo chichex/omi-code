@@ -48,7 +48,7 @@ export async function run(argv: string[], io: Io, deps: Partial<CliDeps> = {}): 
 		}
 		if (first === undefined || first.startsWith("-")) return await launchTui(argv, io);
 		if (first === "mcp") return await serveMcp(rest, io);
-		const command = COMMANDS[first];
+		const command = Object.hasOwn(COMMANDS, first) ? COMMANDS[first] : undefined;
 		if (command === undefined) throw new UsageError(`subcomando desconocido: ${first}`, "corré `omi --help`");
 		return await command(rest, io);
 	} catch (error) {

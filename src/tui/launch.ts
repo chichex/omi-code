@@ -50,5 +50,5 @@ export async function launchTui(args: string[], io: Io, deps: LaunchDeps = {}): 
 	const skills = await embeddedSkills(deps.skillsDir ?? DEFAULT_SKILLS_DIR);
 	const skillArgs = skills.flatMap((path) => ["--skill", path]);
 	await piMain([...skillArgs, ...args], { extensionFactories: [omiToolsExtension(io)] });
-	return EXIT_OK;
+	return typeof process.exitCode === "number" ? process.exitCode : EXIT_OK;
 }
