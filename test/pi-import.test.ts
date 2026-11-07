@@ -161,6 +161,19 @@ test("onboarding ofrece grills a una instalación que ya importó proveedores si
 	assert.deepEqual(again.prompts, []);
 });
 
+test("onboarding no sobrescribe un marker de decisión con tipos inválidos", async (t) => {
+	const home = await homeWithPi(t);
+	await mkdir(join(piAgentDir(home), "grill-sessions"));
+	await writeFile(join(piAgentDir(home), "grill-sessions/paused.json"), '{"id":"paused"}');
+	await mkdir(agentDir(home), { recursive: true });
+	const marker = join(home, ".omi/onboarding.json");
+	await writeFile(marker, '{"piImport":["imported"]}');
+	const io = testIo({ homeDir: home, interactive: true });
+	assert.equal((await runPiImportOnboarding(io)).status, "skipped");
+	assert.deepEqual(io.prompts, []);
+	assert.equal(await readFile(marker, "utf8"), '{"piImport":["imported"]}');
+});
+
 test("onboarding_no ofrece nada si Pi no está configurado", async (t) => {
 	const home = await tempDir(t);
 	const io = testIo({ homeDir: home, interactive: true });

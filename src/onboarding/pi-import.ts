@@ -93,8 +93,11 @@ async function previousDecision(homeDir: string): Promise<ImportDecision | null>
 		const value: unknown = JSON.parse(await readFile(join(omiHome(homeDir), ONBOARDING_MARKER), "utf8"));
 		if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
 		const data = value as Record<string, unknown>;
-		for (const key of ["piImport", "grillImport"]) if (data[key] !== undefined && !["imported", "declined", "skipped"].includes(String(data[key]))) return null;
-		return { ...(data.piImport === undefined ? {} : { piImport: String(data.piImport) }), ...(data.grillImport === undefined ? {} : { grillImport: String(data.grillImport) }) };
+		for (const key of ["piImport", "grillImport"]) {
+			const decision = data[key];
+			if (decision !== undefined && (typeof decision !== "string" || !["imported", "declined", "skipped"].includes(decision))) return null;
+		}
+		return { ...(typeof data.piImport === "string" ? { piImport: data.piImport } : {}), ...(typeof data.grillImport === "string" ? { grillImport: data.grillImport } : {}) };
 	} catch (error) {
 		return (error as NodeJS.ErrnoException).code === "ENOENT" ? {} : null;
 	}
