@@ -58,8 +58,11 @@ async function saveJob(scope: Scope, params: Params, runtime: ToolRuntime): Prom
 		timezone: params.timezone ?? current?.timezone ?? "",
 		timeout_seconds: params.timeoutSeconds ?? current?.timeout_seconds ?? 0,
 	};
-	const diff = `${creating ? "+" : "~"} ${name}: ${body.schedule} ${body.timezone} POST ${body.service}${body.path} (${body.timeout_seconds}s)`;
-	await guardJob(params.action, name, await reachedEnvironment(scope, body.service), runtime, diff);
+	const diff = `${creating ? "+" : "~"} ${name}: ${body.schedule} ${body.timezone} POST ${body.service}${body.path} (${body.timeout_seconds}s)`
+		+ (current !== undefined && current.service !== body.service ? `\nService anterior: ${current.service} → ${body.service}` : "");
+	let environment = await reachedEnvironment(scope, body.service);
+	if (current !== undefined && current.service !== body.service && await reachedEnvironment(scope, current.service) === "prod") environment = "prod";
+	await guardJob(params.action, name, environment, runtime, diff);
 	const job = creating
 		? await scope.client.request("POST", `${scope.projectPath}/jobs`, JobSchema, { body: { name, ...body } })
 		: await scope.client.request("PUT", jobPath(scope, name), JobSchema, { body });

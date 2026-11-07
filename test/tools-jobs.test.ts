@@ -80,6 +80,17 @@ test("omi_jobs_manage_un job de un service con prod desplegado exige un humano",
 	assert.deepEqual(linked.mutations(), []);
 });
 
+test("mover un job de un service con prod desplegado a otro sin prod sigue exigiendo humano", async (t) => {
+	const linked = await linkedProject(t, [["api", 8080], ["worker", 8080]]);
+	await linked.call("omi_jobs_manage", JOB);
+	deployProd(linked);
+	const before = linked.mutations().length;
+	await assert.rejects(linked.call("omi_jobs_manage", { action: "update", name: "facturar", service: "worker" }, { guard: humanless(true) }),
+		(error: OmiError) => error.code === GUARDRAIL_CONFIRMATION_REQUIRED);
+	assert.equal(linked.mutations().length, before);
+	assert.equal(linked.workloads.jobs.get("facturar")?.service, "api");
+});
+
 test("omi_jobs_manage_operar prod directamente exige un humano", async (t) => {
 	const linked = await linkedProject(t);
 	await linked.call("omi_jobs_manage", JOB);

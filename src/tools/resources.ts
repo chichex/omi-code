@@ -5,11 +5,11 @@ import { ResourceConfirmationSchema, ResourceOperationSchema, ResourcePreviewSch
 import { OmiError, UsageError } from "../core/errors.ts";
 import { assertCanProceed, enforce, type EnvironmentName, type GuardedAction } from "../guardrails/policy.ts";
 import { openScope, type Scope } from "./scope.ts";
-import { readSecretValue } from "./secrets.ts";
+import { readSecretValue, secretSource } from "./secrets.ts";
 import { defineTool, type ToolRuntime } from "./types.ts";
 
 const OPERATION_DEADLINE_MS = 15 * 60_000;
-const IN_PROGRESS = ["esperando", "probando", "provisionando", "aplicando", "compensando", "reconciliando", "recuperando"];
+const IN_PROGRESS = ["esperando", "probando", "provisionando", "aplicando", "compensando", "recuperando"];
 const NEEDS_CONNECTION = ["replace", "recover"];
 
 const EnvironmentParam = Type.Union([Type.Literal("stage"), Type.Literal("prod")]);
@@ -114,6 +114,7 @@ export const postgresManageTool = defineTool({
 				environment: preview.environment as EnvironmentName,
 				diff: [
 					`${preview.action} ${preview.slug} (${preview.mode}) en ${preview.environment} · ${preview.variable}`,
+					...(needsConnection(params) ? [`Origen de conexión: ${secretSource(params.connectionFromEnv)}`] : []),
 					...impact,
 					...(preview.pending_configuration ? ["Incluye configuración pendiente de desplegar"] : []),
 				].join("\n"),
@@ -127,6 +128,11 @@ export const postgresManageTool = defineTool({
 			{ body: { include_pending_configuration: preview.pending_configuration, confirmation_name: params.action === "delete" ? preview.slug : "" } },
 		);
 		const operation = await awaitOperation(scope, confirmation.operation_id, runtime);
+		if (operation.state === "reconciliando") {
+			throw new OmiError("resource_recovery_required", `la operación necesita reconciliación: ${operation.error ?? "revisá su estado en OMI"}`, {
+				hint: "consultá `omi resources list`; si solicita otra conexión, usá recover con connectionFromEnv",
+			});
+		}
 		if (operation.state === "requiere_confirmacion") {
 			throw new OmiError("resource_preview_stale", "el impacto cambió mientras esperaba", { hint: "volvé a correr la operación" });
 		}
