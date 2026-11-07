@@ -116,7 +116,7 @@ def verify_omi_job(headers, raw_body: bytes) -> bool:
     secret = os.environ.get("${ENV_TRIGGER_SECRET}", "").encode()
     timestamp = headers.get("X-Omi-Timestamp", "")
     signature = headers.get("X-Omi-Signature", "")
-    if not secret or not signature.startswith("sha256=") or not timestamp.isascii() or not timestamp.isdecimal():
+    if not secret or not signature.startswith("sha256=") or not timestamp.isascii() or not timestamp.isdecimal() or len(timestamp) > 19:
         return False
     if abs(time.time() - int(timestamp)) > 300:
         return False
