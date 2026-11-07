@@ -95,7 +95,8 @@ export function promoteInlineSkillInvocation(
 	let match: RegExpExecArray | null;
 	while ((match = SKILL_INVOCATION.exec(text)) !== null) {
 		const skillName = match[2];
-		if (!skillName || !knownSkillNames.has(skillName)) continue;
+		// ship autoriza mutaciones de stage: una mención o negación no es una invocación.
+		if (!skillName || skillName === "ship" || !knownSkillNames.has(skillName)) continue;
 
 		const boundary = match[1] ?? "";
 		const tokenStart = match.index + boundary.length;

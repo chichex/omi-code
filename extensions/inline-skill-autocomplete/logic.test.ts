@@ -69,6 +69,14 @@ test("promotes a known inline skill so Pi can expand it", () => {
 	);
 });
 
+test("ship requires an explicit invocation, never promotes a mention or negation", () => {
+	const known = new Set(["ship"]);
+	for (const text of ["no corras /skill:ship todavía, primero mirá los logs", "explicame /skill:ship", "después vemos /skill:ship"]) {
+		assert.equal(promoteInlineSkillInvocation(text, known), undefined, text);
+	}
+	assert.equal(promoteInlineSkillInvocation("/skill:ship 1.2.0", known), undefined);
+});
+
 test("leaves leading and unknown skill commands alone", () => {
 	const known = new Set(["run"]);
 	assert.equal(promoteInlineSkillInvocation("/skill:run implement this", known), undefined);

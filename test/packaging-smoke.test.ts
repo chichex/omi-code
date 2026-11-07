@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { readdir, stat } from "node:fs/promises";
+import { readdir, realpath, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
@@ -20,20 +20,22 @@ interface Install {
 	home: string;
 	binary: string;
 	release: string;
+	installRoot: string;
 }
 
-async function buildAndInstall(t: TestContext): Promise<Install> {
+async function buildAndInstall(t: TestContext, custom = false): Promise<Install> {
 	const release = await tempDir(t, "omi-release-");
 	const home = await tempDir(t, "omi-home-");
 	execFileSync(process.execPath, ["scripts/build-release.ts", "--targets", currentPlatform(), "--out", release], { cwd: root, stdio: "pipe" });
-	const installed = spawnSync("sh", ["install.sh"], { cwd: root, encoding: "utf8", env: { ...process.env, HOME: home, OMI_INSTALL_BASE: `file://${release}` } });
+	const installRoot = custom ? join(home, "custom omi") : join(home, ".omi");
+	const installed = spawnSync("sh", ["install.sh"], { cwd: root, encoding: "utf8", env: { ...process.env, HOME: home, OMI_HOME: installRoot, OMI_INSTALL_BASE: `file://${release}` } });
 	assert.equal(installed.status, 0, installed.stderr);
-	return { home, release, binary: join(home, ".omi/bin/omi") };
+	return { home, release, installRoot, binary: join(installRoot, "bin/omi") };
 }
 
-function rpc(binary: string, home: string, command: unknown): Promise<Record<string, unknown>[]> {
+function rpc(binary: string, home: string, command: unknown, extraArgs: string[] = []): Promise<Record<string, unknown>[]> {
 	return new Promise((resolve, reject) => {
-		const child = spawn(binary, ["--mode", "rpc", "--no-session"], { env: { ...process.env, HOME: home }, stdio: ["pipe", "pipe", "ignore"] });
+		const child = spawn(binary, ["--mode", "rpc", "--no-session", ...extraArgs], { env: { ...process.env, HOME: home, OMI_HOME: "" }, stdio: ["pipe", "pipe", "ignore"] });
 		let output = "";
 		child.stdout.on("data", (chunk: Buffer) => {
 			output += chunk.toString("utf8");
@@ -45,20 +47,26 @@ function rpc(binary: string, home: string, command: unknown): Promise<Record<str
 }
 
 test("release real_compila, instala y arranca sin Node ni repo", { skip: !enabled }, async (t) => {
-	const { home, binary, release } = await buildAndInstall(t);
+	const { home, binary, release, installRoot } = await buildAndInstall(t, true);
 	const names = assetNames(currentPlatform());
 	assert.deepEqual((await readdir(release)).sort(), [names.binary, names.runtime, "checksums.txt", "install.sh"].sort());
 
 	const version = spawnSync(binary, ["--version"], { encoding: "utf8", cwd: home, env: { HOME: home, PATH: "/usr/bin:/bin" } });
 	assert.equal(version.status, 0, version.stderr);
 	assert.equal(version.stdout.trim(), pkg.version);
-	assert.equal((await stat(join(home, ".omi/runtime/skills/ship/SKILL.md"))).isFile(), true);
-	assert.equal((await stat(join(home, ".omi/runtime/theme/dark.json"))).isFile(), true);
+	assert.equal((await stat(join(installRoot, "runtime/skills/ship/SKILL.md"))).isFile(), true);
+	assert.equal((await stat(join(installRoot, "runtime/theme/dark.json"))).isFile(), true);
 
-	const [response] = await rpc(binary, home, { id: "1", type: "get_commands" });
+	const probe = join(home, "runtime-probe.ts");
+	await writeFile(probe, `import { VERSION, getPackageDir, getExamplesPath } from "@earendil-works/pi-coding-agent";\nimport { existsSync } from "node:fs";\nexport default function (pi) { pi.registerCommand("runtime-probe", { description: JSON.stringify({ version: VERSION, packageDir: getPackageDir(), examples: existsSync(getExamplesPath()) }), handler: async () => {} }); }\n`);
+	const responses = await rpc(binary, home, { id: "1", type: "get_commands" }, ["--extension", probe]);
+	const response = responses.find((line) => line.id === "1");
 	const commands = (response?.data as { commands: { name: string; source: string }[] }).commands;
 	const skills = commands.filter((command) => command.source === "skill").map((command) => command.name.replace("skill:", "")).sort();
 	assert.deepEqual(skills, ["code-review", "coding-policies", "design-system", "grill", "init", "issue-triage", "land", "run", "ship", "spec", "tdd"]);
+	const metadata = commands.find((command) => command.name === "runtime-probe") as { description?: string } | undefined;
+	const observed = JSON.parse(metadata?.description ?? "null");
+	assert.deepEqual(observed, { version: pkg.dependencies["@earendil-works/pi-coding-agent"], packageDir: await realpath(join(installRoot, "runtime")), examples: true });
 });
 
 test("omi upgrade --check_corre desde el binario instalado", { skip: !enabled }, async (t) => {

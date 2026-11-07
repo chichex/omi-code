@@ -23,6 +23,7 @@ const PI_ASSETS: readonly [source: string, target: string][] = [
 	["README.md", "README.md"],
 	["CHANGELOG.md", "CHANGELOG.md"],
 	["docs", "docs"],
+	["examples", "examples"],
 	["dist/modes/interactive/assets", "assets"],
 	["dist/core/export-html/template.html", "export-html/template.html"],
 	["dist/core/export-html/template.css", "export-html/template.css"],
@@ -49,7 +50,10 @@ const WORKERS: readonly [entry: string, source: string][] = [
 
 /** Pi expone su arranque para bun sólo por ruta: `exports` no lo incluye. */
 async function writeEntries(dir: string): Promise<string[]> {
-	const setup = ["dist/bun/sandbox-env-setup.js", "dist/bun/runtime-setup.js"].map((file) => `import ${JSON.stringify(join(PI, file))};`);
+	const setup = [
+		`import ${JSON.stringify(join(ROOT, "src/core/bootstrap.ts"))};`,
+		...["dist/bun/sandbox-env-setup.js", "dist/bun/runtime-setup.js"].map((file) => `import ${JSON.stringify(join(PI, file))};`),
+	];
 	await writeFile(join(dir, "entry.ts"), [...setup, `import ${JSON.stringify(join(ROOT, "bin/omi.ts"))};`, ""].join("\n"));
 	for (const [entry, source] of WORKERS) {
 		await mkdir(dirname(join(dir, entry)), { recursive: true });

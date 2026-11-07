@@ -81,10 +81,17 @@ test("launchTui_precarga las extensiones embebidas y el theme", async (t) => {
 	const home = await tempDir(t);
 	const calls: Call[] = [];
 	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi(calls), skillsDir: await tempDir(t) });
-	assert.deepEqual(calls[0]?.extensions, [...embeddedExtensions().map((extension) => (extension as { name: string }).name), "omi-tools"]);
+	assert.deepEqual(calls[0]?.extensions, ["omi-tools", ...embeddedExtensions().map((extension) => (extension as { name: string }).name)]);
 	const theme = calls[0]?.args.indexOf("--theme") ?? -1;
 	assert.ok(theme >= 0);
 	assert.match(calls[0]?.args[theme + 1] ?? "", /themes$/);
+});
+
+test("launchTui registra el guardrail de OMI antes de cualquier transform de input", async (t) => {
+	const calls: Call[] = [];
+	await launchTui([], testIo({ homeDir: await tempDir(t) }), { piMain: fakePi(calls), skillsDir: await tempDir(t) });
+	const names = calls[0]?.extensions ?? [];
+	assert.ok(names.indexOf("omi-tools") >= 0 && names.indexOf("omi-tools") < names.indexOf("inline-skill-autocomplete"));
 });
 
 test("launchTui_ofrece importar Pi antes de arrancar", async (t) => {

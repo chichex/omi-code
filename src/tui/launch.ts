@@ -11,7 +11,6 @@ import { resolveRuntime } from "../core/runtime.ts";
 import { AGENT_SESSION_ENV } from "../guardrails/surfaces.ts";
 import { runPiImportOnboarding } from "../onboarding/pi-import.ts";
 import { CATALOG } from "../tools/catalog.ts";
-import { embeddedExtensions } from "./extensions.ts";
 import { registerCatalogTools } from "./tools.ts";
 
 export type PiMain = (args: string[], options: { extensionFactories?: InlineExtension[] }) => Promise<void>;
@@ -55,11 +54,12 @@ export async function launchTui(args: string[], io: Io, deps: LaunchDeps = {}): 
 		process.env.PI_PACKAGE_DIR = runtime.packageDir;
 		process.env.OMI_RUNTIME_DIR = runtime.packageDir;
 	}
+	const { embeddedExtensions } = await import("./extensions.ts");
 	const piMain = deps.piMain ?? (await import("@earendil-works/pi-coding-agent")).main;
 
 	const skills = await embeddedSkills(deps.skillsDir ?? runtime.skillsDir);
 	const skillArgs = skills.flatMap((path) => ["--skill", path]);
 	const themeArgs = (await isDirectory(runtime.themesDir)) ? ["--theme", runtime.themesDir] : [];
-	await piMain([...skillArgs, ...themeArgs, ...args], { extensionFactories: [...embeddedExtensions(), omiToolsExtension(io)] });
+	await piMain([...skillArgs, ...themeArgs, ...args], { extensionFactories: [omiToolsExtension(io), ...embeddedExtensions()] });
 	return typeof process.exitCode === "number" ? process.exitCode : EXIT_OK;
 }
