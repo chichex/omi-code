@@ -33,7 +33,7 @@ export async function login(input: LoginInput, io: Io): Promise<Principal> {
 		token: session.token,
 		expiresAt: session.expires_at,
 		user: { id: session.user_id, name: session.name, email: session.email },
-		defaultOrganizationSlug: session.organizations[0]?.slug ?? "",
+		defaultOrganizationSlug: session.organizations.length === 1 ? session.organizations[0]!.slug : "",
 	});
 	return session;
 }
