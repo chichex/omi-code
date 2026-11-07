@@ -1,9 +1,10 @@
 // `omi upgrade`: verifica SHA-256 antes de tocar nada y vuelve atrás si lo nuevo no arranca.
 
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { OmiError } from "../core/errors.ts";
+import { exists } from "../core/files.ts";
 import type { Runner } from "../core/exec.ts";
 import { omiHome } from "../core/paths.ts";
 import { assetNames, fetchLatestRelease, isNewer, parseChecksums, type LatestRelease } from "./release.ts";
@@ -16,13 +17,6 @@ export interface UpgradeOptions {
 	platform: string;
 	releasesUrl: string;
 	runner: Runner;
-}
-
-async function exists(path: string): Promise<boolean> {
-	return stat(path).then(
-		() => true,
-		() => false,
-	);
 }
 
 async function download(url: string, target: string): Promise<void> {

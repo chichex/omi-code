@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
-import { agentDir, piAgentDir } from "../src/core/paths.ts";
+import { agentDir, sourcePiAgentDir as piAgentDir } from "../src/core/paths.ts";
 import { runPiImportOnboarding } from "../src/onboarding/pi-import.ts";
 import { tempDir, testIo } from "./helpers/io.ts";
 

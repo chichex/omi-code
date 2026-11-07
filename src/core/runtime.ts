@@ -1,10 +1,11 @@
 // Dónde están los assets. En desarrollo, en el repo; en el binario, en ~/.omi/runtime,
 // porque Pi lee temas, wasm y plantillas del disco.
 
-import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { omiHome } from "./paths.ts";
+import { isCompiledBinary, omiHome } from "./paths.ts";
+import { isDirectory } from "./files.ts";
+export { isCompiledBinary };
 
 const REPO_SKILLS_DIR = new URL("../../skills", import.meta.url);
 const REPO_THEMES_DIR = new URL("../../themes", import.meta.url);
@@ -16,10 +17,6 @@ export interface RuntimeAssets {
 	packageDir?: string;
 }
 
-export function isCompiledBinary(url: string = import.meta.url): boolean {
-	return url.includes("$bunfs") || url.includes("~BUN") || url.includes("%7EBUN");
-}
-
 export function runtimeDir(homeDir: string): string {
 	return join(omiHome(homeDir), "runtime");
 }
@@ -27,10 +24,7 @@ export function runtimeDir(homeDir: string): string {
 export async function resolveRuntime(homeDir: string, compiled: boolean = isCompiledBinary()): Promise<RuntimeAssets> {
 	const dir = runtimeDir(homeDir);
 	if (compiled) {
-		const installed = await stat(join(dir, "skills")).then(
-			(info) => info.isDirectory(),
-			() => false,
-		);
+		const installed = await isDirectory(join(dir, "skills"));
 		if (installed) return { skillsDir: join(dir, "skills"), themesDir: join(dir, "themes"), packageDir: dir };
 	}
 	return { skillsDir: fileURLToPath(REPO_SKILLS_DIR), themesDir: fileURLToPath(REPO_THEMES_DIR) };

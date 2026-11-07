@@ -15,6 +15,11 @@ die() {
 	exit 1
 }
 
+case "$TARGET" in
+	/*) ;;
+	*) die "OMI_HOME debe ser una ruta absoluta" ;;
+esac
+
 case "$(uname -s)" in
 	Darwin) os=darwin ;;
 	Linux) os=linux ;;

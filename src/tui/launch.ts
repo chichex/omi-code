@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { Io } from "../cli/io.ts";
 import { EXIT_OK } from "../core/errors.ts";
+import { isDirectory } from "../core/files.ts";
 import { agentDir } from "../core/paths.ts";
 import { resolveRuntime } from "../core/runtime.ts";
 import { AGENT_SESSION_ENV } from "../guardrails/surfaces.ts";
@@ -20,13 +21,6 @@ export interface LaunchDeps {
 	skillsDir?: string;
 	/** Fuerza la resolución de assets de un binario instalado. */
 	compiled?: boolean;
-}
-
-function isDirectory(path: string): Promise<boolean> {
-	return stat(path).then(
-		(info) => info.isDirectory(),
-		() => false,
-	);
 }
 
 async function embeddedSkills(dir: string): Promise<string[]> {

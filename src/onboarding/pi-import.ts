@@ -5,7 +5,8 @@ import { constants } from "node:fs";
 import { copyFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { Io } from "../cli/io.ts";
-import { agentDir, omiHome, piAgentDir } from "../core/paths.ts";
+import { agentDir, omiHome, sourcePiAgentDir } from "../core/paths.ts";
+import { exists } from "../core/files.ts";
 
 const IMPORTABLE_FILES = ["auth.json", "models.json", "settings.json"] as const;
 const PROVIDER_FILES = ["auth.json", "models.json"] as const;
@@ -20,15 +21,6 @@ export interface PiImportResult {
 }
 
 const SKIPPED: PiImportResult = { status: "skipped", files: [] };
-
-async function exists(path: string): Promise<boolean> {
-	try {
-		await stat(path);
-		return true;
-	} catch {
-		return false;
-	}
-}
 
 async function existingFiles(dir: string, names: readonly string[]): Promise<string[]> {
 	const found: string[] = [];
@@ -95,7 +87,7 @@ async function rememberDecision(homeDir: string, decision: PiImportResult["statu
 }
 
 export async function runPiImportOnboarding(io: Io): Promise<PiImportResult> {
-	const source = piAgentDir(io.homeDir);
+	const source = sourcePiAgentDir(io.homeDir);
 	const target = agentDir(io.homeDir);
 	if (!io.interactive) return SKIPPED;
 	if (await exists(join(omiHome(io.homeDir), ONBOARDING_MARKER))) return SKIPPED;

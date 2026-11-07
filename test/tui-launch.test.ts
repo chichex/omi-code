@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
-import { agentDir, piAgentDir } from "../src/core/paths.ts";
+import { agentDir, sourcePiAgentDir as piAgentDir } from "../src/core/paths.ts";
 import { launchTui, type PiMain } from "../src/tui/launch.ts";
 import { CATALOG } from "../src/tools/catalog.ts";
 import { embeddedExtensions } from "../src/tui/extensions.ts";
