@@ -31,7 +31,13 @@ export interface Session {
 
 /** Sin sesión previa: --api, después OMI_API_URL, después la URL pública. */
 export function resolveApiUrl(io: Io, override?: string, stored?: string): string {
-	return override ?? io.env[API_URL_ENV] ?? stored ?? DEFAULT_API_URL;
+	const requested = override ?? io.env[API_URL_ENV];
+	if (stored !== undefined && requested !== undefined && requested.replace(/\/+$/, "") !== stored.replace(/\/+$/, "")) {
+		throw new OmiError("api_url_mismatch", "la URL pedida no coincide con la API de la sesión guardada", {
+			hint: "quitá --api/OMI_API_URL o corré `omi login --api <url>` para iniciar otra sesión",
+		});
+	}
+	return stored ?? requested ?? DEFAULT_API_URL;
 }
 
 function pollInterval(io: Io): { pollIntervalMs: number } | object {
@@ -57,8 +63,14 @@ export async function openSession(io: Io, apiUrl?: string): Promise<Session> {
 }
 
 /** omi-api no tiene rutas de organizaciones: el slug se resuelve con la lista de /me. */
-export async function resolveOrganization(client: OmiClient, slug: string): Promise<Principal["organizations"][number]> {
-	const principal = await client.request("GET", "/me", PrincipalSchema);
+export async function resolveOrganization(client: OmiClient, slug: string, signal?: AbortSignal): Promise<Principal["organizations"][number]> {
+	const principal = await client.request("GET", "/me", PrincipalSchema, signal === undefined ? {} : { signal });
+	if (principal.organizations.length === 0) {
+		throw new OmiError("organization_required", "no pertenecés a ninguna organización", { hint: "creá una organización en OMI antes de vincular el repo" });
+	}
+	if (slug === "") {
+		throw new OmiError("organization_required", `elegí una organización con --org: ${principal.organizations.map((org) => org.slug).join(", ")}`);
+	}
 	const organization = principal.organizations.find((candidate) => candidate.slug === slug);
 	if (organization === undefined) {
 		throw new OmiError("organization_not_member", `no pertenecés a la organización ${slug}`, {

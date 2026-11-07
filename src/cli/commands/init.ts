@@ -62,13 +62,10 @@ export async function initCommand(args: string[], io: Io): Promise<number> {
 		io,
 		...(values.api === undefined ? {} : { apiUrl: values.api }),
 		...(io.interactive
-			? {
-					// Una respuesta alcanza para todo lo que falte en esta corrida.
-					confirmCreate: async (what: string) => {
-						approved ||= /^s/i.test((await io.prompt(`${what} no existe en OMI. ¿Crear lo que falte? [s/N] `)).trim());
-						return approved;
-					},
-				}
+			? { confirmCreate: async (what: string) => {
+				approved ||= /^s/i.test((await io.prompt(`${what} no existe en OMI. ¿Crear lo que falte para ${projectSlug} (${services.map((s) => s.name).join(", ")})? [s/N] `)).trim());
+				return approved;
+			} }
 			: {}),
 	};
 	const result = await linkProject(request, context);

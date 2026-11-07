@@ -6,7 +6,7 @@ import pkg from "../../package.json" with { type: "json" };
 import { Value } from "typebox/value";
 import type { Io } from "../cli/io.ts";
 import { parseFlags } from "../cli/flags.ts";
-import { EXIT_OK, describeError } from "../core/errors.ts";
+import { EXIT_OK, OmiError, describeError } from "../core/errors.ts";
 import { processRunner, type Runner } from "../core/exec.ts";
 import { mcpGuard } from "../guardrails/surfaces.ts";
 import { CATALOG } from "../tools/catalog.ts";
@@ -51,7 +51,15 @@ function readAcceptance(result: unknown): boolean {
 }
 
 export function createMcpServer(options: McpServerOptions): McpServer {
-	const { tools, io, write } = options;
+	const { tools, write } = options;
+	const io: Io = {
+		...options.io,
+		out: (text) => options.io.err(text),
+		interactive: false,
+		prompt: async () => { throw new OmiError("mcp_terminal_unavailable", "MCP no lee prompts de terminal"); },
+		promptHidden: async () => { throw new OmiError("mcp_terminal_unavailable", "MCP no lee secretos de terminal"); },
+		readStdin: async () => { throw new OmiError("mcp_terminal_unavailable", "stdin pertenece al protocolo MCP"); },
+	};
 	const respond = (id: JsonRpcMessage["id"], result: unknown): void => write({ jsonrpc: "2.0", id: id ?? null, result });
 	const fail = (id: JsonRpcMessage["id"], code: number, message: string): void =>
 		write({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });

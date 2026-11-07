@@ -83,12 +83,16 @@ async function write(path: string, content: string, mode?: number): Promise<void
 }
 
 /** Archivo del usuario: si ya existe y difiere, se respeta. */
-async function writeOwnedByUser(root: string, path: string, content: string): Promise<KitFile> {
+async function writeOwnedByUser(root: string, path: string, content: string, previous?: string): Promise<KitFile> {
 	const absolute = join(root, path);
 	const current = await readIfExists(absolute);
 	if (current === null) {
 		await write(absolute, content);
 		return { path, status: "created" };
+	}
+	if (current !== content && current === previous) {
+		await write(absolute, content);
+		return { path, status: "updated" };
 	}
 	return { path, status: current === content ? "unchanged" : "kept" };
 }
@@ -102,12 +106,12 @@ async function writeOwnedByOmi(root: string, path: string, content: string, mode
 	return { path, status: current === null ? "created" : "updated" };
 }
 
-export async function writeKit(root: string, kit: PublishKit, service: ServiceLink, monorepo: boolean): Promise<KitReport> {
+export async function writeKit(root: string, kit: PublishKit, service: ServiceLink, monorepo: boolean, previousWorkflow?: string): Promise<KitReport> {
 	verifyKit(kit, service.name);
 	const workflow = adaptWorkflow(kit, service, monorepo);
 	const files = [
 		await writeOwnedByUser(root, posix.join(service.path, service.dockerfile), kit.dockerfile),
-		await writeOwnedByUser(root, workflowPath(service.name), workflow.text),
+		await writeOwnedByUser(root, workflowPath(service.name), workflow.text, previousWorkflow),
 		await writeOwnedByOmi(root, `${kitDir(service.name)}/contract.md`, kit.contract),
 		await writeOwnedByOmi(root, pushScriptPath(service.name), kit.push_script, 0o755),
 	];

@@ -143,6 +143,29 @@ test("logout_conserva las credenciales si no pudo revocar", async (t) => {
 	assert.notEqual(await loadCredentials(path), null);
 });
 
+for (const command of ["whoami", "logout", "init"]) {
+	for (const source of ["env", "flag"]) {
+		test(`${command}_no envía el token a una API distinta por ${source}`, async (t) => {
+			const { home, omi } = await loggedIn(t);
+			const other = await startMockOmi(t);
+			const io = testIo({ homeDir: home, env: source === "env" ? { OMI_API_URL: other.url } : {} });
+			const args = command === "init" ? [command, "--project", "x", "--service", "api", "--create"] : [command];
+			if (source === "flag") args.push("--api", other.url);
+			args.push("--json");
+			assert.equal(await run(args, io), 1);
+			assert.match(io.errors(), /api_url_mismatch/);
+			assert.deepEqual(other.requests, []);
+			assert.equal(omi.sessions.get("prs_1"), "active");
+			assert.notEqual(await loadCredentials(credentialsPath(home)), null);
+		});
+	}
+}
+
+test("whoami_acepta la URL guardada con barra final", async (t) => {
+	const { home, omi } = await loggedIn(t);
+	assert.equal(await run(["whoami", "--api", `${omi.url}/`], testIo({ homeDir: home })), 0);
+});
+
 test("logout_sin sesión no falla", async (t) => {
 	const home = await tempDir(t);
 	assert.equal(await run(["logout"], testIo({ homeDir: home })), 0);

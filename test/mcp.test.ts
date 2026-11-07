@@ -41,6 +41,24 @@ function server(home: string) {
 	return { mcp, sent };
 }
 
+test("mcp aísla el stdout del protocolo y no ofrece prompts de terminal a las tools", async (t) => {
+	const io = testIo({ homeDir: await tempDir(t), interactive: true });
+	const tool = defineTool({
+		name: "progress", label: "Progress", description: "progress", parameters: Type.Object({}),
+		run: async (_args, runtime) => {
+			runtime.io.out("progress for humans");
+			assert.equal(runtime.io.interactive, false);
+			return { text: "done", data: {} };
+		},
+	});
+	const sent: JsonRpcMessage[] = [];
+	const mcp = createMcpServer({ tools: [tool], io, write: (message) => sent.push(message) });
+	await mcp.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "progress", arguments: {} } });
+	assert.equal(io.output(), "");
+	assert.match(io.errors(), /progress for humans/);
+	assert.deepEqual(sent[0]?.result, { content: [{ type: "text", text: "done" }], structuredContent: {} });
+});
+
 test("mcp_initialize declara tools y la versión pedida por el cliente", async (t) => {
 	const { mcp, sent } = server(await tempDir(t));
 	await mcp.handle({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {} } });

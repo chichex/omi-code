@@ -10,7 +10,7 @@ import { projectLinkPath } from "../core/paths.ts";
 
 const ServiceLink = Type.Object(
 	{
-		name: Type.String({ minLength: 1 }),
+		name: Type.String({ minLength: 1, pattern: "^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$" }),
 		path: Type.String({ minLength: 1 }),
 		port: Type.Integer({ minimum: 1, maximum: 65535 }),
 		dockerfile: Type.String({ minLength: 1 }),
@@ -71,14 +71,21 @@ export function parseProjectLink(raw: string): ProjectLink {
 	return parsed;
 }
 
-export async function readProjectLink(cwd: string): Promise<ProjectLink> {
+export async function loadProjectLink(cwd: string): Promise<ProjectLink | null> {
 	let raw: string;
 	try {
 		raw = await readFile(projectLinkPath(cwd), "utf8");
-	} catch {
-		throw new OmiError("project_not_linked", "este repo no está vinculado a OMI", { hint: "corré `omi init`" });
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+		throw error;
 	}
 	return parseProjectLink(raw);
+}
+
+export async function readProjectLink(cwd: string): Promise<ProjectLink> {
+	const link = await loadProjectLink(cwd);
+	if (link === null) throw new OmiError("project_not_linked", "este repo no está vinculado a OMI", { hint: "corré `omi init`" });
+	return link;
 }
 
 export async function writeProjectLink(cwd: string, link: ProjectLink): Promise<void> {

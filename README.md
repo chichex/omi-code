@@ -14,7 +14,9 @@ Códigos de salida: `0` ok, `1` error de ejecución o API, `2` error de uso o gu
 
 ## Desarrollo
 
-Requiere Node 22.19 o superior. TypeScript corre sin transpilar.
+Requiere Node 22.19 o superior. TypeScript corre sin transpilar desde el checkout.
+No se distribuye por npm: Node no ejecuta TypeScript dentro de `node_modules`.
+El paquete es privado para impedir publicaciones accidentales; la distribución para usuarios es el binario de release.
 
 ```sh
 npm ci

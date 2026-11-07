@@ -27,6 +27,18 @@ function fakePi(calls: Call[]): PiMain {
 	};
 }
 
+for (const exitCode of [1, 2]) {
+	test(`launchTui conserva el código ${exitCode} devuelto por Pi`, async (t) => {
+		const previous = process.exitCode;
+		t.after(() => { process.exitCode = previous; });
+		const home = await tempDir(t);
+		const result = await launchTui([], testIo({ homeDir: home }), {
+			skillsDir: await tempDir(t), piMain: async () => { process.exitCode = exitCode; },
+		});
+		assert.equal(result, exitCode);
+	});
+}
+
 test("launchTui_usa ~/.omi/agent como configuración global de Pi", async (t) => {
 	const home = await tempDir(t);
 	const calls: Call[] = [];
