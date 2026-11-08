@@ -1,5 +1,6 @@
 # Propone un bump semanal sólo tras typecheck, tests y packaging en este mismo workflow.
-# GITHUB_TOKEN no dispara CI por pull_request: no se depende de ese evento ni se mergea solo.
+# GITHUB_TOKEN no dispara CI por pull_request: se lanza por dispatch, porque main exige el check
+# `cierre`. No se mergea solo: el merge humano es lo que publica la release.
 name: Bump Pi
 
 on:
@@ -8,6 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: write
   contents: write
   pull-requests: write
 
@@ -61,5 +63,6 @@ jobs:
           git add package.json package-lock.json
           git commit -m "chore: subir Pi a $version"
           git push origin "$branch"
-          gh pr create --head "$branch" --title "chore: subir Pi a $version" --body "Typecheck, tests y empaquetado pasaron con Pi $version en $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. Requiere revisión y merge humanos; el token del bot no dispara CI de pull_request."
+          gh pr create --head "$branch" --title "chore: subir Pi a $version" --body "Typecheck, tests y empaquetado pasaron con Pi $version en $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. Requiere revisión y merge humanos: al mergear se publica una release."
+          gh workflow run ci.yml --ref "$branch"
           echo "Bump verificado; revisión y merge pendientes del humano." >> "$GITHUB_STEP_SUMMARY"
