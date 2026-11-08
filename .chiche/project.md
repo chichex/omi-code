@@ -48,18 +48,44 @@ Dependencias runtime fijadas a versión exacta. Diseño UI: no aplica (CLI, TUI 
 |---|---|---|
 | commits-convencionales | `tipo(scope)?: resumen`; tipos `feat`, `fix`, `refactor`, `test`, `docs`, `style`, `chore`, `ci`, `build`, `perf`, `revert` y `sdd` | gate `commits` |
 | typecheck | TypeScript sin errores | `npm run typecheck` sale con 0 |
-| max-lineas-archivo | ratchet 500 en `.ts` no-test | gate `max-lines`. Hoy en FALLA por `extensions/`, portado de `chichex/skills`: decisión humana pendiente en el PR de la capa 3 |
+| max-lineas-archivo | 500 en `.ts` no-test; baseline nominal para los 13 archivos portados listados abajo | gate `max-lines`: excepción de adopción aprobada por el humano el 2026-11-08; techo por archivo sin crecimiento y ratchet al tamaño del base |
 | coding-policies | `.sdd/coding-policies.md` de `chichex/omi`, secciones Clean Code y TypeScript | guia — sin gate: la juzga el reviewer |
+
+La baseline siguiente acepta deuda del port inicial, no afirma que esos módulos cumplan SRP. Sólo cubre los 13 paths y techos explícitos del `case`: ningún directorio queda excluido. Para cada uno rige el menor techo entre la baseline y su tamaño en `$BASE`, con piso 500. Al bajar a 500 líneas o eliminar un archivo, retirar su entrada; no ampliar la lista ni los techos sin otra decisión humana. Conservar `wc -l`, la convención ya adoptada; no cambiar el conteo para ocultar deuda.
 
 ```sh
 # commits: sin salida = PASS
 git log --no-merges --format=%s "$BASE"..HEAD \
   | grep -Ev '^(feat|fix|refactor|test|docs|style|chore|ci|build|perf|revert|sdd)(\([a-z0-9-]+\))?!?: .+'
 
-# max-lines: imprime MAX_LINES=PASS o una línea FALLA por archivo
-limit=500; fail=0
+# max-lines: BASE debe ser el commit/branch contra el que se revisa el cambio
+# baseline nominal aprobada; todo otro path sigue con techo 500
+fail=0
+git cat-file -e "$BASE^{commit}" 2>/dev/null || { echo "BASE inválido: $BASE"; exit 1; }
 for f in $(git diff --name-only --diff-filter=ACMR "$BASE"...HEAD -- '*.ts' | grep -Ev '\.test\.ts$'); do
-  [ "$(wc -l < "$f")" -le "$limit" ] || { echo "FALLA $f"; fail=1; }
+  limit=500
+  case "$f" in
+    extensions/artifacts/index.ts) limit=1015 ;;
+    extensions/artifacts/spec-publication.ts) limit=652 ;;
+    extensions/ask-user-question/index.ts) limit=900 ;;
+    extensions/github-issue-selector.ts) limit=560 ;;
+    extensions/github-issues.ts) limit=505 ;;
+    extensions/github-prs/index.ts) limit=560 ;;
+    extensions/grill-tools/index.ts) limit=1860 ;;
+    extensions/grill-tools/inventory.ts) limit=623 ;;
+    extensions/subagent/jobs.ts) limit=632 ;;
+    extensions/workflow-orchestrator/controller.ts) limit=637 ;;
+    extensions/workflow-orchestrator/direct-launch.ts) limit=511 ;;
+    extensions/workflow-orchestrator/lifecycle.ts) limit=824 ;;
+    extensions/workflow-resolution/index.ts) limit=1247 ;;
+  esac
+  if [ "$limit" -gt 500 ] && git cat-file -e "$BASE:$f" 2>/dev/null; then
+    previous=$(git show "$BASE:$f" | wc -l)
+    [ "$previous" -ge 500 ] || previous=500
+    [ "$previous" -ge "$limit" ] || limit=$previous
+  fi
+  actual=$(wc -l < "$f")
+  [ "$actual" -le "$limit" ] || { echo "FALLA $f ($actual > $limit)"; fail=1; }
 done
 [ "$fail" -eq 0 ] && echo "MAX_LINES=PASS"
 ```
@@ -75,11 +101,12 @@ done
 - 2026-11-07, feedback: `OMI_HOME` es una raíz absoluta; un binario instalado infiere la raíz por su ubicación. `PI_PACKAGE_DIR` y `OMI_RUNTIME_DIR` pertenecen sólo al host y se quitan de bash, Runner y subagentes.
 - 2026-11-07, feedback: el bump de Pi verifica packaging en su propio workflow y deja el merge al humano; no depende de eventos de PR creados con `GITHUB_TOKEN`.
 - 2026-11-07, feedback: instalación privada con `gh` autenticado; upgrade con `GH_TOKEN`/`GITHUB_TOKEN` enviado sólo a la API de releases de este repo, nunca persistido.
+- 2026-11-08, preparación del land: el humano autorizó explícitamente la baseline nominal de 13 archivos sin crecimiento y resolver los dos hilos de seguridad como riesgos aceptados/diferidos a #5/#6, no como bugs corregidos. Autoriza sacar la capa 3 de Draft; el merge requiere la confirmación final del plan.
 
 ## Gaps
 
 - Depende de `chichex/omi#140` para funcionar contra producción.
 - Sin cobertura automática contra una `omi-api` real: los tests usan un doble que copia el contrato.
-- Los guardrails locales no aíslan a un agente con bash y acceso al Bearer. Diferidos por decisión humana: aislamiento CLI en #5 y confianza de aprobación MCP en #6; los hilos de review siguen abiertos.
+- Los guardrails locales no aíslan a un agente con bash y acceso al Bearer. Riesgos aceptados para este land y diferidos por decisión humana: aislamiento CLI en #5 y confianza de aprobación MCP en #6. Sus issues siguen abiertos; resolver los hilos originales no constituye una corrección de seguridad.
 - `/skill:init --update` migra `.sdd/` a `.omi/`, pero no `.chiche/` a `.omi/`. Este repo sigue con `.chiche/project.md`, que se lee por compatibilidad.
 - El contrato de `/version` se verifica estático al publicar (`git grep`): OMI no lo valida.
