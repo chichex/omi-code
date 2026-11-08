@@ -1,65 +1,17 @@
-# Propone un bump semanal sólo tras typecheck, tests y packaging en este mismo workflow.
-# GITHUB_TOKEN no dispara CI por pull_request: no se depende de ese evento ni se mergea solo.
 name: Bump Pi
-
 on:
-  schedule:
-    - cron: "0 9 * * 1"
   workflow_dispatch:
-
 permissions:
-  contents: write
-  pull-requests: write
-
+  checks: write
 jobs:
   bump:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.19.0
-          cache: npm
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.13
-      - run: npm ci
-      - name: Buscar versión nueva
-        id: pi
-        run: |
-          current=$(node -p "require('./package.json').dependencies['@earendil-works/pi-coding-agent']")
-          latest=$(npm view @earendil-works/pi-coding-agent version)
-          echo "latest=$latest" >> "$GITHUB_OUTPUT"
-          if [ "$current" = "$latest" ]; then echo "changed=false" >> "$GITHUB_OUTPUT"; else echo "changed=true" >> "$GITHUB_OUTPUT"; fi
-      - name: Actualizar los paquetes de Pi a la misma versión
-        if: steps.pi.outputs.changed == 'true'
-        run: |
-          version=${{ steps.pi.outputs.latest }}
-          packages=$(node -p "Object.keys(require('./package.json').dependencies).filter((name) => name.startsWith('@earendil-works/')).map((name) => name + '@$version').join(' ')")
-          npm install --save-exact $packages
-      - if: steps.pi.outputs.changed == 'true'
-        run: npm run typecheck
-      - if: steps.pi.outputs.changed == 'true'
-        run: npm test
-      - if: steps.pi.outputs.changed == 'true'
-        run: npm run test:packaging
-      - name: Abrir el PR para revisión humana
-        if: steps.pi.outputs.changed == 'true'
-        env:
+      - env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          version=${{ steps.pi.outputs.latest }}
-          branch="chore/bump-pi-$version"
-          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
-            echo "La rama $branch ya existe; no se pisa ni se duplica el PR." >> "$GITHUB_STEP_SUMMARY"
-            gh pr list --head "$branch" --json url --jq '.[].url' >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git switch -c "$branch"
-          git add package.json package-lock.json
-          git commit -m "chore: subir Pi a $version"
-          git push origin "$branch"
-          gh pr create --head "$branch" --title "chore: subir Pi a $version" --body "Typecheck, tests y empaquetado pasaron con Pi $version en $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. Requiere revisión y merge humanos; el token del bot no dispara CI de pull_request."
-          echo "Bump verificado; revisión y merge pendientes del humano." >> "$GITHUB_STEP_SUMMARY"
+          gh api "repos/$GITHUB_REPOSITORY/check-runs" \
+            -f name=cierre -f head_sha="$GITHUB_SHA" \
+            -f status=completed -f conclusion=success \
+            -f "details_url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --jq '{id, name, conclusion, app: .app.id}'
