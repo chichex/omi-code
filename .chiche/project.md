@@ -16,7 +16,7 @@ Dependencias runtime fijadas a versión exacta. Diseño UI: no aplica (CLI, TUI 
 | empaquetado | `npm run test:packaging` | . | verificado 2026-11-07 | ~12s | requiere bun; compila para el host, instala en un HOME temporal (también raíz personalizada), verifica versión/assets de Pi y entorno de procesos hijos |
 | release local | `node scripts/build-release.ts --out <dir>` | . | verificado 2026-11-07 | ~25s | las cuatro plataformas; `--targets` acota |
 | plan de release | `node scripts/next-release.ts` | . | verificado 2026-11-08 | <1s | imprime `version=X.Y.Z`, o `version=` si nada empaquetado cambió desde el último tag |
-| dry-run de release | `gh workflow run release.yml --ref <rama> -f dry_run=true` | . | verificado 2026-11-08 | ~5min | corre el pipeline completo, también en macOS, sin publicar |
+| dry-run de release | `gh workflow run release.yml --ref <rama> -f dry_run=true` | . | verificado 2026-11-08 | ~3min | corre el pipeline completo, también en macOS, sin publicar |
 | censo de protocolo | `OMI_REPO=<checkout de chichex/omi> npm test` | . | verificado 2026-11-07 | ~6s | activa la comparación de `src/protocol/constants.ts` contra el código Go |
 | correr | `npm run omi -- --help` | . | verificado 2026-11-05 | <1s | |
 
@@ -105,7 +105,7 @@ done
 - 2026-11-07, feedback: instalación privada con `gh` autenticado; upgrade con `GH_TOKEN`/`GITHUB_TOKEN` enviado sólo a la API de releases de este repo, nunca persistido.
 - 2026-11-08, preparación del land: el humano autorizó explícitamente la baseline nominal de 13 archivos sin crecimiento y resolver los dos hilos de seguridad como riesgos aceptados/diferidos a #5/#6, no como bugs corregidos. Autoriza sacar la capa 3 de Draft; el merge requiere la confirmación final del plan.
 - 2026-11-08, feedback: despliegue continuo. El humano reemplazó «publicar es decisión humana» por «la decisión humana es el merge». Sólo publica lo que cambia el binario (`isPackaged` en `scripts/next-release.ts`): primero se miran las rutas y después el tipo de commit. Antes de 1.0 lo incompatible sube el minor. Volver atrás es mergear un `revert:`: `omi upgrade` sólo sube de versión.
-- 2026-11-08, `cierre` obligatorio: `GITHUB_TOKEN` no dispara `pull_request`, así que `bump-pi.yml` lanza `ci.yml` por dispatch para que su PR se pueda mergear.
+- 2026-11-08, `cierre` obligatorio: `GITHUB_TOKEN` no dispara `pull_request`, y un `cierre` de `workflow_dispatch` no cuenta para la protección aunque esté en el commit (probado en un PR descartable). `bump-pi.yml` publica el check por la API, sobre un commit distinto al de su corrida, después de correr los mismos gates sobre ese árbol. Probado el check; falta verlo en un bump real.
 
 ## Gaps
 
