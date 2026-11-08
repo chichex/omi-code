@@ -15,6 +15,8 @@ Dependencias runtime fijadas a versión exacta. Diseño UI: no aplica (CLI, TUI 
 | test | `npm test` | . | verificado 2026-11-07 | ~8s | mock de omi-api en `test/helpers/mock-omi.ts`; `smoke.test.ts` usa Pi y procesos reales; incluye `extensions/**/*.test.ts`; requiere `python3` para el handler; los 2 smoke de packaging se corren aparte |
 | empaquetado | `npm run test:packaging` | . | verificado 2026-11-07 | ~12s | requiere bun; compila para el host, instala en un HOME temporal (también raíz personalizada), verifica versión/assets de Pi y entorno de procesos hijos |
 | release local | `node scripts/build-release.ts --out <dir>` | . | verificado 2026-11-07 | ~25s | las cuatro plataformas; `--targets` acota |
+| plan de release | `node scripts/next-release.ts` | . | verificado 2026-11-08 | <1s | imprime `version=X.Y.Z`, o `version=` si nada empaquetado cambió desde el último tag |
+| dry-run de release | `gh workflow run release.yml --ref <rama> -f dry_run=true` | . | verificado 2026-11-08 | ~3min | corre el pipeline completo, también en macOS, sin publicar |
 | censo de protocolo | `OMI_REPO=<checkout de chichex/omi> npm test` | . | verificado 2026-11-07 | ~6s | activa la comparación de `src/protocol/constants.ts` contra el código Go |
 | correr | `npm run omi -- --help` | . | verificado 2026-11-05 | <1s | |
 
@@ -22,9 +24,9 @@ Dependencias runtime fijadas a versión exacta. Diseño UI: no aplica (CLI, TUI 
 
 - **Local:** todo corre contra el mock efímero. No hay credenciales reales en los tests.
 - **Real:** `https://app.ohmyinfra.com`, con `chichex/omi#140` desplegado. Hasta entonces `omi login` falla con `session_token_unavailable`.
-- **Git:** branch default `main`, remote `origin` en `github.com/chichex/omi-code`.
+- **Git:** branch default `main`, remote `origin` en `github.com/chichex/omi-code`. `main` está protegida: exige PR y el check `cierre`, también para admins.
 - **CI:** `ci.yml` corre typecheck, test y empaquetado en cada PR. El check se llama `cierre`.
-- **Release:** un humano empuja el tag `vX.Y.Z`, igual a la versión de `package.json`. `release.yml` publica.
+- **Release:** cada merge a `main` que cambie lo empaquetado publica. `release.yml` calcula la versión desde el último tag, repite los gates, prueba macOS y crea el tag. El tag es la fuente de verdad: `package.json` se estampa sólo en CI y en `main` puede quedar atrás.
 - **Linux real:** `chichex-linux` sirve para probar el binario `linux-x64` en un HOME temporal.
 - **Review a pedido:** `gh workflow run claude-review.yml --repo chichex/omi-code -f pr=<N>`; requiere el secret `CLAUDE_CODE_OAUTH_TOKEN`.
 
@@ -40,7 +42,7 @@ Dependencias runtime fijadas a versión exacta. Diseño UI: no aplica (CLI, TUI 
 - No push directo a `main` ni force-push. Trabajar por PR.
 - No commitear credenciales, tokens ni valores de secretos.
 - El valor de un secreto no pasa por el contexto del LLM ni por la salida.
-- Publicar una release es decisión humana.
+- La decisión humana de publicar es el merge a `main`. No empujar tags `vX.Y.Z` ni correr `gh release create` a mano: el pipeline es el único camino.
 
 ## Políticas de generación
 
@@ -102,6 +104,8 @@ done
 - 2026-11-07, feedback: el bump de Pi verifica packaging en su propio workflow y deja el merge al humano; no depende de eventos de PR creados con `GITHUB_TOKEN`.
 - 2026-11-07, feedback: instalación privada con `gh` autenticado; upgrade con `GH_TOKEN`/`GITHUB_TOKEN` enviado sólo a la API de releases de este repo, nunca persistido.
 - 2026-11-08, preparación del land: el humano autorizó explícitamente la baseline nominal de 13 archivos sin crecimiento y resolver los dos hilos de seguridad como riesgos aceptados/diferidos a #5/#6, no como bugs corregidos. Autoriza sacar la capa 3 de Draft; el merge requiere la confirmación final del plan.
+- 2026-11-08, feedback: despliegue continuo. El humano reemplazó «publicar es decisión humana» por «la decisión humana es el merge». Sólo publica lo que cambia el binario (`isPackaged` en `scripts/next-release.ts`): primero se miran las rutas y después el tipo de commit. Antes de 1.0 lo incompatible sube el minor. Volver atrás es mergear un `revert:`: `omi upgrade` sólo sube de versión.
+- 2026-11-08, `cierre` obligatorio: `GITHUB_TOKEN` no dispara `pull_request`, y un `cierre` de `workflow_dispatch` no cuenta para la protección aunque esté en el commit (probado en un PR descartable). `bump-pi.yml` publica el check por la API, sobre un commit distinto al de su corrida, después de correr los mismos gates sobre ese árbol. Probado el check; falta verlo en un bump real.
 
 ## Gaps
 
@@ -110,3 +114,4 @@ done
 - Los guardrails locales no aíslan a un agente con bash y acceso al Bearer. Riesgos aceptados para este land y diferidos por decisión humana: aislamiento CLI en #5 y confianza de aprobación MCP en #6. Sus issues siguen abiertos; resolver los hilos originales no constituye una corrección de seguridad.
 - `/skill:init --update` migra `.sdd/` a `.omi/`, pero no `.chiche/` a `.omi/`. Este repo sigue con `.chiche/project.md`, que se lee por compatibilidad.
 - El contrato de `/version` se verifica estático al publicar (`git grep`): OMI no lo valida.
+- `release.yml` arranca los binarios de Linux x64 y macOS arm64. Los de Linux arm64 y macOS x64 se compilan y publican sin arrancarse.

@@ -54,7 +54,7 @@ Son controles locales para las superficies soportadas, no aislamiento de un proc
 
 En la TUI, `/skill:ship` autoriza stage para la sesión. En `omi mcp`, lo hace el flag `--authorize-stage` y la aprobación humana llega por elicitación del cliente MCP. En la CLI sin terminal, `--yes` aprueba; dentro de una sesión agéntica, no vale.
 
-El bump semanal de Pi abre un PR sólo tras typecheck, tests y empaquetado en el mismo workflow. La revisión y el merge son humanos.
+El bump semanal de Pi abre un PR sólo tras typecheck, tests y empaquetado en el mismo workflow. La revisión y el merge son humanos, y mergearlo publica una release.
 
 ## Desarrollo
 
@@ -68,6 +68,26 @@ npm run typecheck
 npm test
 npm run test:packaging   # compila e instala de verdad; requiere bun
 npm run omi -- --help
+```
+
+## Releases de omi
+
+Cada merge a `main` que cambie lo empaquetado publica una release: el merge es la decisión humana.
+No hay que empujar tags. Primero se miran las rutas y después el tipo de commit:
+
+| Merge a `main` | Resultado |
+|---|---|
+| `docs(review): …` que sólo toca `.chiche/` | sin release |
+| `fix(cli): …` o cualquier otro tipo sobre lo empaquetado | patch: `0.1.0` → `0.1.1` |
+| `feat(tools): …` | minor: `0.1.1` → `0.2.0` |
+| `feat!: …` o `BREAKING CHANGE:` | minor antes de 1.0; major después |
+
+El tag es la fuente de verdad: `package.json` se estampa sólo en CI, así que en `main` puede quedar atrás.
+Para volver atrás, mergeá un `revert:`: `omi upgrade` sólo sube de versión.
+
+```sh
+gh workflow run release.yml --ref <rama> -f dry_run=true    # corre todo sin publicar
+gh workflow run release.yml --ref main -f dry_run=false     # reintenta una publicación
 ```
 
 ## Publicación y reintentos

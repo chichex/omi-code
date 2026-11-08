@@ -119,13 +119,52 @@ test("bump-pi.yml_es programado y sólo abre el PR después de los tests", async
 	assert.match(workflow, /git ls-remote.*--heads/);
 });
 
-test("release.yml_compila con bun y verifica que el tag coincida", async () => {
+test("bump-pi.yml_publica el check que exige main sólo después de sus gates", async () => {
+	const workflow = await read(".github/workflows/bump-pi.yml");
+	assert.match(workflow, /checks: write/);
+	assert.doesNotMatch(workflow, /gh workflow run/);
+	const check = workflow.indexOf("/check-runs");
+	assert.ok(check > workflow.indexOf("run: npm run test:packaging"));
+	assert.ok(check > workflow.indexOf('git push origin "$branch"'));
+	assert.match(workflow, /-f name=cierre/);
+	assert.match(workflow, /-f head_sha="\$\(git rev-parse HEAD\)"/);
+	assert.match(workflow, /-f conclusion=success/);
+});
+
+test("release.yml_publica desde main sólo después de todos los gates", async () => {
 	const workflow = await read(".github/workflows/release.yml");
-	assert.match(workflow, /tags: \["v\*"\]/);
+	assert.match(workflow, /branches: \[main\]/);
+	assert.doesNotMatch(workflow, /tags:/);
 	assert.match(workflow, /setup-bun/);
-	assert.match(workflow, /scripts\/build-release\.ts/);
-	assert.match(workflow, /GITHUB_REF_NAME/);
-	assert.ok(workflow.indexOf("npm test") < workflow.indexOf("gh release create"));
+	assert.match(workflow, /scripts\/next-release\.ts/);
+	const publish = workflow.indexOf("gh release create");
+	const steps = ["npm version", "npm run typecheck", "npm test", "npm run test:packaging", "scripts/build-release.ts"];
+	const release = workflow.indexOf("\n  release:");
+	let previous = release;
+	for (const step of steps) {
+		const at = workflow.indexOf(step, previous);
+		assert.ok(at > previous && at < publish, step);
+		previous = at;
+	}
+});
+
+test("release.yml_prueba macOS antes de publicar", async () => {
+	const workflow = await read(".github/workflows/release.yml");
+	assert.match(workflow, /runs-on: macos-latest/);
+	assert.match(workflow, /needs: \[plan, macos\]/);
+});
+
+test("release.yml_no empuja a main, fija el commit y no cancela una publicación", async () => {
+	const workflow = await read(".github/workflows/release.yml");
+	assert.doesNotMatch(workflow, /git push/);
+	assert.match(workflow, /--target "\$GITHUB_SHA"/);
+	assert.match(workflow, /cancel-in-progress: false/);
+});
+
+test("release.yml_el dry-run y otras ramas no publican", async () => {
+	const workflow = await read(".github/workflows/release.yml");
+	assert.match(workflow, /if: github\.ref == 'refs\/heads\/main' && inputs\.dry_run != true/);
+	assert.match(workflow, /dry_run:\n\s+description: .+\n\s+type: boolean\n\s+default: true/);
 });
 
 test("buildRelease no borra archivos previos del directorio de salida", async (t) => {

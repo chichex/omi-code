@@ -1,16 +1,56 @@
-# Publica una release cuando un humano empuja el tag vX.Y.Z.
+# Publica una release por cada merge a main que cambie lo empaquetado.
+# La versión la decide scripts/next-release.ts; el tag es la fuente de verdad y
+# package.json sólo se estampa acá, sin commitear: main no recibe pushes de bots.
+# La decisión humana es el merge. Un dispatch sirve para verificar o reintentar.
 name: Release
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Corre todo menos publicar; fuerza una versión aunque no haya cambios empaquetados
+        type: boolean
+        default: true
 
 permissions:
-  contents: write
+  contents: read
+
+# La corrida siguiente calcula desde el tag nuevo: los merges seguidos se agrupan, no se pisan.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  release:
+  plan:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+      - id: next
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = true ]; then
+            node scripts/next-release.ts --force >> "$GITHUB_OUTPUT"
+          else
+            node scripts/next-release.ts >> "$GITHUB_OUTPUT"
+          fi
+
+  # CI sólo arranca el binario de Linux; macOS tiene fallas propias (exit 137 sin refirmar).
+  macos:
+    needs: plan
+    if: needs.plan.outputs.version != ''
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -21,12 +61,34 @@ jobs:
         with:
           bun-version: 1.3.13
       - run: npm ci
+      - run: npm version "$VERSION" --no-git-tag-version --allow-same-version
+      - run: npm run test:packaging
+
+  release:
+    needs: [plan, macos]
+    if: needs.plan.outputs.version != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - run: npm ci
+      - run: npm version "$VERSION" --no-git-tag-version --allow-same-version
       - run: npm run typecheck
       - run: npm test
-      - name: El tag coincide con package.json
-        run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+      - run: npm run test:packaging
       - run: node scripts/build-release.ts --out dist/release
       - name: Publicar
+        if: github.ref == 'refs/heads/main' && inputs.dry_run != true
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/release/* --generate-notes
+        run: gh release create "v$VERSION" dist/release/* --generate-notes --target "$GITHUB_SHA"
