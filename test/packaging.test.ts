@@ -119,11 +119,16 @@ test("bump-pi.yml_es programado y sólo abre el PR después de los tests", async
 	assert.match(workflow, /git ls-remote.*--heads/);
 });
 
-test("bump-pi.yml_dispara el CI que exige main porque su token no lo dispara solo", async () => {
+test("bump-pi.yml_publica el check que exige main sólo después de sus gates", async () => {
 	const workflow = await read(".github/workflows/bump-pi.yml");
-	assert.match(workflow, /actions: write/);
-	const dispatch = workflow.indexOf('gh workflow run ci.yml --ref "$branch"');
-	assert.ok(dispatch > workflow.indexOf('git push origin "$branch"'));
+	assert.match(workflow, /checks: write/);
+	assert.doesNotMatch(workflow, /gh workflow run/);
+	const check = workflow.indexOf("/check-runs");
+	assert.ok(check > workflow.indexOf("run: npm run test:packaging"));
+	assert.ok(check > workflow.indexOf('git push origin "$branch"'));
+	assert.match(workflow, /-f name=cierre/);
+	assert.match(workflow, /-f head_sha="\$\(git rev-parse HEAD\)"/);
+	assert.match(workflow, /-f conclusion=success/);
 });
 
 test("release.yml_publica desde main sólo después de todos los gates", async () => {
