@@ -1,0 +1,16 @@
+{
+  // El repo de origen no trae tsconfig: rige `strict` con la resolución de este proyecto.
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "strict": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": [".", "../src/tui/extensions.ts"],
+  "exclude": ["embedded.d.ts"]
+}

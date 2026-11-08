@@ -1,0 +1,226 @@
+// Descubrimiento de agentes para la tool `subagent` (issue #44 CA-2).
+//
+// Adaptado de examples/extensions/subagent/agents.ts de Pi 0.85.1 con un scope
+// nuevo, `package`: los agentes bundleados en extensions/subagent/agents/,
+// resueltos con `<OMI_RUNTIME_DIR>/agents` o, sin esa variable, relativo a ESTE
+// archivo (import.meta.url). `user` (<getAgentDir()>/agents) y `project` (el
+// <CONFIG_DIR_NAME>/agents mas cercano hacia arriba desde cwd) son opt-in via
+// agentScope; `all` combina los tres con precedencia project > user > package.
+//
+// Sin imports runtime de Pi: index.ts inyecta getAgentDir, CONFIG_DIR_NAME y
+// parseFrontmatter reales, y los tests inyectan directorios temporales.
+
+import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { runtimeAssetDir } from "../lib/runtime-paths.ts";
+
+export type AgentScope = "package" | "user" | "project" | "all";
+export type AgentSource = "package" | "user" | "project";
+
+export interface AgentConfig {
+	name: string;
+	description: string;
+	tools?: string[];
+	model?: string;
+	timeoutSeconds?: number;
+	// Presente cuando el frontmatter trae `timeout` pero no es un entero positivo:
+	// el agente corre sin limite y la tool lo avisa en su salida.
+	timeoutWarning?: string;
+	systemPrompt: string;
+	source: AgentSource;
+	filePath: string;
+}
+
+export interface ParsedFrontmatter<T> {
+	frontmatter: T;
+	body: string;
+}
+
+export type FrontmatterParser = <T extends Record<string, unknown>>(content: string) => ParsedFrontmatter<T>;
+
+export interface AgentDiscoveryDeps {
+	packageAgentsDir?: string;
+	getAgentDir?: () => string;
+	configDirName?: string;
+	parseFrontmatter?: FrontmatterParser;
+}
+
+export interface AgentDiscoveryResult {
+	agents: AgentConfig[];
+	packageAgentsDir: string;
+	userAgentsDir: string;
+	projectAgentsDir: string | null;
+}
+
+type AgentFrontmatter = {
+	name?: unknown;
+	description?: unknown;
+	tools?: unknown;
+	model?: unknown;
+	timeout?: unknown;
+};
+
+export const PACKAGE_AGENTS_DIR = join(dirname(fileURLToPath(import.meta.url)), "agents");
+
+/** Se resuelve al usarse: `OMI_RUNTIME_DIR` puede setearse después de importar este módulo. */
+export function packageAgentsDir(): string {
+	return runtimeAssetDir("agents", PACKAGE_AGENTS_DIR);
+}
+
+const DEFAULT_CONFIG_DIR_NAME = ".pi";
+
+// Espejo de getAgentDir() de Pi para cuando nadie inyecta el real (tests);
+// index.ts siempre pasa el de @earendil-works/pi-coding-agent.
+function defaultAgentDir(): string {
+	return process.env.PI_CODING_AGENT_DIR ?? join(homedir(), DEFAULT_CONFIG_DIR_NAME, "agent");
+}
+
+function parseScalar(raw: string): unknown {
+	if (raw === "") return "";
+	if (/^".*"$/s.test(raw)) return raw.slice(1, -1).replace(/\\"/g, '"');
+	if (/^'.*'$/s.test(raw)) return raw.slice(1, -1);
+	if (raw.startsWith("[") && raw.endsWith("]")) {
+		return raw
+			.slice(1, -1)
+			.split(",")
+			.map((item) => parseScalar(item.trim()))
+			.filter((item) => item !== "");
+	}
+	return raw;
+}
+
+// Parser minimo de frontmatter (clave: valor por linea, comillas y listas de
+// flujo). Alcanza para los agentes bundleados y los tests; en produccion
+// index.ts inyecta parseFrontmatter de Pi, que corre un parser YAML real.
+export function parseAgentFrontmatter<T extends Record<string, unknown> = Record<string, unknown>>(
+	content: string,
+): ParsedFrontmatter<T> {
+	const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+	if (!match) return { frontmatter: {} as T, body: content };
+	const frontmatter: Record<string, unknown> = {};
+	for (const line of (match[1] ?? "").split(/\r?\n/)) {
+		const entry = line.match(/^([A-Za-z_][\w-]*):\s*(.*)$/);
+		if (!entry) continue;
+		frontmatter[entry[1]!] = parseScalar((entry[2] ?? "").trim());
+	}
+	return { frontmatter: frontmatter as T, body: match[2] ?? "" };
+}
+
+// `tools: read, bash` y `tools: [read, bash]` son ambas YAML validas y ambas
+// estan en uso; cualquier otra forma no rompe el descubrimiento.
+function parseToolList(value: unknown): string[] | undefined {
+	const raw = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : [];
+	const tools = raw
+		.filter((tool): tool is string => typeof tool === "string")
+		.map((tool) => tool.trim())
+		.filter(Boolean);
+	return tools.length > 0 ? tools : undefined;
+}
+
+// `timeout: 300` (segundos). El parser YAML de Pi entrega number y el default
+// string. Ausente = sin limite sin aviso. Presente pero que no sea un entero
+// positivo (`300s`, `5m`, `2.5`, `-1`, `0`, vacio) tambien corre sin limite,
+// pero deja un `timeoutWarning`: no falla en silencio.
+function parseTimeout(value: unknown): { seconds?: number; warning?: string } {
+	if (value === undefined) return {};
+	const parsed = typeof value === "number" ? value : typeof value === "string" && /^\d+$/.test(value.trim()) ? Number(value) : NaN;
+	if (Number.isInteger(parsed) && parsed > 0) return { seconds: parsed };
+	const raw = typeof value === "string" ? JSON.stringify(value) : String(value);
+	return {
+		warning: `timeout ${raw} invalido en el frontmatter: tiene que ser un entero positivo de segundos (ej. timeout: 300); se ignoro y el agente corre sin limite.`,
+	};
+}
+
+function loadAgentsFromDir(dir: string, source: AgentSource, parse: FrontmatterParser): AgentConfig[] {
+	const agents: AgentConfig[] = [];
+	if (!existsSync(dir)) return agents;
+
+	let entries: Dirent[];
+	try {
+		entries = readdirSync(dir, { withFileTypes: true });
+	} catch {
+		return agents;
+	}
+
+	for (const entry of entries) {
+		if (!entry.name.endsWith(".md")) continue;
+		if (!entry.isFile() && !entry.isSymbolicLink()) continue;
+		const filePath = join(dir, entry.name);
+		let content: string;
+		try {
+			content = readFileSync(filePath, "utf-8");
+		} catch {
+			continue;
+		}
+		const { frontmatter, body } = parse<AgentFrontmatter>(content);
+		// Un .md sin name o description string se ignora sin descartar los demas.
+		if (typeof frontmatter.name !== "string" || typeof frontmatter.description !== "string") continue;
+		const timeout = parseTimeout(frontmatter.timeout);
+		agents.push({
+			name: frontmatter.name,
+			description: frontmatter.description,
+			tools: parseToolList(frontmatter.tools),
+			model: typeof frontmatter.model === "string" ? frontmatter.model : undefined,
+			timeoutSeconds: timeout.seconds,
+			...(timeout.warning ? { timeoutWarning: timeout.warning } : {}),
+			systemPrompt: body,
+			source,
+			filePath,
+		});
+	}
+	return agents;
+}
+
+function isDirectory(path: string): boolean {
+	try {
+		return statSync(path).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
+function findNearestProjectAgentsDir(cwd: string, configDirName: string): string | null {
+	let currentDir = cwd;
+	while (true) {
+		const candidate = join(currentDir, configDirName, "agents");
+		if (isDirectory(candidate)) return candidate;
+		const parentDir = dirname(currentDir);
+		if (parentDir === currentDir) return null;
+		currentDir = parentDir;
+	}
+}
+
+export function discoverAgents(cwd: string, scope: AgentScope, deps: AgentDiscoveryDeps = {}): AgentDiscoveryResult {
+	const resolvedPackageDir = deps.packageAgentsDir ?? packageAgentsDir();
+	const userAgentsDir = join((deps.getAgentDir ?? defaultAgentDir)(), "agents");
+	const configDirName = deps.configDirName ?? DEFAULT_CONFIG_DIR_NAME;
+	const parse = deps.parseFrontmatter ?? parseAgentFrontmatter;
+	const projectAgentsDir = findNearestProjectAgentsDir(cwd, configDirName);
+
+	// Insercion en orden de precedencia creciente: project pisa a user, que
+	// pisa a package.
+	const agentMap = new Map<string, AgentConfig>();
+	if (scope === "package" || scope === "all") {
+		for (const agent of loadAgentsFromDir(resolvedPackageDir, "package", parse)) agentMap.set(agent.name, agent);
+	}
+	if (scope === "user" || scope === "all") {
+		for (const agent of loadAgentsFromDir(userAgentsDir, "user", parse)) agentMap.set(agent.name, agent);
+	}
+	if ((scope === "project" || scope === "all") && projectAgentsDir) {
+		for (const agent of loadAgentsFromDir(projectAgentsDir, "project", parse)) agentMap.set(agent.name, agent);
+	}
+
+	return { agents: Array.from(agentMap.values()), packageAgentsDir: resolvedPackageDir, userAgentsDir, projectAgentsDir };
+}
+
+export function formatAgentList(agents: AgentConfig[], maxItems: number): { text: string; remaining: number } {
+	if (agents.length === 0) return { text: "none", remaining: 0 };
+	const listed = agents.slice(0, maxItems);
+	return {
+		text: listed.map((agent) => `${agent.name} (${agent.source}): ${agent.description}`).join("; "),
+		remaining: agents.length - listed.length,
+	};
+}

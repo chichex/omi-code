@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "noEmit": true,
+    // Compromiso: @google/genai (transitiva de Pi) declara tipos contra un peer opcional
+    // de MCP y globals del DOM. Sin esto, tsc falla en node_modules, no en este código.
+    "skipLibCheck": true,
+    // Corte de tipos: el código portado se chequea con extensions/tsconfig.json. `exclude` solo no
+    // alcanza: tsc sigue los imports de src/tui/extensions.ts y aplicaría estas banderas a extensions/.
+    // Sin esta opción `#extensions/*` cae en extensions/embedded.d.ts. No usar `paths`: bun los
+    // respeta y empaquetaría la declaración en lugar de las extensiones.
+    "resolvePackageJsonImports": false
+  },
+  "files": ["extensions/embedded.d.ts"],
+  "include": ["bin", "src", "test", "scripts"],
+  "exclude": ["extensions"]
+}

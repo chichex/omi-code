@@ -1,0 +1,486 @@
+import assert from "node:assert/strict";
+import {
+	copyFileSync,
+	cpSync,
+	mkdirSync,
+	mkdtempSync,
+	rmSync,
+	symlinkSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { after, before, beforeEach, test } from "node:test";
+
+interface RegisteredTool {
+	name: string;
+	execute: (...args: any[]) => Promise<any>;
+}
+
+// omi-code trae a Pi como dependencia: los tests usan esa copia, no un `pi` del PATH.
+const NODE_MODULES = fileURLToPath(new URL("../../node_modules/", import.meta.url));
+const PI_PACKAGE_ROOT = join(NODE_MODULES, "@earendil-works", "pi-coding-agent");
+let sandbox = "";
+let tools = new Map<string, RegisteredTool>();
+let visibleWidth: (text: string) => number;
+let validateToolArguments: (tool: unknown, toolCall: { type: "toolCall"; id: string; name: string; arguments: unknown }) => unknown;
+let emittedEvents: Array<{ name: string; payload: unknown }> = [];
+
+before(async () => {
+	sandbox = mkdtempSync(join(tmpdir(), "ask-user-question-test-"));
+	// Replica `extensions/`: la extensión importa `../lib`.
+	mkdirSync(join(sandbox, "ask-user-question"));
+	copyFileSync(new URL("./index.ts", import.meta.url), join(sandbox, "ask-user-question", "index.ts"));
+	cpSync(new URL("../lib", import.meta.url), join(sandbox, "lib"), { recursive: true });
+
+	const scopedRoot = join(sandbox, "node_modules", "@earendil-works");
+	mkdirSync(scopedRoot, { recursive: true });
+	for (const packageName of ["pi-ai", "pi-tui"]) {
+		symlinkSync(
+			join(NODE_MODULES, "@earendil-works", packageName),
+			join(scopedRoot, packageName),
+			"dir",
+		);
+	}
+	symlinkSync(PI_PACKAGE_ROOT, join(scopedRoot, "pi-coding-agent"), "dir");
+	symlinkSync(
+		join(NODE_MODULES, "typebox"),
+		join(sandbox, "node_modules", "typebox"),
+		"dir",
+	);
+
+	const [{ default: register }, tui, piAi] = await Promise.all([
+		import(`${pathToFileURL(join(sandbox, "ask-user-question", "index.ts")).href}?test=${Date.now()}`),
+		import(pathToFileURL(join(NODE_MODULES, "@earendil-works", "pi-tui", "dist", "index.js")).href),
+		import(pathToFileURL(join(NODE_MODULES, "@earendil-works", "pi-ai", "dist", "index.js")).href),
+	]);
+	visibleWidth = tui.visibleWidth;
+	validateToolArguments = piAi.validateToolArguments;
+	register({
+		registerTool(tool: RegisteredTool) {
+			tools.set(tool.name, tool);
+		},
+		events: {
+			on() {},
+			emit(name: string, payload: unknown) {
+				emittedEvents.push({ name, payload });
+			},
+		},
+		on() {},
+	} as never);
+});
+
+beforeEach(() => {
+	emittedEvents = [];
+});
+
+after(() => {
+	if (sandbox) rmSync(sandbox, { recursive: true, force: true });
+});
+
+const plainTheme = {
+	fg: (_color: string, text: string) => text,
+	bg: (_color: string, text: string) => text,
+	bold: (text: string) => text,
+};
+const ansiTheme = {
+	fg: (_color: string, text: string) => `\x1b[38;5;250m${text}\x1b[39m`,
+	bg: (_color: string, text: string) => `\x1b[48;5;237m${text}\x1b[49m`,
+	bold: (text: string) => `\x1b[1m${text}\x1b[22m`,
+};
+
+function tuiContext(
+	drive: (component: { render(width: number): string[]; handleInput(data: string): void }) => void,
+	theme = plainTheme,
+) {
+	return {
+		mode: "tui",
+		ui: {
+			async custom(factory: (...args: any[]) => any) {
+				return await new Promise((resolveDone) => {
+					const tui = { requestRender() {} };
+					const component = factory(tui, theme, {}, resolveDone);
+					drive(component);
+				});
+			},
+		},
+	};
+}
+
+function activeGrillContext(
+	interviewMode: "unselected" | "fast" | "rounds" | "adaptive",
+	drive: (component: { render(width: number): string[]; handleInput(data: string): void }) => void,
+) {
+	return {
+		...tuiContext(drive),
+		sessionManager: {
+			getBranch() {
+				return [{
+					type: "message",
+					message: {
+						role: "toolResult",
+						toolName: "grill_session",
+						details: {
+							action: "configure",
+							snapshot: {
+								id: "grill-rounds-test",
+								status: "active",
+								interviewMode,
+							},
+						},
+					},
+				}];
+			},
+		},
+	};
+}
+
+test("ask_user_question reports a Herdr blocker until the prompt closes", async () => {
+	const tool = tools.get("ask_user_question");
+	assert.ok(tool);
+	const activeEvent = {
+		name: "herdr:blocked",
+		payload: { active: true, label: "Waiting for user response" },
+	};
+	const clearedEvent = { name: "herdr:blocked", payload: { active: false } };
+
+	const cancelled = await tool.execute(
+		"call-cancelled",
+		{
+			question: "¿Continuamos?",
+			options: [{ value: "yes", label: "Sí" }],
+		},
+		undefined,
+		undefined,
+		tuiContext((component) => {
+			assert.deepEqual(emittedEvents, [activeEvent], "Herdr must be blocked before the dialog opens");
+			component.handleInput("\x1b");
+		}),
+	);
+
+	assert.equal(cancelled.details.cancelled, true);
+	assert.deepEqual(emittedEvents, [activeEvent, clearedEvent]);
+
+	await assert.rejects(
+		tool.execute(
+			"call-rejected",
+			{
+				question: "¿Continuamos?",
+				options: [{ value: "yes", label: "Sí" }],
+			},
+			undefined,
+			undefined,
+			{
+				mode: "tui",
+				ui: {
+					async custom() {
+						assert.deepEqual(emittedEvents, [activeEvent, clearedEvent, activeEvent]);
+						throw new Error("UI failed");
+					},
+				},
+			},
+		),
+		/UI failed/,
+	);
+	assert.deepEqual(emittedEvents, [activeEvent, clearedEvent, activeEvent, clearedEvent]);
+});
+
+test("ask_user_question reflows long recommendations when the available width shrinks", async () => {
+	const tool = tools.get("ask_user_question");
+	assert.ok(tool);
+	const reason = "La definición de editado condiciona reversiones, presets, filas dinámicas, señal accesible, cobertura DS y lifecycle; además comparte superficie con otra decisión y puede abrir o cerrar repreguntas materiales.";
+
+	const result = await tool.execute(
+		"call-single",
+		{
+			question: "¿Cómo querés recorrer estas decisiones?",
+			options: [{
+				value: "adaptive",
+				label: "Grillado pregunta a pregunta",
+				description: "Cada respuesta recalcula las ramas siguientes.",
+				recommended: true,
+				recommendationReason: reason,
+			}],
+			allowOther: true,
+		},
+		undefined,
+		undefined,
+		tuiContext((component) => {
+			component.render(396);
+			const narrow = component.render(196);
+			assert.ok(
+				narrow.every((line) => visibleWidth(line) <= 196),
+				`rendered widths: ${narrow.map((line) => visibleWidth(line)).join(", ")}`,
+			);
+			component.handleInput("\r");
+		}, ansiTheme),
+	);
+
+	assert.equal(result.details.cancelled, false);
+	assert.equal(result.details.answers[0].value, "adaptive");
+});
+
+test("ask_user_questions collects a round of independent decisions in one UI", async () => {
+	const tool = tools.get("ask_user_questions");
+	assert.ok(tool, "round tool is registered");
+	assert.equal((tool as any).parameters.properties.questions.minItems, 2);
+	assert.equal((tool as any).parameters.properties.questions.maxItems, 4);
+	let customCalls = 0;
+
+	const result = await tool.execute(
+		"call-round",
+		{
+			questions: [
+				{
+					id: "scope",
+					section: "Alcance",
+					question: "¿Qué alcance confirmamos?",
+					options: [{ value: "narrow", label: "Acotado", recommended: true }],
+					allowOther: true,
+				},
+				{
+					id: "rollout",
+					section: "Entrega",
+					question: "¿Cómo hacemos el rollout?",
+					options: [{ value: "gradual", label: "Gradual", recommended: true }],
+					allowOther: true,
+				},
+			],
+		},
+		undefined,
+		undefined,
+		tuiContext((component) => {
+			customCalls++;
+			component.render(300);
+			assert.ok(component.render(80).every((line) => visibleWidth(line) <= 80));
+			component.handleInput("\r");
+			component.handleInput("\r");
+			component.handleInput("\r");
+		}),
+	);
+
+	assert.equal(customCalls, 1);
+	assert.equal(result.details.cancelled, false);
+	assert.deepEqual(
+		result.details.questions.map((question: any) => [question.id, question.answers[0]?.value]),
+		[["scope", "narrow"], ["rollout", "gradual"]],
+	);
+});
+
+test("CA-10: grill.frontierSize declares a minimum but no maximum in both question tools", () => {
+	for (const name of ["ask_user_question", "ask_user_questions"]) {
+		const tool = tools.get(name);
+		assert.ok(tool, `${name} is registered`);
+		const frontierSize = (tool as any).parameters.properties.grill.properties.frontierSize;
+		assert.equal(frontierSize.minimum, 1, `${name} keeps the minimum`);
+		assert.equal("maximum" in frontierSize, false, `${name} declares no maximum`);
+	}
+});
+
+test("CA-10: a fast-mode review of 25 decisions passes the registered schema and is not blocked", async () => {
+	const tool = tools.get("ask_user_question");
+	assert.ok(tool);
+	const arguments_ = {
+		question: "Seleccioná las decisiones que te hacen ruido.",
+		options: Array.from({ length: 25 }, (_, index) => ({ value: `d${index + 1}`, label: `D${index + 1}` })),
+		selectionMode: "multiple",
+		allowEmptySelection: true,
+		grill: { sessionId: "grill-rounds-test", phase: "interview", frontierSize: 25 },
+	};
+	const validated = validateToolArguments(tool, {
+		type: "toolCall",
+		id: "call-schema-25",
+		name: "ask_user_question",
+		arguments: arguments_,
+	}) as typeof arguments_;
+	assert.equal(validated.grill.frontierSize, 25);
+
+	const result = await tool.execute(
+		"call-fast-25",
+		validated,
+		undefined,
+		undefined,
+		activeGrillContext("fast", (component) => {
+			component.render(300);
+			const narrow = component.render(80);
+			assert.ok(narrow.every((line) => visibleWidth(line) <= 80), "a 25-option list fits a narrow terminal");
+			component.handleInput(" ");
+			for (let index = 0; index < 24; index++) component.handleInput("\x1b[B");
+			component.handleInput(" ");
+			component.handleInput("\r");
+		}),
+	);
+	assert.equal(result.details.cancelled, false);
+	assert.deepEqual(
+		result.details.answers.map((answer: any) => answer.value),
+		["d1", "d25"],
+		"the first and the last of 25 options are selected together",
+	);
+
+	assert.throws(
+		() => validateToolArguments(tool, {
+			type: "toolCall",
+			id: "call-schema-0",
+			name: "ask_user_question",
+			arguments: { ...arguments_, grill: { ...arguments_.grill, frontierSize: 0 } },
+		}),
+		/frontierSize/,
+		"the minimum of 1 still rejects an empty frontier",
+	);
+});
+
+test("round mode blocks the singular tool when several decisions are unblocked", async () => {
+	const tool = tools.get("ask_user_question");
+	assert.ok(tool);
+	let customCalls = 0;
+
+	await assert.rejects(
+		tool.execute(
+			"call-invalid-single-round",
+			{
+				question: "¿Qué política confirmamos para estas cuatro decisiones?",
+				options: [{ value: "default", label: "Usar defaults" }],
+				allowOther: true,
+				grill: {
+					sessionId: "grill-rounds-test",
+					phase: "interview",
+					frontierSize: 4,
+				},
+			},
+			undefined,
+			undefined,
+			activeGrillContext("rounds", (component) => {
+				customCalls++;
+				component.handleInput("\r");
+			}),
+		),
+		/ask_user_questions.*required/i,
+	);
+	assert.equal(customCalls, 0, "the invalid singular prompt must be blocked before opening the TUI");
+});
+
+test("round mode permits a singular one-question frontier when declared explicitly", async () => {
+	const tool = tools.get("ask_user_question");
+	assert.ok(tool);
+
+	const result = await tool.execute(
+		"call-valid-single-round",
+		{
+			question: "¿Qué alcance confirmamos?",
+			options: [{ value: "narrow", label: "Acotado" }],
+			grill: {
+				sessionId: "grill-rounds-test",
+				phase: "interview",
+				frontierSize: 1,
+			},
+		},
+		undefined,
+		undefined,
+		activeGrillContext("rounds", (component) => component.handleInput("\r")),
+	);
+
+	assert.equal(result.details.cancelled, false);
+	assert.equal(result.details.answers[0].value, "narrow");
+});
+
+test("adaptive mode blocks the plural round tool", async () => {
+	const tool = tools.get("ask_user_questions");
+	assert.ok(tool);
+
+	await assert.rejects(
+		tool.execute(
+			"call-invalid-adaptive-round",
+			{
+				questions: [
+					{ id: "one", question: "¿Primera?", options: [{ value: "a", label: "A" }] },
+					{ id: "two", question: "¿Segunda?", options: [{ value: "b", label: "B" }] },
+				],
+				grill: {
+					sessionId: "grill-rounds-test",
+					phase: "interview",
+					frontierSize: 2,
+				},
+			},
+			undefined,
+			undefined,
+			activeGrillContext("adaptive", (component) => {
+				component.handleInput("\r");
+				component.handleInput("\r");
+				component.handleInput("\r");
+			}),
+		),
+		/ask_user_question.*required/i,
+	);
+});
+
+test("ask_user_questions preserves an intentional empty answer when a later decision cancels", async () => {
+	const tool = tools.get("ask_user_questions");
+	assert.ok(tool);
+
+	const result = await tool.execute(
+		"call-partial-round",
+		{
+			questions: [
+				{
+					id: "optional",
+					question: "¿Activamos alguna política opcional?",
+					options: [{ value: "coverage", label: "Coverage" }],
+					selectionMode: "multiple",
+					allowEmptySelection: true,
+				},
+				{
+					id: "required",
+					question: "¿Qué estrategia usamos?",
+					options: [{ value: "safe", label: "Segura" }],
+				},
+			],
+		},
+		undefined,
+		undefined,
+		tuiContext((component) => {
+			component.handleInput("\r");
+			component.handleInput("\x1b");
+		}),
+	);
+
+	assert.equal(result.details.cancelled, true);
+	assert.equal(result.details.questions[0].cancelled, false);
+	assert.deepEqual(result.details.questions[0].answers, []);
+	assert.equal(result.details.questions[1].cancelled, true);
+});
+
+test("Pi grill exposes quick, rounds, and one-by-one as distinct modes", async () => {
+	const skill = await import("node:fs/promises").then(({ readFile }) =>
+		readFile(new URL("../../skills/grill/SKILL.md", import.meta.url), "utf8")
+	);
+	assert.match(skill, /\*\*Grillado rápido\*\*/);
+	assert.match(skill, /\*\*Por rondas\*\*/);
+	assert.match(skill, /\*\*Grillado pregunta a pregunta\*\*/);
+	assert.match(skill, /`ask_user_questions`/);
+	assert.match(skill, /frontera de dependencias/i);
+	assert.match(skill, /hasta 4 preguntas/i);
+	assert.match(skill, /interviewMode/);
+	assert.match(skill, /`grill_session`[^\n]*action: "configure"[^\n]*antes de la primera pregunta/i);
+	assert.match(skill, /frontierSize/);
+});
+
+test("Pi grill assumes low-risk reversible defaults and only asks material decisions", async () => {
+	const skill = await import("node:fs/promises").then(({ readFile }) =>
+		readFile(new URL("../../skills/grill/SKILL.md", import.meta.url), "utf8")
+	);
+	assert.match(skill, /\[ASSUMED\]/);
+	assert.match(skill, /bajo riesgo[^\n]*reversible/i);
+	assert.match(skill, /alcance[^\n]*(?:datos|seguridad|privacidad)[^\n]*(?:migraci[oó]n|irreversible)/i);
+	assert.match(skill, /Nunca escribe ni propone `CONTEXT\.md`, glosarios ni ADRs/);
+	assert.match(skill, /interviewMode[^\n]*sin[^\n]*pregunta/i);
+	assert.match(skill, /cero decisiones materiales[^\n]*cierre/i);
+	assert.match(skill, /confirmaci[oó]n final[^\n]*\[ASSUMED\]/i);
+});
+
+test("Pi grill makes exhaustive mode override every assumption-pruning procedure", async () => {
+	const { readFile } = await import("node:fs/promises");
+	const grill = await readFile(new URL("../../skills/grill/SKILL.md", import.meta.url), "utf8");
+	assert.match(grill, /`explicit-only`[^\n]*no apliques[^\n]*poda/i);
+	assert.ok((grill.match(/`explicit-only`/g) ?? []).length >= 6, "the override reaches recognition, resume, every interview mode, and persistence");
+	assert.match(grill, /summary[^\n]*pol[ií]tica de supuestos/i);
+});

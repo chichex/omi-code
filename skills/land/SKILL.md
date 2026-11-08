@@ -1,0 +1,313 @@
+---
+name: land
+description: Cierra el ciclo SDD después del PR. Mergea un stack de PRs (o un PR suelto) tras mostrar el plan y recibir la confirmación del humano, borra los branches remotos y locales ya mergeados, remueve los worktrees limpios y deja el checkout principal igual a origin/<default>. Usar SIEMPRE que el usuario quiera "cerrar el stack", "mergear el stack", "landear" un PR o un stack, "dejar el repo limpio y al día", hacer "repo clean", o limpiar branches y worktrees ya mergeados. Su invocación explícita es la autorización de merge, pero siempre muestra el plan y pide confirmación antes de mergear, y nunca saltea la protección de branches.
+compatibility: Requiere un repositorio git, GitHub CLI (gh) autenticado con permiso de merge sobre el repo y, para mergear stacks, la extensión github/gh-stack.
+---
+
+Cierra el ciclo SDD después del PR: mergea un stack de PRs (el que `/skill:run` produce para una spec con Plan de entrega de 2 o más capas) o un PR suelto, con el plan mostrado y confirmado por el humano, y deja el repo limpio y al día: remotos y locales ya mergeados borrados, worktrees removidos y el checkout principal igual a `origin/<default>`. Es el único skill del repo que mergea, y solo porque se lo invoca de forma explícita. Reemplaza a `repo-clean`, que existía en Codex y Pi: absorbe su sincronización del checkout principal.
+
+<!-- land-doctrine:start -->
+Tres ideas fuerza:
+
+1. **Invocar es autorizar, pero el plan se confirma.** Escribir `/skill:land` es el pedido humano de mergear; aun así, nada se muta antes de mostrar el plan y recibir la confirmación. No existe un modo desatendido.
+2. **GitHub es la fuente de verdad.** El stack, el estado de cada PR y el método de merge se leen de GitHub; el estado local de `gh stack` ayuda, no manda.
+3. **Nunca se pierde trabajo ni se saltea una protección.** Sin bypass de branch protection, sin force, sin stash, sin `-D`. Borrar exige prueba, nunca ancestría: un PR `MERGED` o un blob idéntico en `origin/<default>`, salvo el grupo «sin PR» de la Fase 7, que nunca va preseleccionado. Lo que está en uso —un worktree, un lock, un PR abierto— se bloquea. Lo que no se puede resolver con seguridad se reporta con la ruta y el comando exacto.
+
+## Argumentos
+
+```text
+/skill:land [<stack#> | <PR#> | <URL de PR> ...] [--method merge|squash|rebase] [--wait N] [--dry-run] [--clean-only] [--autonomy <level>]
+```
+
+- Cada target es un stack, un PR o la URL de un PR. Un PR sin stack es un stack de uno. Un `<PR#>` dentro de un stack significa «hasta ese PR inclusive» (lo que hace `gh stack merge <PR>`): aterrizan ese PR y los de abajo, y el plan lista exactamente qué PRs aterrizan. Varios targets se procesan en secuencia, cada uno con su propio gate: un fallo no bloquea a los demás targets independientes. Los PRs de fork (`isCrossRepository`) se rechazan con diagnóstico.
+- `--method merge|squash|rebase` — método de merge. Sin el flag manda el default del repo (`viewerDefaultMergeMethod`), mostrado en el plan.
+- `--wait N` — minutos de espera máxima por checks pendientes o por la cola de merge. Default 20.
+- `--dry-run` — imprime el plan y termina sin mutar nada.
+- `--clean-only` (sin targets) — salta el merge y va directo a checkout principal → limpieza local → barrido → reporte (Fases 5 a 8). Es incompatible con targets, `--method` y `--wait`; con `--dry-run` imprime qué limpiaría y termina.
+- No existe `--yes`, y `--autonomy` solo acepta `supervised`: la confirmación del plan es siempre humana.
+- `--autonomy <level>` — se acepta por uniformidad y aborta con cualquier valor distinto de `supervised`/`A1`: la confirmación del plan es siempre humana. Lee la fila `land` del contrato solo para la traza. Ver «Niveles de autonomía» y «Nivel efectivo».
+
+Los gates usan la tool de preguntas del harness (`ask_user_question`). Donde la tool no cubre la forma del gate —más opciones de las que admite, selección múltiple— o no existe, formular el mismo gate en texto plano, terminar el turno y esperar la respuesta.
+
+<!-- autonomy-levels:start -->
+**Niveles de autonomía.** La escala es `manual (A0)`, `supervised (A1)`, `plan-approved (A2)`, `unattended (A3)`, `auto-land (A4)` y `auto-deploy (A5)`. `--autonomy <level>` acepta el código o la palabra, sin distinguir mayúsculas (`A2`, `a2` y `plan-approved` son el mismo nivel). Esta versión honra A1 a A3: con A0, A4 o A5 el skill aborta antes de cualquier mutación con el diagnóstico literal `--autonomy <nivel>: no soportado todavía (v1 honra A1–A3)`, y cualquier otro token aborta listando los valores válidos. `--autonomy` sin valor (no hay token siguiente, o el siguiente empieza con `--`) aborta listando los valores válidos: un token que empieza con `--` nunca se lee como valor. Sin flag rige lo que resuelve «Nivel efectivo»; el default es `supervised (A1)`.
+<!-- autonomy-levels:end -->
+
+<!-- autonomy-resolve:start -->
+**Nivel efectivo.** El nivel efectivo es el del flag `--autonomy` si vino; si no, la fila del `Stage` en `## Autonomy` del contrato leído del branch default, nunca del branch de trabajo: un PR no puede subirse la autonomía a sí mismo. `grill` lee la fila `grill`, `spec` la fila `spec`, `run` la fila `run` y `land` la fila `land` (que solo acepta `supervised`: otro nivel en esa fila cae a `supervised (A1)` con el aviso `fila land solo acepta supervised`); `init`, `issue-triage` y `design-system` no tienen fila: flag o `supervised (A1)`. La lectura valida el flag primero y, si existe el remote `origin`, hace `git fetch` best-effort, resuelve el branch default (`git symbolic-ref refs/remotes/origin/HEAD`, descartado si apunta a una ref que ya no existe, y si falla o quedó colgado, `git ls-remote --symref origin HEAD`) y lee `git show origin/<default>:.omi/project.md`, con fallback a `.chiche/project.md` y `.sdd/project.md` para un repo que mantuvo `.chiche/` o `.sdd/`; con `origin` y un default que no se resuelve rige `supervised (A1)`, también con `--autonomy`, con el aviso `origin sin branch default resoluble`, sin leer el working tree; solo sin `origin` lee el working tree en ese mismo orden y avisa `nivel leído del working tree: sin remote`. Si el contrato no tiene `## Autonomy`, o la fila está `unrehearsed` o `FAILED`, rige `supervised (A1)` con aviso. Si el contrato no tiene `## Autonomy` pero sí `## Limites`, esa prosa sigue rigiendo como restricción, el nivel es `supervised (A1)` y el aviso es literal: `contrato sin ## Autonomy: rigen sus ## Limites; corré init --update`. La stop list (segunda tabla de `## Autonomy`, con el header `| Action | Pattern | Reason |` y hasta la primera línea que no empieza con `|`) se lee de la misma fuente y frena en todo nivel (las únicas excepciones son la de merge de `land`, que la invocación y el plan confirmado autorizan, y el comando exacto del ensayo de `init`, que la pregunta de costo autoriza): antes de correr un comando o tocar una ruta que matchee un `Pattern`, el skill frena y lo reporta citando la fila. Un `## Autonomy` sin stop list legible (sin ese header o con 0 filas) avisa `## Autonomy sin stop list legible` y el nivel que sale del contrato cae a `supervised (A1)`; con `--autonomy` el flag sigue mandando y solo se avisa. La traza imprime `nivel efectivo: <nombre> (<código>), leído de <fuente>`. Lo imprime este comando, con `<stage>` y `<flag>` reemplazados (`<flag>` vacío sin el flag; `<stage>` es `none` en los skills sin fila), sin parámetros posicionales ni variables de argumentos del harness, que se sustituyen al cargar el skill con argumentos (`<flag>` se sustituye solo si cumple `^[A-Za-z0-9-]+$`; si no, el skill aborta como valor inválido sin correr el comando):
+
+```bash
+(
+  stage='<stage>' flag='<flag>'
+  export LC_ALL=C
+  pick=$(printf %s "$flag" | tr A-Z a-z); aviso=''; stop=''; contract=''; legible=1
+  case $pick in
+    ''|a1|supervised|a2|plan-approved|a3|unattended) ;;
+    a0|manual|a4|auto-land|a5|auto-deploy) echo "--autonomy $flag: no soportado todavía (v1 honra A1–A3)" >&2; exit 2 ;;
+    *) echo "--autonomy $flag: valor inválido; válidos: supervised (A1), plan-approved (A2), unattended (A3)" >&2; exit 2 ;;
+  esac
+  root=$(git rev-parse --show-toplevel 2>/dev/null) || root=.
+  if git remote get-url origin >/dev/null 2>&1; then
+    git fetch -q origin >/dev/null 2>&1 || aviso="$aviso aviso: fetch de origin falló, se usa la ref local;"
+    ref=$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null)
+    if [ -n "$ref" ] && ! git rev-parse -q --verify "refs/remotes/$ref" >/dev/null 2>&1; then ref=''; fi
+    if [ -z "$ref" ]; then
+      def=$(git ls-remote --symref origin HEAD 2>/dev/null | sed -n 's|^ref: refs/heads/\(.*\)[[:space:]]HEAD$|\1|p' | head -n 1)
+      if [ -n "$def" ] && git rev-parse -q --verify "refs/remotes/origin/$def" >/dev/null 2>&1; then ref="origin/$def"; fi
+    fi
+    if [ -n "$ref" ]; then
+      contract=$(git show "$ref:.omi/project.md" 2>/dev/null) || contract=$(git show "$ref:.chiche/project.md" 2>/dev/null) || contract=$(git show "$ref:.sdd/project.md" 2>/dev/null) || contract=''
+      fuente=$ref
+    else
+      fuente='origin (default sin resolver)'; aviso="$aviso aviso: origin sin branch default resoluble: rige supervised (A1) y no se lee el working tree;"
+    fi
+  else
+    contract=$(cat "$root/.omi/project.md" 2>/dev/null) || contract=$(cat "$root/.chiche/project.md" 2>/dev/null) || contract=$(cat "$root/.sdd/project.md" 2>/dev/null) || contract=''
+    fuente='working tree'; aviso="$aviso aviso: nivel leído del working tree: sin remote;"
+  fi
+  contract=$(printf '%s\n' "$contract" | tr -d '\r')
+  section=$(printf '%s\n' "$contract" | sed -n '/^## Autonomy$/,$p' | sed -n '2,${/^## /q;p;}')
+  if [ -z "$section" ]; then
+    if printf '%s\n' "$contract" | grep -q '^## Limites$'; then aviso="$aviso aviso: contrato sin ## Autonomy: rigen sus ## Limites; corré init --update;"
+    elif [ -z "$contract" ] && [ -n "$flag" ] && [ "$fuente" != 'origin (default sin resolver)' ]; then aviso="$aviso aviso: sin contrato: rige --autonomy, sin stop list;"
+    elif [ -z "$contract" ]; then aviso="$aviso aviso: sin contrato: rige supervised (A1);"
+    else aviso="$aviso aviso: contrato sin ## Autonomy: rige supervised (A1); corré init --update;"; fi
+    [ -n "$pick" ] || pick=a1
+  else
+    stop=$(printf '%s\n' "$section" | sed -n '/^| *Action *| *Pattern *| *Reason *|/,$p' | sed -n '3,$p' | sed -n '/^|/!q;p')
+    if [ -z "$stop" ]; then legible=0; aviso="$aviso aviso: ## Autonomy sin stop list legible (sin el header | Action | Pattern | Reason | o sin filas);"; fi
+    if [ -z "$pick" ] && [ "$stage" = none ]; then pick=a1
+    elif [ -z "$pick" ]; then
+      row=$(printf '%s\n' "$section" | grep -E "^\|[[:space:]]*$stage[[:space:]]*\|" | head -n 1)
+      if [ -z "$row" ]; then pick=a1; aviso="$aviso aviso: ## Autonomy sin fila $stage: rige supervised (A1);"
+      else
+        pick=$(printf '%s\n' "$row" | cut -d'|' -f3 | sed 's/^[[:space:]]*//; s/[[:space:]].*$//' | tr A-Z a-z)
+        reh=$(printf '%s\n' "$row" | cut -d'|' -f5 | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+        case $pick in a1|supervised) pick=a1 ;; a2|plan-approved|a3|unattended) case $reh in rehearsed\ *) ;; *) aviso="$aviso aviso: fila $stage sin ensayo ($reh): rige supervised (A1);"; pick=a1 ;; esac ;; *) aviso="$aviso aviso: fila $stage con nivel desconocido ($pick): rige supervised (A1);"; pick=a1 ;; esac
+      fi
+      if [ "$stage" = land ] && [ "$pick" != a1 ]; then aviso="$aviso aviso: fila land solo acepta supervised: rige supervised (A1);"; pick=a1; fi
+      if [ "$legible" -eq 0 ] && [ "$pick" != a1 ]; then aviso="$aviso aviso: sin stop list legible el nivel del contrato cae a supervised (A1);"; pick=a1; fi
+    fi
+  fi
+  if [ "$fuente" = 'origin (default sin resolver)' ]; then pick=a1; src=$fuente; elif [ -n "$flag" ]; then src='--autonomy'; else src=$fuente; fi
+  case $pick in
+    a1|supervised) nivel='supervised (A1)' ;;
+    a2|plan-approved) nivel='plan-approved (A2)' ;;
+    a3|unattended) nivel='unattended (A3)' ;;
+  esac
+  [ -n "$aviso" ] && printf '%s\n' "${aviso# }" | sed 's/;$//' >&2
+  echo "nivel efectivo: $nivel, leído de $src"
+  [ -z "$stop" ] || printf '%s\n' "$stop" | while IFS= read -r fila; do
+    pat=$(printf '%s\n' "$fila" | cut -d'|' -f3 | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+    if [ -z "$pat" ]; then printf 'aviso: fila de la stop list sin Pattern, ignorada: %s\n' "$fila" >&2; else printf 'parada: %s\n' "$fila"; fi
+  done
+)
+```
+
+El comando termina con exit 2 ante un nivel no soportado o inválido, antes de tocar la red, y el skill aborta ahí; con exit 0 imprime la traza y una línea `parada:` por cada fila de la stop list, e ignora con aviso una fila sin `Pattern`.
+<!-- autonomy-resolve:end -->
+
+## Fase 0 — Lanzador (solo con `/skill:land` pelado)
+
+Pelado, lista los PRs abiertos del repo agrupados por stack (`gh pr list --state open --json number,title,headRefName,baseRefName,isDraft,isCrossRepository`, recorriendo `baseRefName`) y pregunta cuál con la tool de preguntas del harness (`ask_user_question`; texto plano donde no hay): una opción por stack o PR suelto, el más reciente primero, con número, branch y título, más una última opción fija `Solo limpiar y sincronizar` (equivale a `--clean-only`). Antes de preguntar detecta los PRs `MERGED` cuyo branch local o worktree sigue vivo: cuenta con el mismo criterio del grupo «mergeados con PR» de la Fase 7 y con su misma consulta única, cruzada con `git for-each-ref refs/heads` y `git worktree list --porcelain`. Si hay, `Solo limpiar y sincronizar` va primera, marcada `(Recomendado)` y con el conteo: `Solo limpiar y sincronizar (Recomendado) — <N> branches mergeados siguen vivos`. Con args, salta directo a la Fase 1.
+
+## Fase 1 — Preflight (bloqueante)
+
+1. Raíz Git (`git rev-parse --show-toplevel`), `gh auth status`, repo resuelto (`gh repo view --json nameWithOwner,defaultBranchRef,viewerDefaultMergeMethod`) y branch default leído del remote: nunca asumir `main`. Un fallo frena con diagnóstico, sin mutar nada.
+2. Leer `.omi/project.md` si existe: sus `## Comandos` verifican un branch actualizado en la Fase 2 y la stop list de `## Autonomy` rige como siempre, salvo los comandos exactos del plan confirmado: `gh pr merge <N> --<method>` y `gh stack merge <N> --merge-method <m> --yes`. Esos no los frena este skill: invocarlo y confirmar el plan es la autorización humana; una fila que los matchea no los frena y sigue frenando cualquier otro comando que matchee (`gh release`, un merge que no está en el plan). Si la stop list prohíbe mergear sin una excepción para `/skill:land`, el plan de la Fase 2 cita esa fila textual y avisa que confirmar la pisa. En un contrato sin `## Autonomy`, las prohibiciones de merge de su `## Limites` tampoco frenan este skill: el plan las cita textuales y avisa que confirmar las pisa. Un repo inicializado antes del renombre lo tiene en `.chiche/project.md` o `.sdd/project.md`: se lee y se escribe ahí, y `/skill:init --update` ofrece migrar `.sdd/`.
+3. `gh stack` exigido solo si algún target es un stack. Si falta la extensión, frenar con el comando exacto (`gh extension install github/gh-stack`).
+4. Resolver los targets desde GitHub. La pertenencia a un stack no se asume del estado local: un PR pertenece a un stack si su `baseRefName` no es el default o si existe algún PR abierto cuyo `baseRefName` es su `headRefName`; se recorre `baseRefName` hasta el branch default para armar la cadena hacia abajo, se suman los PRs apilados encima y se confirma con `gh stack view --json`. Una cadena de PRs no vinculada se ofrece vincular con `gh stack link` antes de seguir. Si `gh stack view --json` no devuelve el stack porque el checkout principal no tiene su estado local, el fallback es pedir el número de stack. Con `--clean-only` no hay targets: se omiten los puntos 3 y 4. Con varios targets, el preflight predice los conflictos cruzados entre sus branches con `git merge-tree --write-tree origin/<a> origin/<b>` por pares (solo lectura, sin tocar el working tree) y guarda qué pares chocan y en qué archivos, para mostrarlos en el plan.
+
+## Fase 2 — Plan y confirmación
+
+Antes de preguntar, evalúa el gate de la Fase 3 en cada PR que aterriza: checks deduplicados, `mergeable`, `reviewDecision`, threads y draft. Se imprime, antes de cualquier mutación, una tabla por target con las columnas `orden | PR | branch | base | método | checks | threads sin resolver | draft | gate`, más los worktrees, branches locales y remotos que va a borrar. La columna `checks` da el `estado` del filtro de la Fase 3 y muestra los checks reemplazados por un run posterior como `N supersedidos`, sin bloquear; la columna `gate` dice `verde`, `pendiente` o `DETENIDO: <motivo>`. Un target con algún PR en rojo no pendiente aparece en la tabla como `DETENIDO`, con el motivo, y la pregunta no le ofrece `Mergear`; cuentan solo los PRs que aterrizan. En un stack la tabla lista exactamente qué PRs aterrizan (hasta el `<PR#>` pedido inclusive) y marca como `quedan abiertos` los de arriba: sus branches no se borran y su columna `gate` es solo información: no detienen el target. Con `--clean-only` no hay tabla ni pregunta de merge: se imprime el estado del checkout principal y lo que la limpieza borraría, y cada mutación pasa por los gates de las Fases 5 a 7. Después se pregunta: `Mergear (Recomendado)` / `Cancelar`; `Mergear` nombra los targets en verde o pendientes, que son los únicos que cubre. Si ningún target queda en verde ni pendiente, no hay pregunta: el run termina en `SDD-LAND DETENIDO`, con el motivo de cada target. `--dry-run` imprime el plan y termina. Sin confirmación no hay merge. La tabla va como texto visible en el mismo mensaje que la pregunta.
+
+Si dos targets independientes chocan entre sí, el plan lo dice con los archivos en conflicto y ofrece, como pregunta aparte de `Mergear` / `Cancelar`, actualizar el branch del target siguiente cuando el anterior aterrice: `Actualizar el branch con <default> (Recomendado)` / `Dejarlo detenido`. Actualizar significa un `git merge origin/<default>` normal en el worktree de ese branch (nunca rebase, nunca force), resolver el conflicto mostrando el diff resultante, verificar con los comandos del contrato, pushear al branch del PR y repetir su gate de la Fase 3 con los checks frescos. Sin esa autorización, el target que quede `CONFLICTING` se detiene con diagnóstico, como cualquier otro gate rojo.
+
+## Fase 3 — Gate de merge, merge y espera
+
+Antes del primer gate, `git fetch --prune`, para que `origin/<default>` local esté fresco si hay que actualizar un branch; se repite después de cada merge del run. Entre targets, el gate se relee de GitHub, porque un merge cambia el `mergeable` de los demás.
+
+Gate por PR: abierto, no draft, `mergeable` distinto de `CONFLICTING` (si es `UNKNOWN`, reconsultar), `reviewDecision` distinto de `CHANGES_REQUESTED`, `statusCheckRollup` deduplicado y después aprobado por lista de inclusión —cada `CheckRun` con `conclusion` `SUCCESS`, `NEUTRAL` o `SKIPPED` y cada `StatusContext` con `state` `SUCCESS`; un check pendiente espera hasta `--wait`; cualquier otro estado (`FAILURE`, `ERROR`, `TIMED_OUT`, `CANCELLED`, `ACTION_REQUIRED`, `STARTUP_FAILURE`, `STALE`) deja el target `DETENIDO`—, y cero review threads sin resolver (GraphQL `reviewThreads`, paginando hasta agotar). Con un check pendiente hace polling en primer plano cada 60 s hasta `--wait` (default 20 min), cancelable, sin `&` ni `nohup`. Rojo, `CHANGES_REQUESTED`, thread abierto o timeout dejan ese target `DETENIDO` con diagnóstico y sin merge parcial; los demás targets independientes siguen.
+
+La concurrency de CI cancela un run y lo reemplaza por otro sobre el mismo SHA, así que un mismo check aparece varias veces en el rollup. Por eso el gate deduplica antes de aplicar la lista de inclusión. La identidad de un check es `workflowName` + `name` en un `CheckRun` y `context` en un `StatusContext`; de cada identidad cuenta solo el más reciente, por `startedAt` (fallback `completedAt`). Un check sin ninguno de los dos, o con `0001-01-01T00:00:00Z`, es el más reciente porque todavía no arrancó. Un `SKIPPED` o `NEUTRAL` nunca supersede a un run real: si el grupo tiene algún run que no lo sea, cuenta el más reciente de esos, así un job salteado por un re-disparo (por ejemplo, un `labeled`) no tapa un rojo anterior. Ante un empate de `startedAt`, que tiene resolución de segundos, gana el veredicto conservador (`detenido` > `pendiente` > `verde`), sin depender del orden del rollup. Los anteriores quedan supersedidos: el plan los cuenta y no bloquean. El gate corre este filtro canónico con `gh pr view <n> --json statusCheckRollup --jq '<filtro>'`, y su salida es `{"estado": "verde"|"pendiente"|"detenido", "detenidos": [...], "supersedidos": N}`:
+
+```jq
+def tiempo: [.startedAt, .completedAt] | map(select(type == "string" and . != "" and (startswith("0001-") | not))) | first // "9999";
+def identidad: if .__typename == "StatusContext" then .context else "\(.workflowName // "") / \(.name)" end;
+def veredicto:
+  if .__typename == "StatusContext" then
+    (if .state == "SUCCESS" then "verde" elif .state == "PENDING" or .state == "EXPECTED" then "pendiente" else "detenido" end)
+  elif .status != "COMPLETED" then "pendiente"
+  elif .conclusion == "SUCCESS" or .conclusion == "NEUTRAL" or .conclusion == "SKIPPED" then "verde"
+  else "detenido" end;
+def peso: if .v == "detenido" then 2 elif .v == "pendiente" then 1 else 0 end;
+def omitido: .r == "SKIPPED" or .r == "NEUTRAL";
+[.statusCheckRollup[] | {id: identidad, t: tiempo, v: veredicto, r: (.conclusion // .state)}]
+| group_by(.id)
+| {
+    vigentes: map(sort_by(.t, peso) | (map(select(omitido | not)) | last) // last),
+    supersedidos: (map(length - 1) | add // 0)
+  }
+| {
+    estado: (if any(.vigentes[]; .v == "detenido") then "detenido" elif any(.vigentes[]; .v == "pendiente") then "pendiente" else "verde" end),
+    detenidos: [.vigentes[] | select(.v == "detenido") | "\(.id): \(.r)"],
+    supersedidos
+  }
+```
+
+`estado` `verde` aprueba los checks, `pendiente` espera hasta `--wait` y `detenido` deja el target `DETENIDO` con `detenidos` como motivo.
+
+Ejecución, después de la confirmación y con el gate verde en todos los PRs del target:
+
+- Stack → `gh stack merge <PR objetivo> --merge-method <m> --yes` (ese `--yes` solo saltea el prompt propio de gh-stack, después de la confirmación de la Fase 2). `<PR objetivo>` es el top del stack o el `<PR#>` pedido: aterrizan ese PR y todos los de abajo, nunca los de arriba. El merge de un stack es todo-o-nada hasta ese PR. Con aterrizaje parcial (quedan capas abiertas arriba) no se borra ningún branch del stack, ni remoto ni local, y el reporte lo deja pendiente con el comando para seguir.
+- PR suelto → `gh pr merge <n> --<m>` sin `--delete-branch` ni `--admin`.
+- El método es `--method` o el default del repo (`viewerDefaultMergeMethod`), tal como lo mostró el plan.
+- Con merge queue el target queda `en cola` y se espera hasta `--wait`; un target que sigue en cola al vencer queda `DETENIDO`, sin borrar nada.
+- El éxito se verifica releyendo `state == MERGED` de cada PR, nunca por exit code.
+- Por cada PR cuyo merge verificó, registrar un `land.merged` (ver «Log de eventos»); un stack que aterriza de una vez registra uno por cada PR que aterrizó.
+
+## Fase 4 — Remotos
+
+Los remotos se borran solo cuando todos los PRs del target están `MERGED` y el aterrizaje no es parcial: con `gh api -X DELETE` sobre `repos/<owner>/<repo>/git/refs/heads/<branch>` se borra `refs/heads/<branch>` de cada uno (idempotente: si ya no existe, sigue). Después barre los demás remotos: solo branches remotos cuyo PR está `MERGED` (`gh pr list --state merged --json headRefName`) y que no tienen PR abierto, excluyendo el default y los branches protegidos, además de los de cualquier stack que aún tenga capas abiertas; nunca por mera ancestría. Los borra tras UNA confirmación que nombra cada branch. Nunca borra un branch con PR abierto o sin mergear. Con `--clean-only` esta fase se omite.
+
+## Fase 5 — Checkout principal
+
+Va antes de la limpieza local porque `git branch -d` compara contra el upstream o, sin upstream tras `git fetch --prune`, contra `HEAD`: con el checkout principal al día, lo mergeado se reconoce. Primero `git fetch --prune`. Solo si está parado en el default; en otro branch no se cambia (se reporta y se omite).
+
+<!-- land-common-dir:start -->
+**Borradores ya aterrizados del common-dir.** Con el `git fetch --prune` hecho y antes de clasificar los paths sucios, barre los tres common-dirs, `<git-common-dir>/omi/`, `<git-common-dir>/chiche/` y `<git-common-dir>/sdd/` (`git rev-parse --path-format=absolute --git-common-dir`), esté o no el checkout principal en el default. Todo archivo de `<kind>/` —con `<kind>` = `specs` o `grills`, incluida la carpeta de capturas de un handoff— cuyo `git hash-object <archivo>` es igual a `git rev-parse origin/<default>:.omi/<kind>/<nombre>`, a `git rev-parse origin/<default>:.chiche/<kind>/<nombre>` o a `git rev-parse origin/<default>:.sdd/<kind>/<nombre>` (`<nombre>` es su ruta dentro de `<kind>/`) es un borrador ya aterrizado: llegó a `origin/<default>` por un PR. Se borra con `rm -- <archivo>` y va al reporte como `ya aterrizados` con su ruta; si el `rm` falla, va a `sin resolver` con la ruta y el comando. Un borrador sin gemelo aterrizado, o con otro contenido, nunca se toca. Con `--dry-run` se lista lo que se borraría y no se borra; con `--clean-only` el barrido corre igual.
+<!-- land-common-dir:end -->
+
+- **Limpio**: `git merge --ff-only origin/<default>`.
+- **Sucio**: antes de preguntar, clasifica cada path de `git status --porcelain=v1 -z --untracked-files=all`:
+  - **ya aterrizado**: un path sin trackear o modificado cuyo `git hash-object <path>` es igual a `git rev-parse origin/<default>:<path>`. También cuenta un `.chiche/<kind>/<nombre>` o `.sdd/<kind>/<nombre>` (con `<kind>` = `specs` o `grills`) sin trackear o modificado cuyo `git hash-object` es igual a `git rev-parse origin/<default>:.omi/<kind>/<nombre>`: `run` copia los borradores de `.chiche/` y `.sdd/` bajo `.omi/` del worktree. Es un borrador que ya llegó a `origin/<default>` por otro PR: se resuelve sin preguntar justo antes del fast-forward y solo si el fast-forward va a correr, es decir, sin commits adelante, con una opción que lo hace y sin ningún path conservado en `git diff --name-only HEAD origin/<default>` (`rm -- <path>` si no está trackeado, `git restore --source=HEAD --staged --worktree -- <path>` si está modificado; el fast-forward lo vuelve a escribir igual), y va al reporte como `ya aterrizados`. Si no hay fast-forward (`Dejar como está`, commits adelante o choque con un path conservado), no se toca y va al reporte como `ya aterrizados (sin resolver)`.
+  - **en otro branch**: el mismo blob, en el mismo path, existe en otro branch local o worktree; se conserva, se reporta y nunca entra en `Descartar`. Se detecta con `git rev-parse <branch>:<path>` por cada branch local salvo el actual y con `git hash-object` del path en cada worktree de `git worktree list --porcelain` salvo el checkout principal.
+  - **sin dueño**: el resto; sigue la pregunta.
+
+  Si no queda ningún path sin dueño, no hay pregunta: se resuelven los ya aterrizados y se hace el fast-forward. Si quedan, mostrar `git status --short --branch --untracked-files=all`, `git diff --stat`, la clasificación y la lista exacta de paths sin dueño que `Descartar` tocaría, y preguntar: `Conservar en wip/<fecha>-<slug>, sin push (Recomendado)` / `Descartar` / `Tratar por path` / `Dejar como está`. Las cuatro opciones actúan solo sobre los paths sin dueño.
+  - **Conservar**: `git switch -c wip/<YYYY-MM-DD>-<slug>` (el slug sale del primer path modificado), commits por paths revisados (sin secrets, sin `--no-verify`), volver al default y fast-forward.
+  - **Descartar**: `Descartar` actúa solo sobre los paths sin dueño mostrados en la preview: `git restore --source=HEAD --staged --worktree -- <paths trackeados>` y `rm -- <paths sin trackear>`, sin `git reset --hard` ni `git clean`.
+  - **Tratar por path**: una pregunta por path (`conservar / descartar / ignorar`). `descartar` usa el mismo `git restore` o `rm` que `Descartar`. `ignorar` solo se ofrece para paths untracked —un path trackeado y modificado solo puede conservarse o descartarse— y escribe el patrón en `.git/info/exclude` (local, sin commit); solo se crea el branch `wip/` si algún path eligió `conservar`.
+  - **Dejar como está**: no se toca nada y el estado queda en el reporte.
+  - Se hace el fast-forward a `origin/<default>` después de `Conservar`, `Descartar` y `Tratar por path`; `Dejar como está` es el único que no lo hace. Si el fast-forward choca con un path conservado, no se fuerza: se reporta con el path y el comando.
+- Con commits locales adelante del remote o en otro branch: se reporta, sin switch. Nunca stash.
+
+## Fase 6 — Limpieza local automática
+
+Solo para lo que el run mergeó, con el `git fetch --prune` de la Fase 5 ya hecho: por cada branch mergeado del target, `git worktree remove` solo si ese worktree está limpio y sin lock (si no, reporta la ruta), después `git branch -d` (nunca `-D`); si se niega, por ejemplo tras un squash, reportar el branch y el comando para que decida el humano; al final, `gh stack unstack --local` del stack cerrado y `git worktree prune`. Si el checkout principal está parado en uno de esos branches no cambia de branch: lo reporta con el comando. Si el checkout principal no pudo sincronizarse (sucio y `Dejar como está`, otro branch, commits adelante), `git branch -d` puede negarse porque compara contra `HEAD`: se reporta con el comando, sin `-D`. Con aterrizaje parcial no borra ningún branch ni worktree del stack y no hace `unstack`. Con `--clean-only` el run no mergeó nada y no hay qué limpiar acá: la limpieza es el barrido.
+
+Las Fases 6 y 7 nunca remueven un worktree bloqueado (línea `locked` en `git worktree list --porcelain`). La única excepción es de esta fase: si el lock dice `run <slug>` y su branch es del target recién mergeado, `git worktree unlock` y después `git worktree remove`, solo si el worktree está limpio. Cualquier otro lock se reporta con su motivo y con el comando `git worktree unlock <ruta> && git worktree remove <ruta>`.
+
+## Fase 7 — Barrido del ruido previo
+
+Borrar exige prueba, nunca ancestría. Lista los branches locales en dos grupos, con una sola consulta `gh pr list --state all --limit <N> --json number,state,headRefName,headRefOid,isCrossRepository` cruzada localmente (la misma de la Fase 0; `<N>` alcanza con 1000, y un branch cuyo PR quedó afuera cae en el grupo sin PR, que no va preseleccionado), y descarta los PRs con `isCrossRepository`, que son de forks aunque compartan el nombre del branch.
+
+- **mergeados con PR**: su PR por `headRefName` está `MERGED`, no hay ningún PR abierto con ese head y el tip local es el `headRefOid` de ese PR o un ancestro. El tip se comprueba con `git merge-base --is-ancestor <tip> <headRefOid>`; si el objeto no está local, antes `git fetch origin refs/pull/<n>/head`. Van preseleccionados.
+- **sin PR, contenidos en `origin/<default>`**: nunca tuvieron PR, no tienen worktree y no tienen lock, y su tip es ancestro de `origin/<default>`. Van sin preselección.
+
+Nunca se ofrecen el default, el branch actual, un branch con worktree (salvo que esté en el grupo «mergeados con PR» y su worktree esté limpio y sin lock) ni los branches de un stack con capas abiertas. Los worktrees de los branches «mergeados con PR» que están limpios y sin lock se ofrecen junto con su branch. Antes de `git worktree remove`, comprueba que `git branch -d` va a pasar (`git merge-base --is-ancestor <branch> <upstream o HEAD>`, que es lo que mira `-d`); si no, por ejemplo tras un squash o un rebase, reporta el branch y el worktree con el comando, sin tocarlos y sin `-D`. Si pasa, primero `git worktree remove`, después `git branch -d`. Además ofrece, en un grupo propio y sin preselección, los worktrees detached limpios y sin lock cuyo SHA alcanza algún ref (`git for-each-ref --contains <sha>` no vacío), con su SHA y el ref que lo alcanza. Los detached que ningún ref alcanza se reportan con la ruta y el comando, sin ofrecerlos: removerlos dejaría sus commits inalcanzables.
+
+La pregunta es `Borrar los mergeados (Recomendado)` / `Elegir cuáles` (selección múltiple, incluye el grupo sin PR) / `No borrar`. `Borrar los mergeados` borra solo el grupo «mergeados con PR» con sus worktrees; `Elegir cuáles` muestra todos los grupos, incluidos los detached. Worktrees sucios y branches sin mergear solo se reportan con ruta y comando exacto.
+
+## Fase 8 — Reporte
+
+`SDD-LAND TERMINADO` solo con todos los targets mergeados y verificados, remotos y locales resueltos y el checkout principal con `HEAD == origin/<default>` y status limpio (o el estado que el usuario eligió dejar). Con `--clean-only` no hay targets y alcanza con la limpieza resuelta; un aterrizaje parcial es `TERMINADO` para el PR pedido y deja el resto en `pendiente`. Cada target lleva su sha de merge: un merge atómico de stack se lista como `stack #<n> → <sha> (#a, #b, …)`, con los PRs que aterrizaron, y un PR suelto como `#<n> → <sha>`:
+
+```text
+SDD-LAND TERMINADO
+- repo: <owner/repo> · default <branch> · método <m>
+- targets: <N> mergeados y verificados (con `--clean-only`: targets: ninguno (--clean-only))
+  - stack #<n> → <sha> (#a, #b, …)
+  - #<n> → <sha>
+- remotos borrados: <branches | ninguno>
+- ya aterrizados: <paths | ninguno> · del common-dir: <rutas | ninguno> · sin resolver: <paths | ninguno>
+- worktrees removidos: <rutas | ninguno>
+- worktrees bloqueados: <ruta (motivo del lock) · git worktree unlock <ruta> && git worktree remove <ruta> | ninguno>
+- branches borrados: <locales | ninguno>
+- ruido podado: <branches y worktrees del barrido | ninguno | omitido>
+- checkout principal: <default> @ <sha corto> · HEAD == origin/<default> · status limpio | <estado elegido>
+- pendiente: <capas abiertas encima del PR elegido y branches conservados, con el comando para seguir | ninguno>
+```
+
+En cualquier otro caso, `SDD-LAND DETENIDO`, con lo hecho, lo pendiente y el comando para reanudar:
+
+```text
+SDD-LAND DETENIDO
+- motivo: <fallo, gate rojo, cancelación o límite del contrato ajeno al merge>
+- hecho: <merges, remotos, worktrees y branches ya resueltos>
+- pendiente: <targets o pasos sin completar, con ruta y comando exacto>
+- reanudar: <comando exacto, por ejemplo /skill:land <PR>>
+```
+
+### Siguiente etapa: ship
+
+Con `.omi/project.json` en el repo, lo mergeado todavía no llegó a usuarios. Después del reporte, proponer `/skill:ship` con `ask_user_question`: `Publicar y desplegar` encadena la etapa, y `Terminar` cierra acá. Mergear no autoriza desplegar: sin la respuesta del humano, no se encadena. Sin `.omi/project.json` esta etapa no aplica.
+
+## Log de eventos
+
+<!-- omi-events:start -->
+Las transiciones de este skill se registran en `<git-common-dir>/omi/events.jsonl`, el log local append-only del formato `events-v1` (normativo en `docs/sdd-events-v1.md` del repo de estos skills). Cada evento es una línea que agrega este comando, con los valores entre `<>` reemplazados: `issue` es `#NN`, `owner/repo#NN` o `none`; `spec`, `previous` y `grill` van sin codificar (`.sdd/specs/<slug>.md`, `#NN`, `<fecha>-<slug>` o `none`) y el comando los percent-encodea; `previous` es `none` salvo en `spec.moved`; `pr` son números separados por coma y sin espacios, o vacío; `reason` es `none` salvo en `run.failed`. La identidad events-v1 de una spec local es `.sdd/specs/<slug>.md` sea cual sea la marca del lugar donde vive: `.omi/`, `.chiche/` o `.sdd/`, del árbol o del common-dir.
+
+```bash
+(
+  harness='<harness>' event='<evento>' issue='<issue>' spec='<spec>' previous='<previous>' grillref='<grill>' pr='<prs>' reason='<reason>'
+  export LC_ALL=C
+  enc() { [ "$1" = none ] && { printf none; return; }; s=$1; while [ -n "$s" ]; do c=${s%"${s#?}"}; s=${s#?}; case $c in [A-Za-z0-9._~-]) printf %s "$c" ;; *) printf %% && printf %s "$c" | od -An -tx1 | tr -d ' \n' | tr a-f A-F ;; esac; done; }
+  ok() {
+    case $harness in claude|codex|opencode|pi|antigravity) ;; *) return 1 ;; esac
+    case "$issue$pr$reason" in *[![:graph:]]*) return 1 ;; esac
+    case "$spec$previous$grillref" in *'<'*'>'*) return 1 ;; esac
+    printf '%s\n' "$issue" | grep -Eqx 'none|#[1-9][0-9]*|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#[1-9][0-9]*' || return 1
+    printf '%s\n' "$pr" | grep -Eqx '([1-9][0-9]*(,[1-9][0-9]*)*)?' || return 1
+    [ -n "$spec" ] && [ -n "$previous" ] && [ -n "$grillref" ] || return 1
+    case $reason in none) [ "$event" != run.failed ] ;; aborted|interrupted) [ "$event" = run.failed ] ;; *) false ;; esac || return 1
+    [ "$event" = spec.moved ] || [ "$previous" = none ] || return 1
+    case $event in
+      grill.paused|grill.finalized) [ "$grillref" != none ] && [ -z "$pr" ] ;;
+      spec.moved) [ "$spec" != none ] && [ "$previous" != none ] && [ -z "$pr" ] ;;
+      spec.published|spec.approved|spec.superseded|run.started|run.committed|run.failed) [ "$spec" != none ] && [ -z "$pr" ] ;;
+      run.pr-opened) [ "$spec" != none ] && [ -n "$pr" ] ;;
+      land.merged) case $pr in ''|*,*) false ;; esac ;;
+      *) false ;;
+    esac
+  }
+  ok && dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && mkdir -p "$dir/omi" &&
+    line=$(printf '{"v":1,"ts":"%s","harness":"%s","event":"%s","issue":"%s","spec":"%s","previous":"%s","grill":"%s","pr":[%s],"reason":"%s"}' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$harness" "$event" "$issue" "$(enc "$spec")" "$(enc "$previous")" "$(enc "$grillref")" "$pr" "$reason") &&
+    [ ${#line} -lt 1024 ] && printf '%s\n' "$line" >> "$dir/omi/events.jsonl" ||
+    echo "aviso: no se registró el evento SDD $event" >&2
+)
+```
+
+- **Best-effort.** Un fallo del append nunca frena ni hace fallar el skill: el comando termina con exit 0 y avisa por stderr, y el reporte del skill lo nombra en una línea.
+- **Validación barata.** Antes del append, `ok` revisa el harness, el evento del catálogo, `issue`, `pr` sin espacios, refs no vacías y sin un `<...>` sin reemplazar, y los invariantes del catálogo: un valor inválido cae en el mismo aviso y no escribe nada, porque los consumidores saltean en silencio una línea inválida.
+- **Solo en el common-dir.** El log se escribe en `<git-common-dir>/omi/`, nunca dentro del working tree: fuera de un repo git, o si el harness no puede escribir ahí, el evento se saltea con el aviso, sin caer al working tree (`.omi/`, `.chiche/` ni `.sdd/`).
+<!-- omi-events:end -->
+
+En este skill, cada `land.merged` lleva en `pr` el número de un PR mergeado y verificado, en `issue` el issue que el body de ese PR cierra o referencia (`Closes #NN`, `Refs #NN`) o `none` —en un stack, el issue del `Refs`/`Closes` del stack para todos sus PRs: la línea `spec en #<PR>` nombra un PR, no un issue—, y `spec`, `previous` y `grill` en `none`. `--dry-run` y `--clean-only` no registran nada. Un PR que queda `en cola` al vencer `--wait` y que la cola mergea después no registra `land.merged`: reanudar no lo recupera, porque un PR ya `MERGED` no es target, y el formato no hace backfill.
+
+## MUST DO
+
+- Mostrar el plan completo y recibir la confirmación antes de cualquier mutación; `--dry-run` no muta nada.
+- Leer el branch default del remote y el estado de cada PR de GitHub; verificar el merge releyendo `state == MERGED`.
+- Respetar la stop list de `## Autonomy` del contrato, salvo los comandos exactos del plan confirmado (`gh pr merge <N> --<method>` y `gh stack merge <N> --merge-method <m> --yes`), que la invocación más la confirmación del plan autorizan. En una regla que junta varias prohibiciones, solo cae la parte de merge.
+- Borrar remotos solo con todo el target `MERGED`, y locales solo lo mergeado y limpio.
+- Reportar con ruta y comando exacto todo lo que no se pudo resolver con seguridad.
+
+## MUST NOT DO
+
+- No bypass de protección ni `--admin`.
+- No `git push --force*`.
+- No push al default.
+- No reset, stash ni clean del checkout principal: `Descartar` usa `git restore` y `rm` solo sobre los paths sin dueño de la preview.
+- No remover un worktree bloqueado, salvo el lock `run` del target recién mergeado en la Fase 6.
+- No borrar branches con PR abierto o sin mergear.
+- No cambiar settings del repo (`deleteBranchOnMerge`, protecciones).
+- No polling en background.
+- No mergear sin la confirmación de la Fase 2.
+- No actualizar el branch de un PR sin la pregunta del plan, ni con rebase.
+<!-- land-doctrine:end -->
+
+En Pi, las preguntas usan `ask_user_question`: la tabla del plan se imprime como texto visible en el MISMO mensaje que la pregunta, `Elegir cuáles` es la única pregunta de selección múltiple y `Tratar por path` hace una pregunta por path, en llamadas de hasta 4 preguntas.
+
+En Pi, `<harness>` es `pi`.

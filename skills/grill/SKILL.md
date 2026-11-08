@@ -1,0 +1,505 @@
+---
+name: grill
+description: Entrevista rigurosa y pragmática para desambiguar las decisiones materiales de un tema, plan o diseño y producir un contrato de handoff antes de escribir un spec. Avanza con supuestos explícitos cuando equivocarse es barato y reversible. Usar cuando el usuario quiere stress-testear, aclarar o alinear una idea, pide "grill", "grillame", "entrevistame sobre esto", o quiere retomar una sesión de grilling. No implementa ni escribe el spec definitivo.
+compatibility: Requiere las tools ask_user_question, ask_user_questions, grill_session, select_grill_session y launch_grill de las extensiones Pi de este repo.
+---
+
+# Grill
+
+Desambiguá las decisiones materiales hasta alcanzar un entendimiento compartido, con la menor cantidad de interrupciones posible. El resultado es contexto confiable para escribir un spec hecho y derecho. **Nunca implementes el plan ni escribas el spec definitivo antes de finalizar el handoff.** Después de congelarlo, podés encadenar `spec` si el usuario elige esa acción.
+
+`grill` es el único entry point para entrevistas. Nunca escribe ni propone `CONTEXT.md`, glosarios ni ADRs: solo desambigua y produce el handoff.
+
+Usá `ask_user_question` para una sola decisión, `ask_user_questions` para rondas de 2 a 4 decisiones independientes, `grill_session` para persistir el progreso y `select_grill_session` para listar, inspeccionar o retomar entrevistas anteriores. La modalidad elegida se persiste como `interviewMode` y las tools de preguntas la validan en runtime.
+
+## Argumentos Pi
+
+```text
+/skill:grill [#NN | owner/repo#NN | https://github.com/owner/repo/issues/NN | --resume <sessionId>] [--autonomy <level>]
+```
+
+- `#NN` inicia el reconocimiento desde ese issue del repositorio actual.
+- `owner/repo#NN` o una URL canónica `https://github.com/owner/repo/issues/NN` pueden apuntar a otro proyecto. Si NO recibiste un envelope `workflow-launch`, invocá inmediatamente `launch_grill` usando sólo esa referencia calificada como target exacto y terminá el turno: la tool localiza un único checkout entre los proyectos conocidos por Pi, pide autorización y abre allí una sesión hija. No explores, no crees una sesión de grill y no interpretes la URL como path. Si la tool no está disponible, frená con el comando manual `/grill <target>`; no continúes en el cwd equivocado.
+- `--resume <sessionId>` viene de un selector o del orquestador: cargá directamente el snapshot autoritativo con `grill_session` (`action: "get"`), sin volver a abrir `select_grill_session`, y continuá en esta misma conversación.
+- `--autonomy <level>` — nivel de autonomía de esta corrida; manda sobre la fila `grill` de `## Autonomy` del contrato: `supervised` (A1) pregunta todo, `plan-approved` (A2) solo lo de impacto alto y `unattended` (A3) no pregunta y aborta si el pedido es muy abierto. Al encadenar `/skill:spec` se le pasa el mismo flag. Ver «Niveles de autonomía», «Nivel efectivo» y «Autonomía por nivel».
+
+<!-- autonomy-levels:start -->
+**Niveles de autonomía.** La escala es `manual (A0)`, `supervised (A1)`, `plan-approved (A2)`, `unattended (A3)`, `auto-land (A4)` y `auto-deploy (A5)`. `--autonomy <level>` acepta el código o la palabra, sin distinguir mayúsculas (`A2`, `a2` y `plan-approved` son el mismo nivel). Esta versión honra A1 a A3: con A0, A4 o A5 el skill aborta antes de cualquier mutación con el diagnóstico literal `--autonomy <nivel>: no soportado todavía (v1 honra A1–A3)`, y cualquier otro token aborta listando los valores válidos. `--autonomy` sin valor (no hay token siguiente, o el siguiente empieza con `--`) aborta listando los valores válidos: un token que empieza con `--` nunca se lee como valor. Sin flag rige lo que resuelve «Nivel efectivo»; el default es `supervised (A1)`.
+<!-- autonomy-levels:end -->
+
+<!-- autonomy-resolve:start -->
+**Nivel efectivo.** El nivel efectivo es el del flag `--autonomy` si vino; si no, la fila del `Stage` en `## Autonomy` del contrato leído del branch default, nunca del branch de trabajo: un PR no puede subirse la autonomía a sí mismo. `grill` lee la fila `grill`, `spec` la fila `spec`, `run` la fila `run` y `land` la fila `land` (que solo acepta `supervised`: otro nivel en esa fila cae a `supervised (A1)` con el aviso `fila land solo acepta supervised`); `init`, `issue-triage` y `design-system` no tienen fila: flag o `supervised (A1)`. La lectura valida el flag primero y, si existe el remote `origin`, hace `git fetch` best-effort, resuelve el branch default (`git symbolic-ref refs/remotes/origin/HEAD`, descartado si apunta a una ref que ya no existe, y si falla o quedó colgado, `git ls-remote --symref origin HEAD`) y lee `git show origin/<default>:.omi/project.md`, con fallback a `.chiche/project.md` y `.sdd/project.md` para un repo que mantuvo `.chiche/` o `.sdd/`; con `origin` y un default que no se resuelve rige `supervised (A1)`, también con `--autonomy`, con el aviso `origin sin branch default resoluble`, sin leer el working tree; solo sin `origin` lee el working tree en ese mismo orden y avisa `nivel leído del working tree: sin remote`. Si el contrato no tiene `## Autonomy`, o la fila está `unrehearsed` o `FAILED`, rige `supervised (A1)` con aviso. Si el contrato no tiene `## Autonomy` pero sí `## Limites`, esa prosa sigue rigiendo como restricción, el nivel es `supervised (A1)` y el aviso es literal: `contrato sin ## Autonomy: rigen sus ## Limites; corré init --update`. La stop list (segunda tabla de `## Autonomy`, con el header `| Action | Pattern | Reason |` y hasta la primera línea que no empieza con `|`) se lee de la misma fuente y frena en todo nivel (las únicas excepciones son la de merge de `land`, que la invocación y el plan confirmado autorizan, y el comando exacto del ensayo de `init`, que la pregunta de costo autoriza): antes de correr un comando o tocar una ruta que matchee un `Pattern`, el skill frena y lo reporta citando la fila. Un `## Autonomy` sin stop list legible (sin ese header o con 0 filas) avisa `## Autonomy sin stop list legible` y el nivel que sale del contrato cae a `supervised (A1)`; con `--autonomy` el flag sigue mandando y solo se avisa. La traza imprime `nivel efectivo: <nombre> (<código>), leído de <fuente>`. Lo imprime este comando, con `<stage>` y `<flag>` reemplazados (`<flag>` vacío sin el flag; `<stage>` es `none` en los skills sin fila), sin parámetros posicionales ni variables de argumentos del harness, que se sustituyen al cargar el skill con argumentos (`<flag>` se sustituye solo si cumple `^[A-Za-z0-9-]+$`; si no, el skill aborta como valor inválido sin correr el comando):
+
+```bash
+(
+  stage='<stage>' flag='<flag>'
+  export LC_ALL=C
+  pick=$(printf %s "$flag" | tr A-Z a-z); aviso=''; stop=''; contract=''; legible=1
+  case $pick in
+    ''|a1|supervised|a2|plan-approved|a3|unattended) ;;
+    a0|manual|a4|auto-land|a5|auto-deploy) echo "--autonomy $flag: no soportado todavía (v1 honra A1–A3)" >&2; exit 2 ;;
+    *) echo "--autonomy $flag: valor inválido; válidos: supervised (A1), plan-approved (A2), unattended (A3)" >&2; exit 2 ;;
+  esac
+  root=$(git rev-parse --show-toplevel 2>/dev/null) || root=.
+  if git remote get-url origin >/dev/null 2>&1; then
+    git fetch -q origin >/dev/null 2>&1 || aviso="$aviso aviso: fetch de origin falló, se usa la ref local;"
+    ref=$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null)
+    if [ -n "$ref" ] && ! git rev-parse -q --verify "refs/remotes/$ref" >/dev/null 2>&1; then ref=''; fi
+    if [ -z "$ref" ]; then
+      def=$(git ls-remote --symref origin HEAD 2>/dev/null | sed -n 's|^ref: refs/heads/\(.*\)[[:space:]]HEAD$|\1|p' | head -n 1)
+      if [ -n "$def" ] && git rev-parse -q --verify "refs/remotes/origin/$def" >/dev/null 2>&1; then ref="origin/$def"; fi
+    fi
+    if [ -n "$ref" ]; then
+      contract=$(git show "$ref:.omi/project.md" 2>/dev/null) || contract=$(git show "$ref:.chiche/project.md" 2>/dev/null) || contract=$(git show "$ref:.sdd/project.md" 2>/dev/null) || contract=''
+      fuente=$ref
+    else
+      fuente='origin (default sin resolver)'; aviso="$aviso aviso: origin sin branch default resoluble: rige supervised (A1) y no se lee el working tree;"
+    fi
+  else
+    contract=$(cat "$root/.omi/project.md" 2>/dev/null) || contract=$(cat "$root/.chiche/project.md" 2>/dev/null) || contract=$(cat "$root/.sdd/project.md" 2>/dev/null) || contract=''
+    fuente='working tree'; aviso="$aviso aviso: nivel leído del working tree: sin remote;"
+  fi
+  contract=$(printf '%s\n' "$contract" | tr -d '\r')
+  section=$(printf '%s\n' "$contract" | sed -n '/^## Autonomy$/,$p' | sed -n '2,${/^## /q;p;}')
+  if [ -z "$section" ]; then
+    if printf '%s\n' "$contract" | grep -q '^## Limites$'; then aviso="$aviso aviso: contrato sin ## Autonomy: rigen sus ## Limites; corré init --update;"
+    elif [ -z "$contract" ] && [ -n "$flag" ] && [ "$fuente" != 'origin (default sin resolver)' ]; then aviso="$aviso aviso: sin contrato: rige --autonomy, sin stop list;"
+    elif [ -z "$contract" ]; then aviso="$aviso aviso: sin contrato: rige supervised (A1);"
+    else aviso="$aviso aviso: contrato sin ## Autonomy: rige supervised (A1); corré init --update;"; fi
+    [ -n "$pick" ] || pick=a1
+  else
+    stop=$(printf '%s\n' "$section" | sed -n '/^| *Action *| *Pattern *| *Reason *|/,$p' | sed -n '3,$p' | sed -n '/^|/!q;p')
+    if [ -z "$stop" ]; then legible=0; aviso="$aviso aviso: ## Autonomy sin stop list legible (sin el header | Action | Pattern | Reason | o sin filas);"; fi
+    if [ -z "$pick" ] && [ "$stage" = none ]; then pick=a1
+    elif [ -z "$pick" ]; then
+      row=$(printf '%s\n' "$section" | grep -E "^\|[[:space:]]*$stage[[:space:]]*\|" | head -n 1)
+      if [ -z "$row" ]; then pick=a1; aviso="$aviso aviso: ## Autonomy sin fila $stage: rige supervised (A1);"
+      else
+        pick=$(printf '%s\n' "$row" | cut -d'|' -f3 | sed 's/^[[:space:]]*//; s/[[:space:]].*$//' | tr A-Z a-z)
+        reh=$(printf '%s\n' "$row" | cut -d'|' -f5 | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+        case $pick in a1|supervised) pick=a1 ;; a2|plan-approved|a3|unattended) case $reh in rehearsed\ *) ;; *) aviso="$aviso aviso: fila $stage sin ensayo ($reh): rige supervised (A1);"; pick=a1 ;; esac ;; *) aviso="$aviso aviso: fila $stage con nivel desconocido ($pick): rige supervised (A1);"; pick=a1 ;; esac
+      fi
+      if [ "$stage" = land ] && [ "$pick" != a1 ]; then aviso="$aviso aviso: fila land solo acepta supervised: rige supervised (A1);"; pick=a1; fi
+      if [ "$legible" -eq 0 ] && [ "$pick" != a1 ]; then aviso="$aviso aviso: sin stop list legible el nivel del contrato cae a supervised (A1);"; pick=a1; fi
+    fi
+  fi
+  if [ "$fuente" = 'origin (default sin resolver)' ]; then pick=a1; src=$fuente; elif [ -n "$flag" ]; then src='--autonomy'; else src=$fuente; fi
+  case $pick in
+    a1|supervised) nivel='supervised (A1)' ;;
+    a2|plan-approved) nivel='plan-approved (A2)' ;;
+    a3|unattended) nivel='unattended (A3)' ;;
+  esac
+  [ -n "$aviso" ] && printf '%s\n' "${aviso# }" | sed 's/;$//' >&2
+  echo "nivel efectivo: $nivel, leído de $src"
+  [ -z "$stop" ] || printf '%s\n' "$stop" | while IFS= read -r fila; do
+    pat=$(printf '%s\n' "$fila" | cut -d'|' -f3 | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+    if [ -z "$pat" ]; then printf 'aviso: fila de la stop list sin Pattern, ignorada: %s\n' "$fila" >&2; else printf 'parada: %s\n' "$fila"; fi
+  done
+)
+```
+
+El comando termina con exit 2 ante un nivel no soportado o inválido, antes de tocar la red, y el skill aborta ahí; con exit 0 imprime la traza y una línea `parada:` por cada fila de la stop list, e ignora con aviso una fila sin `Pattern`.
+<!-- autonomy-resolve:end -->
+
+<!-- autonomy-a2:start -->
+**Autonomía por nivel.** Con `plan-approved` (A2) se preguntan solo las decisiones de impacto alto: una decisión es de impacto alto si define el alcance entero, o roza la stop list, datos o migraciones, o un contrato externo (API, formato, evento); el resto queda `[ASSUMED]` en el handoff o en la tabla de inferencias. Con `unattended` (A3), `grill` corre el reconocimiento siempre y cuenta las decisiones de alcance abiertas: con 0 sigue sin preguntar; con 1 a 3 las deja `[ASSUMED]` en el handoff, sin preguntar; con más de 3 aborta con el listado y el diagnóstico `pedido no autonomizable en A3: bajá a A2 o partilo`. En A2 y A3 no hay preguntas de configuración, de frontera de bloque ni de confirmación de cierre: el handoff se congela con lo decidido y lo asumido. En `spec`, con `supervised` (A1) no se pregunta antes de publicar y la corrida termina en el menú final, donde se revisa la spec entera; con A2 se preguntan las de impacto alto y no hay menú: responderlas es la aprobación; con A3 no se pregunta nada ni hay menú.
+<!-- autonomy-a2:end -->
+
+
+### Lanzamiento orquestado de Pi
+
+El launcher de Pi entrega, después del skill materializado, este envelope terminal:
+
+```xml
+<workflow-launch version="1">
+<DirectGrillRequestV1 JSON estricto>
+</workflow-launch>
+```
+
+Validá que sea versión 1, exacto y serializable; que `kind=grill`; que `repo`, `cwd`, `target.type=issue`, `target.canonicalReference` e `issue` sean coherentes; que el argumento materializado `#NN` coincida con el issue; y que el cwd actual sea el checkout resuelto. Un envelope ausente para `#NN` local sigue siendo válido. Un envelope malformado, doble, conflictivo o de otro proyecto falla cerrado antes de crear `grill_session`. Con un envelope válido ya estás en la sesión hija correcta: **no vuelvas a invocar `launch_grill`** y seguí con la Fase 0 usando su issue como origen estructurado.
+
+## Principios
+
+- Optimizá por **mínima interrupción**, no por máxima cantidad de preguntas. Un hueco en el pedido no es automáticamente una decisión para el usuario.
+- Clasificá cada punto abierto como hecho comprobable, supuesto de bajo riesgo o decisión material.
+- Marcá como `[ASSUMED]` una opción respaldada por el pedido, el código, convenciones del repo o un default seguro cuando sea de bajo riesgo, barata y reversible. No la preguntes.
+- Preguntá solo decisiones que cambien materialmente alcance o comportamiento observable, UX/API pública, datos/seguridad/privacidad, costo o efectos externos, compatibilidad o una migración irreversible; también cuando haya una contradicción real o alternativas igual de plausibles con consecuencias relevantes.
+- No preguntes por detalles de implementación que el agente puede resolver responsablemente — nombres internos, ubicación de archivos, estructura menor de tests, copy no contractual o defaults convencionales — salvo que el usuario haya expresado una preferencia o tengan consecuencias materiales.
+- Nunca asumas en silencio: cada `[ASSUMED]` debe quedar visible con su evidencia en el mapa, persistido en el resumen y enumerado en el contrato final. El usuario puede corregirlo en cualquier momento.
+- Elegí el `interviewMode` a partir del diagnóstico y configuralo sin abrir una pregunta de preferencias. Respetá un modo pedido explícitamente; preguntá por el modo solo ante instrucciones contradictorias o si el usuario pidió elegirlo.
+- En **Grillado pregunta a pregunta**, hacé exactamente una pregunta material por vez y dejá que cada respuesta moldee la siguiente. No prepares un cuestionario rígido completo.
+- En **Por rondas**, presentá juntas hasta 4 preguntas sobre decisiones materiales de la frontera de dependencias que ya estén desbloqueadas y sean realmente independientes. Recalculá la frontera recién cuando vuelva la ronda completa.
+- En **Grillado rápido**, presentá juntas las decisiones materiales aplicables del bloque en curso, con la opción recomendada marcada como propuesta. El usuario señala solamente cuáles quiere revisar.
+- Persistí el modo antes de entrevistar: `fast` para Grillado rápido, `rounds` para Por rondas y `adaptive` para pregunta a pregunta. Nunca confíes solamente en recordar el historial.
+- Recorré las dependencias entre decisiones en orden; resolvé primero aquello de lo que dependen otras ramas.
+- Entrevistá por bloques: secciones coherentes del árbol, una tras otra, en orden de dependencias (ver **Bloques**).
+- Hacé una decisión por pregunta: no armes preguntas compuestas.
+- Para cada pregunta ofrecé una respuesta recomendada y una justificación breve.
+- Habilitá siempre respuesta libre con `allowOther: true`.
+- Si un hecho se puede averiguar explorando el codebase, buscándolo en documentación local o ejecutando una comprobación segura, hacelo en vez de preguntarlo.
+- Las decisiones materiales pertenecen al usuario; las elecciones operativas de bajo impacto son responsabilidad del agente. Si el usuario pide un grill exhaustivo o sin supuestos, activá la política `explicit-only`, registrala en el `summary` y no apliques ninguna poda `[ASSUMED]`: todo punto abierto sigue como decisión explícita. Esta regla prevalece sobre cualquier instrucción posterior de asumir o podar.
+
+## Retomar una entrevista
+
+`/grills` y `select_grill_session` combinan los snapshots runtime globales y los handoffs portables de cada root conocido bajo `.omi/grills/`, `.chiche/grills/` y `.sdd/grills/` y de `<git-common-dir>/omi/grills/`, `<git-common-dir>/chiche/grills/` y `<git-common-dir>/sdd/grills/`, estos tres últimos leídos una sola vez por repo, en un único inventario reconciliado. Abren siempre en el proyecto actual. El alcance «Todos» sólo suma roots conocidos: el root actual, los `projectPath` recuperables de snapshots y los cwd de sesiones Pi conocidas; no recorre ni escanea el filesystem. Un handoff de `<git-common-dir>/omi/grills/`, `<git-common-dir>/chiche/grills/` o `<git-common-dir>/sdd/grills/` toma como raíz operativa su `project` cuando nombra un worktree del mismo repo; si no, el worktree principal de ese common-dir. En `.omi/grills/`, `.chiche/grills/` o `.sdd/grills/` del árbol, un `project` del marker distinto de la ubicación física es una ruta histórica: se muestra como advertencia, mientras la raíz física sigue siendo la raíz operativa. Inválidos y conflictos sólo se inspeccionan.
+
+Un handoff-only pausado se importa al runtime únicamente después de confirmar **Retomar**. La importación conserva el ID lógico, el Markdown completo, el path fuente y el proyecto histórico; no inventa respuestas ni reescribe el handoff al listar o importar. Un handoff-only finalizado permite crear spec pasando su ruta absoluta validada a `spec`, o duplicarlo importando una baseline explícita y una revisión hija.
+
+Cuando el usuario quiera ver, inspeccionar o retomar sesiones de grilling:
+
+1. Si recibiste `--resume <sessionId>`, cargá ese snapshot con `grill_session` (`action: "get"`); de lo contrario invocá `select_grill_session`.
+2. Si el snapshot o selector devuelve `resume` o `duplicate`, tratá la selección como estado autoritativo.
+3. Los handoffs viejos pueden traer una sección `## Modo`: ignorala, ya no existe.
+4. Si existe un cuestionario exportado con respuestas completadas (ver **Exportar cuestionario**), leelo e incorporá cada respuesta como decisión resuelta con su checkpoint; repreguntá solo lo materialmente ambiguo.
+5. Mostrá brevemente el tema, la política de supuestos persistida, los supuestos `[ASSUMED]`, los bloques cerrados con sus decisiones resueltas (agrupadas por su prefijo de bloque), el bloque en curso y los bloques pendientes, y seguí por el bloque en curso.
+6. Reevaluá las ramas pendientes usando los criterios de la Fase 0. Si el `summary` conserva `explicit-only`, no hagas ninguna poda; en otro caso podá los puntos que ahora puedan asumirse. Elegí **Grillado rápido**, **Por rondas** o **Grillado pregunta a pregunta**. Conservá una preferencia explícita del usuario; de lo contrario informá el modo elegido en una línea, sin abrir otro gate.
+7. Persistí inmediatamente el modo con `grill_session` (`action: "configure"`, `interviewMode: "fast" | "rounds" | "adaptive"`) antes de la primera pregunta. Continuá por el bloque en curso, desde la siguiente decisión material pendiente; no repitas decisiones ni supuestos aceptados salvo que el usuario quiera revisarlos.
+
+Una sesión finalizada es inmutable. Para cambiarla, duplicala como nueva revisión mediante `select_grill_session`. Para convertirla en spec sin cambiarla, elegí la acción de crear spec SDD del selector: usa el ID si existe un snapshot válido y la ruta absoluta física si es un handoff-only; el handoff congelado se usa como fuente.
+
+## Fase 0: reconocimiento y estimación
+
+Antes de entrevistar:
+
+1. Explorá el codebase y resolvé todos los hechos comprobables relevantes. Los hechos los averigua el agente, nunca el usuario: si más adelante una pregunta de la frontera necesita un hecho del entorno todavía sin comprobar, se averigua sin frenar la ronda (ver **Modalidad B: Por rondas**).
+2. Buscá `CONTEXT-MAP.md`, los `CONTEXT.md` y `docs/adr/`; informá su existencia en el mapa. Leé los que sean relevantes para entender el vocabulario; nunca los modifiques.
+3. Separá explícitamente: hechos comprobados, instrucciones ya dadas por el usuario y elecciones todavía abiertas.
+4. Resolvé la política de supuestos antes de podar. Si el usuario pidió un grill exhaustivo o sin supuestos, usá `explicit-only`: no conviertas ningún punto en `[ASSUMED]` y tratá todas las elecciones abiertas como decisiones explícitas, también para la estimación. En otro caso usá `risk-pruned`: convertí cada elección respaldada, de bajo riesgo y reversible en `[ASSUMED]`; si corregirla durante la spec o implementación sería local y barato, no merece un gate.
+5. Construí el árbol con las decisiones que sigan explícitas después de aplicar la política y sus dependencias. En `risk-pruned`, no lo infles con detalles de implementación ni preferencias hipotéticas.
+6. Estimá preguntas mínimas, probables y máximas después de aplicar la política. La cifra operativa es la estimación probable y puede ser cero.
+7. Agrupá las preguntas explícitas por secciones coherentes —los bloques— y asigná una estimación a cada una.
+8. Diagnosticá qué modalidad necesita el árbol resultante. Evaluá: contradicciones reales; costo de revertir; acoplamiento entre decisiones materiales; tamaño y estabilidad de la frontera; probabilidad de que una respuesta abra ramas materiales; novedad frente a patrones existentes; y riesgos de datos, seguridad, compliance, migraciones o integraciones externas.
+9. A partir de ese diagnóstico:
+   - elegí **Grillado pregunta a pregunta** solo cuando una rama material necesite repreguntas adaptativas, tenga consecuencias difíciles de revertir, contradicciones o riesgos altos, o dependencias tan densas que una respuesta reformule la siguiente;
+   - elegí **Por rondas** cuando haya varias decisiones materiales desbloqueadas e independientes y alcance con recalcular el árbol entre rondas;
+   - elegí **Grillado rápido** como default cuando el árbol resultante sea estable, existan recomendaciones respaldadas y corregir el rumbo sea barato.
+   Ante evidencia mixta, aislá la rama crítica en vez de volver quisquillosa toda la sesión. No uses la cantidad de preguntas como criterio decisivo.
+10. Si el tema proviene de un issue de GitHub, conservá su número como referencia estructurada y resolvé `owner/repo` con `gh repo view --json nameWithOwner` cuando esté disponible. Esta referencia es metadata local del workflow: no agregues labels ni comments al issue sólo para marcarlo.
+11. No cuentes como preguntas de entrevista los supuestos `[ASSUMED]`, la elección automática de configuración, la frontera de bloque, la revisión colectiva del Grillado rápido ni la confirmación final. Cada decisión material incluida en una ronda sí cuenta por separado.
+
+El total puede cambiar porque una respuesta abre o cierra ramas. Presentalo como estimación, no como promesa exacta. Si quedan cero decisiones materiales, creá y configurá la sesión para dejar trazabilidad y pasá directo al cierre.
+
+### Bloques
+
+<!-- grill-blocks:start -->
+Un bloque es una sección coherente del árbol de decisiones. La entrevista va por bloques: un árbol con una sola sección es un solo bloque y no tiene frontera de bloque.
+
+- **Mapa.** El mapa del reconocimiento lista los bloques en orden de dependencias, cada uno con su estimación de preguntas.
+- **Orden.** El agente ordena y anuncia los bloques, sin preguntar cuál abordar primero. El usuario cambia el orden con la respuesta libre de la configuración o en cualquier momento.
+- **Dentro del bloque.** Se entrevista por rondas sobre la frontera o pregunta a pregunta, según la modalidad.
+- **Recorrido.** Una sesión recorre todos los bloques, uno tras otro.
+- **Frontera de bloque.** Al cerrar un bloque, el agente muestra un resumen corto de lo decidido, anuncia el siguiente y hace UNA pregunta con dos opciones: «Seguir con <bloque>» (recomendada) y «Cortar acá y seguir más tarde». Cortar es pausar, con la exportación de cuestionario disponible.
+- **Último bloque.** Después del último bloque no hay frontera: se pasa al cierre.
+- **Handoff pausado.** Mientras la sesión está `paused`, cada decisión de `## Decisiones resueltas` va con el prefijo de su bloque (`<Bloque>: ...`, como `Diseño:`) y cada entrada de `## Ramas pendientes` lleva el encabezado de su bloque, para reconstruir los bloques al retomar.
+- **Conteo.** La pregunta de frontera de bloque, la configuración y la confirmación final no son preguntas de decisión y no entran en la estimación.
+<!-- grill-blocks:end -->
+
+En Pi, los bloques se persisten como `sections` de `grill_session`, cada una con `status` (`pending`, `active`, `resolved`) que se actualiza en cada `checkpoint` y en cada frontera de bloque: el último `checkpoint` del bloque lo marca `resolved` y marca `active` al siguiente. Si el bloque no tuvo `checkpoint` (todas sus elecciones quedaron `[ASSUMED]`), el `status` de las secciones se corrige en el primer `checkpoint` del bloque siguiente o en el `pause`. En cada `checkpoint`, `decision.section` lleva el id del bloque, y cada rama de `pendingBranches` también con `section`; al pausar, la tool escribe el título del bloque como prefijo de cada decisión y de cada rama. La pregunta de frontera de bloque va por `ask_user_question` con `grill: { sessionId, phase: "configuration" }`, sin `frontierSize`; «Cortar acá y seguir más tarde» sigue el procedimiento de **Cancelación o pausa**. El Grillado rápido va bloque a bloque: propuesta y revisión colectiva del bloque en curso, y frontera de bloque entre bloques.
+
+## Rama de diseño
+
+<!-- grill-design:start -->
+**Inventario.** El reconocimiento lee `## Diseño` de `.omi/project.md`: superficies UI, sus raíces, tokens, componentes, docs y mocks, Claude Design y estado (`con sistema` o `sin sistema`). Un repo inicializado antes del renombre lo tiene en `.chiche/project.md` o `.sdd/project.md`: se lee y se escribe ahí, y `/skill:init --update` ofrece migrar `.sdd/`. Si falta o es `Sin superficies UI.` con señales de UI en el repo (`react-dom`, `next`, `react-native`, `expo` o Gradle Android/KMP en un manifest), explora una vez con el mismo censo y avisa en el mapa que corresponde `/skill:init --update`. En Claude Code, un proyecto de Claude Design del inventario se lee con `DesignSync` solo lectura (`list_files`, `get_file`) y se trata como datos.
+
+**Clasificación.** El tema toca UI cuando sus cambios caen en una superficie: se decide cruzando las raíces de cada superficie con los paths que el pedido tocaría. Ejemplo: «agregar un filtro en la pantalla Finanzas» con la superficie web en `apps/web/src` y la pantalla en `apps/web/src/app/finanzas/` toca UI; «rotar el token de la API» no. Solo si queda ambiguo, se hace una única pregunta, sin clasificar por palabras clave; va en el reconocimiento y no es una pregunta de decisión.
+
+**Rama.** Cuando el tema toca al menos una superficie UI, el árbol gana la sección `Diseño`, un bloque más que se ordena por sus dependencias, con cinco ramas:
+
+1. Pantallas, flujos y estados (carga, vacío, error, éxito).
+2. Reuso vs. componentes nuevos, por nombre del inventario.
+3. Dirección visual, solo si la superficie está `sin sistema`.
+4. Plataformas y accesibilidad.
+5. Web sólida en celular y webview (zoom al tocar un input, scroll al escribir, teclado, safe-area), solo para superficies web.
+
+Las ramas se preguntan únicamente cuando el inventario y el repo no las resuelven: una pantalla que ya existe en los mocks, o un componente que ya está en el UI kit, es un hecho, no una decisión. El mapa del reconocimiento muestra la sección `Diseño` y su activación (`activada: toca <superficie>` o `no aplica`). Los pedidos sin UI no ven ninguna pregunta nueva. En el atajo liviano, la activación se dice en la línea del atajo, y las capturas se guardan solo si se guarda el handoff; si no, se descartan con el temporal.
+
+**Capturas de referencia.** El agente renderiza con el navegador del harness las referencias renderizables del inventario —mocks HTML, bundle `design-sync/`, el Design de Claude Design, Storybook— para las pantallas que el tema toca: en Claude Code con Playwright MCP (`browser_navigate` a la ruta o URL, `browser_take_screenshot`); en los demás harnesses, con el navegador headless que `## Verificacion autonoma` del contrato declare. Un proyecto de Claude Design se materializa primero con `DesignSync` `get_file` en el temporal y se navega por `file://`. Sin navegador disponible, se le pide la captura al usuario o se registra la referencia por ruta, sin captura. Las capturas que el usuario adjunte como archivo o ruta se guardan tal cual. Sin referencia renderizable ni adjunta, nunca se inventa una captura: la rama lo registra como hecho. Las capturas viven en el scratch, un directorio temporal fuera del repo (ej. `mktemp -d`), hasta guardar, pausar o finalizar; recién ahí se copian a `<git-common-dir>/omi/grills/<nombre-real-del-handoff>/`, con el mismo nombre base que el `.md` que quedó escrito (en Pi, incluido el sufijo de colisión que agrega la tool), y el handoff las referencia por ruta relativa (`<nombre-real-del-handoff>/<pantalla>.png`). Al guardar, pausar o finalizar, el scratch se borra solo si la copia salió bien (`cp -R -- "<scratch>/." "<destino>/" && rm -rf -- "<scratch>"`): si la copia falla, se conserva y el reporte nombra su ruta y las capturas que no se copiaron, porque las adjuntas o las de Claude Design no siempre se vuelven a renderizar. Al cerrar sin guardar, el comando de cierre empieza con `trap 'rm -rf -- "<scratch>"' EXIT`, que borra el scratch aunque ese comando falle.
+
+**Handoff.** Mientras la sesión está `paused`, las decisiones de diseño viven en `## Decisiones resueltas` con prefijo `Diseño:`, y la ruta de cada captura va en la decisión `Diseño:` que la usa. Con la rama activada, el contrato visible del cierre incluye el diseño, y el handoff `finalized` lo persiste en `## Diseño`. Si un handoff trae más de un `## Diseño` (una revisión importada), el vigente es el último.
+<!-- grill-design:end -->
+
+## Fase 1: mapa previo y configuración
+
+Antes de la primera pregunta, escribí en el chat un mapa visible con:
+
+- tema y objetivo de desambiguación;
+- hechos ya comprobados;
+- docs de dominio existentes (`CONTEXT.md`, ADRs), solo como lectura;
+- política de supuestos (`risk-pruned` o `explicit-only`) y su origen;
+- supuestos `[ASSUMED]`, cada uno con evidencia y motivo por el que es barato corregirlo; en `explicit-only`, la lista queda vacía;
+- decisiones materiales, bloques y dependencias, con los bloques en orden de dependencias y cada uno con su estimación;
+- estimación mínima, probable y máxima después de aplicar la política;
+- orden recomendado y motivo;
+- diagnóstico de modalidad, con señales concretas para aprobación colectiva, adaptación entre rondas o adaptación después de cada respuesta, y modalidad elegida.
+
+### Paso 1: crear la sesión
+
+Creá el registro persistente con `grill_session` usando `action: "create"`, un `summary` que incluya hechos, política de supuestos y supuestos `[ASSUMED]`, y `sections` con los bloques en orden (todos `pending`). La tool inicializa `interviewMode: "unselected"`: ningún checkpoint de entrevista será aceptado hasta configurarlo. Si el origen es un issue, incluí `sourceIssue: { number: NN, repository: "owner/repo" }` (omití sólo `repository` si no puede resolverse). Guardá el `sessionId` devuelto y usalo durante toda la entrevista.
+
+### Paso 2: configurar la modalidad diagnosticada
+
+Elegí y persistí el `interviewMode` sin abrir una pregunta de configuración: `fast` para **Grillado rápido**, `rounds` para **Por rondas** o `adaptive` para **Grillado pregunta a pregunta**. Respetá cualquier modalidad que el usuario haya pedido explícitamente; si no indicó una, usá el diagnóstico de la Fase 0.
+
+Solo si el usuario pidió elegir la modalidad o dio instrucciones contradictorias, invocá `ask_user_question` con las tres opciones, la recomendada marcada, `allowOther: true` y `grill: { sessionId, phase: "configuration" }`. Si cancela ese gate solicitado, pausá el registro y no empieces.
+
+Persistí el modo elegido con `grill_session` (`action: "configure"`, `interviewMode: "fast" | "rounds" | "adaptive"`) antes de la primera pregunta. Este checkpoint de configuración es obligatorio aunque la elección haya sido automática: las tools rechazan combinaciones incompatibles y `grill_session` rechaza checkpoints mientras el modo siga `unselected`.
+
+### Contexto obligatorio de las preguntas
+
+Mientras la sesión esté activa, toda llamada de entrevista o cierre incluye un objeto `grill`:
+
+- `sessionId`: id persistente devuelto por `grill_session`;
+- `phase`: `"interview"` para decisiones, `"configuration"` para la modalidad pedida y la frontera de bloque, o `"closure"` para la confirmación final;
+- `frontierSize`: cantidad real de decisiones representadas por la llamada; es obligatorio en fase `interview`. Vale 1 en modo adaptativo, de 1 a 4 en rondas y la cantidad de decisiones del bloque en la revisión colectiva del modo rápido.
+
+El gate de runtime aplica estas reglas:
+
+- con `interviewMode: "rounds"`, una frontera de 2 a 4 exige `ask_user_questions`; `ask_user_question` sólo se admite con `frontierSize: 1`;
+- con `interviewMode: "adaptive"` o `"fast"`, `ask_user_questions` se rechaza;
+- configuración y cierre usan siempre `ask_user_question`.
+
+No eludas el gate declarando `frontierSize: 1` cuando existen varias decisiones independientes. Si una tool rechaza la llamada, corregí la modalidad o el tamaño de frontera; no improvises un cuestionario numerado dentro de una única pregunta.
+
+## Fase 2: entrevista
+
+### Modalidad A: Grillado pregunta a pregunta
+
+Para cada decisión material:
+
+1. Si la política es `explicit-only`, no reapliques la poda y elegí la siguiente decisión según dependencias. Con `risk-pruned`, si la siguiente rama ya tiene un default respaldado, de bajo riesgo y reversible, registrala como `[ASSUMED]` en el resumen y seguí sin preguntar; si sigue siendo material, elegila según dependencias y respuestas anteriores.
+2. Invocá `ask_user_question` una sola vez con:
+   - `grill: { sessionId, phase: "interview", frontierSize: 1 }`;
+   - una pregunta autocontenida;
+   - `selectionMode: "single"` o `"multiple"` según corresponda;
+   - opciones claras y mutuamente comprensibles;
+   - una o más opciones marcadas `recommended: true` cuando corresponda;
+   - `recommendationReason` breve;
+   - `allowOther: true`;
+   - sección, número actual y total estimado.
+3. Esperá la respuesta de la tool.
+4. Interpretá la respuesta y actualizá el árbol de decisiones.
+5. Antes de hacer otra pregunta, invocá `grill_session` con `action: "checkpoint"`:
+   - registrá una `interaction` con id único, pregunta y respuestas;
+   - agregá o actualizá la decisión normalizada;
+   - reemplazá `pendingBranches` con el estado actual;
+   - actualizá el `status` de las secciones (el bloque en curso `active`, los cerrados `resolved`) y la estimación si cambiaron.
+6. Recién después formulá la siguiente pregunta. Si el bloque en curso quedó resuelto, aplicá antes la frontera de bloque (ver **Bloques**).
+
+### Modalidad B: Por rondas
+
+Cada ronda presenta la **frontera de dependencias**: solo decisiones del bloque en curso cuyas dependencias ya están resueltas.
+
+1. Calculá la frontera actual. Con `risk-pruned`, convertí en `[ASSUMED]` los defaults de bajo riesgo que hayan quedado desbloqueados; con `explicit-only`, no conviertas ninguno. Priorizá las decisiones materiales que desbloquean más ramas.
+2. **Hechos sin bloqueo.** Si una pregunta de la frontera necesita un hecho del entorno todavía sin comprobar, no se lo preguntes al usuario: lanzá la exploración y no frenes la ronda. Solo esperan las preguntas que dependen de ese hecho; el resto de la frontera se pregunta ya. Cuando vuelve el hecho, sumalo a los hechos comprobados y recalculá la frontera para la ronda siguiente. Si toda la frontera depende de hechos pendientes, no abras una ronda vacía ni le preguntes el hecho al usuario: esperá la exploración. Si la exploración falla o vence, reintentala o explorá inline; si el hecho sigue sin poder comprobarse, registralo como supuesto visible y seguí. En Pi, lanzá la exploración con la tool `subagent` (agente `scout`, `background: true`) y armá la ronda sin esperarla: el reporte vuelve como mensaje `subagent-result`. Si la tool `subagent` no está disponible, explorá inline antes de la ronda.
+3. Si la respuesta de una decisión material cambiaría cómo se formula otra o sus opciones, no las pongas en la misma ronda: dejá la dependiente para la ronda siguiente.
+4. Elegí hasta 4 decisiones independientes entre las preguntables de la frontera (las que no esperan un hecho):
+   - con 2 a 4, invocá `ask_user_questions` una sola vez con `grill: { sessionId, phase: "interview", frontierSize: N }` y enviá una entrada por decisión, cada una con `id` único, pregunta autocontenida, `section`, progreso, opciones, recomendación con motivo, `selectionMode` y `allowOther: true`;
+   - si queda una sola decisión preguntable, invocá `ask_user_question` con `grill: { sessionId, phase: "interview", frontierSize: 1 }`; una ronda de una pregunta es válida cuando las dependencias no permiten agrupar.
+5. Esperá la ronda completa. La tool no devuelve control al agente entre preguntas: no incluyas dos decisiones acopladas esperando corregir la segunda sobre la marcha.
+6. Por cada respuesta recibida, en orden:
+   - actualizá el árbol;
+   - persistí un `checkpoint` separado con interacción y decisión normalizada;
+   - reemplazá `pendingBranches` y actualizá el `status` de las secciones y la estimación.
+7. Recalculá la frontera recién después de procesar toda la ronda y abrí la siguiente. Si el bloque en curso quedó resuelto, aplicá antes la frontera de bloque (ver **Bloques**).
+8. Si una respuesta contradice una decisión previa o invalida otra rama, mostrá la contradicción y resolvé solo lo afectado antes de continuar. No repitas respuestas válidas.
+9. Si el usuario cancela con respuestas parciales, checkpointá primero las respuestas efectivamente devueltas y después seguí el procedimiento de pausa. Las preguntas no respondidas siguen pendientes.
+
+### Modalidad C: Grillado rápido
+
+1. Recorré el árbol por orden de dependencias. Con `risk-pruned`, sacá del lote toda elección que cumpla la regla `[ASSUMED]`; con `explicit-only`, no saques ninguna elección abierta. La propuesta contiene las decisiones materiales aplicables del bloque en curso.
+2. Renderizá primero los supuestos nuevos o modificados y después la propuesta de decisiones. Para cada decisión material incluí:
+   - id y sección;
+   - pregunta autocontenida;
+   - opciones relevantes;
+   - opción recomendada marcada como **propuesta elegida**;
+   - justificación breve;
+   - dependencia o condición, si existe.
+3. Aclará que las propuestas de decisiones todavía no están confirmadas. Las ramas que solo aparecerían con una respuesta no recomendada deben figurar como condicionales; no inventes sus preguntas antes de que se abra esa rama.
+4. Si el bloque en curso queda sin decisiones materiales, no abras la revisión colectiva: pasá a la frontera de bloque o, si era el último, al cierre.
+5. En otro caso, invocá una sola vez `ask_user_question` en modo `multiple`, con `grill: { sessionId, phase: "interview", frontierSize: N }`, una opción por id de decisión y esta consigna: **“Seleccioná las decisiones que te hacen ruido; si no seleccionás ninguna, aprobás todas las propuestas.”** Usá `allowEmptySelection: true` y `allowOther: true`.
+6. Si no selecciona ninguna:
+   - considerá aprobadas todas las recomendaciones visibles;
+   - persistí cada pregunta y su respuesta aprobada con un `checkpoint` separado y un id de interacción único;
+   - actualizá decisiones, ramas pendientes, secciones, estimación y resumen de supuestos en cada checkpoint;
+   - avanzá a la frontera de bloque o, si era el último, al cierre.
+7. Si señala decisiones que le hacen ruido:
+   - resolvelas una por una, en orden de dependencias, usando el ciclo adaptativo de la Modalidad A;
+   - aceptá como confirmadas las propuestas no señaladas solo cuando ya no dependan de una decisión revisada;
+   - si un cambio invalida, cierra o abre preguntas posteriores, recalculá el árbol, asumí las ramas baratas y renderizá una propuesta rápida revisada para lo material;
+   - repetí la revisión colectiva hasta que no queden objeciones.
+8. Si la respuesta libre trae reemplazos inequívocos para varias decisiones, aplicalos sin volver a preguntar cada una y mostralos en la propuesta revisada.
+
+El lote es de un bloque: al resolverlo, aplicá la frontera de bloque (ver **Bloques**). Los supuestos y la revisión colectiva no son preguntas de decisión.
+
+No dependas solamente del historial conversacional: el snapshot persistente debe poder reconstruir el estado en otra sesión de Pi.
+
+### Persistencia de supuestos
+
+- Guardá la política vigente (`risk-pruned` o `explicit-only`) y la lista de supuestos en `summary` bajo bloques `Política de supuestos` y `Supuestos [ASSUMED]` al crear la sesión y cada vez que un checkpoint, pausa o cierre los modifique.
+- En `explicit-only`, mantené vacía la lista `[ASSUMED]` y no ejecutes ninguna instrucción de poda de las tres modalidades.
+- Como un supuesto no fue una pregunta, no fabriques una `interaction` ni consumas un checkpoint para persistirlo; el `summary` y el contrato son su fuente.
+- Si el usuario corrige un supuesto de forma inequívoca, aplicá la corrección, actualizá las ramas afectadas y no repreguntes. Si la corrección descubre una decisión material nueva, promovela al árbol.
+- La confirmación final acepta también todos los `[ASSUMED]` visibles; hasta entonces siguen siendo revisables.
+
+### Selección única y múltiple
+
+- Usá selección única para alternativas excluyentes.
+- Usá selección múltiple cuando varias respuestas puedan coexistir.
+- No fuerces una selección múltiple si en realidad estás mezclando decisiones dependientes; separalas en preguntas sucesivas.
+
+### Cancelación o pausa
+
+Si `ask_user_question` o `ask_user_questions` indica cancelación:
+
+1. No hagas otra pregunta.
+2. Escribí un resumen visible de lo resuelto, los supuestos `[ASSUMED]` y lo pendiente.
+3. Invocá `grill_session` con `action: "pause"`, incluyendo resumen con supuestos, ramas pendientes, secciones y estimación actuales. `pendingBranches` alimenta `## Ramas pendientes`, que lista lo pendiente del bloque en curso y los bloques no empezados, en orden. La tool además escribe/actualiza el handoff interoperable en `<git-common-dir>/omi/grills/` del proyecto (ver **Formato del handoff**). Después de escribir el handoff, la tool registra `grill.paused` en el log de eventos (ver **Log de eventos**).
+4. Ofrecé exportar las decisiones pendientes como cuestionario para un stakeholder sin agente (ver **Exportar cuestionario**).
+5. Informá el id de la sesión, la ruta del handoff en el repo, y que puede retomarse con `select_grill_session`.
+
+## Formato del handoff
+
+<!-- grill-drafts:start -->
+**Dónde viven los borradores.** El handoff, el cuestionario y la carpeta de capturas se escriben en `<git-common-dir>/omi/grills/`, fuera del working tree: `<git-common-dir>` es la salida de `git rev-parse --path-format=absolute --git-common-dir`, el mismo directorio para todos los worktrees del repo, así que `git status` queda limpio en cada uno. Fuera de un repo git, en `.omi/grills/` del cwd. Para leer o retomar se miran los seis lugares, en este orden: `.omi/grills/`, `.chiche/grills/` y `.sdd/grills/` del árbol, con lo que un PR ya commiteó, y `<git-common-dir>/omi/grills/`, `<git-common-dir>/chiche/grills/` y `<git-common-dir>/sdd/grills/`; ante el mismo nombre gana el trackeado sobre el local y, dentro de cada uno, `omi` sobre `chiche` y `chiche` sobre `sdd`. Todo guardado se escribe en `<git-common-dir>/omi/grills/`, aunque el handoff retomado venga de otro de los seis lugares. El borrador no se ve en el editor ni viaja con un clon nuevo, así que cada vez que se guarda, pausa o finaliza, el reporte imprime su ruta absoluta. Si el harness no puede escribir en `<git-common-dir>/omi/`, su capa de interacción dice cómo pedir permiso o caer a `.omi/` del cwd.
+<!-- grill-drafts:end -->
+
+El handoff es el artefacto interoperable del grill: los cuatro harnesses lo escriben con el mismo template, y `spec --from-grill` de cualquier harness lo consume sin traducción. En Pi lo escribe y actualiza la tool: cada `pause` y `finalize` upsertea `<git-common-dir>/omi/grills/<fecha>-<slug>.md` del proyecto de la sesión y escribe el marker `Chiche-Tracking: version=2` con los valores autoritativos del snapshot (`state` según el estado real, `issue` desde `sourceIssue`, `grill` = id de la sesión, `project` = `projectPath`, percent-encodeados donde haga falta). El marker que encuentra, `SDD-Tracking: version=1` o `Chiche-Tracking: version=2`, lo reemplaza en su lugar por el v2 (un handoff v1 migra) y nunca se agrega otro al lado. El `handoffMarkdown` que generás en el cierre tiene que seguir este template:
+
+```markdown
+# Grill — <tema>
+<!-- Estado: paused|finalized. Proyecto: <ruta absoluta>. Fuente: <issue o pedido>. -->
+<!-- Chiche-Tracking: version=2; type=grill; state=<paused|finalized>; issue=<#NN|owner/repo#NN|none>; grill=<ref>; project=<ref> -->
+
+## Hechos comprobados
+...
+
+## Decisiones resueltas
+1. ...
+
+## Ramas pendientes
+...
+
+## Diseño
+<solo si la rama de diseño se activó; ausente mientras esté paused, cuando las decisiones de diseño van a Decisiones resueltas con prefijo "Diseño:": superficies y su estado; pantallas, flujos y estados; componentes a reusar o crear por nombre del inventario; dirección visual si la superficie está sin sistema; requisitos de webview, plataforma y accesibilidad; capturas de referencia por ruta relativa>
+
+## Handoff
+<vacío mientras esté paused; contrato completo cuando esté finalized>
+```
+
+Si tu marker difiere del estado real de la sesión, la tool lo corrige: siempre queda exactamente un marker con la identidad autoritativa.
+
+`## Diseño` no cambia el esquema de `grill_session`: `pause` arma el Markdown desde el snapshot con sus cuatro secciones fijas, así que en una sesión pausada las decisiones de diseño viajan en `## Decisiones resueltas` con prefijo `Diseño:`; `finalize` escribe el `handoffMarkdown` verbatim, con `## Diseño` cuando la rama se activó. Las capturas se copian a la carpeta derivada de la ruta del handoff que devuelve la tool, nunca del slug calculado. Si hay capturas, hacé `pause` antes de `finalize`: `pause` escribe el handoff y devuelve su ruta real, la misma que después usa `finalize`, y de ahí salen el nombre de la carpeta y las rutas relativas del `handoffMarkdown`. En una sesión importada, la tool no escribe el `handoffMarkdown` verbatim: lo anida bajo `### Handoff de la revisión`, después del handoff fuente, así que el `## Diseño` vigente es el último del archivo.
+
+## Exportar cuestionario
+
+Tanto al pausar como en el cierre, ofrecé exportar las decisiones pendientes como `<git-common-dir>/omi/grills/<fecha>-<slug>-cuestionario.md`: un cuestionario autocontenido para un tercero sin agente, pensado para pegar en un Google Doc y discutir con un stakeholder. Escribilo como archivo Markdown normal; no reemplaza el snapshot de `grill_session`.
+
+Por cada decisión pendiente incluí:
+
+- contexto breve que la haga entendible sin leer el resto de la sesión;
+- la pregunta y sus opciones;
+- la opción recomendada con su motivo;
+- un espacio explícito para la respuesta.
+
+No uses jerga interna de la sesión ni referencias que el tercero no pueda resolver. Después de escribir el archivo, asegurate de que la sesión quede pausada (`grill_session` con `action: "pause"`) e informá la ruta del cuestionario.
+
+Cuando vuelvan las respuestas, el grill se retoma leyendo ese archivo: registrá cada respuesta como decisión resuelta con su checkpoint, repreguntá solo lo ambiguo y continuá con las ramas restantes.
+
+## Fase 3: cierre
+
+Cerrá solamente cuando todos los bloques estén resueltos.
+
+### Paso 1: contrato visible
+
+Primero escribí en el chat el entendimiento compartido completo. Debe incluir:
+
+1. tema y alcance;
+2. hechos comprobados;
+3. decisiones resueltas, agrupadas por bloque y enumeradas una por una;
+4. restricciones y no-objetivos;
+5. dependencias y consecuencias importantes;
+6. supuestos `[ASSUMED]`, cada uno con su evidencia y el impacto si fuera incorrecto;
+7. riesgos o preguntas deliberadamente diferidas;
+8. contexto recomendado para la sesión que escribirá el spec.
+
+Este texto es el contrato de handoff. Tiene que estar renderizado en el chat; no puede vivir solamente en una tool o archivo. La confirmación final aprueba tanto las decisiones como los `[ASSUMED]` enumerados, sin un gate separado por cada supuesto.
+
+### Paso 2: confirmación autocontenida
+
+Recién después del contrato visible, invocá `ask_user_question` con `grill: { sessionId, phase: "closure" }`, una pregunta autocontenida y estas acciones provisionales:
+
+- **Confirmar entendimiento**: finaliza y congela el handoff.
+- **Confirmar y crear spec SDD**: si `spec` está disponible, primero finaliza y congela el handoff; recién después inicia el workflow de spec.
+- **Ajustar una decisión o supuesto**: vuelve al punto elegido y retoma solo la rama afectada.
+- **Pausar**: conserva el progreso sin finalizar.
+- **Exportar cuestionario**: escribe las decisiones pendientes o diferidas como cuestionario para un stakeholder sin agente y pausa la sesión hasta que vuelvan las respuestas (ver **Exportar cuestionario**).
+
+No incluyas acciones para implementar o construir.
+
+### Paso 3: persistencia final
+
+Si el usuario confirma, con o sin encadenado:
+
+1. Convertí el contrato visible en Markdown autocontenido siguiendo el template de **Formato del handoff**.
+2. Invocá `grill_session` con `action: "finalize"`, el resumen actualizado — incluidos los supuestos `[ASSUMED]` — y `handoffMarkdown`. Después de escribir el handoff, la tool registra `grill.finalized` en el log de eventos.
+   - Si el usuario eligió **Confirmar y crear spec SDD**, incluí `continueWithSpec: true`; la tool persiste primero y recién después encola el skill canónico materializado.
+3. Informá las dos rutas que devuelve la tool: el snapshot global y el handoff del repo en `<git-common-dir>/omi/grills/`, con su ruta absoluta.
+4. Si hubo encadenado, terminá este turno después de la persistencia: el follow-up materializado de `spec --from-grill` continúa en esta misma sesión.
+
+Si pide ajustar, retomá una sola rama. Una corrección inequívoca de un supuesto se aplica sin otra pregunta; una decisión material sigue el ciclo de pregunta + checkpoint. Si pausa, seguí el procedimiento de pausa.
+
+### Paso 4: acción posterior
+
+Después de finalizar:
+
+- si eligió **Confirmar entendimiento**, terminá e informá el handoff;
+- si eligió **Confirmar y crear spec SDD**, `grill_session finalize` con `continueWithSpec: true` entrega el skill canónico materializado con `--from-grill <sessionId>` (más `--autonomy <código>` si esta corrida recibió `--autonomy`: pasalo en el parámetro `autonomy` del finalize);
+- no leas un `SKILL.md` por un path inferido ni envíes slash commands;
+- el handoff confirmado es fuente autoritativa: no vuelvas a preguntar decisiones ya resueltas;
+- la spec sigue exigiendo `.omi/project.md`.
+
+No implementes el plan desde este skill.
+
+## Log de eventos
+
+<!-- omi-events:start -->
+Las transiciones de este skill se registran en `<git-common-dir>/omi/events.jsonl`, el log local append-only del formato `events-v1` (normativo en `docs/sdd-events-v1.md` del repo de estos skills). Cada evento es una línea que agrega este comando, con los valores entre `<>` reemplazados: `issue` es `#NN`, `owner/repo#NN` o `none`; `spec`, `previous` y `grill` van sin codificar (`.sdd/specs/<slug>.md`, `#NN`, `<fecha>-<slug>` o `none`) y el comando los percent-encodea; `previous` es `none` salvo en `spec.moved`; `pr` son números separados por coma y sin espacios, o vacío; `reason` es `none` salvo en `run.failed`. La identidad events-v1 de una spec local es `.sdd/specs/<slug>.md` sea cual sea la marca del lugar donde vive: `.omi/`, `.chiche/` o `.sdd/`, del árbol o del common-dir.
+
+```bash
+(
+  harness='<harness>' event='<evento>' issue='<issue>' spec='<spec>' previous='<previous>' grillref='<grill>' pr='<prs>' reason='<reason>'
+  export LC_ALL=C
+  enc() { [ "$1" = none ] && { printf none; return; }; s=$1; while [ -n "$s" ]; do c=${s%"${s#?}"}; s=${s#?}; case $c in [A-Za-z0-9._~-]) printf %s "$c" ;; *) printf %% && printf %s "$c" | od -An -tx1 | tr -d ' \n' | tr a-f A-F ;; esac; done; }
+  ok() {
+    case $harness in claude|codex|opencode|pi|antigravity) ;; *) return 1 ;; esac
+    case "$issue$pr$reason" in *[![:graph:]]*) return 1 ;; esac
+    case "$spec$previous$grillref" in *'<'*'>'*) return 1 ;; esac
+    printf '%s\n' "$issue" | grep -Eqx 'none|#[1-9][0-9]*|[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#[1-9][0-9]*' || return 1
+    printf '%s\n' "$pr" | grep -Eqx '([1-9][0-9]*(,[1-9][0-9]*)*)?' || return 1
+    [ -n "$spec" ] && [ -n "$previous" ] && [ -n "$grillref" ] || return 1
+    case $reason in none) [ "$event" != run.failed ] ;; aborted|interrupted) [ "$event" = run.failed ] ;; *) false ;; esac || return 1
+    [ "$event" = spec.moved ] || [ "$previous" = none ] || return 1
+    case $event in
+      grill.paused|grill.finalized) [ "$grillref" != none ] && [ -z "$pr" ] ;;
+      spec.moved) [ "$spec" != none ] && [ "$previous" != none ] && [ -z "$pr" ] ;;
+      spec.published|spec.approved|spec.superseded|run.started|run.committed|run.failed) [ "$spec" != none ] && [ -z "$pr" ] ;;
+      run.pr-opened) [ "$spec" != none ] && [ -n "$pr" ] ;;
+      land.merged) case $pr in ''|*,*) false ;; esac ;;
+      *) false ;;
+    esac
+  }
+  ok && dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && mkdir -p "$dir/omi" &&
+    line=$(printf '{"v":1,"ts":"%s","harness":"%s","event":"%s","issue":"%s","spec":"%s","previous":"%s","grill":"%s","pr":[%s],"reason":"%s"}' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$harness" "$event" "$issue" "$(enc "$spec")" "$(enc "$previous")" "$(enc "$grillref")" "$pr" "$reason") &&
+    [ ${#line} -lt 1024 ] && printf '%s\n' "$line" >> "$dir/omi/events.jsonl" ||
+    echo "aviso: no se registró el evento SDD $event" >&2
+)
+```
+
+- **Best-effort.** Un fallo del append nunca frena ni hace fallar el skill: el comando termina con exit 0 y avisa por stderr, y el reporte del skill lo nombra en una línea.
+- **Validación barata.** Antes del append, `ok` revisa el harness, el evento del catálogo, `issue`, `pr` sin espacios, refs no vacías y sin un `<...>` sin reemplazar, y los invariantes del catálogo: un valor inválido cae en el mismo aviso y no escribe nada, porque los consumidores saltean en silencio una línea inválida.
+- **Solo en el common-dir.** El log se escribe en `<git-common-dir>/omi/`, nunca dentro del working tree: fuera de un repo git, o si el harness no puede escribir ahí, el evento se saltea con el aviso, sin caer al working tree (`.omi/`, `.chiche/` ni `.sdd/`).
+<!-- omi-events:end -->
+
+En Pi, `<harness>` es `pi`.
+
+En Pi, `grill.paused` y `grill.finalized` los registra `grill_session` después de escribir el handoff, con el `grill` y el `issue` de su marker: este skill no corre el comando, ni lo repone a mano si la tool avisa. Si la tool suma un aviso `SDD event log not updated`, el reporte lo nombra en una línea.
