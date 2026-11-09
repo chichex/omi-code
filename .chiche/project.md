@@ -26,7 +26,7 @@ Dependencias runtime fijadas a versión exacta. Diseño UI: no aplica (CLI, TUI 
 - **Real:** `https://app.ohmyinfra.com`, con `chichex/omi#140` desplegado. Hasta entonces `omi login` falla con `session_token_unavailable`.
 - **Git:** branch default `main`, remote `origin` en `github.com/chichex/omi-code`. `main` está protegida: exige PR y el check `cierre`, también para admins.
 - **CI:** `ci.yml` corre typecheck, test y empaquetado en cada PR. El check se llama `cierre`.
-- **Release:** cada merge a `main` que cambie lo empaquetado publica. `release.yml` calcula la versión desde el último tag, repite los gates, prueba macOS y crea el tag. El tag es la fuente de verdad: `package.json` se estampa sólo en CI y en `main` puede quedar atrás.
+- **Release:** cada merge a `main` que cambie lo empaquetado publica. `release.yml` calcula la versión desde el último tag, repite los gates, prueba macOS, arranca en las cuatro plataformas los mismos archivos que publica y crea el tag. El tag es la fuente de verdad: `package.json` se estampa sólo en CI y en `main` puede quedar atrás.
 - **Linux real:** `chichex-linux` sirve para probar el binario `linux-x64` en un HOME temporal.
 - **Review a pedido:** `gh workflow run claude-review.yml --repo chichex/omi-code -f pr=<N>`; requiere el secret `CLAUDE_CODE_OAUTH_TOKEN`.
 
@@ -115,4 +115,4 @@ done
 - Los guardrails locales no aíslan a un agente con bash y acceso al Bearer. Riesgos aceptados para este land y diferidos por decisión humana: aislamiento CLI en #5 y confianza de aprobación MCP en #6. Sus issues siguen abiertos; resolver los hilos originales no constituye una corrección de seguridad.
 - `/skill:init --update` migra `.sdd/` a `.omi/`, pero no `.chiche/` a `.omi/`. Este repo sigue con `.chiche/project.md`, que se lee por compatibilidad.
 - El contrato de `/version` se verifica estático al publicar (`git grep`): OMI no lo valida.
-- `release.yml` arranca los binarios de Linux x64 y macOS arm64. Los de Linux arm64 y macOS x64 se compilan y publican sin gate: los de `v0.1.0` se arrancaron una vez a mano en runners de esas arquitecturas (2026-11-08), con `install.sh` y los 11 skills.
+- `release.yml` pasa los binarios entre jobs como artifact, y los assets pesan 523 MB. Sin confirmar el límite de almacenamiento de Actions de la cuenta: si se llena, falla el build y no se publica nada.

@@ -64,12 +64,10 @@ jobs:
       - run: npm version "$VERSION" --no-git-tag-version --allow-same-version
       - run: npm run test:packaging
 
-  release:
+  build:
     needs: [plan, macos]
     if: needs.plan.outputs.version != ''
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     env:
       VERSION: ${{ needs.plan.outputs.version }}
     steps:
@@ -87,6 +85,67 @@ jobs:
       - run: npm test
       - run: npm run test:packaging
       - run: node scripts/build-release.ts --out dist/release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: dist/release
+          if-no-files-found: error
+          retention-days: 1
+
+  # test:packaging compila aparte para el host. Esto arranca lo que se publica, compilado desde Linux.
+  boot:
+    needs: [plan, build]
+    if: needs.plan.outputs.version != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: ${{ runner.temp }}/release
+      - name: Instalar con install.sh
+        run: OMI_INSTALL_BASE="file://$RUNNER_TEMP/release" sh "$RUNNER_TEMP/release/install.sh"
+      - name: Arrancan el binario suelto y el del bundle
+        run: |
+          if [ "$(head -c 2 "$HOME/.omi/bin/omi")" = '#!' ]; then
+            echo "install.sh cayó al bundle: el binario suelto no arranca" >&2
+            exit 1
+          fi
+          file "$HOME/.omi/bin/omi"
+          [ "$("$HOME/.omi/bin/omi" --version)" = "$VERSION" ]
+          [ "$("$HOME/.omi/runtime/omi" --version)" = "$VERSION" ]
+      - name: Pi carga los skills embebidos
+        run: |
+          ( printf '{"id":"1","type":"get_commands"}\n'; sleep 20 ) | "$HOME/.omi/bin/omi" --mode rpc --no-session > "$RUNNER_TEMP/rpc.out" || true
+          expected=$(ls "$HOME/.omi/runtime/skills" | wc -l)
+          loaded=$(grep '^{' "$RUNNER_TEMP/rpc.out" | jq -s '[.[] | select(.id == "1") | .data.commands[] | select(.source == "skill")] | length')
+          echo "skills: $loaded de $expected"
+          [ "$loaded" -gt 0 ]
+          [ "$loaded" -eq "$expected" ]
+
+  release:
+    needs: [plan, boot]
+    if: needs.plan.outputs.version != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: dist/release
+      - name: Verificar lo que se publica
+        working-directory: dist/release
+        run: sha256sum -c checksums.txt
       - name: Publicar
         if: github.ref == 'refs/heads/main' && inputs.dry_run != true
         env:
