@@ -16,7 +16,7 @@ Dependencias runtime fijadas a versión exacta. Diseño UI: no aplica (CLI, TUI 
 | empaquetado | `npm run test:packaging` | . | verificado 2026-11-07 | ~12s | requiere bun; compila para el host, instala en un HOME temporal (también raíz personalizada), verifica versión/assets de Pi y entorno de procesos hijos |
 | release local | `node scripts/build-release.ts --out <dir>` | . | verificado 2026-11-07 | ~25s | las cuatro plataformas; `--targets` acota |
 | plan de release | `node scripts/next-release.ts` | . | verificado 2026-11-08 | <1s | imprime `version=X.Y.Z`, o `version=` si nada empaquetado cambió desde el último tag |
-| dry-run de release | `gh workflow run release.yml --ref <rama> -f dry_run=true` | . | verificado 2026-11-08 | ~3min | corre el pipeline completo, también en macOS, sin publicar |
+| dry-run de release | `gh workflow run release.yml --ref <rama> -f dry_run=true` | . | verificado 2026-11-08 | ~5min | corre el pipeline completo, con el arranque en las cuatro plataformas, sin publicar |
 | censo de protocolo | `OMI_REPO=<checkout de chichex/omi> npm test` | . | verificado 2026-11-07 | ~6s | activa la comparación de `src/protocol/constants.ts` contra el código Go |
 | correr | `npm run omi -- --help` | . | verificado 2026-11-05 | <1s | |
 
@@ -115,4 +115,4 @@ done
 - Los guardrails locales no aíslan a un agente con bash y acceso al Bearer. Riesgos aceptados para este land y diferidos por decisión humana: aislamiento CLI en #5 y confianza de aprobación MCP en #6. Sus issues siguen abiertos; resolver los hilos originales no constituye una corrección de seguridad.
 - `/skill:init --update` migra `.sdd/` a `.omi/`, pero no `.chiche/` a `.omi/`. Este repo sigue con `.chiche/project.md`, que se lee por compatibilidad.
 - El contrato de `/version` se verifica estático al publicar (`git grep`): OMI no lo valida.
-- `release.yml` pasa los binarios entre jobs como artifact, y los assets pesan 523 MB. Sin confirmar el límite de almacenamiento de Actions de la cuenta: si se llena, falla el build y no se publica nada.
+- `release.yml` pasa los binarios entre jobs como un artifact de 283 MB, que expira en un día. Sin confirmar el límite de almacenamiento de Actions de la cuenta: si se llena, falla el build y no se publica nada.
