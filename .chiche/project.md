@@ -11,8 +11,8 @@ Dependencias runtime fijadas a versión exacta. Diseño UI: no aplica (CLI, TUI 
 | Acción | Comando | cwd | Estado | Duración típica | Notas |
 |---|---|---|---|---|---|
 | deps | `npm ci` | . | verificado 2026-11-05 | ~5s | un worktree nuevo no trae `node_modules` |
-| typecheck | `npm run typecheck` | . | verificado 2026-11-07 | ~2s | dos proyectos: raíz estricta y `extensions/` con su `tsconfig` |
-| test | `npm test` | . | verificado 2026-11-07 | ~8s | mock de omi-api en `test/helpers/mock-omi.ts`; `smoke.test.ts` usa Pi y procesos reales; incluye `extensions/**/*.test.ts`; requiere `python3` para el handler; los 3 smoke de packaging se corren aparte |
+| typecheck | `npm run typecheck` | . | verificado 2026-11-07 | ~2s | |
+| test | `npm test` | . | verificado 2026-11-07 | ~8s | mock de omi-api en `test/helpers/mock-omi.ts`; `smoke.test.ts` usa Pi y procesos reales; requiere `python3` para el handler; los 3 smoke de packaging se corren aparte |
 | empaquetado | `npm run test:packaging` | . | verificado 2026-11-07 | ~12s | requiere bun y `python3`; compila para el host, instala en un HOME temporal (también raíz personalizada), verifica versión/assets de Pi, entorno de procesos hijos y cancelar el prompt en un pty |
 | release local | `node scripts/build-release.ts --out <dir>` | . | verificado 2026-11-07 | ~25s | las cuatro plataformas; `--targets` acota |
 | plan de release | `node scripts/next-release.ts` | . | verificado 2026-11-08 | <1s | imprime `version=X.Y.Z`, o `version=` si nada empaquetado cambió desde el último tag |
@@ -50,10 +50,8 @@ Dependencias runtime fijadas a versión exacta. Diseño UI: no aplica (CLI, TUI 
 |---|---|---|
 | commits-convencionales | `tipo(scope)?: resumen`; tipos `feat`, `fix`, `refactor`, `test`, `docs`, `style`, `chore`, `ci`, `build`, `perf`, `revert` y `sdd` | gate `commits` |
 | typecheck | TypeScript sin errores | `npm run typecheck` sale con 0 |
-| max-lineas-archivo | 500 en `.ts` no-test; baseline nominal para los 13 archivos portados listados abajo | gate `max-lines`: excepción de adopción aprobada por el humano el 2026-11-08; techo por archivo sin crecimiento y ratchet al tamaño del base |
+| max-lineas-archivo | 500 en `.ts` no-test | gate `max-lines` |
 | coding-policies | `.sdd/coding-policies.md` de `chichex/omi`, secciones Clean Code y TypeScript | guia — sin gate: la juzga el reviewer |
-
-La baseline siguiente acepta deuda del port inicial, no afirma que esos módulos cumplan SRP. Sólo cubre los 13 paths y techos explícitos del `case`: ningún directorio queda excluido. Para cada uno rige el menor techo entre la baseline y su tamaño en `$BASE`, con piso 500. Al bajar a 500 líneas o eliminar un archivo, retirar su entrada; no ampliar la lista ni los techos sin otra decisión humana. Conservar `wc -l`, la convención ya adoptada; no cambiar el conteo para ocultar deuda.
 
 ```sh
 # commits: sin salida = PASS
@@ -61,33 +59,11 @@ git log --no-merges --format=%s "$BASE"..HEAD \
   | grep -Ev '^(feat|fix|refactor|test|docs|style|chore|ci|build|perf|revert|sdd)(\([a-z0-9-]+\))?!?: .+'
 
 # max-lines: BASE debe ser el commit/branch contra el que se revisa el cambio
-# baseline nominal aprobada; todo otro path sigue con techo 500
 fail=0
 git cat-file -e "$BASE^{commit}" 2>/dev/null || { echo "BASE inválido: $BASE"; exit 1; }
 for f in $(git diff --name-only --diff-filter=ACMR "$BASE"...HEAD -- '*.ts' | grep -Ev '\.test\.ts$'); do
-  limit=500
-  case "$f" in
-    extensions/artifacts/index.ts) limit=1015 ;;
-    extensions/artifacts/spec-publication.ts) limit=652 ;;
-    extensions/ask-user-question/index.ts) limit=900 ;;
-    extensions/github-issue-selector.ts) limit=560 ;;
-    extensions/github-issues.ts) limit=505 ;;
-    extensions/github-prs/index.ts) limit=560 ;;
-    extensions/grill-tools/index.ts) limit=1860 ;;
-    extensions/grill-tools/inventory.ts) limit=623 ;;
-    extensions/subagent/jobs.ts) limit=632 ;;
-    extensions/workflow-orchestrator/controller.ts) limit=637 ;;
-    extensions/workflow-orchestrator/direct-launch.ts) limit=511 ;;
-    extensions/workflow-orchestrator/lifecycle.ts) limit=824 ;;
-    extensions/workflow-resolution/index.ts) limit=1247 ;;
-  esac
-  if [ "$limit" -gt 500 ] && git cat-file -e "$BASE:$f" 2>/dev/null; then
-    previous=$(git show "$BASE:$f" | wc -l)
-    [ "$previous" -ge 500 ] || previous=500
-    [ "$previous" -ge "$limit" ] || limit=$previous
-  fi
   actual=$(wc -l < "$f")
-  [ "$actual" -le "$limit" ] || { echo "FALLA $f ($actual > $limit)"; fail=1; }
+  [ "$actual" -le 500 ] || { echo "FALLA $f ($actual > 500)"; fail=1; }
 done
 [ "$fail" -eq 0 ] && echo "MAX_LINES=PASS"
 ```
@@ -97,10 +73,8 @@ done
 - `skipLibCheck: true`: `@google/genai`, transitiva de Pi, declara tipos contra un peer opcional de MCP y contra globals del DOM. Sin esto `tsc` falla en `node_modules`. Lo documenta `tsconfig.json`.
 - `moduleResolution: Bundler`: bun empaqueta el binario, y los `.d.ts` de Pi importan JSON sin atributo.
 - `OMI_POLL_INTERVAL_MS`, `OMI_RELEASES_URL`, `OMI_INSTALL_BASE` y `OMI_PACKAGING_SMOKE`: overrides de harness para los tests.
-- `#extensions/*`, `extensions/embedded.d.ts` y `resolvePackageJsonImports: false`: cortan el typecheck estricto en el código portado. No usar `paths`: bun los respeta, empaqueta la declaración y las factories quedan `undefined`.
 - En macOS un binario de bun muere con exit 137 hasta refirmarlo ad hoc: lo hacen `install.sh` y `omi upgrade`, y decide el probe de arranque.
-- Los skills y extensiones vienen de `chichex/skills` en `553cf06`. El marcador `Chiche-Tracking` no se renombró: es formato de archivos existentes.
-- 2026-11-07, feedback: `OMI_HOME` es una raíz absoluta; un binario instalado infiere la raíz por su ubicación. `PI_PACKAGE_DIR` y `OMI_RUNTIME_DIR` pertenecen sólo al host y se quitan de bash, Runner y subagentes.
+- 2026-11-07, feedback: `OMI_HOME` es una raíz absoluta; un binario instalado infiere la raíz por su ubicación. `PI_PACKAGE_DIR` pertenece sólo al host y se quita de bash y Runner.
 - 2026-11-07, feedback: el bump de Pi verifica packaging en su propio workflow y deja el merge al humano; no depende de eventos de PR creados con `GITHUB_TOKEN`.
 - 2026-11-07, feedback: instalación privada con `gh` autenticado; upgrade con `GH_TOKEN`/`GITHUB_TOKEN` enviado sólo a la API de releases de este repo, nunca persistido.
 - 2026-11-08, preparación del land: el humano autorizó explícitamente la baseline nominal de 13 archivos sin crecimiento y resolver los dos hilos de seguridad como riesgos aceptados/diferidos a #5/#6, no como bugs corregidos. Autoriza sacar la capa 3 de Draft; el merge requiere la confirmación final del plan.
@@ -109,6 +83,8 @@ done
 - 2026-11-08, permiso de Actions: el humano autorizó `can_approve_pull_request_reviews: true` para que el bump abra su PR. El mismo permiso deja aprobar PRs: revisarlo si `main` empieza a exigir aprobaciones.
 - 2026-11-09, feedback: la oferta de importar Pi pregunta por grupo y Enter sólo copia lo inofensivo. Las credenciales, los ajustes con código externo y los que reemplazan a los de omi piden un sí explícito, porque Pi instala y carga `packages` al arrancar. `onboarding.json` guarda una decisión por grupo y `piImport` se sigue leyendo. `omi import pi` vuelve a preguntar.
 - 2026-11-09, feedback: instalación aislada. omi sólo lee configuración de `~/.omi/agent` y del proyecto (del cwd a la raíz del repo; sin repo, el cwd). Pi no expone flags para eso, así que `src/tui/isolation.ts` agrega `!~/.agents/skills/**` a los ajustes en cada arranque y corre con `--no-context-files` más una extensión que inyecta sólo el contexto permitido en `before_agent_start`. Falla cerrado: sin la extensión no hay contexto, y con ajustes ilegibles se arranca con `--no-skills`. El costo es que la sección Context de la TUI queda vacía: lo cubre un aviso al iniciar la sesión. La caja negra de `test/helpers/foreign-config.ts` mira el request real al proveedor, también con el binario compilado, y cubre los bumps de Pi.
+- 2026-11-09, feedback: instalación limpia. Una instalación nueva no trae skills ni extensiones ajenas: se borraron los 11 skills y las 11 extensiones portadas de `chichex/skills`, con el tema `claude-code` y sus docs. omi no depende de ningún paquete ni trae reemplazo. Sólo quedan `omi-tools`, `omi-runtime-shell` y `omi-isolated-context`. `/skill:ship` ya no autoriza stage: el guard de la TUI pregunta y recuerda el sí. Las credenciales del shell se sacan del host con `hideFromHost` y vuelven en `childEnvironment`, porque son del usuario y no de omi; `PROVIDER_CREDENTIALS` lo vigila un test que sondea a cada proveedor de Pi, así que un bump que sume una variable falla ahí. Rompe `GEMINI_API_KEY=… omi -p` a propósito.
+- 2026-11-09, feedback: importar duplica. El criterio es importar, borrar `~/.pi` y que omi siga igual. El grupo Recursos copia todo lo de `~/.pi/agent` salvo lista negra, porque los paquetes guardan configuración propia (`claude-bridge.json`). Las rutas hacia `~/.pi` de los ajustes quedan relativas a `~/.omi/agent`, y las de afuera no se tocan. Quien ya pasó por el onboarding no recibe la pregunta nueva al actualizar: la tiene en `omi import pi`.
 - 2026-11-09, Bun: `rl.question` queda pendiente al cerrar el readline. Sin `askOrCancel`, Ctrl+D colgaba el binario y Ctrl+C pedía dos pulsaciones. Con Node no se reproduce: lo cubre el smoke de empaquetado con un pty real.
 
 ## Gaps
@@ -116,8 +92,9 @@ done
 - Depende de `chichex/omi#140` para funcionar contra producción.
 - Sin cobertura automática contra una `omi-api` real: los tests usan un doble que copia el contrato.
 - Los guardrails locales no aíslan a un agente con bash y acceso al Bearer. Riesgos aceptados para este land y diferidos por decisión humana: aislamiento CLI en #5 y confianza de aprobación MCP en #6. Sus issues siguen abiertos; resolver los hilos originales no constituye una corrección de seguridad.
-- `/skill:init --update` migra `.sdd/` a `.omi/`, pero no `.chiche/` a `.omi/`. Este repo sigue con `.chiche/project.md`, que se lee por compatibilidad.
 - El contrato de `/version` se verifica estático al publicar (`git grep`): OMI no lo valida.
 - Sin confirmar si el proveedor invalida el refresh token viejo al copiar `auth.json` con OAuth: el código de Pi guarda el nuevo sólo en su archivo, y probarlo exige renovar un token real. Por eso el aviso dice «puede».
-- El aislamiento cubre la configuración de agentes, no todo el home. Fuera de alcance: variables de entorno del shell, credenciales estándar de SDKs y `~/.cache/huggingface/token`, que la extensión `llama` de Pi lee al usar Hugging Face. Sin repo git, Pi sube hasta `/` buscando `.agents/skills`; esas carpetas piden confianza y los ajustes globales no las excluyen.
+- El aislamiento cubre la configuración de agentes, no todo el home. Fuera de alcance: `~/.cache/huggingface/token`, que la extensión `llama` de Pi lee al usar Hugging Face. Sin repo git, Pi sube hasta `/` buscando `.agents/skills`; esas carpetas piden confianza y los ajustes globales no las excluyen.
+- `models.json` o `auth.json` con una referencia a una variable oculta, como `$GEMINI_API_KEY`, no la resuelven: el valor tiene que estar en el archivo o venir de un comando.
+- Importar no cubre symlinks absolutos hacia `~/.pi`, que siguen apuntando ahí, ni rutas de los ajustes fuera de `~/.pi/agent`, como `../otro`, que no se copian. Tampoco cubre paquetes de terceros con `~/.pi` escrito en su código, como `pi-antigravity-bridge`: siguen leyendo y escribiendo ahí.
 - `release.yml` pasa los binarios entre jobs como un artifact de 283 MB, que expira en un día. Sin confirmar el límite de almacenamiento de Actions de la cuenta: si se llena, falla el build y no se publica nada.
