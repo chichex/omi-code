@@ -16,12 +16,12 @@ export interface Commit {
 	files: string[];
 }
 
-const PACKAGED_DIRS = ["src/", "bin/", "extensions/", "skills/", "themes/"];
+const PACKAGED_DIRS = ["src/", "bin/"];
 const PACKAGED_FILES = new Set(["package.json", "package-lock.json", "tsconfig.json", "install.sh", "scripts/build-release.ts"]);
 const VERSION_TAG = /^v(\d+)\.(\d+)\.(\d+)$/;
 const LOG_FORMAT = "%x1e%B%x1f";
 
-/** Si el path cambia lo que recibe el usuario. Las skills son Markdown, pero van en el binario. */
+/** Si el path cambia lo que recibe el usuario. */
 export function isPackaged(path: string): boolean {
 	if (path.endsWith(".test.ts")) return false;
 	return PACKAGED_FILES.has(path) || PACKAGED_DIRS.some((dir) => path.startsWith(dir));

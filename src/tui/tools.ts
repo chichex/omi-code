@@ -7,16 +7,8 @@ import { processRunner, type Runner } from "../core/exec.ts";
 import { tuiGuard } from "../guardrails/surfaces.ts";
 import type { OmiTool, ToolRuntime } from "../tools/types.ts";
 
-const SHIP_COMMAND = /^\/skill:ship(\s|$)/;
-
 export function registerCatalogTools(pi: ExtensionAPI, catalog: readonly OmiTool[], io: Io, runner: Runner = processRunner): void {
-	// Un humano que escribe /skill:ship autoriza stage. Un mensaje del modelo o de otra
-	// extensión no: sólo vale lo que entra por la terminal.
 	const session = { stageAuthorized: false };
-	pi.on("input", (event) => {
-		if (event.source === "interactive" && SHIP_COMMAND.test(event.text.trim())) session.stageAuthorized = true;
-		return { action: "continue" };
-	});
 
 	for (const tool of catalog) {
 		pi.registerTool({

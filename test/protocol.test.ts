@@ -16,7 +16,7 @@ test("protocolo_define la URL y el override de la API", () => {
 	assert.equal(protocol.API_URL_ENV, "OMI_API_URL");
 });
 
-test("protocolo_define variables, headers, archivos y rutas SDD", () => {
+test("protocolo_define variables, headers y archivos", () => {
 	assert.deepEqual(
 		{
 			env: [protocol.ENV_PORT, protocol.ENV_OMI_ENVIRONMENT, protocol.ENV_OMI_VERSION, protocol.RESERVED_ENV_PREFIX],
@@ -24,7 +24,6 @@ test("protocolo_define variables, headers, archivos y rutas SDD", () => {
 			trigger: protocol.ENV_TRIGGER_SECRET,
 			headers: [protocol.HEADER_JOB, protocol.HEADER_SCHEDULED_AT, protocol.HEADER_ATTEMPT, protocol.HEADER_TIMESTAMP, protocol.HEADER_SIGNATURE],
 			files: [protocol.PROJECT_LINK_FILE, protocol.OMI_HOME_DIR, protocol.CREDENTIALS_FILE],
-			sdd: [protocol.SDD_ARTIFACT_DIR, ...protocol.SDD_LEGACY_ARTIFACT_DIRS],
 		},
 		{
 			env: ["PORT", "OMI_ENVIRONMENT", "OMI_VERSION", "OMI_"],
@@ -32,7 +31,6 @@ test("protocolo_define variables, headers, archivos y rutas SDD", () => {
 			trigger: "OMI_TRIGGER_SECRET",
 			headers: ["X-Omi-Job", "X-Omi-Scheduled-At", "X-Omi-Attempt", "X-Omi-Timestamp", "X-Omi-Signature"],
 			files: [".omi/project.json", ".omi", "credentials.json"],
-			sdd: [".omi", ".chiche", ".sdd"],
 		},
 	);
 });

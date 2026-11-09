@@ -51,11 +51,10 @@ test("onboarding_importa de Pi sin mutar ~/.pi/agent cuando el usuario acepta", 
 	assert.deepEqual(await snapshot(piAgentDir(home)), before);
 });
 
-test("onboarding_quita chichex/skills de packages porque omi ya lo embebe", async (t) => {
+test("onboarding_conserva todos los paquetes: omi no trae ninguno de fábrica", async (t) => {
 	const home = await homeWithPi(t);
 	await runPiImportOnboarding(testIo({ homeDir: home, interactive: true, answers: ["s", "s"] }));
-	const imported = JSON.parse(await readFile(join(agentDir(home), "settings.json"), "utf8"));
-	assert.deepEqual(imported, { ...settings, packages: ["npm:pi-claude-bridge"] });
+	assert.deepEqual(JSON.parse(await readFile(join(agentDir(home), "settings.json"), "utf8")), settings);
 });
 
 test("onboarding_importa sólo los archivos que existen en Pi", async (t) => {
@@ -101,19 +100,22 @@ test("onboarding ofrece importar después de un arranque no interactivo que dej�
 	assert.match(await readFile(join(agentDir(home), "auth.json"), "utf8"), /sk-falsa/);
 });
 
-test("onboarding normaliza las fuentes absorbidas y conserva la base de paths locales", async (t) => {
+test("onboarding deja relativo a omi todo lo que apuntaba a Pi y no toca lo de afuera", async (t) => {
 	const home = await homeWithPi(t);
-	const packages = [
-		{ source: "git:github.com/chichex/skills", skills: [] },
-		"git:github.com/chichex/chiche@v2", "https://github.com/chichex/skills.git@main",
-		"https://github.com/chichex/chiche", "git:git@github.com:chichex/chiche.git@feature/x",
-		"./pi-tools", { source: "../other-tools", extensions: [] }, "npm:unrelated",
-	];
-	await writeFile(join(piAgentDir(home), "settings.json"), `\uFEFF${JSON.stringify({ packages, extensions: ["./ext.ts"] })}`);
+	const pi = piAgentDir(home);
+	await writeFile(join(pi, "settings.json"), `\uFEFF${JSON.stringify({
+		packages: [join(pi, "absoluto"), "~/.pi/agent/con-tilde", { source: join(pi, "objeto"), extensions: [] }, "./relativo", "../afuera", "npm:unrelated", "git:github.com/fake/paquete"],
+		extensions: ["~/.pi/agent/a.ts", "/opt/mia.ts", "~/mia.ts"],
+		skills: [join(home, ".pi/otro"), "!~/.pi/agent/skills/no", "+./si"],
+	})}`);
 	await runPiImportOnboarding(testIo({ homeDir: home, interactive: true, answers: ["s", "s"] }));
-	const imported = JSON.parse(await readFile(join(agentDir(home), "settings.json"), "utf8"));
-	assert.deepEqual(imported.packages, [join(piAgentDir(home), "pi-tools"), { source: join(home, ".pi/other-tools"), extensions: [] }, "npm:unrelated"]);
-	assert.deepEqual(imported.extensions, [join(piAgentDir(home), "ext.ts")]);
+	const raw = await readFile(join(agentDir(home), "settings.json"), "utf8");
+	assert.deepEqual(JSON.parse(raw), {
+		packages: ["./absoluto", "./con-tilde", { source: "./objeto", extensions: [] }, "./relativo", "../afuera", "npm:unrelated", "git:github.com/fake/paquete"],
+		extensions: ["./a.ts", "/opt/mia.ts", "~/mia.ts"],
+		skills: ["../otro", "!./skills/no", "+./si"],
+	});
+	assert.doesNotMatch(raw, /\.pi/);
 });
 
 test("onboarding tolera temporales de una importación interrumpida", async (t) => {
@@ -247,7 +249,7 @@ test("onboarding: Enter no copia credenciales ni ajustes con paquetes, pero sí 
 });
 
 test("onboarding: Enter copia ajustes sin paquetes", async (t) => {
-	const home = await piWithSettings(t, JSON.stringify({ theme: "dark", packages: ["git:github.com/chichex/chiche"] }));
+	const home = await piWithSettings(t, JSON.stringify({ theme: "dark" }));
 	const io = testIo({ homeDir: home, interactive: true, env: PLAIN, answers: [""] });
 	assert.deepEqual((await runPiImportOnboarding(io)).files, ["settings.json"]);
 	assert.deepEqual(io.prompts, ["¿Copiar ajustes? [S/n] "]);
@@ -281,15 +283,14 @@ test("onboarding sólo acepta un sí explícito: lo que no entiende no copia", a
 	}
 });
 
-test("onboarding avisa qué paquetes externos instalaría, sin contar los que omi ya embebe", async (t) => {
+test("onboarding avisa qué paquetes externos instalaría", async (t) => {
 	const home = await piWithSettings(t, JSON.stringify({
-		packages: ["git:github.com/chichex/chiche", "npm:pi-claude-bridge", { source: "npm:otro" }],
+		packages: ["git:github.com/fake/paquete", "npm:pi-claude-bridge", { source: "npm:otro" }],
 		extensions: ["/opt/mia.ts"],
 	}));
 	const io = testIo({ homeDir: home, interactive: true, env: PLAIN, answers: ["n"] });
 	await runPiImportOnboarding(io);
-	assert.match(io.errors(), /^ {16}! Instala y carga: npm:pi-claude-bridge, npm:otro, \/opt\/mia\.ts$/m);
-	assert.doesNotMatch(io.errors(), /chichex/);
+	assert.match(io.errors(), /^ {16}! Instala y carga: git:github\.com\/fake\/paquete, npm:pi-claude-bridge, npm:otro, \/opt\/mia\.ts$/m);
 });
 
 test("onboarding avisa de la sesión compartida sólo con OAuth y nunca muestra secretos", async (t) => {
@@ -404,4 +405,80 @@ test("omi import pi no sobrescribe un marker ilegible", async (t) => {
 	assert.equal(await run(["import", "pi"], io), 1);
 	assert.match(io.errors(), /onboarding\.json/);
 	assert.equal(await readFile(join(home, ".omi/onboarding.json"), "utf8"), "{nope");
+});
+
+async function addResources(home: string): Promise<void> {
+	const pi = piAgentDir(home);
+	await mkdir(join(pi, "skills/de-pi"), { recursive: true });
+	await writeFile(join(pi, "skills/de-pi/SKILL.md"), "de Pi");
+	await writeFile(join(pi, "AGENTS.md"), "instrucciones de Pi");
+}
+
+test("onboarding pide un sí explícito para los recursos y dice qué traen", async (t) => {
+	const home = await homeWithPi(t);
+	await addResources(home);
+	const io = testIo({ homeDir: home, interactive: true, env: PLAIN, answers: ["n", "n", ""] });
+	await runPiImportOnboarding(io);
+	assert.match(io.errors(), /^  Recursos      AGENTS\.md, skills$/m);
+	assert.match(io.errors(), /^ {16}! Pueden traer código que se carga al arrancar\.$/m);
+	assert.equal(io.prompts.at(-1), "¿Copiar recursos? [s/N] ");
+	await assert.rejects(stat(join(agentDir(home), "skills")));
+});
+
+test("onboarding copia los recursos sin mutar Pi", async (t) => {
+	const home = await homeWithPi(t);
+	await addResources(home);
+	const io = testIo({ homeDir: home, interactive: true, answers: ["n", "n", "s"] });
+	assert.deepEqual((await runPiImportOnboarding(io)).files, ["AGENTS.md", "skills"]);
+	assert.equal(await readFile(join(agentDir(home), "skills/de-pi/SKILL.md"), "utf8"), "de Pi");
+	assert.equal(await readFile(join(piAgentDir(home), "skills/de-pi/SKILL.md"), "utf8"), "de Pi");
+	assert.equal(await readFile(join(agentDir(home), "AGENTS.md"), "utf8"), "instrucciones de Pi");
+});
+
+test("omi import pi suma los recursos que faltan sin pisar los de omi", async (t) => {
+	const home = await tempDir(t);
+	await addResources(home);
+	await writeFile(join(piAgentDir(home), "skills/de-pi/extra.md"), "nuevo de Pi");
+	await mkdir(join(agentDir(home), "skills/de-pi"), { recursive: true });
+	await writeFile(join(agentDir(home), "skills/de-pi/SKILL.md"), "editado en omi");
+	await writeFile(join(agentDir(home), "AGENTS.md"), "instrucciones de omi");
+	const io = testIo({ homeDir: home, interactive: true, env: PLAIN, answers: ["s"] });
+	assert.equal(await run(["import", "pi"], io), 0);
+	assert.doesNotMatch(io.errors(), /AGENTS\.md/);
+	assert.equal(await readFile(join(agentDir(home), "skills/de-pi/SKILL.md"), "utf8"), "editado en omi");
+	assert.equal(await readFile(join(agentDir(home), "skills/de-pi/extra.md"), "utf8"), "nuevo de Pi");
+	assert.equal(await readFile(join(agentDir(home), "AGENTS.md"), "utf8"), "instrucciones de omi");
+});
+
+test("onboarding no pregunta por recursos a quien ya lo respondió: actualizar omi no molesta", async (t) => {
+	const home = await homeWithPi(t);
+	await addResources(home);
+	await mkdir(join(home, ".omi"), { recursive: true });
+	await writeFile(join(home, ".omi/onboarding.json"), '{"credentialsImport":"declined","settingsImport":"declined","grillImport":"declined"}');
+	const io = testIo({ homeDir: home, interactive: true });
+	assert.equal((await runPiImportOnboarding(io)).status, "skipped");
+	assert.deepEqual(io.prompts, []);
+	const again = testIo({ homeDir: home, interactive: true, env: PLAIN, answers: ["n", "n", "s"] });
+	assert.equal(await run(["import", "pi"], again), 0);
+	assert.equal(again.prompts.at(-1), "¿Copiar recursos? [s/N] ");
+	assert.equal((await stat(join(agentDir(home), "skills/de-pi/SKILL.md"))).isFile(), true);
+});
+
+test("onboarding lleva mcp-auth.json con las credenciales", async (t) => {
+	const home = await homeWithPi(t);
+	await writeFile(join(piAgentDir(home), "mcp-auth.json"), '{"servidor":{"token":"secreto"}}', { mode: 0o600 });
+	const io = testIo({ homeDir: home, interactive: true, env: PLAIN, answers: ["s", "n"] });
+	assert.deepEqual((await runPiImportOnboarding(io)).files, ["auth.json", "models.json", "mcp-auth.json"]);
+	assert.equal((await stat(join(agentDir(home), "mcp-auth.json"))).mode & 0o777, 0o600);
+	assert.doesNotMatch(io.errors(), /secreto/);
+});
+
+test("onboarding no lleva historial, cachés ni decisiones de Pi", async (t) => {
+	const home = await homeWithPi(t);
+	for (const name of ["trust.json", "models-store.json", "crashes.json", "settings.json.bak-1", "pi-debug.log"]) await writeFile(join(piAgentDir(home), name), "{}");
+	for (const name of ["sessions", "backups", "tmp"]) await mkdir(join(piAgentDir(home), name));
+	const io = testIo({ homeDir: home, interactive: true, answers: ["n", "n"] });
+	await runPiImportOnboarding(io);
+	assert.equal(io.prompts.length, 2);
+	assert.doesNotMatch(io.errors(), /Recursos/);
 });

@@ -1,7 +1,7 @@
 // Caja negra del aislamiento: siembra configuración ajena y captura lo que omi le manda al modelo.
 
 import { spawn } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { dirname, join } from "node:path";
@@ -51,6 +51,37 @@ export async function seedConfig(home: string, agent: string): Promise<string> {
 	return cwd;
 }
 
+function extensionWithTool(name: string): string {
+	return `export default function (pi) { pi.registerTool({ name: "${name}", label: "x", description: "x", parameters: { type: "object", properties: {} }, execute: async () => ({ content: [], details: undefined }) }); }\n`;
+}
+
+/** Lo que tiene que seguir llegando al modelo después de importar y borrar ~/.pi. */
+export const PI_MARKS = ["MARCA_CONTEXTO", "MARCA_SKILL", "MARCA_SKILL_POR_RUTA", "MARCA_SYMLINK", "marca_extension", "marca_extension_por_ruta", "MARCA_PAQUETE"] as const;
+
+/** Un Pi con de todo: rutas en los ajustes, un paquete instalado, un symlink y lo que no se copia. */
+export async function seedPi(home: string): Promise<void> {
+	const pi = join(home, ".pi/agent");
+	await put(join(pi, "settings.json"), JSON.stringify({
+		packages: ["git:github.com/fake/paquete"],
+		extensions: ["~/.pi/agent/sueltas/por-ruta.ts"],
+		skills: [join(pi, "sueltas/skills")],
+	}));
+	await put(join(pi, "AGENTS.md"), "MARCA_CONTEXTO");
+	await put(join(pi, "skills/de-pi/SKILL.md"), skill("de-pi", "MARCA_SKILL"));
+	await put(join(pi, "reales/enlazado/SKILL.md"), skill("enlazado", "MARCA_SYMLINK"));
+	await symlink("../reales/enlazado", join(pi, "skills/enlazado"));
+	await put(join(pi, "sueltas/skills/por-ruta/SKILL.md"), skill("por-ruta", "MARCA_SKILL_POR_RUTA"));
+	await put(join(pi, "extensions/de-pi.ts"), extensionWithTool("marca_extension"));
+	await put(join(pi, "sueltas/por-ruta.ts"), extensionWithTool("marca_extension_por_ruta"));
+	const repo = join(pi, "git/github.com/fake/paquete");
+	await put(join(repo, "package.json"), JSON.stringify({ name: "paquete", pi: { skills: ["./skills"] } }));
+	await put(join(repo, "skills/de-paquete/SKILL.md"), skill("de-paquete", "MARCA_PAQUETE"));
+	await put(join(pi, "sessions/vieja.jsonl"), "{}");
+	await put(join(pi, "backups/viejo.json"), "{}");
+	await put(join(pi, "trust.json"), "{}");
+	await put(join(pi, "settings.json.bak-1"), "{}");
+}
+
 function completion(): string {
 	const chunk = (delta: unknown, finish: string | null): string =>
 		`data: ${JSON.stringify({ id: "1", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
@@ -63,6 +94,32 @@ export interface OmiProcess {
 	cwd: string;
 	agent: string;
 	env: NodeJS.ProcessEnv;
+}
+
+/** Manda un comando por RPC al omi real y devuelve el `data` de su respuesta. */
+export function rpc(omi: Omit<OmiProcess, "agent">, request: { id: string; type: string; [key: string]: unknown }): Promise<unknown> {
+	return new Promise((resolve, reject) => {
+		const child = spawn(omi.command, [...(omi.args ?? []), "--mode", "rpc", "--no-session"], { cwd: omi.cwd, env: omi.env, stdio: ["pipe", "pipe", "pipe"] });
+		let output = "";
+		let stderr = "";
+		const timeout = setTimeout(() => { child.kill("SIGKILL"); reject(new Error(`RPC no respondió: ${stderr}`)); }, 20000);
+		child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
+		child.stdout.on("data", (chunk: Buffer) => {
+			output += chunk.toString("utf8");
+			for (const line of output.split("\n").slice(0, -1)) {
+				if (!line.startsWith("{")) continue;
+				const message = JSON.parse(line) as { id?: unknown; type?: string; success?: boolean; data?: unknown; error?: string };
+				if (message.type !== "response" || message.id !== request.id) continue;
+				clearTimeout(timeout);
+				child.kill();
+				if (message.success === false) reject(new Error(message.error));
+				else resolve(message.data);
+				return;
+			}
+		});
+		child.on("error", (error) => { clearTimeout(timeout); reject(error); });
+		child.stdin.write(`${JSON.stringify(request)}\n`);
+	});
 }
 
 /** Arranca omi contra un proveedor local y devuelve el body del request que recibió. */

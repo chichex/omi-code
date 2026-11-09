@@ -6,7 +6,6 @@ import { agentDir, sourcePiAgentDir as piAgentDir } from "../src/core/paths.ts";
 import { USER_SKILLS_EXCLUSION } from "../src/tui/isolation.ts";
 import { launchTui, type PiMain } from "../src/tui/launch.ts";
 import { CATALOG } from "../src/tools/catalog.ts";
-import { embeddedExtensions } from "../src/tui/extensions.ts";
 import { registerCatalogTools } from "../src/tui/tools.ts";
 import { tempDir, testIo } from "./helpers/io.ts";
 import { linkedProject } from "./helpers/project.ts";
@@ -26,7 +25,6 @@ function fakePi(calls: Call[]): PiMain {
 		for (const extension of options.extensionFactories ?? []) {
 			if (typeof extension === "function") continue;
 			names.push(extension.name);
-			// Las portadas necesitan el runtime real de Pi: las prueba embedded-extensions.test.ts.
 			if (extension.name !== "omi-tools") continue;
 			const { factory } = extension;
 			await factory({ registerTool: (tool: { name: string }) => tools.push(tool.name), on: () => {} } as never);
@@ -41,7 +39,7 @@ for (const exitCode of [1, 2]) {
 		t.after(() => { process.exitCode = previous; });
 		const home = await tempDir(t);
 		const result = await launchTui([], testIo({ homeDir: home }), {
-			skillsDir: await tempDir(t), piMain: async () => { process.exitCode = exitCode; },
+			piMain: async () => { process.exitCode = exitCode; },
 		});
 		assert.equal(result, exitCode);
 	});
@@ -50,7 +48,7 @@ for (const exitCode of [1, 2]) {
 test("launchTui_usa ~/.omi/agent como configuración global de Pi", async (t) => {
 	const home = await tempDir(t);
 	const calls: Call[] = [];
-	const code = await launchTui(["--continue"], testIo({ homeDir: home }), { piMain: fakePi(calls), skillsDir: await tempDir(t) });
+	const code = await launchTui(["--continue"], testIo({ homeDir: home }), { piMain: fakePi(calls) });
 	assert.equal(code, 0);
 	assert.equal(calls[0]?.agentDirEnv, agentDir(home));
 	assert.equal((await stat(agentDir(home))).isDirectory(), true);
@@ -60,45 +58,23 @@ test("launchTui_usa ~/.omi/agent como configuración global de Pi", async (t) =>
 test("launchTui_precarga las tools de OMI del catálogo", async (t) => {
 	const home = await tempDir(t);
 	const calls: Call[] = [];
-	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi(calls), skillsDir: await tempDir(t) });
+	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi(calls) });
 	assert.deepEqual(calls[0]?.tools, CATALOG.map((tool) => tool.name));
 	assert.ok(calls[0]?.tools.includes("omi_link_project"));
 });
 
-test("launchTui_pasa a Pi cada skill embebido con --skill", async (t) => {
-	const home = await tempDir(t);
-	const skills = await tempDir(t);
-	for (const name of ["grill", "tdd"]) {
-		await mkdir(join(skills, name));
-		await writeFile(join(skills, name, "SKILL.md"), `---\nname: ${name}\ndescription: d\n---\n`);
-	}
-	await writeFile(join(skills, "README.md"), "no es un skill");
-	const calls: Call[] = [];
-	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi(calls), skillsDir: skills });
-	assert.deepEqual(calls[0]?.args.slice(0, 4), ["--skill", join(skills, "grill"), "--skill", join(skills, "tdd")]);
-});
-
-test("launchTui_precarga las extensiones embebidas y el theme", async (t) => {
+test("launchTui_una instalación nueva sólo trae lo de omi", async (t) => {
 	const home = await tempDir(t);
 	const calls: Call[] = [];
-	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi(calls), skillsDir: await tempDir(t) });
-	assert.deepEqual(calls[0]?.extensions, ["omi-tools", "omi-isolated-context", ...embeddedExtensions().map((extension) => (extension as { name: string }).name)]);
-	const theme = calls[0]?.args.indexOf("--theme") ?? -1;
-	assert.ok(theme >= 0);
-	assert.match(calls[0]?.args[theme + 1] ?? "", /themes$/);
-});
-
-test("launchTui registra el guardrail de OMI antes de cualquier transform de input", async (t) => {
-	const calls: Call[] = [];
-	await launchTui([], testIo({ homeDir: await tempDir(t) }), { piMain: fakePi(calls), skillsDir: await tempDir(t) });
-	const names = calls[0]?.extensions ?? [];
-	assert.ok(names.indexOf("omi-tools") >= 0 && names.indexOf("omi-tools") < names.indexOf("inline-skill-autocomplete"));
+	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi(calls) });
+	assert.deepEqual(calls[0]?.extensions, ["omi-tools", "omi-runtime-shell", "omi-isolated-context"]);
+	assert.deepEqual(calls[0]?.args, ["--no-context-files"]);
 });
 
 test("launchTui_excluye ~/.agents/skills y arma el contexto él mismo", async (t) => {
 	const home = await tempDir(t);
 	const calls: Call[] = [];
-	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi(calls), skillsDir: await tempDir(t) });
+	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi(calls) });
 	const settings = JSON.parse(await readFile(join(agentDir(home), "settings.json"), "utf8")) as { skills: string[] };
 	assert.deepEqual(settings.skills, [USER_SKILLS_EXCLUSION]);
 	assert.ok(calls[0]?.args.includes("--no-context-files"));
@@ -111,14 +87,14 @@ test("launchTui_vuelve a excluir después de importar los ajustes de Pi", async 
 	await mkdir(piAgentDir(home), { recursive: true });
 	await writeFile(join(piAgentDir(home), "settings.json"), '{"theme":"pi"}');
 	const calls: Call[] = [];
-	await launchTui([], testIo({ homeDir: home, interactive: true, answers: ["s"] }), { piMain: fakePi(calls), skillsDir: await tempDir(t) });
+	await launchTui([], testIo({ homeDir: home, interactive: true, answers: ["s"] }), { piMain: fakePi(calls) });
 	assert.deepEqual(JSON.parse(await readFile(join(agentDir(home), "settings.json"), "utf8")), { theme: "pi", skills: [USER_SKILLS_EXCLUSION] });
 });
 
 for (const flag of ["--no-context-files", "-nc"]) {
 	test(`launchTui_con ${flag} no agrega contexto propio`, async (t) => {
 		const calls: Call[] = [];
-		await launchTui([flag], testIo({ homeDir: await tempDir(t) }), { piMain: fakePi(calls), skillsDir: await tempDir(t) });
+		await launchTui([flag], testIo({ homeDir: await tempDir(t) }), { piMain: fakePi(calls) });
 		assert.ok(!calls[0]?.extensions.includes("omi-isolated-context"));
 	});
 }
@@ -129,7 +105,7 @@ test("launchTui_con ajustes ilegibles avisa y arranca sin skills externos", asyn
 	await writeFile(join(agentDir(home), "settings.json"), "{ roto");
 	const calls: Call[] = [];
 	const io = testIo({ homeDir: home });
-	await launchTui([], io, { piMain: fakePi(calls), skillsDir: await tempDir(t) });
+	await launchTui([], io, { piMain: fakePi(calls) });
 	assert.ok(calls[0]?.args.includes("--no-skills"));
 	assert.match(io.errors(), /settings\.json/);
 	assert.equal(await readFile(join(agentDir(home), "settings.json"), "utf8"), "{ roto");
@@ -141,7 +117,7 @@ test("launchTui_ofrece importar Pi antes de arrancar", async (t) => {
 	await writeFile(join(piAgentDir(home), "auth.json"), "{}");
 	const calls: Call[] = [];
 	const io = testIo({ homeDir: home, interactive: true, answers: ["s"] });
-	await launchTui([], io, { piMain: fakePi(calls), skillsDir: await tempDir(t) });
+	await launchTui([], io, { piMain: fakePi(calls) });
 	assert.equal(io.prompts.length, 1);
 	assert.equal((await stat(join(agentDir(home), "auth.json"))).isFile(), true);
 	assert.equal(calls.length, 1);
@@ -204,38 +180,6 @@ test("registerCatalogTools_sin UI rechaza con el código y el hint legibles para
 	assert.deepEqual(linked.mutations(), []);
 });
 
-test("registerCatalogTools_escribir /skill:ship autoriza stage en la sesión", async (t) => {
-	const linked = await linkedProject(t);
-	const { pi, tools, handlers } = fakeExtensionApi();
-	registerCatalogTools(pi, CATALOG, linked.io(), fakeRunner());
-	const { seen, context } = uiContext(false);
-	handlers.get("input")?.({ type: "input", text: "/skill:ship 1.2.0", source: "interactive" });
-	await tools.get("omi_env_set")?.execute("1", stageEnv, undefined, undefined, context);
-	assert.equal(seen.length, 0);
-	assert.equal(linked.mutations().length, 1);
-});
-
-test("registerCatalogTools_un /skill:ship que no viene del humano no autoriza", async (t) => {
-	const linked = await linkedProject(t);
-	const { pi, tools, handlers } = fakeExtensionApi();
-	registerCatalogTools(pi, CATALOG, linked.io(), fakeRunner());
-	const { seen, context } = uiContext(false);
-	handlers.get("input")?.({ type: "input", text: "/skill:ship", source: "extension" });
-	await assert.rejects(tools.get("omi_env_set")?.execute("1", stageEnv, undefined, undefined, context) ?? Promise.resolve(), /guardrail_declined/);
-	assert.equal(seen.length, 1);
-});
-
-test("registerCatalogTools_ship no autoriza prod", async (t) => {
-	const linked = await linkedProject(t);
-	const { pi, tools, handlers } = fakeExtensionApi();
-	registerCatalogTools(pi, CATALOG, linked.io(), fakeRunner());
-	const { seen, context } = uiContext(false);
-	handlers.get("input")?.({ type: "input", text: "/skill:ship", source: "interactive" });
-	const prodEnv = { ...stageEnv, environment: "prod" };
-	await assert.rejects(tools.get("omi_env_set")?.execute("1", prodEnv, undefined, undefined, context) ?? Promise.resolve(), /guardrail_declined/);
-	assert.equal(seen.length, 1);
-});
-
 test("registerCatalogTools_transmite el progreso como actualización de la tool", async (t) => {
 	const linked = await linkedProject(t);
 	linked.workloads.logFrames.push("data: uno\n\n", "data: dos\n\n");
@@ -269,34 +213,33 @@ test("launchTui_marca la sesión como agéntica para los procesos hijos", async 
 	const home = await tempDir(t);
 	const calls: Call[] = [];
 	delete process.env.OMI_AGENT_SESSION;
-	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi(calls), skillsDir: await tempDir(t) });
+	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi(calls) });
 	assert.equal(process.env.OMI_AGENT_SESSION, "1");
 	delete process.env.OMI_AGENT_SESSION;
 });
 
-test("launchTui_en un binario instalado toma skills y assets de ~/.omi/runtime", async (t) => {
+function restorePackageDir(t: { after(fn: () => void): void }): void {
+	const previous = process.env.PI_PACKAGE_DIR;
+	t.after(() => {
+		if (previous === undefined) delete process.env.PI_PACKAGE_DIR;
+		else process.env.PI_PACKAGE_DIR = previous;
+	});
+}
+
+test("launchTui_en un binario instalado toma los assets de ~/.omi/runtime", async (t) => {
+	restorePackageDir(t);
 	const home = await tempDir(t);
 	const runtime = join(home, ".omi/runtime");
-	await mkdir(join(runtime, "skills/ship"), { recursive: true });
-	await writeFile(join(runtime, "skills/ship/SKILL.md"), "---\nname: ship\ndescription: d\n---\n");
-	const calls: Call[] = [];
-	const previous = { package: process.env.PI_PACKAGE_DIR, runtime: process.env.OMI_RUNTIME_DIR };
-	t.after(() => {
-		for (const [name, value] of [["PI_PACKAGE_DIR", previous.package], ["OMI_RUNTIME_DIR", previous.runtime]] as const) {
-			if (value === undefined) delete process.env[name];
-			else process.env[name] = value;
-		}
-	});
-	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi(calls), compiled: true });
-	assert.deepEqual(calls[0]?.args, ["--skill", join(runtime, "skills/ship"), "--no-context-files"]);
+	await mkdir(join(runtime, "theme"), { recursive: true });
+	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi([]), compiled: true });
 	assert.equal(process.env.PI_PACKAGE_DIR, runtime);
-	assert.equal(process.env.OMI_RUNTIME_DIR, runtime);
 });
 
 test("launchTui_en desarrollo ignora una instalación vieja en ~/.omi/runtime", async (t) => {
+	restorePackageDir(t);
+	delete process.env.PI_PACKAGE_DIR;
 	const home = await tempDir(t);
-	await mkdir(join(home, ".omi/runtime/skills/viejo"), { recursive: true });
-	const calls: Call[] = [];
-	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi(calls), compiled: false });
-	assert.ok(!calls[0]?.args.some((arg) => arg.includes(".omi/runtime")));
+	await mkdir(join(home, ".omi/runtime/theme"), { recursive: true });
+	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi([]), compiled: false });
+	assert.equal(process.env.PI_PACKAGE_DIR, undefined);
 });

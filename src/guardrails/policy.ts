@@ -32,7 +32,7 @@ export interface Guard {
 	readonly surface: "tui" | "cli" | "mcp";
 	/** Hay una forma de preguntarle a un humano ahora. */
 	readonly canAsk: boolean;
-	/** La sesión ya autorizó operar stage: un `ship` o un sí previo. */
+	/** La sesión ya autorizó operar stage: un flag o un sí previo. */
 	readonly stageAuthorized: boolean;
 	/** Aprobación explícita previa a la operación, como `--yes`. */
 	readonly preApproved: boolean;

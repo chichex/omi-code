@@ -1,11 +1,9 @@
-// Cara TUI: arranca Pi con la configuración en ~/.omi y las tools y skills de OMI cargadas.
+// Cara TUI: arranca Pi con la configuración en ~/.omi y las tools de OMI cargadas.
 
-import { mkdir, readdir, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir } from "node:fs/promises";
 import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { Io } from "../cli/io.ts";
 import { EXIT_OK } from "../core/errors.ts";
-import { isDirectory } from "../core/files.ts";
 import { agentDir } from "../core/paths.ts";
 import { resolveRuntime } from "../core/runtime.ts";
 import { AGENT_SESSION_ENV } from "../guardrails/surfaces.ts";
@@ -19,24 +17,8 @@ export type PiMain = (args: string[], options: { extensionFactories?: InlineExte
 
 export interface LaunchDeps {
 	piMain?: PiMain;
-	skillsDir?: string;
 	/** Fuerza la resolución de assets de un binario instalado. */
 	compiled?: boolean;
-}
-
-async function embeddedSkills(dir: string): Promise<string[]> {
-	let names: string[];
-	try {
-		names = (await readdir(dir)).sort();
-	} catch {
-		return [];
-	}
-	const skills: string[] = [];
-	for (const name of names) {
-		const path = join(dir, name);
-		if ((await stat(path)).isDirectory()) skills.push(path);
-	}
-	return skills;
 }
 
 export function omiToolsExtension(io: Io): InlineExtension {
@@ -52,18 +34,10 @@ export async function launchTui(args: string[], io: Io, deps: LaunchDeps = {}): 
 	// Lo heredan los comandos que corra el agente: ahí `--yes` no puede valer.
 	process.env[AGENT_SESSION_ENV] = "1";
 	const runtime = await resolveRuntime(io.homeDir, deps.compiled);
-	if (runtime.packageDir !== undefined) {
-		process.env.PI_PACKAGE_DIR = runtime.packageDir;
-		process.env.OMI_RUNTIME_DIR = runtime.packageDir;
-	}
-	const { embeddedExtensions } = await import("./extensions.ts");
+	if (runtime.packageDir !== undefined) process.env.PI_PACKAGE_DIR = runtime.packageDir;
 	const piMain = deps.piMain ?? (await import("@earendil-works/pi-coding-agent")).main;
 
-	const skills = await embeddedSkills(deps.skillsDir ?? runtime.skillsDir);
-	const skillArgs = skills.flatMap((path) => ["--skill", path]);
-	const themeArgs = (await isDirectory(runtime.themesDir)) ? ["--theme", runtime.themesDir] : [];
-	const processExtensions = runtime.packageDir === undefined ? [] : [await runtimeShellExtension(io)];
 	const isolation = await isolatePi(args, dir, io);
-	await piMain([...skillArgs, ...themeArgs, ...isolation.args, ...args], { extensionFactories: [omiToolsExtension(io), ...processExtensions, ...isolation.extensions, ...embeddedExtensions()] });
+	await piMain([...isolation.args, ...args], { extensionFactories: [omiToolsExtension(io), await runtimeShellExtension(io), ...isolation.extensions] });
 	return typeof process.exitCode === "number" ? process.exitCode : EXIT_OK;
 }

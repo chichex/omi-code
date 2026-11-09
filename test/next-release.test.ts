@@ -11,10 +11,10 @@ const script = fileURLToPath(new URL("../scripts/next-release.ts", import.meta.u
 const commit = (message: string, ...files: string[]): Commit => ({ message, files });
 
 test("isPackaged_distingue lo que entra en el binario", () => {
-	for (const path of ["src/cli/main.ts", "bin/omi.ts", "extensions/subagent/agents/x.md", "skills/ship/SKILL.md", "themes/omi.json", "package.json", "package-lock.json", "tsconfig.json", "install.sh", "scripts/build-release.ts"]) {
+	for (const path of ["src/cli/main.ts", "bin/omi.ts", "package.json", "package-lock.json", "tsconfig.json", "install.sh", "scripts/build-release.ts"]) {
 		assert.equal(isPackaged(path), true, path);
 	}
-	for (const path of [".chiche/project.md", "docs/x.md", "README.md", "test/x.test.ts", "extensions/subagent/jobs.test.ts", ".github/workflows/ci.yml", "scripts/next-release.ts", "LICENSE", "srcs/x.ts"]) {
+	for (const path of [".chiche/project.md", "docs/x.md", "README.md", "test/x.test.ts", "src/x.test.ts", ".github/workflows/ci.yml", "scripts/next-release.ts", "LICENSE", "srcs/x.ts"]) {
 		assert.equal(isPackaged(path), false, path);
 	}
 });
@@ -33,7 +33,7 @@ test("nextVersion_decide el nivel por tipo de commit", () => {
 
 test("nextVersion_lo empaquetado manda sobre el tipo del commit", () => {
 	assert.equal(nextVersion("0.1.0", [commit("chore: subir Pi a 1.6.0", "package.json", "package-lock.json")]), "0.1.1");
-	assert.equal(nextVersion("0.1.0", [commit("docs(skills): aclara ship", "skills/ship/SKILL.md")]), "0.1.1");
+	assert.equal(nextVersion("0.1.0", [commit("docs(cli): aclara el comentario", "src/a.ts")]), "0.1.1");
 	assert.equal(nextVersion("0.1.0", [commit("mensaje sin formato", "src/a.ts")]), "0.1.1");
 });
 
@@ -113,7 +113,7 @@ test("next-release_calcula la versión desde el último tag", async (t) => {
 	assert.equal(plan(repo), "version=0.1.1\n");
 	git(repo, "tag", "v0.1.1");
 	assert.equal(plan(repo), "version=\n");
-	await commitFile(repo, "skills/ship/SKILL.md", "feat(skills): y");
+	await commitFile(repo, "src/c.ts", "feat(cli): y");
 	assert.equal(plan(repo), "version=0.2.0\n");
 });
 
