@@ -32,6 +32,10 @@ curl -fsSL https://github.com/chichex/omi-code/releases/latest/download/install.
 
 Se instala en `~/.omi`; `OMI_HOME=/ruta/absoluta` permite otra raíz. El binario instalado la infiere de su ubicación.
 
+Si ya usabas Pi, el primer arranque ofrece copiar credenciales, ajustes y grills a `~/.omi/agent`, con una pregunta por grupo. Pi no se modifica.
+Enter sólo copia lo inofensivo. Por ejemplo, los grills. Piden un `s` explícito las credenciales y los ajustes que instalan paquetes o reemplazan los de omi.
+`omi import pi` vuelve a preguntar. Copiar credenciales OAuth hace que Pi y omi compartan la sesión: si uno renueva el token, el otro puede pedir login.
+
 `omi upgrade` actualiza a la última release y `omi upgrade --check` sólo informa.
 Para releases privadas necesita `GH_TOKEN` o `GITHUB_TOKEN` con acceso. Por ejemplo, desde una terminal del humano:
 
