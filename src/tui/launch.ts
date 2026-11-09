@@ -11,6 +11,7 @@ import { resolveRuntime } from "../core/runtime.ts";
 import { AGENT_SESSION_ENV } from "../guardrails/surfaces.ts";
 import { runPiImportOnboarding } from "../onboarding/pi-import.ts";
 import { CATALOG } from "../tools/catalog.ts";
+import { isolatePi } from "./isolation.ts";
 import { registerCatalogTools } from "./tools.ts";
 import { runtimeShellExtension } from "./runtime-shell.ts";
 
@@ -62,6 +63,7 @@ export async function launchTui(args: string[], io: Io, deps: LaunchDeps = {}): 
 	const skillArgs = skills.flatMap((path) => ["--skill", path]);
 	const themeArgs = (await isDirectory(runtime.themesDir)) ? ["--theme", runtime.themesDir] : [];
 	const processExtensions = runtime.packageDir === undefined ? [] : [await runtimeShellExtension(io)];
-	await piMain([...skillArgs, ...themeArgs, ...args], { extensionFactories: [omiToolsExtension(io), ...processExtensions, ...embeddedExtensions()] });
+	const isolation = await isolatePi(args, dir, io);
+	await piMain([...skillArgs, ...themeArgs, ...isolation.args, ...args], { extensionFactories: [omiToolsExtension(io), ...processExtensions, ...isolation.extensions, ...embeddedExtensions()] });
 	return typeof process.exitCode === "number" ? process.exitCode : EXIT_OK;
 }

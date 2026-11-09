@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 import { agentDir, sourcePiAgentDir as piAgentDir } from "../src/core/paths.ts";
+import { USER_SKILLS_EXCLUSION } from "../src/tui/isolation.ts";
 import { launchTui, type PiMain } from "../src/tui/launch.ts";
 import { CATALOG } from "../src/tools/catalog.ts";
 import { embeddedExtensions } from "../src/tui/extensions.ts";
@@ -81,7 +82,7 @@ test("launchTui_precarga las extensiones embebidas y el theme", async (t) => {
 	const home = await tempDir(t);
 	const calls: Call[] = [];
 	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi(calls), skillsDir: await tempDir(t) });
-	assert.deepEqual(calls[0]?.extensions, ["omi-tools", ...embeddedExtensions().map((extension) => (extension as { name: string }).name)]);
+	assert.deepEqual(calls[0]?.extensions, ["omi-tools", "omi-isolated-context", ...embeddedExtensions().map((extension) => (extension as { name: string }).name)]);
 	const theme = calls[0]?.args.indexOf("--theme") ?? -1;
 	assert.ok(theme >= 0);
 	assert.match(calls[0]?.args[theme + 1] ?? "", /themes$/);
@@ -92,6 +93,46 @@ test("launchTui registra el guardrail de OMI antes de cualquier transform de inp
 	await launchTui([], testIo({ homeDir: await tempDir(t) }), { piMain: fakePi(calls), skillsDir: await tempDir(t) });
 	const names = calls[0]?.extensions ?? [];
 	assert.ok(names.indexOf("omi-tools") >= 0 && names.indexOf("omi-tools") < names.indexOf("inline-skill-autocomplete"));
+});
+
+test("launchTui_excluye ~/.agents/skills y arma el contexto él mismo", async (t) => {
+	const home = await tempDir(t);
+	const calls: Call[] = [];
+	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi(calls), skillsDir: await tempDir(t) });
+	const settings = JSON.parse(await readFile(join(agentDir(home), "settings.json"), "utf8")) as { skills: string[] };
+	assert.deepEqual(settings.skills, [USER_SKILLS_EXCLUSION]);
+	assert.ok(calls[0]?.args.includes("--no-context-files"));
+	assert.ok(calls[0]?.extensions.includes("omi-isolated-context"));
+	assert.ok(!calls[0]?.args.includes("--no-skills"));
+});
+
+test("launchTui_vuelve a excluir después de importar los ajustes de Pi", async (t) => {
+	const home = await tempDir(t);
+	await mkdir(piAgentDir(home), { recursive: true });
+	await writeFile(join(piAgentDir(home), "settings.json"), '{"theme":"pi"}');
+	const calls: Call[] = [];
+	await launchTui([], testIo({ homeDir: home, interactive: true, answers: ["s"] }), { piMain: fakePi(calls), skillsDir: await tempDir(t) });
+	assert.deepEqual(JSON.parse(await readFile(join(agentDir(home), "settings.json"), "utf8")), { theme: "pi", skills: [USER_SKILLS_EXCLUSION] });
+});
+
+for (const flag of ["--no-context-files", "-nc"]) {
+	test(`launchTui_con ${flag} no agrega contexto propio`, async (t) => {
+		const calls: Call[] = [];
+		await launchTui([flag], testIo({ homeDir: await tempDir(t) }), { piMain: fakePi(calls), skillsDir: await tempDir(t) });
+		assert.ok(!calls[0]?.extensions.includes("omi-isolated-context"));
+	});
+}
+
+test("launchTui_con ajustes ilegibles avisa y arranca sin skills externos", async (t) => {
+	const home = await tempDir(t);
+	await mkdir(agentDir(home), { recursive: true });
+	await writeFile(join(agentDir(home), "settings.json"), "{ roto");
+	const calls: Call[] = [];
+	const io = testIo({ homeDir: home });
+	await launchTui([], io, { piMain: fakePi(calls), skillsDir: await tempDir(t) });
+	assert.ok(calls[0]?.args.includes("--no-skills"));
+	assert.match(io.errors(), /settings\.json/);
+	assert.equal(await readFile(join(agentDir(home), "settings.json"), "utf8"), "{ roto");
 });
 
 test("launchTui_ofrece importar Pi antes de arrancar", async (t) => {
@@ -247,7 +288,7 @@ test("launchTui_en un binario instalado toma skills y assets de ~/.omi/runtime",
 		}
 	});
 	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi(calls), compiled: true });
-	assert.deepEqual(calls[0]?.args, ["--skill", join(runtime, "skills/ship")]);
+	assert.deepEqual(calls[0]?.args, ["--skill", join(runtime, "skills/ship"), "--no-context-files"]);
 	assert.equal(process.env.PI_PACKAGE_DIR, runtime);
 	assert.equal(process.env.OMI_RUNTIME_DIR, runtime);
 });
