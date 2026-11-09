@@ -19,10 +19,10 @@
     "test:packaging": "OMI_PACKAGING_SMOKE=1 node --test --test-timeout=300000 test/packaging-smoke.test.ts"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "1.4.0",
-    "@earendil-works/pi-ai": "1.4.0",
-    "@earendil-works/pi-coding-agent": "1.4.0",
-    "@earendil-works/pi-tui": "1.4.0",
+    "@earendil-works/pi-agent-core": "1.5.0",
+    "@earendil-works/pi-ai": "1.5.0",
+    "@earendil-works/pi-coding-agent": "1.5.0",
+    "@earendil-works/pi-tui": "1.5.0",
     "typebox": "1.3.27"
   },
   "devDependencies": {
