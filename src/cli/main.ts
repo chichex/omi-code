@@ -39,6 +39,7 @@ export async function run(argv: string[], io: Io, deps: Partial<CliDeps> = {}): 
 	const [first, ...rest] = argv;
 	try {
 		if (first === "--version" || first === "-v") {
+			// release.yml estampa package.json desde el tag: en un checkout de main esto puede quedar atrás.
 			io.out(pkg.version);
 			return EXIT_OK;
 		}
