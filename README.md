@@ -82,6 +82,7 @@ No hay que empujar tags. Primero se miran las rutas y después el tipo de commit
 | `feat(tools): …` | minor: `0.1.1` → `0.2.0` |
 | `feat!: …` o `BREAKING CHANGE:` | minor antes de 1.0; major después |
 
+Antes de publicar, el pipeline instala y arranca en las cuatro plataformas los mismos archivos que va a publicar.
 El tag es la fuente de verdad: `package.json` se estampa sólo en CI, así que en `main` puede quedar atrás.
 Para volver atrás, mergeá un `revert:`: `omi upgrade` sólo sube de versión.
 

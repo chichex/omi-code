@@ -147,13 +147,35 @@ test("release.yml_publica desde main sólo después de todos los gates", async (
 	assert.match(workflow, /scripts\/next-release\.ts/);
 	const publish = workflow.indexOf("gh release create");
 	const steps = ["npm version", "npm run typecheck", "npm test", "npm run test:packaging", "scripts/build-release.ts"];
-	const release = workflow.indexOf("\n  release:");
-	let previous = release;
+	let previous = workflow.indexOf("\n  build:");
+	assert.ok(previous > 0);
 	for (const step of steps) {
 		const at = workflow.indexOf(step, previous);
 		assert.ok(at > previous && at < publish, step);
 		previous = at;
 	}
+});
+
+test("release.yml_arranca en cada plataforma lo mismo que publica", async () => {
+	const { PLATFORMS } = await import("../src/upgrade/release.ts");
+	const workflow = await read(".github/workflows/release.yml");
+	const runners = /runner: \[(.+)\]/.exec(workflow)?.[1]?.split(", ") ?? [];
+	assert.equal(runners.length, PLATFORMS.length);
+	assert.deepEqual(runners.sort(), ["macos-15-intel", "macos-latest", "ubuntu-24.04-arm", "ubuntu-latest"]);
+	assert.match(workflow, /fail-fast: false/);
+	assert.match(workflow, /needs: \[plan, build\]/);
+	assert.match(workflow, /needs: \[plan, boot\]/);
+
+	const boot = workflow.slice(workflow.indexOf("\n  boot:"), workflow.indexOf("\n  release:"));
+	assert.match(boot, /download-artifact/);
+	assert.match(boot, /OMI_INSTALL_BASE=/);
+	assert.match(boot, /cayó al bundle/);
+	assert.match(boot, /--mode rpc/);
+
+	const release = workflow.slice(workflow.indexOf("\n  release:"));
+	assert.doesNotMatch(release, /build-release|npm ci/);
+	assert.match(release, /download-artifact/);
+	assert.ok(release.indexOf("sha256sum -c checksums.txt") < release.indexOf("gh release create"));
 });
 
 test("release.yml_prueba macOS antes de publicar", async () => {
