@@ -120,14 +120,12 @@ jobs:
           file "$HOME/.omi/bin/omi"
           [ "$("$HOME/.omi/bin/omi" --version)" = "$VERSION" ]
           [ "$("$HOME/.omi/runtime/omi" --version)" = "$VERSION" ]
-      - name: Pi carga los skills embebidos
+      - name: Pi responde por RPC y la instalación viene sin skills
         run: |
           ( printf '{"id":"1","type":"get_commands"}\n'; sleep 20 ) | "$HOME/.omi/bin/omi" --mode rpc --no-session > "$RUNNER_TEMP/rpc.out" || true
-          expected=$(ls "$HOME/.omi/runtime/skills" | wc -l)
-          loaded=$(grep '^{' "$RUNNER_TEMP/rpc.out" | jq -s '[.[] | select(.id == "1") | .data.commands[] | select(.source == "skill")] | length')
-          echo "skills: $loaded de $expected"
-          [ "$loaded" -gt 0 ]
-          [ "$loaded" -eq "$expected" ]
+          [ ! -e "$HOME/.omi/runtime/skills" ]
+          # Exige la respuesta: si omi no contesta, también hay cero skills.
+          grep '^{' "$RUNNER_TEMP/rpc.out" | jq -se 'map(select(.id == "1" and .success == true)) | length == 1 and (.[0].data.commands | all(.source != "skill"))'
 
   release:
     needs: [plan, boot]

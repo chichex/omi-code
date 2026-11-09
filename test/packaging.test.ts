@@ -171,6 +171,9 @@ test("release.yml_arranca en cada plataforma lo mismo que publica", async () => 
 	assert.match(boot, /OMI_INSTALL_BASE=/);
 	assert.match(boot, /cayó al bundle/);
 	assert.match(boot, /--mode rpc/);
+	// Una instalación nueva viene sin skills, y cero skills no puede pasar si omi no contestó.
+	assert.match(boot, /\[ ! -e "\$HOME\/\.omi\/runtime\/skills" \]/);
+	assert.match(boot, /jq -se '.*\.success == true.*length == 1.*\.source != "skill"/);
 
 	const release = workflow.slice(workflow.indexOf("\n  release:"));
 	assert.doesNotMatch(release, /build-release|npm ci/);
