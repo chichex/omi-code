@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { readdir, realpath, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, realpath, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
@@ -99,4 +99,46 @@ test("omi upgrade --check_corre desde el binario instalado", { skip: !enabled },
 	});
 	assert.equal(check.code, 0);
 	assert.deepEqual(JSON.parse(check.stdout), { current: pkg.version, latest: "99.0.0", updateAvailable: true });
+});
+
+// Sólo con un pty aparece el prompt, y Node y Bun cierran readline distinto: con Node esto no se reproduce.
+const CANCEL_PROMPT_IN_PTY = `
+import os, pty, select, signal, sys, time
+key, binary = bytes([int(sys.argv[1])]), sys.argv[2]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv(binary, [binary])
+output, sent_at, start = b"", None, time.time()
+while time.time() - (sent_at or start) < 10:
+    if select.select([fd], [], [], 0.1)[0]:
+        try:
+            chunk = os.read(fd, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        output += chunk
+    if sent_at is None and b"/N]" in output:
+        os.write(fd, key)
+        sent_at = time.time()
+if sent_at is None:
+    sys.exit("no apareció el prompt")
+for _ in range(20):
+    if os.waitpid(pid, os.WNOHANG)[0] != 0:
+        sys.exit(0)
+    time.sleep(0.1)
+os.kill(pid, signal.SIGKILL)
+sys.exit("el prompt quedó colgado")
+`;
+
+test("el binario termina al cancelar el prompt de Pi y no copia nada", { skip: !enabled }, async (t) => {
+	const { home, binary } = await buildAndInstall(t);
+	await mkdir(join(home, ".pi/agent"), { recursive: true });
+	await writeFile(join(home, ".pi/agent/auth.json"), '{"anthropic":{"key":"falsa"}}');
+	for (const [name, key] of [["Ctrl+C", "3"], ["Ctrl+D", "4"]] as const) {
+		const driven = spawnSync("python3", ["-I", "-c", CANCEL_PROMPT_IN_PTY, key, binary], { encoding: "utf8", env: { ...process.env, HOME: home, OMI_HOME: "" } });
+		assert.equal(driven.status, 0, `${name}: ${driven.stderr}`);
+	}
+	await assert.rejects(stat(join(home, ".omi/agent/auth.json")));
+	await assert.rejects(stat(join(home, ".omi/onboarding.json")));
 });

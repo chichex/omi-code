@@ -26,13 +26,28 @@ async function readAll(stream: NodeJS.ReadStream): Promise<string> {
 	return Buffer.concat(chunks).toString("utf8");
 }
 
-async function askVisible(question: string): Promise<string> {
-	const rl = createInterface({ input: process.stdin, output: process.stderr });
+/** Lo único de readline que hace falta para preguntar. */
+export interface QuestionReader {
+	question(question: string): Promise<string>;
+	once(event: "close", listener: () => void): unknown;
+	close(): void;
+}
+
+// Ctrl+C y Ctrl+D cierran el readline. Node rechaza la pregunta; Bun la deja pendiente y el binario queda colgado.
+export async function askOrCancel(reader: QuestionReader, question: string): Promise<string> {
 	try {
-		return await rl.question(question);
+		return await new Promise<string>((resolve, reject) => {
+			const cancel = (): void => reject(new Error("entrada cancelada"));
+			reader.once("close", cancel);
+			reader.question(question).then(resolve, cancel);
+		});
 	} finally {
-		rl.close();
+		reader.close();
 	}
+}
+
+async function askVisible(question: string): Promise<string> {
+	return askOrCancel(createInterface({ input: process.stdin, output: process.stderr }), question);
 }
 
 // Lee sin eco: el valor de un secreto o una contraseña no queda en la terminal.
