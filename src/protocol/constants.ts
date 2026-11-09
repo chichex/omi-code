@@ -36,7 +36,3 @@ export const REGISTRY_CHUNK_BYTES = 52_428_800;
 export const OMI_HOME_DIR = ".omi";
 export const CREDENTIALS_FILE = "credentials.json";
 export const PROJECT_LINK_FILE = ".omi/project.json";
-
-// Artefactos SDD: se escribe en .omi/ y se lee también lo que dejaron chiche y sdd.
-export const SDD_ARTIFACT_DIR = ".omi";
-export const SDD_LEGACY_ARTIFACT_DIRS = [".chiche", ".sdd"] as const;

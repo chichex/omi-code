@@ -1,15 +1,29 @@
-// omi sólo lee configuración de ~/.omi/agent y del proyecto. Pi además carga ~/.agents/skills y
-// sube hasta / buscando AGENTS.md: se corta acá porque Pi no expone un flag para ninguna de las dos.
+// omi sólo lee configuración de ~/.omi/agent y del proyecto. Pi además carga ~/.agents/skills, sube
+// hasta / buscando AGENTS.md y se autentica con variables del shell: se corta acá porque Pi no
+// expone un flag para ninguna de las tres.
 
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { Io } from "../cli/io.ts";
+import { isInside } from "../core/files.ts";
+import { hideFromHost } from "../core/process-environment.ts";
 
 /** Sigue siendo reversible: `+~/.agents/skills/foo/SKILL.md` en los ajustes trae uno puntual. */
 export const USER_SKILLS_EXCLUSION = "!~/.agents/skills/**";
+
+/** Lo que miran los proveedores de Pi para autenticarse solos. `test/isolation.test.ts` falla si Pi suma otra. */
+export const PROVIDER_CREDENTIALS = [
+	"AI_GATEWAY_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_FEDERATION_RULE_ID", "ANTHROPIC_OAUTH_TOKEN", "ANT_LING_API_KEY",
+	"AWS_ACCESS_KEY_ID", "AWS_BEARER_TOKEN_BEDROCK", "AWS_CONTAINER_CREDENTIALS_FULL_URI", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_PROFILE", "AWS_WEB_IDENTITY_TOKEN_FILE",
+	"AZURE_OPENAI_API_KEY", "BASETEN_API_KEY", "CEREBRAS_API_KEY", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_KEY", "CLOUDFLARE_GATEWAY_ID", "COPILOT_GITHUB_TOKEN", "DEEPSEEK_API_KEY",
+	"FIREWORKS_API_KEY", "GCLOUD_PROJECT", "GEMINI_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_API_KEY", "GOOGLE_CLOUD_LOCATION", "GOOGLE_CLOUD_PROJECT", "GROQ_API_KEY", "HF_TOKEN",
+	"KIMI_API_KEY", "META_API_KEY", "MINIMAX_API_KEY", "MINIMAX_CN_API_KEY", "MISTRAL_API_KEY", "MOONSHOT_API_KEY", "NVIDIA_API_KEY", "OPENAI_API_KEY", "OPENCODE_API_KEY", "OPENROUTER_API_KEY",
+	"QWEN_TOKEN_PLAN_API_KEY", "QWEN_TOKEN_PLAN_CN_API_KEY", "RADIUS_API_KEY", "TOGETHER_API_KEY", "TYPESAFE_API_KEY", "XAI_API_KEY",
+	"XIAOMI_API_KEY", "XIAOMI_TOKEN_PLAN_AMS_API_KEY", "XIAOMI_TOKEN_PLAN_CN_API_KEY", "XIAOMI_TOKEN_PLAN_SGP_API_KEY", "ZAI_API_KEY", "ZAI_CODING_CN_API_KEY",
+] as const;
 
 const CONTEXT_OPT_OUT = ["--no-context-files", "-nc"];
 
@@ -63,11 +77,6 @@ function projectRoot(cwd: string): string {
 	}
 }
 
-function isInside(root: string, path: string): boolean {
-	const fromRoot = relative(root, path);
-	return fromRoot !== ".." && !fromRoot.startsWith(`..${sep}`) && !isAbsolute(fromRoot);
-}
-
 /** Descarta el contexto de los ancestros del proyecto. Por ejemplo, `~/AGENTS.md`. */
 export function projectContextFiles<T extends { path: string }>(files: readonly T[], cwd: string, dir: string): T[] {
 	const root = projectRoot(resolve(cwd));
@@ -103,6 +112,7 @@ export interface PiIsolation {
 
 /** Importa Pi: llamarla después de fijar las variables de entorno que Pi lee al cargarse. */
 export async function isolatePi(args: readonly string[], dir: string, io: Io): Promise<PiIsolation> {
+	hideFromHost(PROVIDER_CREDENTIALS);
 	const excluded = await excludeUserSkills(dir);
 	if (!excluded) io.err(`aviso: no se pudo actualizar ${join(dir, "settings.json")}; esta sesión arranca sin skills externos`);
 	const wantsContext = !args.some((arg) => CONTEXT_OPT_OUT.includes(arg));

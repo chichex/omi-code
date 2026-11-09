@@ -6,7 +6,7 @@ Un solo comando, `omi`, con tres caras sobre el mismo core:
 
 | Cara | Comando | Para qué |
 |---|---|---|
-| TUI | `omi` | sesión agéntica con las tools y skills de OMI |
+| TUI | `omi` | sesión agéntica con las tools de OMI |
 | CLI | `omi <subcomando>` | operaciones determinísticas, con `--json` |
 | MCP | `omi mcp` | el mismo catálogo por stdio para otros agentes |
 
@@ -32,14 +32,35 @@ curl -fsSL https://github.com/chichex/omi-code/releases/latest/download/install.
 
 Se instala en `~/.omi`; `OMI_HOME=/ruta/absoluta` permite otra raíz. El binario instalado la infiere de su ubicación.
 
-Si ya usabas Pi, el primer arranque ofrece copiar credenciales, ajustes y grills a `~/.omi/agent`, con una pregunta por grupo. Pi no se modifica.
-Enter sólo copia lo inofensivo. Por ejemplo, los grills. Piden un `s` explícito las credenciales y los ajustes que instalan paquetes o reemplazan los de omi.
+### Instalación limpia
+
+Una instalación nueva viene vacía: sin skills, sin extensiones ajenas y sin modelo. Sólo trae las tools de OMI, que son las tres entradas de `[Extensions]`.
+Para usar un modelo, entrá con `/login` o importá credenciales.
+
+omi sólo lee configuración de `~/.omi/agent` y del proyecto, del directorio actual hasta la raíz del repo.
+Por ejemplo, no carga `~/.pi/agent`, `~/.agents/skills` ni `~/AGENTS.md`. Para instrucciones globales usá `~/.omi/agent/AGENTS.md`.
+La configuración del repo (`.pi/`, `.agents/skills`) sigue valiendo, con la confirmación de confianza.
+
+Las API keys del shell no le dan un modelo a omi. Por ejemplo, con `GEMINI_API_KEY` exportada, omi arranca igual sin modelo. Los comandos que corre el agente sí la ven, como cualquier comando de tu shell.
+
+### Importar de Pi
+
+Importar es la única forma de traer algo, y siempre duplica: después podés borrar `~/.pi` y omi sigue igual. La excepción es un paquete con `~/.pi` escrito en su código: sigue usando esa ruta.
+
+Si ya usabas Pi, el primer arranque ofrece copiar a `~/.omi/agent` con una pregunta por grupo. Pi no se modifica.
+
+| Grupo | Qué copia | Enter |
+|---|---|---|
+| Credenciales | `auth.json`, `models.json`, `mcp-auth.json` | no copia |
+| Ajustes | `settings.json`, con las rutas relativas a omi | copia sólo si no instala paquetes ni reemplaza los de omi |
+| Recursos | el resto: skills, extensiones, paquetes instalados (`git/`, `npm/`), `AGENTS.md`, `mcp.json` | no copia |
+| Grills | sesiones que omi no tiene | copia |
+
+No se copian las sesiones, los backups, `trust.json` ni las cachés. Los recursos nunca pisan lo que omi ya tiene.
+
 `omi import pi` vuelve a preguntar. Copiar credenciales OAuth hace que Pi y omi compartan la sesión: si uno renueva el token, el otro puede pedir login.
 
-La instalación está aislada: omi trae sus skills y sólo lee configuración de `~/.omi/agent` y del proyecto, del directorio actual hasta la raíz del repo.
-Por ejemplo, no carga `~/.pi/agent`, `~/.agents/skills` ni `~/AGENTS.md`. Para instrucciones globales usá `~/.omi/agent/AGENTS.md`.
-Para esto omi agrega `!~/.agents/skills/**` a `~/.omi/agent/settings.json`. Si querés un skill puntual, sumá `+~/.agents/skills/foo/SKILL.md` a esa misma lista.
-La configuración del repo (`.pi/`, `.agents/skills`) sigue valiendo, con la confirmación de confianza. Las variables de entorno del shell también, como una API key.
+Para sumar un skill de `~/.agents/skills`, agregá `+~/.agents/skills/foo/SKILL.md` a `skills` en `~/.omi/agent/settings.json`. omi mantiene ahí `!~/.agents/skills/**`.
 
 `omi upgrade` actualiza a la última release y `omi upgrade --check` sólo informa.
 Para releases privadas necesita `GH_TOKEN` o `GITHUB_TOKEN` con acceso. Por ejemplo, desde una terminal del humano:
@@ -61,7 +82,7 @@ Son controles locales para las superficies soportadas, no aislamiento de un proc
 | Variables no secretas, jobs y deploy en stage, publicar | autónomo en una sesión autorizada |
 | Cualquier cosa en prod, secretos, Postgres, bajas | humano, siempre |
 
-En la TUI, `/skill:ship` autoriza stage para la sesión. En `omi mcp`, lo hace el flag `--authorize-stage` y la aprobación humana llega por elicitación del cliente MCP. En la CLI sin terminal, `--yes` aprueba; dentro de una sesión agéntica, no vale.
+En la TUI, el primer sí a una operación de stage vale para toda la sesión. En `omi mcp`, lo hace el flag `--authorize-stage` y la aprobación humana llega por elicitación del cliente MCP. En la CLI sin terminal, `--yes` aprueba; dentro de una sesión agéntica, no vale.
 
 El bump semanal de Pi abre un PR sólo tras typecheck, tests y empaquetado en el mismo workflow. La revisión y el merge son humanos, y mergearlo publica una release. Ese PR muestra una CI esperando aprobación: se puede mergear sin aprobarla, porque el workflow ya publicó `cierre`.
 

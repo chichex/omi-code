@@ -2,22 +2,23 @@
 
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { copyFile, link, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { copyFile, cp, link, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import type { Io } from "../cli/io.ts";
 import { painter } from "../cli/style.ts";
 import { OmiError } from "../core/errors.ts";
 import { agentDir, omiHome, sourcePiAgentDir } from "../core/paths.ts";
-import { exists, isDirectory } from "../core/files.ts";
+import { exists, isDirectory, isInside } from "../core/files.ts";
 import { renderOutcome, renderQuestion, renderSummary, type OfferRow } from "./pi-import-view.ts";
 
 const SETTINGS_FILE = "settings.json";
-const PROVIDER_FILES = ["auth.json", "models.json"] as const;
+const PROVIDER_FILES = ["auth.json", "models.json", "mcp-auth.json"] as const;
 const ONBOARDING_MARKER = "onboarding.json";
 const GRILLS_DIR = "grill-sessions";
 
-/** Identidad del repo sin transporte, .git ni @ref. */
-const ABSORBED_PACKAGE = /^(?:git:)?(?:(?:https?:\/\/|ssh:\/\/)?(?:git@)?)github\.com[/:]chichex\/(?:skills|chiche)(?:\.git)?(?:@.+|\/)?$/i;
+/** El resto de ~/.pi/agent se copia. Esto no: ya tiene su grupo, es historial o caché, o lo decide cada instalación. */
+const NOT_RESOURCES: ReadonlySet<string> = new Set([...PROVIDER_FILES, SETTINGS_FILE, GRILLS_DIR, "sessions", "backups", "tmp", "trust.json", "models-store.json", "crashes.json"]);
+const LEFTOVER = /^settings\.json\.|\.(?:log|lock|tmp)$/;
 
 const OAUTH_WARNING = "Pi y omi compartirían la sesión: si uno renueva el token, el otro puede pedirte login.";
 
@@ -28,7 +29,7 @@ export interface PiImportResult {
 
 const SKIPPED: PiImportResult = { status: "skipped", files: [] };
 
-const DECISION_KEYS = ["credentialsImport", "settingsImport", "grillImport"] as const;
+const DECISION_KEYS = ["credentialsImport", "settingsImport", "resourcesImport", "grillImport"] as const;
 /** Una sola decisión que antes abarcaba credenciales y ajustes. */
 const LEGACY_CONFIG_KEY = "piImport";
 const DECISION_VALUES = ["imported", "declined", "skipped"] as const;
@@ -51,8 +52,13 @@ async function existingFiles(dir: string, names: readonly string[]): Promise<str
 	return found;
 }
 
-function localPath(source: string, base: string): string {
-	return /^\.{1,2}(?:\/|$)/.test(source) ? resolve(base, source) : source;
+/** Una ruta hacia adentro de ~/.pi queda relativa a ~/.omi/agent, donde está la copia. Ejemplo: `~/.pi/agent/a.ts` da `./a.ts`. */
+function withoutPiPath(entry: string, piAgent: string): string {
+	const [, prefix = "", rest = ""] = /^([!+-]?)(.*)$/s.exec(entry) ?? [];
+	const path = rest.startsWith("~/") ? join(dirname(dirname(piAgent)), rest.slice(2)) : rest;
+	if (!isAbsolute(path) || !isInside(dirname(piAgent), path)) return entry;
+	const fromAgent = relative(piAgent, path);
+	return `${prefix}${fromAgent.startsWith("..") ? fromAgent : `./${fromAgent}`}`;
 }
 
 function packageSource(entry: unknown): unknown {
@@ -60,22 +66,19 @@ function packageSource(entry: unknown): unknown {
 }
 
 /** Los settings tal como quedarían en omi. Lanza si no son un objeto JSON. */
-function importedSettings(raw: string, base: string): Record<string, unknown> {
+function importedSettings(raw: string, piAgent: string): Record<string, unknown> {
 	const parsed: unknown = JSON.parse(raw.replace(/^﻿/, ""));
 	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new SyntaxError("settings.json no es un objeto");
 	const settings = parsed as Record<string, unknown>;
 	if (Array.isArray(settings.packages)) {
-		settings.packages = settings.packages.filter((entry: unknown) => {
-			const source = packageSource(entry);
-			return typeof source !== "string" || !ABSORBED_PACKAGE.test(source);
-		}).map((entry: unknown) => {
-			if (typeof entry === "string") return localPath(entry, base);
+		settings.packages = settings.packages.map((entry: unknown) => {
+			if (typeof entry === "string") return withoutPiPath(entry, piAgent);
 			const pkg = entry as { source?: unknown } | null;
-			return typeof pkg?.source === "string" ? { ...pkg, source: localPath(pkg.source, base) } : entry;
+			return typeof pkg?.source === "string" ? { ...pkg, source: withoutPiPath(pkg.source, piAgent) } : entry;
 		});
 	}
 	for (const key of ["extensions", "skills", "prompts", "themes"]) {
-		if (Array.isArray(settings[key])) settings[key] = settings[key].map((path: unknown) => typeof path === "string" ? localPath(path, base) : path);
+		if (Array.isArray(settings[key])) settings[key] = settings[key].map((path: unknown) => typeof path === "string" ? withoutPiPath(path, piAgent) : path);
 	}
 	return settings;
 }
@@ -198,6 +201,26 @@ async function settingsGroup(source: string, target: string): Promise<ImportGrou
 	return { ...row, files: [SETTINGS_FILE], warnings, defaultYes: warnings.length === 0 };
 }
 
+/** Una carpeta que ya existe se vuelve a ofrecer: copiarla sólo suma lo que falta. */
+async function resourcesGroup(source: string, target: string): Promise<ImportGroup | null> {
+	if (!(await isDirectory(source))) return null;
+	const files: string[] = [];
+	for (const name of (await readdir(source)).sort()) {
+		if (NOT_RESOURCES.has(name) || LEFTOVER.test(name)) continue;
+		if (await isDirectory(join(source, name)) || !(await exists(join(target, name)))) files.push(name);
+	}
+	if (files.length === 0) return null;
+	return {
+		decisionKey: "resourcesImport",
+		label: "Recursos",
+		noun: "recursos",
+		summary: files.join(", "),
+		files,
+		warnings: ["Pueden traer código que se carga al arrancar."],
+		defaultYes: false,
+	};
+}
+
 async function grillsGroup(source: string, target: string): Promise<ImportGroup | null> {
 	const files = await missingGrillFiles(source, target);
 	if (files.length === 0) return null;
@@ -218,9 +241,12 @@ async function importGroups(source: string, target: string, previous: ImportDeci
 	const providersInOmi = await hasProviders(target);
 	const pending = (key: DecisionKey): boolean => again || previous[key] === undefined;
 	const configOpen = again || !providersInOmi;
+	// Quien ya pasó por el onboarding no vuelve a recibir preguntas al actualizar omi.
+	const resourcesOpen = pending("resourcesImport") && (again || previous.settingsImport === undefined);
 	const groups = [
 		pending("credentialsImport") && configOpen ? await credentialsGroup(source, providersInOmi) : null,
 		pending("settingsImport") && configOpen ? await settingsGroup(source, target) : null,
+		resourcesOpen ? await resourcesGroup(source, target) : null,
 		pending("grillImport") ? await grillsGroup(source, target) : null,
 	];
 	return groups.filter((group) => group !== null);
@@ -234,6 +260,12 @@ function isAccepted(answer: string, defaultYes: boolean): boolean {
 async function copyGroup(source: string, target: string, group: ImportGroup): Promise<string[]> {
 	const copied: string[] = [];
 	for (const name of group.files) {
+		if (group.decisionKey === "resourcesImport") {
+			// No pisa lo que omi ya tiene. Un symlink relativo sigue apuntando adentro de la copia.
+			await cp(join(source, name), join(target, name), { recursive: true, force: false, errorOnExist: false, verbatimSymlinks: true });
+			copied.push(name);
+			continue;
+		}
 		const isGrill = name.startsWith(`${GRILLS_DIR}/`);
 		if (isGrill) await mkdir(join(target, GRILLS_DIR), { recursive: true, mode: 0o700 });
 		if (await importFile(join(source, name), join(target, name), name, !isGrill)) copied.push(name);
@@ -268,6 +300,7 @@ async function offerImport(io: Io, previous: ImportDecision, again: boolean): Pr
 	}
 
 	if (accepted.length > 0) await mkdir(target, { recursive: true, mode: 0o700 });
+	if (accepted.some((group) => group.decisionKey === "resourcesImport")) io.err(paint("dim", "Copiando recursos…"));
 	const files: string[] = [];
 	for (const group of accepted) files.push(...await copyGroup(source, target, group));
 	await rememberDecision(io.homeDir, nextDecision(previous, offered, accepted));

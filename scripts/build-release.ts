@@ -31,13 +31,6 @@ const PI_ASSETS: readonly [source: string, target: string][] = [
 	["dist/core/export-html/vendor", "export-html/vendor"],
 ];
 
-/** Assets propios. Los agentes son los que usa la extensión subagent. */
-const OMI_ASSETS: readonly [source: string, target: string][] = [
-	["skills", "skills"],
-	["themes", "themes"],
-	["extensions/subagent/agents", "agents"],
-];
-
 function sha256(content: Buffer): string {
 	return createHash("sha256").update(content).digest("hex");
 }
@@ -82,9 +75,6 @@ async function stageRuntime(stage: string): Promise<void> {
 		if (name.endsWith(".json")) await cp(join(themes, name), join(stage, "theme", name));
 	}
 	await cp(join(ROOT, "node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm"), join(stage, "photon_rs_bg.wasm"));
-	for (const [source, target] of OMI_ASSETS) {
-		await cp(join(ROOT, source), join(stage, target), { recursive: true });
-	}
 }
 
 async function writeChecksums(out: string, names: readonly string[]): Promise<void> {

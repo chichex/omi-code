@@ -28,8 +28,8 @@ interface Release {
 /** Tarball real, con el binario y el runtime que espera install.sh. */
 async function runtimeTarball(t: TestContext, binary: string): Promise<Buffer> {
 	const dir = await tempDir(t);
-	await mkdir(join(dir, "skills/ship"), { recursive: true });
-	await writeFile(join(dir, "skills/ship/SKILL.md"), "nuevo\n");
+	await mkdir(join(dir, "theme"), { recursive: true });
+	await writeFile(join(dir, "theme/dark.json"), "nuevo\n");
 	await writeFile(join(dir, "omi"), binary, { mode: 0o755 });
 	const output = join(await tempDir(t), "runtime.tar.gz");
 	execFileSync("tar", ["-czf", output, "-C", dir, "."]);
@@ -82,8 +82,8 @@ async function installed(t: TestContext, name = ""): Promise<string> {
 	const home = join(await tempDir(t), name);
 	await mkdir(join(home, ".omi/bin"), { recursive: true });
 	await writeFile(join(home, ".omi/bin/omi"), "#!/bin/sh\necho 0.1.0\n", { mode: 0o755 });
-	await mkdir(join(home, ".omi/runtime/skills/ship"), { recursive: true });
-	await writeFile(join(home, ".omi/runtime/skills/ship/SKILL.md"), "viejo\n");
+	await mkdir(join(home, ".omi/runtime/theme"), { recursive: true });
+	await writeFile(join(home, ".omi/runtime/theme/dark.json"), "viejo\n");
 	return home;
 }
 
@@ -174,7 +174,7 @@ test("runUpgrade_verifica y reemplaza binario y runtime", async (t) => {
 	assert.deepEqual(result, { current: "0.1.0", latest: "9.9.9", updated: true });
 	assert.equal(await readFile(join(home, ".omi/bin/omi"), "utf8"), WORKING_BINARY);
 	assert.equal((await stat(join(home, ".omi/bin/omi"))).mode & 0o777, 0o755);
-	assert.equal(await readFile(join(home, ".omi/runtime/skills/ship/SKILL.md"), "utf8"), "nuevo\n");
+	assert.equal(await readFile(join(home, ".omi/runtime/theme/dark.json"), "utf8"), "nuevo\n");
 });
 
 test("runUpgrade_no deja temporales en ~/.omi", async (t) => {
@@ -196,7 +196,7 @@ for (const target of ["binary", "runtime"] as const) {
 		const release = await releaseServer(t, { corrupt: assetNames(PLATFORM)[target] });
 		await assert.rejects(runUpgrade(options(home, release)), (error: OmiError) => error.code === "checksum_mismatch");
 		assert.match(await readFile(join(home, ".omi/bin/omi"), "utf8"), /0\.1\.0/);
-		assert.equal(await readFile(join(home, ".omi/runtime/skills/ship/SKILL.md"), "utf8"), "viejo\n");
+		assert.equal(await readFile(join(home, ".omi/runtime/theme/dark.json"), "utf8"), "viejo\n");
 		assert.deepEqual((await readdir(join(home, ".omi"))).sort(), ["bin", "runtime"]);
 	});
 }
@@ -226,7 +226,7 @@ test("runUpgrade_si nada arranca restaura la instalación anterior", async (t) =
 	const release = await releaseServer(t, { binary: "#!/bin/sh\nexit 137\n" });
 	await assert.rejects(runUpgrade(options(home, release)), (error: OmiError) => error.code === "upgrade_failed");
 	assert.match(await readFile(join(home, ".omi/bin/omi"), "utf8"), /0\.1\.0/);
-	assert.equal(await readFile(join(home, ".omi/runtime/skills/ship/SKILL.md"), "utf8"), "viejo\n");
+	assert.equal(await readFile(join(home, ".omi/runtime/theme/dark.json"), "utf8"), "viejo\n");
 	assert.deepEqual((await readdir(join(home, ".omi"))).sort(), ["bin", "runtime"]);
 });
 
@@ -263,7 +263,7 @@ test("upgrade restaura runtime si falla el segundo swap", async (t) => {
 	try { await assert.rejects(runUpgrade(options(home, release))); }
 	finally { await chmod(join(home, ".omi/bin"), 0o755); }
 	assert.match(await readFile(join(home, ".omi/bin/omi"), "utf8"), /0\.1\.0/);
-	assert.equal(await readFile(join(home, ".omi/runtime/skills/ship/SKILL.md"), "utf8"), "viejo\n");
+	assert.equal(await readFile(join(home, ".omi/runtime/theme/dark.json"), "utf8"), "viejo\n");
 });
 
 test("upgrade conserva backups y explica su ubicación si falla el rollback", async (t) => {
@@ -281,7 +281,7 @@ test("upgrade conserva backups y explica su ubicación si falla el rollback", as
 	} finally { await chmod(join(home, ".omi"), 0o700); }
 	const work = (await readdir(join(home, ".omi"))).find((name) => name.startsWith("upgrade-"));
 	assert.ok(work);
-	assert.equal(await readFile(join(home, ".omi", work, "previous-runtime/skills/ship/SKILL.md"), "utf8"), "viejo\n");
+	assert.equal(await readFile(join(home, ".omi", work, "previous-runtime/theme/dark.json"), "utf8"), "viejo\n");
 });
 
 test("upgrade fallback ejecuta correctamente rutas con caracteres de shell", async (t) => {

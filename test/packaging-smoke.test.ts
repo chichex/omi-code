@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { mkdir, readdir, realpath, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { test, type TestContext } from "node:test";
 import pkg from "../package.json" with { type: "json" };
 import { assetNames, currentPlatform } from "../src/upgrade/release.ts";
-import { FOREIGN, OWN, requestSeenByModel, seedConfig } from "./helpers/foreign-config.ts";
+import { FOREIGN, OWN, PI_MARKS, requestSeenByModel, seedConfig, seedPi } from "./helpers/foreign-config.ts";
 import { tempDir } from "./helpers/io.ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -34,9 +34,9 @@ async function buildAndInstall(t: TestContext, custom = false): Promise<Install>
 	return { home, release, installRoot, binary: join(installRoot, "bin/omi") };
 }
 
-function rpc(binary: string, home: string, command: unknown, extraArgs: string[] = []): Promise<Record<string, unknown>[]> {
+function rpc(binary: string, home: string, command: unknown, extraArgs: string[] = [], env: NodeJS.ProcessEnv = {}): Promise<Record<string, unknown>[]> {
 	return new Promise((resolve, reject) => {
-		const child = spawn(binary, ["--mode", "rpc", "--no-session", ...extraArgs], { env: { ...process.env, HOME: home, OMI_HOME: "" }, stdio: ["pipe", "pipe", "ignore"] });
+		const child = spawn(binary, ["--mode", "rpc", "--no-session", ...extraArgs], { env: { ...process.env, HOME: home, OMI_HOME: "", ...env }, stdio: ["pipe", "pipe", "ignore"] });
 		let output = "";
 		const timeout = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("RPC no respondió")); }, 10000);
 		child.stdout.on("data", (chunk: Buffer) => {
@@ -61,29 +61,66 @@ test("release real_compila, instala y arranca sin Node ni repo", { skip: !enable
 	const version = spawnSync(binary, ["--version"], { encoding: "utf8", cwd: home, env: { HOME: home, PATH: "/usr/bin:/bin" } });
 	assert.equal(version.status, 0, version.stderr);
 	assert.equal(version.stdout.trim(), pkg.version);
-	assert.equal((await stat(join(installRoot, "runtime/skills/ship/SKILL.md"))).isFile(), true);
+	await assert.rejects(stat(join(installRoot, "runtime/skills")));
 	assert.equal((await stat(join(installRoot, "runtime/theme/dark.json"))).isFile(), true);
 
 	const probe = join(home, "runtime-probe.ts");
 	await writeFile(probe, `import { VERSION, getPackageDir, getExamplesPath } from "@earendil-works/pi-coding-agent";\nimport { existsSync } from "node:fs";\nexport default function (pi) { pi.registerCommand("runtime-probe", { description: JSON.stringify({ version: VERSION, packageDir: getPackageDir(), examples: existsSync(getExamplesPath()) }), handler: async () => {} }); }\n`);
-	const agent = join(installRoot, "agent");
-	const seededCwd = await seedConfig(home, agent);
 	const responses = await rpc(binary, home, { id: "1", type: "get_commands" }, ["--extension", probe]);
 	const response = responses.find((line) => line.id === "1");
 	const commands = (response?.data as { commands: { name: string; source: string }[] }).commands;
 	const skills = commands.filter((command) => command.source === "skill").map((command) => command.name.replace("skill:", "")).sort();
-	assert.deepEqual(skills, ["code-review", "coding-policies", "design-system", "grill", "init", "issue-triage", "land", "propio", "run", "ship", "spec", "tdd"]);
+	assert.deepEqual(skills, []);
 	const metadata = commands.find((command) => command.name === "runtime-probe") as { description?: string } | undefined;
 	const observed = JSON.parse(metadata?.description ?? "null");
 	assert.deepEqual(observed, { version: pkg.dependencies["@earendil-works/pi-coding-agent"], packageDir: await realpath(join(installRoot, "runtime")), examples: true });
-	const shell = await rpc(binary, home, { id: "env", type: "bash", command: 'printf "%s|%s|%s" "${PI_PACKAGE_DIR-unset}" "${OMI_RUNTIME_DIR-unset}" "${OMI_AGENT_SESSION-unset}"' });
+	const models = await rpc(binary, home, { id: "models", type: "get_available_models" }, [], { GEMINI_API_KEY: "del-shell" });
+	assert.deepEqual((models.find((line) => line.id === "models")?.data as { models: unknown[] }).models, []);
+	const shell = await rpc(binary, home, { id: "env", type: "bash", command: 'printf "%s|%s|%s" "${PI_PACKAGE_DIR-unset}" "${GEMINI_API_KEY-unset}" "${OMI_AGENT_SESSION-unset}"' }, [], { GEMINI_API_KEY: "del-shell" });
 	const shellResponse = shell.find((line) => line.id === "env" && line.type === "response");
 	assert.ok(shellResponse?.data, JSON.stringify(shell));
-	assert.equal((shellResponse.data as { output: string }).output, "unset|unset|1");
+	assert.equal((shellResponse.data as { output: string }).output, "unset|del-shell|1");
+	const agent = join(installRoot, "agent");
+	const seededCwd = await seedConfig(home, agent);
 	const body = await requestSeenByModel({ command: binary, cwd: seededCwd, agent, env: { HOME: home, PATH: "/usr/bin:/bin", OMI_HOME: "" } });
 	assert.ok(body.length > 0, "el proveedor no recibió nada");
 	for (const mark of Object.values(FOREIGN)) assert.ok(!body.includes(mark), `llegó al modelo: ${mark}`);
 	for (const mark of Object.values(OWN)) assert.ok(body.includes(mark), `no llegó al modelo: ${mark}`);
+});
+
+const ACCEPT_IMPORT_IN_PTY = `
+import os, pty, re, select, sys
+binary = sys.argv[1]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv(binary, [binary, "import", "pi"])
+output, answered = b"", 0
+while True:
+    if not select.select([fd], [], [], 60)[0]:
+        sys.exit("la importación se colgó")
+    try:
+        chunk = os.read(fd, 4096)
+    except OSError:
+        break
+    if not chunk:
+        break
+    output += chunk
+    prompts = len(re.findall(rb"\\[[sS]/[nN]\\]", output))
+    while answered < prompts:
+        os.write(fd, b"s\\n")
+        answered += 1
+status = os.waitpid(pid, 0)[1]
+sys.exit(0 if answered > 0 and os.waitstatus_to_exitcode(status) == 0 else f"salió mal: {answered} respuestas")
+`;
+
+test("el binario duplica lo que importa: borrás ~/.pi y sigue igual", { skip: !enabled }, async (t) => {
+	const { home, binary } = await buildAndInstall(t);
+	await seedPi(home);
+	const driven = spawnSync("python3", ["-I", "-c", ACCEPT_IMPORT_IN_PTY, binary], { encoding: "utf8", env: { ...process.env, HOME: home, OMI_HOME: "" } });
+	assert.equal(driven.status, 0, driven.stderr);
+	await rm(join(home, ".pi"), { recursive: true });
+	const body = await requestSeenByModel({ command: binary, cwd: home, agent: join(home, ".omi/agent"), env: { HOME: home, PATH: "/usr/bin:/bin", OMI_HOME: "", PI_OFFLINE: "1" } });
+	for (const mark of PI_MARKS) assert.ok(body.includes(mark), `no llegó al modelo: ${mark}`);
 });
 
 test("omi upgrade --check_corre desde el binario instalado", { skip: !enabled }, async (t) => {

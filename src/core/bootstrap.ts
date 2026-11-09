@@ -7,5 +7,4 @@ import { agentDir, omiHome } from "./paths.ts";
 const home = process.env.HOME ?? homedir();
 const root = omiHome(home);
 process.env.PI_PACKAGE_DIR = join(root, "runtime");
-process.env.OMI_RUNTIME_DIR = join(root, "runtime");
 process.env.PI_CODING_AGENT_DIR = agentDir(home);

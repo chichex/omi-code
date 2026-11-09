@@ -3,7 +3,7 @@ import { delimiter, join } from "node:path";
 import type { BashOperations, InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { Io } from "../cli/io.ts";
 import { agentDir } from "../core/paths.ts";
-import { childEnvironment } from "../../extensions/lib/process-environment.ts";
+import { childEnvironment } from "../core/process-environment.ts";
 
 export async function runtimeShellExtension(io: Io): Promise<InlineExtension> {
 	const { createBashToolDefinition, createLocalBashOperations } = await import("@earendil-works/pi-coding-agent");

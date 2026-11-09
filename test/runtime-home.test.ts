@@ -9,7 +9,7 @@ import { tempDir } from "./helpers/io.ts";
 test("OMI_HOME resuelve juntos configuración, credenciales y runtime", async (t) => {
 	const home = await tempDir(t);
 	const target = join(await tempDir(t), "custom-omi");
-	await mkdir(join(target, "runtime/skills"), { recursive: true });
+	await mkdir(join(target, "runtime/theme"), { recursive: true });
 	const previous = process.env.OMI_HOME;
 	t.after(() => { if (previous === undefined) delete process.env.OMI_HOME; else process.env.OMI_HOME = previous; });
 	process.env.OMI_HOME = target;

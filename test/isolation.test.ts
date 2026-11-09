@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { test, type TestContext } from "node:test";
 import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { agentDir } from "../src/core/paths.ts";
-import { excludeUserSkills, isolatedContextExtension, projectContextFiles, USER_SKILLS_EXCLUSION } from "../src/tui/isolation.ts";
+import { excludeUserSkills, isolatedContextExtension, projectContextFiles, PROVIDER_CREDENTIALS, USER_SKILLS_EXCLUSION } from "../src/tui/isolation.ts";
 import { FOREIGN, OWN, requestSeenByModel, seedConfig } from "./helpers/foreign-config.ts";
 import { tempDir } from "./helpers/io.ts";
 
@@ -155,4 +155,14 @@ test("omi real_al modelo sólo le llega lo de ~/.omi y lo del proyecto", async (
 	assert.ok(body.length > 0, "el proveedor no recibió nada");
 	for (const mark of Object.values(FOREIGN)) assert.ok(!body.includes(mark), `llegó al modelo: ${mark}`);
 	for (const mark of Object.values(OWN)) assert.ok(body.includes(mark), `no llegó al modelo: ${mark}`);
+});
+
+test("PROVIDER_CREDENTIALS_cubre lo que cada proveedor de Pi mira para autenticarse solo", async () => {
+	const { builtinProviders } = await import("@earendil-works/pi-ai/providers/all");
+	const asked = new Set<string>();
+	const ctx = { env: async (name: string) => { asked.add(name); return undefined; }, fileExists: async () => true };
+	for (const provider of builtinProviders()) await provider.auth.apiKey?.resolve({ ctx, signal: AbortSignal.timeout(5000) } as never);
+	assert.ok(asked.size > 30, `el sondeo dejó de ver variables: ${asked.size}`);
+	const known: readonly string[] = PROVIDER_CREDENTIALS;
+	assert.deepEqual([...asked].filter((name) => !known.includes(name)), [], "Pi suma variables: agregalas a PROVIDER_CREDENTIALS");
 });

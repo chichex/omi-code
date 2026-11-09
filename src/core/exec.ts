@@ -1,7 +1,7 @@
 // Ejecuta procesos externos (git, docker, regctl). Es una frontera: los tests la reemplazan.
 
 import { spawn } from "node:child_process";
-import { childEnvironment } from "../../extensions/lib/process-environment.ts";
+import { childEnvironment } from "./process-environment.ts";
 
 export interface CommandResult {
 	code: number;

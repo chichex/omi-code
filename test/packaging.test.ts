@@ -21,8 +21,8 @@ async function fakeRelease(t: TestContext, options: { binary?: string; bundled?:
 	const stage = await tempDir(t);
 	const names = assetNames(currentPlatform());
 	const bundled = options.bundled ?? "#!/bin/sh\necho 1.0.0\n";
-	await mkdir(join(stage, "skills/ship"), { recursive: true });
-	await writeFile(join(stage, "skills/ship/SKILL.md"), "x\n");
+	await mkdir(join(stage, "theme"), { recursive: true });
+	await writeFile(join(stage, "theme/dark.json"), "x\n");
 	await writeFile(join(stage, "omi"), bundled, { mode: 0o755 });
 	await writeFile(join(dir, names.binary), options.binary ?? "#!/bin/sh\necho 1.0.0\n", { mode: 0o755 });
 	execFileSync("tar", ["-czf", join(dir, names.runtime), "-C", stage, "."]);
@@ -42,7 +42,7 @@ test("install.sh_instala binario y runtime en ~/.omi", async (t) => {
 	const result = install(await fakeRelease(t), home);
 	assert.equal(result.status, 0, result.stderr);
 	assert.equal(execFileSync(join(home, ".omi/bin/omi"), ["--version"], { encoding: "utf8" }), "1.0.0\n");
-	assert.equal((await stat(join(home, ".omi/runtime/skills/ship/SKILL.md"))).isFile(), true);
+	assert.equal((await stat(join(home, ".omi/runtime/theme/dark.json"))).isFile(), true);
 	assert.equal((await stat(join(home, ".omi/runtime/omi"))).isFile(), true);
 });
 
