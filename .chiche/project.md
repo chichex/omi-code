@@ -12,8 +12,8 @@ Dependencias runtime fijadas a versión exacta. Diseño UI: no aplica (CLI, TUI 
 |---|---|---|---|---|---|
 | deps | `npm ci` | . | verificado 2026-11-05 | ~5s | un worktree nuevo no trae `node_modules` |
 | typecheck | `npm run typecheck` | . | verificado 2026-11-07 | ~2s | dos proyectos: raíz estricta y `extensions/` con su `tsconfig` |
-| test | `npm test` | . | verificado 2026-11-07 | ~8s | mock de omi-api en `test/helpers/mock-omi.ts`; `smoke.test.ts` usa Pi y procesos reales; incluye `extensions/**/*.test.ts`; requiere `python3` para el handler; los 2 smoke de packaging se corren aparte |
-| empaquetado | `npm run test:packaging` | . | verificado 2026-11-07 | ~12s | requiere bun; compila para el host, instala en un HOME temporal (también raíz personalizada), verifica versión/assets de Pi y entorno de procesos hijos |
+| test | `npm test` | . | verificado 2026-11-07 | ~8s | mock de omi-api en `test/helpers/mock-omi.ts`; `smoke.test.ts` usa Pi y procesos reales; incluye `extensions/**/*.test.ts`; requiere `python3` para el handler; los 3 smoke de packaging se corren aparte |
+| empaquetado | `npm run test:packaging` | . | verificado 2026-11-07 | ~12s | requiere bun y `python3`; compila para el host, instala en un HOME temporal (también raíz personalizada), verifica versión/assets de Pi, entorno de procesos hijos y cancelar el prompt en un pty |
 | release local | `node scripts/build-release.ts --out <dir>` | . | verificado 2026-11-07 | ~25s | las cuatro plataformas; `--targets` acota |
 | plan de release | `node scripts/next-release.ts` | . | verificado 2026-11-08 | <1s | imprime `version=X.Y.Z`, o `version=` si nada empaquetado cambió desde el último tag |
 | dry-run de release | `gh workflow run release.yml --ref <rama> -f dry_run=true` | . | verificado 2026-11-08 | ~5min | corre el pipeline completo, con el arranque en las cuatro plataformas, sin publicar |
@@ -107,6 +107,8 @@ done
 - 2026-11-08, feedback: despliegue continuo. El humano reemplazó «publicar es decisión humana» por «la decisión humana es el merge». Sólo publica lo que cambia el binario (`isPackaged` en `scripts/next-release.ts`): primero se miran las rutas y después el tipo de commit. Antes de 1.0 lo incompatible sube el minor. Volver atrás es mergear un `revert:`: `omi upgrade` sólo sube de versión.
 - 2026-11-08, `cierre` obligatorio: la CI de un PR abierto con `GITHUB_TOKEN` queda en `action_required` sin correr, y un `cierre` de `workflow_dispatch` no cuenta para la protección aunque esté en el commit (probado en un PR descartable). `bump-pi.yml` publica el check por la API, sobre un commit distinto al de su corrida, después de correr los mismos gates sobre ese árbol. Probado con un bump real sobre un Pi viejo (#12). El PR queda `UNSTABLE` por esa corrida, sin bloquear el merge: `cierre` es el único check requerido. Aprobarla es opcional: corre la CI real y lo deja `CLEAN`.
 - 2026-11-08, permiso de Actions: el humano autorizó `can_approve_pull_request_reviews: true` para que el bump abra su PR. El mismo permiso deja aprobar PRs: revisarlo si `main` empieza a exigir aprobaciones.
+- 2026-11-09, feedback: la oferta de importar Pi pregunta por grupo y Enter sólo copia lo inofensivo. Las credenciales, los ajustes con código externo y los que reemplazan a los de omi piden un sí explícito, porque Pi instala y carga `packages` al arrancar. `onboarding.json` guarda una decisión por grupo y `piImport` se sigue leyendo. `omi import pi` vuelve a preguntar.
+- 2026-11-09, Bun: `rl.question` queda pendiente al cerrar el readline. Sin `askOrCancel`, Ctrl+D colgaba el binario y Ctrl+C pedía dos pulsaciones. Con Node no se reproduce: lo cubre el smoke de empaquetado con un pty real.
 
 ## Gaps
 
@@ -115,4 +117,5 @@ done
 - Los guardrails locales no aíslan a un agente con bash y acceso al Bearer. Riesgos aceptados para este land y diferidos por decisión humana: aislamiento CLI en #5 y confianza de aprobación MCP en #6. Sus issues siguen abiertos; resolver los hilos originales no constituye una corrección de seguridad.
 - `/skill:init --update` migra `.sdd/` a `.omi/`, pero no `.chiche/` a `.omi/`. Este repo sigue con `.chiche/project.md`, que se lee por compatibilidad.
 - El contrato de `/version` se verifica estático al publicar (`git grep`): OMI no lo valida.
+- Sin confirmar si el proveedor invalida el refresh token viejo al copiar `auth.json` con OAuth: el código de Pi guarda el nuevo sólo en su archivo, y probarlo exige renovar un token real. Por eso el aviso dice «puede».
 - `release.yml` pasa los binarios entre jobs como un artifact de 283 MB, que expira en un día. Sin confirmar el límite de almacenamiento de Actions de la cuenta: si se llena, falla el build y no se publica nada.
