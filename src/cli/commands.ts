@@ -1,6 +1,7 @@
 // Tabla de subcomandos. Cada entrada es un adaptador delgado sobre el core.
 
 import { loginCommand, logoutCommand, whoamiCommand } from "./commands/auth.ts";
+import { importCommand } from "./commands/import.ts";
 import { initCommand } from "./commands/init.ts";
 import { upgradeCommand } from "./commands/upgrade.ts";
 import {
@@ -31,6 +32,7 @@ export const HELP_ROWS: ReadonlyArray<readonly [string, string]> = [
 	["promote", "promueve a prod la versión de stage"],
 	["logs", "logs en vivo y crash logs"],
 	["upgrade", "actualiza omi"],
+	["import", "trae credenciales, ajustes y grills de Pi"],
 	["mcp", "servidor MCP por stdio"],
 ];
 
@@ -49,6 +51,7 @@ export const USAGE: Readonly<Record<string, string>> = {
 	promote: "omi promote [--service <nombre>] [--yes]",
 	logs: "omi logs --env <stage|prod> [--service <nombre>] [--lines <n>] [--duration <s>]\nomi logs --env <stage|prod> --crash [--id <ilog>] [--deployment <dep>]",
 	upgrade: "omi upgrade [--check]",
+	import: "omi import pi",
 	mcp: "omi mcp [--authorize-stage]",
 };
 
@@ -66,4 +69,5 @@ export const COMMANDS: Readonly<Record<string, Command | undefined>> = {
 	promote: promoteCommand,
 	logs: logsCommand,
 	upgrade: upgradeCommand,
+	import: importCommand,
 };
