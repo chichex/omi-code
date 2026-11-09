@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { test, type TestContext } from "node:test";
 import pkg from "../package.json" with { type: "json" };
 import { assetNames, currentPlatform } from "../src/upgrade/release.ts";
+import { FOREIGN, OWN, requestSeenByModel, seedConfig } from "./helpers/foreign-config.ts";
 import { tempDir } from "./helpers/io.ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -65,11 +66,13 @@ test("release real_compila, instala y arranca sin Node ni repo", { skip: !enable
 
 	const probe = join(home, "runtime-probe.ts");
 	await writeFile(probe, `import { VERSION, getPackageDir, getExamplesPath } from "@earendil-works/pi-coding-agent";\nimport { existsSync } from "node:fs";\nexport default function (pi) { pi.registerCommand("runtime-probe", { description: JSON.stringify({ version: VERSION, packageDir: getPackageDir(), examples: existsSync(getExamplesPath()) }), handler: async () => {} }); }\n`);
+	const agent = join(installRoot, "agent");
+	const seededCwd = await seedConfig(home, agent);
 	const responses = await rpc(binary, home, { id: "1", type: "get_commands" }, ["--extension", probe]);
 	const response = responses.find((line) => line.id === "1");
 	const commands = (response?.data as { commands: { name: string; source: string }[] }).commands;
 	const skills = commands.filter((command) => command.source === "skill").map((command) => command.name.replace("skill:", "")).sort();
-	assert.deepEqual(skills, ["code-review", "coding-policies", "design-system", "grill", "init", "issue-triage", "land", "run", "ship", "spec", "tdd"]);
+	assert.deepEqual(skills, ["code-review", "coding-policies", "design-system", "grill", "init", "issue-triage", "land", "propio", "run", "ship", "spec", "tdd"]);
 	const metadata = commands.find((command) => command.name === "runtime-probe") as { description?: string } | undefined;
 	const observed = JSON.parse(metadata?.description ?? "null");
 	assert.deepEqual(observed, { version: pkg.dependencies["@earendil-works/pi-coding-agent"], packageDir: await realpath(join(installRoot, "runtime")), examples: true });
@@ -77,6 +80,10 @@ test("release real_compila, instala y arranca sin Node ni repo", { skip: !enable
 	const shellResponse = shell.find((line) => line.id === "env" && line.type === "response");
 	assert.ok(shellResponse?.data, JSON.stringify(shell));
 	assert.equal((shellResponse.data as { output: string }).output, "unset|unset|1");
+	const body = await requestSeenByModel({ command: binary, cwd: seededCwd, agent, env: { HOME: home, PATH: "/usr/bin:/bin", OMI_HOME: "" } });
+	assert.ok(body.length > 0, "el proveedor no recibió nada");
+	for (const mark of Object.values(FOREIGN)) assert.ok(!body.includes(mark), `llegó al modelo: ${mark}`);
+	for (const mark of Object.values(OWN)) assert.ok(body.includes(mark), `no llegó al modelo: ${mark}`);
 });
 
 test("omi upgrade --check_corre desde el binario instalado", { skip: !enabled }, async (t) => {
