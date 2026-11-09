@@ -1,6 +1,7 @@
 # Propone un bump semanal sólo tras typecheck, tests y packaging en este mismo workflow.
-# GITHUB_TOKEN no dispara CI por pull_request y un `cierre` lanzado por dispatch no cuenta para la
-# protección de main. Este job ya corrió esos gates sobre el mismo árbol, así que publica el check.
+# La CI de un PR abierto con GITHUB_TOKEN queda en action_required sin correr, y un `cierre` lanzado por
+# dispatch no cuenta para la protección de main. Este job ya corrió esos gates sobre el mismo árbol, así
+# que publica el check.
 # No se mergea solo: el merge humano es lo que publica la release.
 # Abrir el PR requiere que el repo permita a Actions crearlos (`can_approve_pull_request_reviews`).
 name: Bump Pi
