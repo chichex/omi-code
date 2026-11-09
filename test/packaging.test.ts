@@ -131,6 +131,14 @@ test("bump-pi.yml_publica el check que exige main sólo después de sus gates", 
 	assert.match(workflow, /-f conclusion=success/);
 });
 
+test("bump-pi.yml_recrea una rama sin PR y respeta la que ya tuvo uno", async () => {
+	const workflow = await read(".github/workflows/bump-pi.yml");
+	const lookup = workflow.indexOf('gh pr list --head "$branch" --state all');
+	const remove = workflow.indexOf('git push origin --delete "$branch"');
+	assert.ok(lookup > 0 && lookup < remove);
+	assert.ok(remove < workflow.indexOf('git push origin "$branch"'));
+});
+
 test("release.yml_publica desde main sólo después de todos los gates", async () => {
 	const workflow = await read(".github/workflows/release.yml");
 	assert.match(workflow, /branches: \[main\]/);

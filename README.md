@@ -54,7 +54,7 @@ Son controles locales para las superficies soportadas, no aislamiento de un proc
 
 En la TUI, `/skill:ship` autoriza stage para la sesión. En `omi mcp`, lo hace el flag `--authorize-stage` y la aprobación humana llega por elicitación del cliente MCP. En la CLI sin terminal, `--yes` aprueba; dentro de una sesión agéntica, no vale.
 
-El bump semanal de Pi abre un PR sólo tras typecheck, tests y empaquetado en el mismo workflow. La revisión y el merge son humanos, y mergearlo publica una release.
+El bump semanal de Pi abre un PR sólo tras typecheck, tests y empaquetado en el mismo workflow. La revisión y el merge son humanos, y mergearlo publica una release. Ese PR muestra una CI esperando aprobación: se puede mergear sin aprobarla, porque el workflow ya publicó `cierre`.
 
 ## Desarrollo
 
