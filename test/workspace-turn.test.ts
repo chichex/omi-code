@@ -45,6 +45,12 @@ test("workspace_un turno real conserva streaming y tools; una confirmación vuel
 	const plain = plainTerminal(result.output);
 	assert.equal(requests.length, 2, plain);
 	assert.ok(requests[1]?.includes("PROBE_OK"), requests[1]);
+	assert.match(plain, /▌ Vos/);
+	for (const body of requests) {
+		const payload = JSON.parse(body) as { messages: { role: string; content: unknown }[] };
+		assert.deepEqual(payload.messages.filter((message) => message.role === "user").map((message) => message.content), [[{ type: "text", text: "hola" }]]);
+		assert.doesNotMatch(body, /▌ Vos/, "la etiqueta visual no se envía al proveedor");
+	}
 	// El renderer puede emitir sólo el sufijo cambiado del título: no buscar una pantalla completa en deltas ANSI.
 	assert.match(plain, /Cambios locales/); assert.match(plain, /Esperando decisión/); assert.match(plain, /PROBE_COMPLETED/);
 	assert.doesNotMatch(plain, /Extension error|TypeError|exceeds terminal width/);

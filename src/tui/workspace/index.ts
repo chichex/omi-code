@@ -6,11 +6,16 @@ import type { ExtensionAPI, ExtensionContext, InlineExtension, KeybindingsManage
 import { colorToHex, Container, HStack, isViewportTUI, matchesKey, ScrollView, VStack, wrapTextWithAnsi, type Component, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import type { Io } from "../../cli/io.ts";
 import { agentDir } from "../../core/paths.ts";
-import { readCommand, readEnvironments, readFileDiff, readGit, readGithub, readUntrackedPreview, resourceReader, sensitivePreviewPath, workspaceName, type EnvironmentStatus, type GitSnapshot, type GithubSnapshot, type Resources } from "./data.ts";
+import { readEnvironments, readFileDiff, readGit, readGithub, readGithubDetail, readUntrackedPreview, resourceReader, sensitivePreviewPath, workspaceName, type EnvironmentStatus, type GitSnapshot, type GithubItem, type Resources } from "./data.ts";
 import { OmiModelPicker, type PickerResult } from "./model-picker.ts";
-import { align, bar, fit, gib, modalLines, percentage, surface, text, tokens } from "./presentation.ts";
+import { align, bar, changedFileLine, fit, gib, gitSyncSummary, modalLines, percentage, sidebarSection, surface, text, tokens } from "./presentation.ts";
 
-type View = "project" | "changes" | "deliveries";
+import { WORKSPACE_VIEWS, workspaceTabs, type WorkspaceView } from "./navigation.ts";
+
+type View = WorkspaceView;
+type GithubView = "issues" | "prs";
+interface GithubList { items: GithubItem[] | undefined; error: string | undefined; at: number | undefined; selected: number }
+const emptyGithubList = (): GithubList => ({ items: undefined, error: undefined, at: undefined, selected: 0 });
 export interface WorkspacePreferences { favorites: string[]; sidebar: boolean }
 export async function loadWorkspacePreferences(home: string): Promise<WorkspacePreferences> {
 	try {
@@ -77,20 +82,25 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		const parsed = parseArgs(args);
 		let active = false; let ctx: ExtensionContext; let tui: TUI | undefined;
 		let prefs: WorkspacePreferences = { favorites: [], sidebar: true };
-		let view: View = "project"; let working = false; let blocked = false; let activity = "Listo";
+		let view: View = "chat"; let working = false; let blocked = false; let activity = "Listo";
 		const runningTools = new Map<string, string>();
 		let git: GitSnapshot | undefined; let gitError = false; let resources: Resources | undefined;
-		let github: GithubSnapshot | undefined; let githubError: string | undefined; let githubAt: number | undefined;
-		let environments: EnvironmentStatus[] = []; let project: string | undefined; let envError: string | undefined; let envAt: number | undefined;
+		const github: Record<GithubView, GithubList> = { issues: emptyGithubList(), prs: emptyGithubList() };
+		let githubDetailBusy = false; let infoPrompt = false;
+		let environments: EnvironmentStatus[] = []; let services: string[] = []; let project: string | undefined; let envError: string | undefined; let envAt: number | undefined;
 		let localBusy = false; let remoteBusy = false; let timer: ReturnType<typeof setInterval> | undefined;
 		let lastRemote = 0; let selectedFile = 0; let diff: string | undefined; let diffLoading = false; let diffRequest = 0;
 		let baseRoot: Component | undefined; let root: Component | undefined; let projectRoot: Component | undefined; let layoutCompatible = false;
 		let document: Component; let pending: Component; let status: Component; let above: Component; let editor: Container; let below: Component; let footer: Component;
 		let workspaceDocument: Component; let modelShortcut = "Ctrl L";
 		let sidebarContextStart = 0; let sidebarResourceStart = 0; let welcomeCommandStart = 8;
+		let sidebarLinks = new Map<number, View>();
 		let unsubscribeInput: (() => void) | undefined; let finishModal: (() => void) | undefined;
 		const controller = new AbortController(); const sampleResources = resourceReader();
 		const theme = (): Theme => ctx.ui.theme;
+		// Sólo presentación: el mensaje original sigue intacto en el historial y en el contexto del modelo.
+		pi.registerMarkdownTransformer((markdown, context) => active && context.messageType === "user" && markdown.trim()
+			? `**${theme().fg("accent", "▌ Vos")}**\n\n${markdown}` : markdown);
 		const rows = (): number => tui?.terminal.rows || 24;
 		const sidebarVisible = (width = tui?.terminal.columns ?? 80, height = rows()): boolean => layoutCompatible && tui?.mode === "fullscreen" && prefs.sidebar && width >= 110 && height >= 26;
 		const contextState = () => {
@@ -106,16 +116,24 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 
 		async function refreshRemote(): Promise<void> {
 			if (!active || remoteBusy) return;
-			if (parsed.offline || !ctx.isProjectTrusted()) { githubError = parsed.offline ? "Offline" : "Proyecto sin confianza"; envError = githubError; changed(); return; }
-			remoteBusy = true; lastRemote = Date.now(); const identity = gitIdentity(); const snapshot = git;
+			if (parsed.offline || !ctx.isProjectTrusted()) { const error = parsed.offline ? "Offline" : "Proyecto sin confianza"; github.issues.error = error; github.prs.error = error; envError = error; changed(); return; }
+			remoteBusy = true; lastRemote = Date.now(); const identity = gitIdentity(); const snapshot = git; changed();
 			const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(6000)]);
 			await Promise.all([
+				...(["issues", "prs"] as const).map(async (kind) => {
+					const state = github[kind];
+					try {
+						const items = snapshot ? await readGithub(snapshot, kind === "issues" ? "issue" : "pr", signal) : undefined;
+						if (active && identity === gitIdentity()) {
+							const previousIndex = state.selected; const selected = state.items?.[previousIndex]?.number; state.items = items;
+							state.selected = Math.max(0, items?.findIndex((item) => item.number === selected) ?? 0);
+							if (state.selected !== previousIndex) (kind === "issues" ? issuesPane : prsPane).offset = Math.max(0, state.selected - Math.max(1, rows() - 11) + 1);
+							state.error = undefined; state.at = Date.now();
+						}
+					} catch { if (active && identity === gitIdentity()) state.error = "GitHub no disponible · revisá gh / login / red"; }
+				}),
 				(async () => {
-					try { const value = snapshot ? await readGithub(snapshot, signal) : undefined; if (active && identity === gitIdentity()) { github = value; githubError = undefined; githubAt = Date.now(); } }
-					catch { if (active && identity === gitIdentity()) githubError = "GitHub no disponible · revisá gh / login / red"; }
-				})(),
-				(async () => {
-					try { const value = await readEnvironments({ ...io, cwd: snapshot?.root ?? ctx.cwd }, signal); if (active && identity === gitIdentity()) { environments = value.environments; project = value.project; envError = undefined; envAt = Date.now(); } }
+					try { const value = await readEnvironments({ ...io, cwd: snapshot?.root ?? ctx.cwd }, signal); if (active && identity === gitIdentity()) { environments = value.environments; services = value.services; project = value.project; envError = undefined; envAt = Date.now(); } }
 					catch { if (active && identity === gitIdentity()) envError = "OMI no disponible · revisá vínculo / sesión / red"; }
 				})(),
 			]);
@@ -130,19 +148,24 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 				(async () => { try { const value = await sampleResources(ctx.cwd, controller.signal); if (active) resources = value; } catch { /* conservar última muestra, nunca inventar ceros */ } })(),
 			]);
 			localBusy = false;
-			if (active && previousIdentity !== gitIdentity()) { github = undefined; githubAt = undefined; environments = []; envAt = undefined; project = undefined; diffRequest++; diffLoading = false; diff = undefined; selectedFile = 0; }
+			if (active && previousIdentity !== gitIdentity()) { github.issues = emptyGithubList(); github.prs = emptyGithubList(); environments = []; services = []; envAt = undefined; envError = undefined; project = undefined; diffRequest++; diffLoading = false; diff = undefined; selectedFile = 0; issuesPane.offset = 0; prsPane.offset = 0; }
 			changed();
 			if (active && (previousIdentity !== gitIdentity() || Date.now() - lastRemote > 30_000)) void refreshRemote();
 		}
 		async function info(title: string, lines: string[]): Promise<void> {
 			if (!active || finishModal) return;
-			await ctx.ui.custom<void>((ui, currentTheme, _keys, done) => {
+			infoPrompt = true;
+			try { await ctx.ui.custom<void>((ui, currentTheme, _keys, done) => {
 				let offset = 0; finishModal = () => done();
 				return { capturesViewportInput: true, invalidate() {}, render(width) { const count = Math.max(1, rows() - 12); const visible = lines.flatMap((line) => wrapTextWithAnsi(text(line), Math.max(1, width - 4))); offset = Math.min(offset, Math.max(0, visible.length - count)); return modalLines(currentTheme, title, visible.slice(offset, offset + count).map((line) => fit(line, Math.max(1, width - 4))), width); }, handleInput(data) { if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c") || matchesKey(data, "return")) done(); else if (matchesKey(data, "up")) offset = Math.max(0, offset - 1); else if (matchesKey(data, "down")) offset++; else if (matchesKey(data, "pageDown")) offset += 8; else if (matchesKey(data, "pageUp")) offset = Math.max(0, offset - 8); ui.requestRender(); } };
-			}, { overlay: true, overlayOptions: { width: "85%", maxHeight: "90%", anchor: "center" } });
-			finishModal = undefined;
+			}, { overlay: true, overlayOptions: { width: "85%", maxHeight: "90%", anchor: "center" } }); }
+			finally { infoPrompt = false; finishModal = undefined; }
 		}
-		async function showWorkspace(): Promise<void> { await info("Ubicación de trabajo", [workspaceName(git), `Branch: ${git ? `${git.detached ? "HEAD separado · " : ""}${git.branch}` : "—"}`, `Directorio activo: ${ctx.cwd}`, `Raíz del checkout: ${git?.root ?? "—"}`, `Repo principal: ${git?.mainRoot ?? "—"}`, git?.linked ? "Este worktree tiene directorio e índice propios. Comparte historia y referencias Git. No es un sandbox: no aísla credenciales, procesos ni servicios." : "No hay un worktree enlazado activo.", ...(gitError ? ["Estado Git desactualizado: no se pudo refrescar."] : [])]); }
+		async function showWorkspace(): Promise<void> {
+			await info("Ubicación de trabajo", [workspaceName(git), `Branch: ${git ? `${git.detached ? "HEAD separado · " : ""}${git.branch}` : "—"}`, `Directorio activo: ${ctx.cwd}`, `Raíz del checkout: ${git?.root ?? "—"}`, `Repo principal: ${git?.mainRoot ?? "—"}`,
+				...(git ? [`Archivos modificados: ${git.changeCount}`, `Upstream: ${git.tracking === false ? "sin configurar" : git.upstream ?? "no disponible"}`, `Commits: ↑${git.ahead ?? "—"} ↓${git.behind ?? "—"}`, "↑ commits locales por subir · ↓ commits del upstream por traer.", "Comparación con la referencia local del último fetch; no consulta el remoto. Para actualizarla, ejecutá git fetch. Los archivos sin commit se cuentan por separado."] : []),
+				git?.linked ? "Este worktree tiene directorio e índice propios. Comparte historia y referencias Git. No es un sandbox: no aísla credenciales, procesos ni servicios." : "No hay un worktree enlazado activo.", ...(gitError ? ["Estado Git desactualizado: no se pudo refrescar."] : [])]);
+		}
 		async function showResources(): Promise<void> { const r = resources; await info("Recursos · equipo donde corre OMI", r ? [`Host: ${r.host}`, `CPU total: ${r.cpu === undefined ? "esperando muestra" : `${r.cpu.toFixed(1)}%`}`, `RAM usada: ${gib(r.totalRam - r.availableRam)} / ${gib(r.totalRam)}${r.memoryEstimated ? " (estimada)" : ""}`, `RAM disponible: ${gib(r.availableRam)}`, `Disco del proyecto: ${r.disk ? `${gib(r.disk.used)} usados / ${gib(r.disk.total)} · ${gib(r.disk.available)} disponibles` : "no disponible"}`, `Proceso OMI: CPU ${r.processCpu?.toFixed(1) ?? "—"}% · RAM ${gib(r.rss)}`, "RAM OMI es RSS de este proceso; no suma herramientas ni otros subprocesos.", "CPU de OMI normalizada a la capacidad total del equipo.", "Estas métricas son del host de OMI, no de tu Mac si te conectaste por SSH."] : ["Recolectando datos…"]); }
 		async function showContext(): Promise<void> { const usage = ctx.getContextUsage(); await info("Ventana de contexto", [`Modelo: ${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "sin modelo"}`, `Uso: ${usage?.tokens == null ? "desconocido" : `${tokens(usage.tokens)} tokens (estimado)`}`, `Límite: ${tokens(usage?.contextWindow ?? ctx.model?.contextWindow ?? 0)} tokens`, `Ocupación: ${usage?.percent == null ? "—" : `${usage.percent.toFixed(1)}%`}`, "El runtime usa el último uso informado por el modelo y estima los mensajes posteriores. Después de compactar puede ser desconocido hasta la siguiente respuesta.", "No inventamos un desglose por sistema, conversación y tools.", "Para compactar usá /compact. Cambiar el modelo no descarta contenido."]); }
 		async function showModel(query = ""): Promise<void> {
@@ -167,45 +190,44 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		}
 		function switchView(next: View): void {
 			if (!active || blocked || tui?.hasOverlay()) return;
-			if ((!layoutCompatible || tui?.mode !== "fullscreen") && next !== "project") { ctx.ui.notify("Esta vista requiere el layout fullscreen compatible de OMI", "warning"); return; }
+			if ((!layoutCompatible || tui?.mode !== "fullscreen") && next !== "chat") { ctx.ui.notify("Esta vista requiere el layout fullscreen compatible de OMI", "warning"); return; }
 			view = next; buildRoot();
-			if (next === "project") tui?.setFocus(editor?.children[0] ?? null);
-			else tui?.setFocus(next === "changes" ? changesPane : deliveriesPane);
+			tui?.setFocus(next === "chat" ? editor?.children[0] ?? null : readPanes[next]);
 			changed();
 		}
 		async function toggleSidebar(): Promise<void> { prefs.sidebar = !prefs.sidebar; changed(); await save(); }
 		async function palette(): Promise<void> {
 			if (!active || finishModal) return;
-			const actions = ["Proyecto", "Cambios", "Entregas", "Elegir modelo", "Ventana de contexto", "Ubicación / worktree", "Recursos del equipo", "Mostrar / ocultar lateral", "Actualizar datos"];
-			const selected = await ctx.ui.select("OMI · Comandos", actions);
-			if (!active) return;
-			if (selected === actions[0]) switchView("project"); else if (selected === actions[1]) switchView("changes"); else if (selected === actions[2]) switchView("deliveries");
-			else if (selected === actions[3]) await showModel(); else if (selected === actions[4]) await showContext(); else if (selected === actions[5]) await showWorkspace(); else if (selected === actions[6]) await showResources(); else if (selected === actions[7]) await toggleSidebar(); else if (selected === actions[8]) { void refreshLocal(); void refreshRemote(); }
+			const actions: [string, () => void | Promise<void>][] = [...WORKSPACE_VIEWS.map((item): [string, () => void] => [item.label, () => switchView(item.id)]),
+				["Elegir modelo", showModel], ["Ventana de contexto", showContext], ["Ubicación / worktree", showWorkspace], ["Recursos del equipo", showResources], ["Mostrar / ocultar lateral", toggleSidebar], ["Actualizar datos", () => { void refreshLocal(); void refreshRemote(); }]];
+			const selected = await ctx.ui.select("OMI · Comandos", actions.map(([label]) => label));
+			if (active) await actions.find(([label]) => label === selected)?.[1]();
 		}
 		const header = new Lines((width) => {
 			const t = theme(); const name = text(basename(git?.root ?? ctx.cwd));
 			return [surface(t, align(t.bold(t.fg("accent", " > omi code")) + `  ·  ${name}`, t.fg("dim", width >= 90 ? "Ctrl K comandos  F4 lateral " : "Ctrl K comandos "), width), width, true),
-				surface(t, ["project", "changes", "deliveries"].map((key, index) => { const label = `${index + 1} ${["Proyecto", "Cambios", "Entregas"][index]}`; return key === view ? t.fg("accent", t.bold(` [${label}] `)) : t.fg("muted", `  ${label}  `); }).join(""), width, true),
+				surface(t, workspaceTabs(width, view).map((tab) => tab.view === view ? t.fg("accent", t.bold(tab.label)) : t.fg("muted", tab.label)).join(""), width, true),
 				t.fg("border", "─".repeat(Math.max(0, width)))];
-		}, (event) => { if (event.type !== "click") return; if (event.y === 0 && event.x > event.width - 22) { void palette(); return { handled: true }; } if (event.y === 1) { switchView(event.x < 14 ? "project" : event.x < 27 ? "changes" : "deliveries"); return { handled: true }; } return undefined; });
+		}, (event) => { if (event.type !== "click") return; if (event.y === 0 && event.x > event.width - 22) { void palette(); return { handled: true }; } if (event.y === 1) { const tab = workspaceTabs(event.width, view).find((item) => event.x >= item.start && event.x < item.end); if (tab) { switchView(tab.view); return { handled: true }; } } return undefined; });
 		function sidebarLines(width: number): string[] {
 			const t = theme(); const label = (value: string) => t.fg("muted", value);
 			const inner = Math.max(1, width - 3); const height = Math.max(1, rows() - 6);
-			const lines = [label("PROYECTO"), text(basename(git?.root ?? ctx.cwd)), t.fg("accent", text(git ? `${git.detached ? "HEAD · " : ""}${git.branch} · ${workspaceName(git)}` : "Sin repositorio Git")), label(git ? `${git.changeCount} archivos · ${git.tracking ? `↑${git.ahead} ↓${git.behind}` : "sin upstream"}` : "Git no disponible")];
+			const section = (title: string, color: Parameters<typeof sidebarSection>[3]) => sidebarSection(t, title, inner, color);
+			const lines = [section("PROYECTO", "syntaxType"), t.bold(text(basename(git?.root ?? ctx.cwd))), t.fg("accent", text(git ? `${git.detached ? "HEAD · " : ""}${git.branch} · ${workspaceName(git)}` : "Sin repositorio Git")), git ? label(`${git.changeCount} archivos · `) + gitSyncSummary(t, git) : label("Git no disponible")];
 			if (gitError) lines.push(t.fg("warning", "Git desactualizado"));
-			lines.push("", label("ENTREGAS"));
-			if (githubError) lines.push(t.fg("warning", github ? "GitHub · datos desactualizados" : `GitHub · ${githubError === "Offline" ? "offline" : "no disponible"}`));
-			if (github?.pr) lines.push(text(github.pr));
-			for (const run of (github?.runs ?? []).slice(0, 2)) lines.push(`${t.fg(run.conclusion === "success" ? "success" : run.conclusion && run.conclusion !== "success" ? "warning" : "accent", run.conclusion === "success" ? "✓" : run.conclusion ? "!" : "●")} ${text(run.name)} · ${text(run.conclusion || run.status)}`);
-			if (!github && !githubError) lines.push(label(remoteBusy ? "GitHub · consultando…" : "GitHub · sin datos"));
-			if (github && !github.runs.length) lines.push(label("Sin ejecuciones en esta branch"));
-			lines.push("");
-			if (envError) lines.push(t.fg("warning", environments.length ? "OMI · datos desactualizados" : `OMI · ${envError === "Offline" ? "offline" : "no disponible"}`));
-			for (const env of environments.slice(0, 2)) lines.push(text(`${env.service}/${env.name} ${env.version ?? "—"} · ${env.state}`));
-			if (!environments.length && !envError) lines.push(label(envAt ? "Sin proyecto OMI vinculado" : "OMI · consultando…"));
+			const targets = new Map<string, View>();
+			const nav = (line: string, target: View): void => { lines.push(line); targets.set(line, target); };
+			lines.push("", section("GITHUB", "mdLink"));
+			for (const kind of ["issues", "prs"] as const) {
+				const state = github[kind]; const name = kind === "issues" ? "Issues" : "PRs";
+				const summary = state.items ? `${state.items.length}${state.items.length === 100 ? "+" : ""} ${name} abiertos` : `${name} · ${remoteBusy ? "consultando…" : "sin datos"}`;
+				nav(state.error ? t.fg("warning", `${name} · ${state.items ? "desactualizados" : state.error === "Offline" ? "offline" : "no disponible"}`) : label(summary), kind);
+			}
+			lines.push(""); nav(section("OMI", "success"), "omi");
+			nav(envError ? t.fg("warning", project ? "Datos desactualizados" : envError === "Offline" ? "Offline" : "No disponible") : label(text(project ?? (envAt ? "Sin proyecto vinculado" : "Consultando…"))), "omi");
 			const r = resources; const ram = r ? percentage(r.totalRam - r.availableRam, r.totalRam) : undefined;
 			const disk = r?.disk ? percentage(r.disk.used, r.disk.total) : undefined;
-			const resourceLines = [label(`EQUIPO · ${text(r?.host ?? "…")}`)];
+			const resourceLines = [section(`EQUIPO · ${text(r?.host ?? "…")}`, "syntaxVariable")];
 			const metric = (name: string, value: string, percent?: number): void => {
 				if (height >= 24) resourceLines.push(align(name, value, inner), bar(t, percent, inner));
 				else resourceLines.push(`${name.padEnd(5)} ${bar(t, percent, 8)} ${value}`);
@@ -217,15 +239,16 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			if ((ram ?? 0) >= 90 || (disk ?? 0) >= 90) resourceLines.push(t.fg("warning", "! Revisá RAM y disco"));
 			resourceLines.push(label("Detalles del host >"));
 			const context = contextState();
-			const contextLines = [label("CONTEXTO"), align(`${context.label}${context.limit === undefined ? "" : " tokens"}`, context.percent === undefined ? "—" : `${context.percent.toFixed(0)}%`, inner), bar(t, context.percent, inner), ""];
+			const contextLines = [section("CONTEXTO", "warning"), align(`${context.label}${context.limit === undefined ? "" : " tokens"}`, context.percent === undefined ? "—" : `${context.percent.toFixed(0)}%`, inner), bar(t, context.percent, inner), ""];
 			const space = Math.max(0, height - contextLines.length - resourceLines.length - 1);
 			let blanks = Math.max(0, lines.length - space);
 			const compact = lines.filter((line) => line || blanks-- <= 0).slice(0, space);
 			while (compact.length < space + 1) compact.push("");
+			sidebarLinks = new Map(); compact.forEach((line, index) => { const target = targets.get(line); if (target) sidebarLinks.set(index, target); });
 			sidebarContextStart = compact.length; sidebarResourceStart = compact.length + contextLines.length;
 			return [...compact, ...contextLines, ...resourceLines].slice(0, height).map((line) => surface(t, `│ ${fit(line, inner)} `, width, true));
 		}
-		const sidebar = new Lines(sidebarLines, (event) => { if (event.type !== "click") return; if (event.y >= sidebarResourceStart) void showResources(); else if (event.y >= sidebarContextStart) void showContext(); else if (event.y < 4) void showWorkspace(); else switchView("deliveries"); return { handled: true }; });
+		const sidebar = new Lines(sidebarLines, (event) => { if (event.type !== "click") return; if (event.y >= sidebarResourceStart) void showResources(); else if (event.y >= sidebarContextStart) void showContext(); else if (event.y < 4) void showWorkspace(); else { const target = sidebarLinks.get(event.y); if (target) switchView(target); } return { handled: true }; });
 		async function openChange(): Promise<void> {
 			const snapshot = git; const file = snapshot?.changes[selectedFile]; if (!snapshot || !file) return;
 			const request = ++diffRequest; diffLoading = true; changed();
@@ -243,14 +266,14 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			finally { if (request === diffRequest) { diffLoading = false; changesPane.offset = 0; changed(); } }
 		}
 		const changesPane = new ReadView((width) => {
-			const t = theme(); const lines = [t.bold(" Cambios locales"), t.fg("dim", " ↑ ↓ seleccionar · Enter diff / archivo nuevo · Backspace volver · Esc proyecto"), ""];
+			const t = theme(); const lines = [t.bold(" Cambios locales"), t.fg("dim", " ↑ ↓ seleccionar · Enter diff / archivo nuevo · Backspace volver · Esc chat"), ""];
 			if (diffLoading) lines.push(" Cargando diff…");
 			else if (diff !== undefined) lines.push(...diff.split("\n").map((line) => line.startsWith("+") ? t.fg("success", text(line)) : line.startsWith("-") ? t.fg("error", text(line)) : text(line)));
 			else if (!git) lines.push(" No hay un repositorio Git disponible.");
-			else { if (gitError) lines.push(t.fg("warning", " Datos Git desactualizados")); if (!git.changes.length) lines.push(" No hay cambios locales."); git.changes.forEach((file, index) => { const line = ` ${index === selectedFile ? "›" : " "} ${file.status} ${text(file.path)}`; lines.push(index === selectedFile ? t.fg("accent", line) : line); }); if (git.changeCount > git.changes.length) lines.push(` Mostrando ${git.changes.length} de ${git.changeCount} archivos.`); }
+			else { if (gitError) lines.push(t.fg("warning", " Datos Git desactualizados")); if (!git.changes.length) lines.push(" No hay cambios locales."); git.changes.forEach((file, index) => lines.push(changedFileLine(t, file, width, index === selectedFile))); if (git.changeCount > git.changes.length) lines.push(` Mostrando ${git.changes.length} de ${git.changeCount} archivos.`); }
 			return lines.map((line) => surface(t, line, width));
 		}, (data) => {
-			if (matchesKey(data, "escape")) { switchView("project"); return true; }
+			if (matchesKey(data, "escape")) { switchView("chat"); return true; }
 			if (matchesKey(data, "backspace")) { diffRequest++; diffLoading = false; diff = undefined; changesPane.offset = 0; changed(); return true; }
 			if (diff === undefined && !diffLoading) {
 				if (matchesKey(data, "up") || matchesKey(data, "down")) { selectedFile = Math.max(0, Math.min((git?.changes.length ?? 1) - 1, selectedFile + (matchesKey(data, "up") ? -1 : 1))); changesPane.offset = Math.max(0, selectedFile - Math.max(1, rows() - 12)); changed(); return true; }
@@ -258,24 +281,69 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			}
 			return false;
 		}, changed, () => rows() - 6);
-		const deliveriesPane = new ReadView((width) => {
-			const t = theme(); const lines = [t.bold(" Entregas"), t.fg("dim", " r actualizar · Enter logs fallidos de la última ejecución · Esc proyecto"), "", t.fg("accent", ` GITHUB ACTIONS · ${age(githubAt)}`)];
-			if (githubError) lines.push(t.fg("warning", ` ${githubError}`));
-			if (github?.pr) lines.push(` ${text(github.pr)}`);
-			for (const run of github?.runs ?? []) lines.push(` #${run.id} ${text(run.name)} · ${text(run.conclusion || run.status)}`, ...((run.jobs ?? "").split("\n").filter(Boolean).map((job) => `   ${text(job)}`)), "");
-			if (!github?.runs.length) lines.push(" Sin ejecuciones disponibles.");
-			lines.push("", t.fg("accent", ` AMBIENTES OMI · ${age(envAt)}`));
-			if (envError) lines.push(t.fg("warning", ` ${envError}`));
-			for (const environment of environments) lines.push(text(` ${environment.service}/${environment.name} · ${environment.version ?? "sin versión"} · ${environment.state}`));
-			if (!environments.length) lines.push(" Sin ambientes disponibles. Vinculá el proyecto con omi init.");
-			lines.push("", t.fg("dim", " Vista de sólo lectura. Los deploys conservan las confirmaciones de OMI."));
+		async function showGithubDetail(kind: GithubView): Promise<void> {
+			const item = github[kind].items?.[github[kind].selected]; const snapshot = git;
+			if (!item || !snapshot || githubDetailBusy || finishModal || !active || parsed.offline || !ctx.isProjectTrusted()) return;
+			githubDetailBusy = true; const identity = gitIdentity(); changed();
+			const current = () => active && identity === gitIdentity() && view === kind && github[kind].items?.[github[kind].selected]?.number === item.number;
+			try {
+				const body = await readGithubDetail(snapshot, kind === "issues" ? "issue" : "pr", item.number, AbortSignal.any([controller.signal, AbortSignal.timeout(6000)]));
+				const description = body.split("\n");
+				if (current()) await info(`${kind === "issues" ? "Issue" : "PR"} #${item.number} · ${text(item.title)}`, [`Autor: ${item.author}`, `Etiquetas: ${item.labels.join(", ") || "—"}`, ...(kind === "prs" ? [`${item.draft ? "Borrador" : "Abierto"} · ${item.head} → ${item.base}`, `Revisión: ${item.review || "sin decisión"}`] : []), item.url, "", ...description.slice(0, 1000), ...(description.length > 1000 ? ["[Descripción recortada a 1000 líneas]"] : [])]);
+			} catch { if (current()) await info("GitHub · detalle no disponible", ["Revisá gh, autenticación o red. El detalle también puede ser demasiado grande."]); }
+			finally { githubDetailBusy = false; changed(); }
+		}
+		function githubPane(kind: GithubView): ReadView {
+			const pane = new ReadView((width) => {
+				const t = theme(); const state = github[kind]; const name = kind === "issues" ? "Issues" : "PRs";
+				state.selected = Math.max(0, Math.min(state.selected, (state.items?.length ?? 1) - 1));
+				const lines = [t.bold(` ${name} abiertos`), t.fg("dim", " ↑ ↓ seleccionar · Enter detalle · r actualizar · Esc chat"), t.fg("dim", ` Todo el repositorio · ${age(state.at)}`), ""];
+				if (state.error) lines.push(t.fg("warning", ` ${state.error}${state.items ? " · datos desactualizados" : ""}`));
+				if (!git) lines.push(" No hay un repositorio Git disponible.");
+				else if (!state.items && !state.error) lines.push(remoteBusy ? " Consultando GitHub…" : " Sin datos. Pulsá r para actualizar.");
+				else if (state.items?.length === 0) lines.push(` No hay ${name.toLowerCase()} abiertos en la última consulta.`);
+				for (const [index, item] of (state.items ?? []).entries()) {
+					const line = align(` ${index === state.selected ? "›" : " "} #${item.number}${item.draft ? " [borrador]" : ""} ${text(item.title)}`, text(`@${item.author}`), width);
+					lines.push(index === state.selected ? t.fg("accent", line) : line);
+				}
+				if (state.items?.length === 100) lines.push(t.fg("dim", " Mostrando hasta 100 resultados abiertos."));
+				if (githubDetailBusy) lines.push(t.fg("muted", " Cargando detalle…"));
+				return lines.map((line) => surface(t, line, width));
+			}, (data) => {
+				if (matchesKey(data, "escape")) { switchView("chat"); return true; }
+				if (data === "r") { void refreshRemote(); return true; }
+				if (matchesKey(data, "return")) { void showGithubDetail(kind); return true; }
+				const state = github[kind]; const page = Math.max(1, rows() - 11);
+				const move = matchesKey(data, "up") ? -1 : matchesKey(data, "down") ? 1 : matchesKey(data, "pageUp") ? -page : matchesKey(data, "pageDown") ? page : 0;
+				if (move || matchesKey(data, "home") || matchesKey(data, "end")) {
+					state.selected = Math.max(0, Math.min((state.items?.length ?? 1) - 1, matchesKey(data, "home") ? 0 : matchesKey(data, "end") ? (state.items?.length ?? 1) - 1 : state.selected + move));
+					pane.offset = Math.max(0, state.selected - page + 1); changed(); return true;
+				}
+				return false;
+			}, changed, () => rows() - 6);
+			return pane;
+		}
+		const issuesPane = githubPane("issues"); const prsPane = githubPane("prs");
+		const omiPane = new ReadView((width) => {
+			const t = theme(); const lines = [t.bold(" OMI"), t.fg("dim", " r actualizar · Esc chat · infraestructura del proyecto"), "", t.fg("accent", ` PROYECTO OMI · ${age(envAt)}`)];
+			if (envError) lines.push(t.fg("warning", ` ${envError}${project ? " · datos desactualizados" : ""}`));
+			if (project) {
+				lines.push(` ${text(project)}`, "", t.fg("accent", " SERVICIOS Y AMBIENTES"));
+				for (const service of services) {
+					lines.push(t.bold(` ${text(service)}`));
+					const serviceEnvironments = environments.filter((environment) => environment.service === service);
+					for (const environment of serviceEnvironments) lines.push(text(`   ${environment.name} · ${environment.version ?? "sin versión"} · ${environment.state}`));
+					if (!serviceEnvironments.length) lines.push(t.fg("muted", "   Sin ambientes informados."));
+				}
+			} else if (!envError) lines.push(envAt ? " Sin proyecto OMI vinculado. Usá omi init para vincularlo." : " Consultando vínculo y ambientes OMI…");
+			lines.push("", t.fg("accent", " OPERACIONES OMI"), " Estado, variables, recursos, jobs, versiones, logs y deploys:", " pedilos en Chat. Se conservan las herramientas y confirmaciones.", "", t.fg("dim", " Vista de sólo lectura. Un estado running no es un health check."));
 			return lines.map((line) => surface(t, line, width));
 		}, (data) => {
-			if (matchesKey(data, "escape")) { switchView("project"); return true; }
+			if (matchesKey(data, "escape")) { switchView("chat"); return true; }
 			if (data === "r") { void refreshRemote(); return true; }
-			if (matchesKey(data, "return")) { const run = github?.runs[0]; const snapshot = git; if (run && snapshot && !parsed.offline && ctx.isProjectTrusted()) { void readCommand("gh", ["run", "view", String(run.id), "--log-failed"], snapshot.root, controller.signal).then((result) => { if (active) void info(`GitHub Actions · #${run.id}`, (result.code === 0 && !result.truncated ? result.stdout || "No hay logs de jobs fallidos." : "Logs no disponibles o demasiado grandes.").split("\n").slice(0, 1000)); }); } return true; }
 			return false;
 		}, changed, () => rows() - 6);
+		const readPanes = { issues: issuesPane, prs: prsPane, changes: changesPane, omi: omiPane };
 
 		const welcome = new Lines((width) => {
 			if (working || ctx.sessionManager.getBranch().some((entry) => entry.type === "message")) return [];
@@ -283,7 +351,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			const identity = git ? `${text(git.branch)} · ${text(workspaceName(git))} · ${git.changeCount} cambios locales` : text(ctx.cwd);
 			const description = wrapTextWithAnsi("La conversación aparece acá. Podés empezar escribiendo o abrir los comandos.", Math.max(1, width - 4));
 			welcomeCommandStart = 7 + description.length;
-			const lines = ["", t.fg("accent", t.bold("omi code")), "", `¿Qué hacemos en ${name}?`, "", t.fg("muted", identity), ...description.map((line) => t.fg("muted", line)), "", t.fg("muted", "Ctrl K   Comandos"), t.fg("muted", `${modelShortcut}   Elegir modelo`), t.fg("muted", "Ctrl 2   Revisar cambios"), ""];
+			const lines = ["", t.fg("accent", t.bold("omi code")), "", `¿Qué hacemos en ${name}?`, "", t.fg("muted", identity), ...description.map((line) => t.fg("muted", line)), "", t.fg("muted", "Ctrl K   Comandos"), t.fg("muted", `${modelShortcut}   Elegir modelo`), t.fg("muted", "Ctrl 4   Revisar cambios"), ""];
 			return lines.map((line) => fit(`  ${line}`, width));
 		}, (event) => { if (event.type !== "click") return; if (event.y === welcomeCommandStart) void palette(); else if (event.y === welcomeCommandStart + 1) void showModel(); else if (event.y === welcomeCommandStart + 2) switchView("changes"); else return; return { handled: true }; });
 		function buildRoot(): void {
@@ -295,7 +363,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 				projectRoot = new VStack([{ component: transcript, basis: 0, grow: 1, minSize: 1 }, { component: dock, basis: "auto", shrink: 1, minSize: 3 }]);
 				baseRoot = new VStack([{ component: new ScrollView(document, { follow: "end", primary: true }), basis: 0, grow: 1, minSize: 1 }, dock, footer]);
 			}
-			root = new VStack([{ component: header, basis: 3, shrink: 0 }, { component: new HStack([{ component: view === "project" ? projectRoot : view === "changes" ? changesPane : deliveriesPane, basis: 0, grow: 1, minSize: 20 }, { component: sidebar, basis: 33, shrink: 0, visible: (viewport) => sidebarVisible(viewport.width, viewport.height) }]), basis: 0, grow: 1, minSize: 1 }, { component: footer, basis: "auto", shrink: 0 }]);
+			root = new VStack([{ component: header, basis: 3, shrink: 0 }, { component: new HStack([{ component: view === "chat" ? projectRoot : readPanes[view], basis: 0, grow: 1, minSize: 20 }, { component: sidebar, basis: 33, shrink: 0, visible: (viewport) => sidebarVisible(viewport.width, viewport.height) }]), basis: 0, grow: 1, minSize: 1 }, { component: footer, basis: "auto", shrink: 0 }]);
 			ensureRoot();
 		}
 		function ensureRoot(): void { if (active && tui && root && isViewportTUI(tui)) tui.setLayoutRoot(root); }
@@ -321,7 +389,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			["omi", "Paleta de comandos de OMI", palette], ["omi-model", "Selector propio de modelo", showModel],
 			["omi-workspace", "Ubicación y worktree", showWorkspace], ["omi-resources", "CPU, RAM y disco del host", showResources],
 			["omi-context", "Ventana de contexto", showContext], ["omi-sidebar", "Mostrar / ocultar lateral", toggleSidebar],
-			["omi-changes", "Cambios locales", () => switchView("changes")], ["omi-deliveries", "GitHub Actions y ambientes", () => switchView("deliveries")],
+			...WORKSPACE_VIEWS.map((item): [string, string, () => void] => [item.command, `Vista ${item.label}`, () => switchView(item.id)]),
 		];
 		for (const [name, description, handler] of commands) pi.registerCommand(name, { description, handler: async () => { if (active) await handler(); } });
 
@@ -331,7 +399,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			if (!parsed.useTheme && !pi.getSettings().theme) {
 				const base = ctx.ui.getTheme("dark");
 				if (base) { const colors = Object.fromEntries(Object.entries(base.colors).map(([key, value]) => [key, colorToHex(value)])) as Record<keyof typeof base.colors, string>;
-					Object.assign(colors, { accent: "#97d6ba", success: "#97d6ba", text: "#dce1e3", muted: "#a2acb3", dim: "#78858f", border: "#292f34", userMessageBg: "#050607", userMessageText: "#dce1e3", toolPendingBg: "#0b0e10", toolSuccessBg: "#0b0e10", toolErrorBg: "#201415", selectedBg: "#24382e" });
+					Object.assign(colors, { accent: "#97d6ba", success: "#97d6ba", text: "#dce1e3", muted: "#a2acb3", dim: "#78858f", border: "#292f34", userMessageBg: "#182b23", userMessageText: "#edf5f0", toolPendingBg: "#0b0e10", toolSuccessBg: "#0b0e10", toolErrorBg: "#201415", selectedBg: "#24382e" });
 					ctx.ui.setTheme(new PiTheme(colors, colors, base.getColorMode(), { name: "omi-black", appearance: "dark" })); }
 			}
 			ctx.ui.setHeader(() => new Lines((width) => tui?.mode === "fullscreen" && layoutCompatible ? [] : header.render(width)));
@@ -342,7 +410,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 					const state = blocked ? "Esperando decisión" : working ? activity : "Listo";
 					const left = ` ${t.fg(blocked ? "warning" : "success", "●")} ${text(state)} · ${text(workspaceName(git))}${git ? ` · ${text(git.branch)}` : ""}`;
 					const extra = text([...footerData.getExtensionStatuses().values()].join(" · "));
-					const hint = side ? extra || "Ctrl 1/2/3 vistas · /omi" : `Contexto ${context.label}${context.percent === undefined ? "" : ` · ${context.percent.toFixed(0)}%`}`;
+					const hint = side ? extra || "Ctrl 1–5 vistas · /omi" : `Contexto ${context.label}${context.percent === undefined ? "" : ` · ${context.percent.toFixed(0)}%`}`;
 					const rightWidth = Math.min(hint.length, Math.floor(width * .48));
 					const statusLine = fit(left, Math.max(0, width - rightWidth - 1)) + " " + t.fg("muted", fit(hint, rightWidth));
 					const name = ctx.model ? text(ctx.model.name) : "Sin modelo";
@@ -369,12 +437,11 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			if (!ctx.ui.getEditorComponent()) ctx.ui.setEditorComponent((ui, editorTheme, keys) => new OmiEditor(ui, editorTheme, keys));
 			unsubscribeInput = ctx.ui.onTerminalInput((data) => {
 				if (!active || blocked || tui?.hasOverlay()) return;
-				if (matchesKey(data, "ctrl+1")) { switchView("project"); return { consume: true }; }
-				if (matchesKey(data, "ctrl+2")) { switchView("changes"); return { consume: true }; }
-				if (matchesKey(data, "ctrl+3")) { switchView("deliveries"); return { consume: true }; }
+				const next = WORKSPACE_VIEWS.find((item) => matchesKey(data, item.key));
+				if (next) { switchView(next.id); return { consume: true }; }
 				if (matchesKey(data, "ctrl+k")) { void palette(); return { consume: true }; }
 				if (matchesKey(data, "f4")) { void toggleSidebar(); return { consume: true }; }
-				if (view !== "project" && (matchesKey(data, "ctrl+c") || matchesKey(data, "ctrl+d"))) { switchView("project"); editor?.children[0]?.handleInput?.(data); return { consume: true }; }
+				if (view !== "chat" && (matchesKey(data, "ctrl+c") || matchesKey(data, "ctrl+d"))) { switchView("chat"); editor?.children[0]?.handleInput?.(data); return { consume: true }; }
 				return undefined;
 			});
 			working = !ctx.isIdle();
@@ -386,7 +453,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		pi.on("agent_settled", (_event, context) => { ctx = context; working = false; runningTools.clear(); activity = "Listo"; void refreshLocal(); changed(); });
 		pi.on("tool_execution_start", (event) => { runningTools.set(event.toolCallId, event.toolName); activity = `Ejecutando ${text(event.toolName)}${runningTools.size > 1 ? ` +${runningTools.size - 1}` : ""}`; changed(); });
 		pi.on("tool_execution_end", (event) => { runningTools.delete(event.toolCallId); activity = runningTools.size ? `Ejecutando ${text([...runningTools.values()][0]!)}` : "Trabajando"; changed(); });
-		pi.on("ui_prompt_start", () => { if (!active) return; blocked = true; view = "project"; buildRoot(); changed(); });
+		pi.on("ui_prompt_start", () => { if (!active) return; blocked = true; if (!infoPrompt) { view = "chat"; buildRoot(); } changed(); });
 		pi.on("ui_prompt_end", () => { blocked = false; changed(); });
 		const update = (_event: unknown, context: ExtensionContext): void => { ctx = context; changed(); };
 		pi.on("message_end", update); pi.on("session_compact", update); pi.on("session_compact_failed", update);

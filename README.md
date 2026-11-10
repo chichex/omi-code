@@ -45,21 +45,36 @@ Las API keys del shell no le dan un modelo a omi. Por ejemplo, con `GEMINI_API_K
 
 ### Workspace de terminal
 
-`omi` arranca con un layout fullscreen propio: cabecera con **Proyecto / Cambios / Entregas**, conversación y editor,
+`omi` arranca con un layout fullscreen propio: cabecera con **1 Chat / 2 Issues / 3 PRs / 4 Cambios / 5 OMI**, conversación y editor,
 lateral plegable con contexto encima de recursos y pie con actividad y una fila propia para el modelo. El fondo por defecto es negro; una selección de tema
 explícita sigue controlando los colores del runtime. La conversación, las tools, sus confirmaciones, el streaming,
 el historial y la edición siguen usando el renderer de Pi; no hay un segundo proceso de chat ni una UI web.
 
-- **Proyecto:** branch, cambios locales, divergencia cuando existe upstream, tipo de checkout y ruta activa.
-  Distingue `Repo principal`, `Worktree · nombre`, HEAD separado y carpetas sin Git. Un worktree no es un sandbox.
-- **Cambios:** lista de hasta 100 archivos y diffs de working tree / stage, sin drivers de diff ni textconv externos.
+- **1 · Chat:** conversación y editor. Tus mensajes llevan un encabezado **▌ Vos** y, con la paleta por defecto, un fondo verde oscuro y texto claro.
+  Las respuestas y herramientas conservan su presentación. La etiqueta es sólo visual: no modifica lo enviado al modelo ni lo guardado en el historial.
+- **2 · Issues:** hasta 100 issues abiertos de todo el repo de GitHub, no sólo de la branch actual.
+- **3 · PRs:** hasta 100 PRs abiertos de todo el repo, incluidos los borradores.
+  Ambas listas requieren `gh` instalado y autenticado; flechas seleccionan, **Enter** carga la descripción del elemento elegido y **r** actualiza.
+  Los errores se muestran por separado y conservan la última lista como desactualizada, no como una lista vacía exitosa.
+  Estas vistas son de sólo lectura; no crean issues, no cierran ni fusionan PRs y no consultan GitHub Actions.
+- **4 · Cambios:** lista de hasta 100 archivos y diffs de working tree / stage, sin drivers de diff ni textconv externos.
+  Cada archivo con seguimiento muestra `+líneas` en verde y `−líneas` en rojo, alineadas a la derecha incluso al acortar una ruta larga.
+  Es el cambio neto respecto de HEAD (stage + working tree, sin contar dos veces la misma edición); sin commits se compara con el árbol vacío.
+  Los binarios se marcan `binario` y un conteo no disponible como `—`, no cero. Los archivos sin seguimiento muestran `nuevo`: no se lee su contenido durante el refresco para contarlos.
   Los archivos nuevos se enumeran individualmente y **Enter** abre una previsualización local de sólo lectura (hasta 256 KiB o 2000 líneas).
   No se leen durante el refresco ni se envían al modelo. Las rutas que parecen sensibles (`.env`, claves, credenciales) piden confirmación adicional;
   esa detección es orientativa, no una garantía de detectar todos los secretos. No se abren binarios, enlaces simbólicos ni archivos fuera del checkout.
   Esta vista no edita, agrega al stage, comitea ni cambia de branch.
-- **Entregas:** PR, últimas ejecuciones de GitHub Actions y jobs; Enter consulta los logs fallidos de la última ejecución.
-  Requiere `gh` instalado y autenticado. Los ambientes se leen desde el proyecto OMI vinculado y la sesión de `omi login`.
-  No se ejecutan deploys desde estos paneles ni se saltean guardrails.
+- **5 · OMI:** proyecto vinculado, servicios y ambientes con versión y estado informados por OMI.
+  Usa el vínculo local y la sesión de `omi login`; **r** actualiza. Sin vínculo se indica `omi init`, sin inventar servicios.
+  Es el punto de consulta de infraestructura, separado de GitHub. Las operaciones de variables, recursos, jobs, versiones, logs y deploys
+  siguen disponibles mediante las herramientas en Chat, con sus confirmaciones habituales; el panel no las ejecuta automáticamente.
+- **Ubicación del repo:** la lateral y `/omi-workspace` muestran branch, cambios locales, divergencia cuando existe upstream, tipo de checkout y ruta activa.
+  Distingue `Repo principal`, `Worktree · nombre`, HEAD separado y carpetas sin Git. Un worktree no es un sandbox.
+  `↑N ↓N` son **commits** por subir/traer, no archivos ni líneas sin commit. Se comparan con la referencia local del último fetch;
+  la lateral muestra `Al día (local)` si ambos son cero, `sin upstream` si no está configurado y `↑— ↓—` si el conteo no está disponible.
+  No hace fetch automático ni convierte errores en ceros. `/omi-workspace` muestra el upstream y explica cómo actualizarlo con `git fetch`.
+  Las secciones Proyecto, GitHub, OMI, Contexto y Equipo tienen encabezados de distintos colores, fondo tenue y separadores de caracteres, respetando el tema claro/oscuro.
 - **Contexto:** encima de Equipo, con tokens estimados / límite real del modelo, porcentaje y barra sólida `█`.
   Si el runtime no conoce el uso se muestra `—`, no cero. Con la lateral oculta, el dato queda en el pie.
   No se inventa un desglose de tokens. `/omi-context` explica el dato y `/compact` sigue siendo explícito.
@@ -88,14 +103,20 @@ el historial y la edición siguen usando el renderer de Pi; no hay un segundo pr
 
 | Atajo / comando | Acción |
 |---|---|
-| Ctrl 1 / Ctrl 2 / Ctrl 3 | Proyecto / Cambios / Entregas (Control también en Mac, no Option ni Command) |
+| Ctrl 1 o `/omi-chat` | Chat |
+| Ctrl 2 o `/omi-issues` | Issues abiertos de GitHub |
+| Ctrl 3 o `/omi-prs` | PRs abiertos de GitHub |
+| Ctrl 4 o `/omi-changes` | Cambios locales |
+| Ctrl 5 o `/omi-platform` | OMI: proyecto, servicios y ambientes |
 | Ctrl K o `/omi` | Paleta de comandos (Ctrl K reemplaza borrar hasta fin de línea en el editor) |
 | F4 o `/omi-sidebar` | Mostrar / ocultar lateral |
 | `/omi-model` | Selector propio, también si otra extensión personaliza el editor |
 | `/omi-workspace` | Ubicación, repo principal y worktree |
 | `/omi-resources` | CPU, RAM, disco y host |
 | `/omi-context` | Detalle del contexto |
-| `/omi-changes` / `/omi-deliveries` | Abrir las vistas de sólo lectura |
+
+Los atajos son **Control** también en Mac, no Option ni Command. **Esc** vuelve a Chat desde las vistas de consulta.
+Las pestañas también funcionan por clic; en panes angostos conservan los cinco números y el nombre de la vista activa.
 
 La lateral ocupa 33 columnas (incluido el separador) y se oculta por debajo de 110 columnas o 26 filas;
 los comandos y el pie siguen disponibles. Contexto, CPU, RAM y disco usan barras de bloques `█` de una fila;

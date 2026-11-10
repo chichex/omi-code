@@ -24,10 +24,12 @@ export const readCommand: ReadCommand = (command, args, cwd, signal) => new Prom
 
 /** Nombres de archivos, modelos y respuestas remotas nunca pueden inyectar controles al terminal. */
 export function safeText(value: string): string { return value.replace(/\t/g, "    ").replace(/[\x00-\x1f\x7f-\x9f]/g, ""); }
-export interface ChangedFile { status: string; path: string; previousPath?: string }
+export interface FileLineStats { added: number; removed: number }
+export interface ChangedFile { status: string; path: string; previousPath?: string; lines?: FileLineStats | "binary" }
 export interface GitSnapshot {
 	root: string; gitDir: string; commonDir: string; mainRoot: string; linked: boolean;
-	branch: string; detached: boolean; changes: ChangedFile[]; changeCount: number; tracking: boolean; ahead: number; behind: number;
+	branch: string; detached: boolean; changes: ChangedFile[]; changeCount: number;
+	tracking: boolean | undefined; upstream?: string; ahead: number | undefined; behind: number | undefined;
 }
 export function parseStatus(raw: string): { changes: ChangedFile[]; changeCount: number } {
 	const records = raw.split("\0"); const changes: ChangedFile[] = []; let changeCount = 0;
@@ -40,26 +42,91 @@ export function parseStatus(raw: string): { changes: ChangedFile[]; changeCount:
 	}
 	return { changes, changeCount };
 }
+/** --numstat -z: los nombres pueden incluir tabs/saltos de línea; los renames traen dos rutas aparte. */
+export function parseNumstat(raw: string): Map<string, FileLineStats | "binary"> | undefined {
+	const result = new Map<string, FileLineStats | "binary">();
+	if (!raw) return result;
+	if (!raw.endsWith("\0")) return undefined;
+	const records = raw.slice(0, -1).split("\0");
+	for (let i = 0; i < records.length; i++) {
+		const match = /^(\d+|-)\t(\d+|-)\t([\s\S]*)$/.exec(records[i]!); if (!match) return undefined;
+		let path = match[3]!;
+		if (!path) { const previous = records[++i]; path = records[++i] ?? ""; if (!previous || !path) return undefined; }
+		if (result.has(path)) return undefined;
+		if (match[1] === "-" && match[2] === "-") result.set(path, "binary");
+		else {
+			const added = Number(match[1]); const removed = Number(match[2]);
+			if (!/^\d+$/.test(match[1]!) || !/^\d+$/.test(match[2]!) || !Number.isSafeInteger(added) || !Number.isSafeInteger(removed)) return undefined;
+			result.set(path, { added, removed });
+		}
+	}
+	return result;
+}
+async function readLineStats(root: string, changes: ChangedFile[], hasHead: boolean, signal: AbortSignal | undefined, run: ReadCommand): Promise<void> {
+	const tracked = changes.filter((file) => file.status !== "??"); if (!tracked.length) return;
+	let base = "HEAD";
+	if (!hasHead) {
+		// Árbol vacío de Git, sin crear objetos ni modificar el índice; también sirve en repos SHA-256.
+		const format = await run("git", ["rev-parse", "--show-object-format"], root, signal);
+		if (format.code !== 0 || format.truncated) return;
+		const emptyTrees: Record<string, string> = { sha1: "4b825dc642cb6eb9a060e54bf8d69288fbee4904", sha256: "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321" };
+		const empty = emptyTrees[format.stdout.trim()]; if (!empty) return; base = empty;
+	}
+	const renamed = tracked.filter((file) => file.previousPath && file.status.includes("R"));
+	const statsFor = async (files: ChangedFile[], renames: boolean) => {
+		const paths = [...new Set(files.flatMap((file) => file.previousPath ? [file.path, file.previousPath] : [file.path]))];
+		const diff = await run("git", ["diff", "--numstat", "-z", "--no-ext-diff", "--no-textconv", "--color=never", renames ? "--find-renames" : "--no-renames", base, "--", ...paths.map((path) => `:(literal)${path}`)], root, signal);
+		return diff.code === 0 && !diff.truncated ? parseNumstat(diff.stdout) : undefined;
+	};
+	// Respetar las filas del status: no convertir una alta y una baja independientes en un rename implícito.
+	const [stats, renameStats] = await Promise.all([statsFor(tracked, false), renamed.length ? statsFor(renamed, true) : undefined]);
+	if (!stats) return;
+	for (const file of tracked) {
+		const source = renamed.includes(file) ? renameStats : stats; if (!source) continue;
+		const values = [source.get(file.path), ...(file.previousPath && file.status.includes("R") ? [source.get(file.previousPath)] : [])];
+		file.lines = values.includes("binary") ? "binary" : values.reduce<FileLineStats>((sum, value) => value && value !== "binary" ? { added: sum.added + value.added, removed: sum.removed + value.removed } : sum, { added: 0, removed: 0 });
+	}
+}
+/** Commits contra la referencia local del upstream (último fetch). Nunca hace fetch ni convierte errores en 0/0. */
+async function readTracking(root: string, ref: string | undefined, hasHead: boolean, signal: AbortSignal | undefined, run: ReadCommand): Promise<Pick<GitSnapshot, "tracking" | "upstream" | "ahead" | "behind">> {
+	const unknown = { tracking: undefined, ahead: undefined, behind: undefined };
+	if (ref === undefined) return { ...unknown, tracking: false }; // HEAD separado.
+	if (!ref.startsWith("refs/heads/")) return unknown;
+	const result = await run("git", ["for-each-ref", "--format=%(refname)%00%(upstream)%00%(upstream:short)", "--count=1", "--", ref], root, signal);
+	if (result.code !== 0 || result.truncated) return unknown;
+	if (!result.stdout) return hasHead ? unknown : { ...unknown, tracking: false }; // Branch sin commits, no una lectura vacía de un branch existente.
+	const match = /^([^\0\n]+)\0([^\0\n]*)\0([^\0\n]*)\n?$/.exec(result.stdout);
+	if (!match || match[1] !== ref) return unknown;
+	if (!match[2] && !match[3]) return { ...unknown, tracking: false };
+	if (!match[2]?.startsWith("refs/") || !match[3]) return unknown;
+	const tracking = { ...unknown, tracking: true, upstream: match[3] };
+	const counts = await run("git", ["rev-list", "--left-right", "--count", `HEAD...${match[2]}`], root, signal);
+	const values = counts.code === 0 && !counts.truncated ? /^\s*(\d+)\s+(\d+)\s*$/.exec(counts.stdout) : undefined;
+	if (!values) return tracking;
+	const ahead = Number(values[1]); const behind = Number(values[2]);
+	return Number.isSafeInteger(ahead) && Number.isSafeInteger(behind) ? { ...tracking, ahead, behind } : tracking;
+}
 export async function readGit(cwd: string, signal?: AbortSignal, run: ReadCommand = readCommand): Promise<GitSnapshot | undefined> {
 	const paths = await run("git", ["rev-parse", "--show-toplevel", "--absolute-git-dir", "--path-format=absolute", "--git-common-dir"], cwd, signal);
 	if (paths.code !== 0 || paths.truncated) return undefined;
 	const [root, gitDir, commonDir] = paths.stdout.trimEnd().split("\n");
 	if (!root || !gitDir || !commonDir) return undefined;
-	const [symbolic, head, status, worktrees, upstream] = await Promise.all([
-		run("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], cwd, signal),
+	const [symbolic, head, status, worktrees] = await Promise.all([
+		run("git", ["symbolic-ref", "--quiet", "HEAD"], cwd, signal),
 		run("git", ["rev-parse", "--short", "HEAD"], cwd, signal),
 		run("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], cwd, signal),
 		run("git", ["worktree", "list", "--porcelain", "-z"], cwd, signal),
-		run("git", ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"], cwd, signal),
 	]);
 	if (status.code !== 0 || status.truncated) throw new Error("No se pudo leer el estado completo de Git");
+	const parsed = parseStatus(status.stdout);
 	const detached = symbolic.code !== 0;
+	const ref = detached ? undefined : symbolic.truncated ? "" : symbolic.stdout.trim();
+	const [tracking] = await Promise.all([readTracking(root, ref, head.code === 0, signal, run), readLineStats(root, parsed.changes, head.code === 0, signal, run)]);
 	const first = worktrees.stdout.split("\0").find((record) => record.startsWith("worktree "));
-	const [ahead = 0, behind = 0] = upstream.code === 0 ? upstream.stdout.trim().split(/\s+/).map(Number) : [];
 	return {
 		root, gitDir, commonDir, mainRoot: first?.slice(9) || root, linked: resolve(gitDir) !== resolve(commonDir),
-		branch: (detached ? head.stdout.trim() : symbolic.stdout.trim()) || "sin commits", detached,
-		...parseStatus(status.stdout), tracking: upstream.code === 0, ahead: Number.isFinite(ahead) ? ahead : 0, behind: Number.isFinite(behind) ? behind : 0,
+		branch: (detached ? head.stdout.trim() : symbolic.stdout.trim().replace(/^refs\/heads\//, "")) || "sin commits", detached,
+		...parsed, ...tracking,
 	};
 }
 
@@ -105,38 +172,48 @@ export function resourceReader(run: ReadCommand = readCommand) {
 	};
 }
 
-export interface GithubSnapshot { branch: string; pr?: string; runs: { id: number; name: string; status: string; conclusion: string | null; jobs?: string }[] }
-export async function readGithub(git: GitSnapshot, signal?: AbortSignal, run: ReadCommand = readCommand): Promise<GithubSnapshot> {
-	if (git.detached) return { branch: git.branch, runs: [] };
-	const result = await run("gh", ["run", "list", "--branch", git.branch, "--limit", "3", "--json", "databaseId,displayTitle,name,status,conclusion"], git.root, signal);
+export type GithubKind = "issue" | "pr";
+export interface GithubItem {
+	number: number; title: string; author: string; labels: string[]; url: string; updatedAt: string;
+	draft: boolean; head: string; base: string; review: string;
+}
+function object(value: unknown): Record<string, unknown> { return value && typeof value === "object" ? value as Record<string, unknown> : {}; }
+export async function readGithub(git: GitSnapshot, kind: GithubKind, signal?: AbortSignal, run: ReadCommand = readCommand): Promise<GithubItem[]> {
+	const fields = "number,title,author,labels,url,updatedAt" + (kind === "pr" ? ",isDraft,headRefName,baseRefName,reviewDecision" : "");
+	// Todo el repo, no sólo la branch actual. También funciona con HEAD separado.
+	const result = await run("gh", [kind, "list", "--state", "open", "--limit", "100", "--json", fields], git.root, signal);
 	if (result.code !== 0 || result.truncated) throw new Error("GitHub no disponible (gh, autenticación o red)");
 	const raw: unknown = JSON.parse(result.stdout);
 	if (!Array.isArray(raw)) throw new Error("Respuesta de GitHub no válida");
-	const runs: GithubSnapshot["runs"] = raw.filter((item) => item && typeof item === "object" && typeof item.databaseId === "number" && typeof item.name === "string" && typeof item.status === "string")
-		.slice(0, 3).map((item) => ({ id: item.databaseId as number, name: item.name as string, status: item.status as string, conclusion: typeof item.conclusion === "string" ? item.conclusion : null }));
-	const [prResult, jobResult] = await Promise.all([
-		run("gh", ["pr", "view", "--json", "number,title,state,isDraft"], git.root, signal),
-		runs[0] ? run("gh", ["run", "view", String(runs[0].id), "--json", "jobs"], git.root, signal) : Promise.resolve(undefined),
-	]);
-	let pr: string | undefined;
-	if (prResult.code === 0 && !prResult.truncated) { const data = JSON.parse(prResult.stdout); if (typeof data.number === "number" && typeof data.title === "string") pr = `PR #${data.number}${data.isDraft ? " · Draft" : ""} · ${data.title}`; }
-	if (jobResult?.code === 0 && !jobResult.truncated && runs[0]) {
-		const data = JSON.parse(jobResult.stdout);
-		if (Array.isArray(data.jobs)) runs[0].jobs = data.jobs.slice(0, 15).filter((job: { name?: unknown }) => typeof job.name === "string")
-			.map((job: { name: string; status: string; conclusion?: string }) => `${job.name}: ${job.conclusion || job.status}`).join("\n");
-	}
-	return { branch: git.branch, ...(pr ? { pr } : {}), runs };
+	return raw.slice(0, 100).map((value) => {
+		const item = object(value);
+		if (!Number.isSafeInteger(item.number) || Number(item.number) <= 0 || typeof item.title !== "string") throw new Error("Respuesta de GitHub no válida");
+		return {
+			number: Number(item.number), title: item.title, author: String(object(item.author).login ?? "desconocido"),
+			labels: Array.isArray(item.labels) ? item.labels.map((label) => object(label).name).filter((name): name is string => typeof name === "string") : [],
+			url: typeof item.url === "string" ? item.url : "", updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : "",
+			draft: item.isDraft === true, head: typeof item.headRefName === "string" ? item.headRefName : "", base: typeof item.baseRefName === "string" ? item.baseRefName : "", review: typeof item.reviewDecision === "string" ? item.reviewDecision : "",
+		};
+	});
+}
+export async function readGithubDetail(git: GitSnapshot, kind: GithubKind, number: number, signal?: AbortSignal, run: ReadCommand = readCommand): Promise<string> {
+	if (!Number.isSafeInteger(number) || number <= 0) throw new Error("Número de GitHub no válido");
+	const result = await run("gh", [kind, "view", String(number), "--json", "body"], git.root, signal);
+	if (result.code !== 0 || result.truncated) throw new Error("Detalle no disponible o demasiado grande");
+	const data = object(JSON.parse(result.stdout));
+	if (typeof data.body !== "string") throw new Error("Detalle de GitHub no válido");
+	return data.body;
 }
 export interface EnvironmentStatus { service: string; name: string; state: string; version?: string }
-export async function readEnvironments(io: Io, signal: AbortSignal): Promise<{ project?: string; environments: EnvironmentStatus[] }> {
-	const link = await loadProjectLink(io.cwd); if (!link) return { environments: [] };
+export async function readEnvironments(io: Io, signal: AbortSignal): Promise<{ project?: string; services: string[]; environments: EnvironmentStatus[] }> {
+	const link = await loadProjectLink(io.cwd); if (!link) return { services: [], environments: [] };
 	const { client } = await openSession(io); const org = await resolveOrganization(client, link.organizationSlug, signal);
 	const environments: EnvironmentStatus[] = [];
 	for (const service of link.services.slice(0, 10)) {
 		const view = await client.request("GET", `/organizations/${encodeURIComponent(org.organization_id)}/projects/${encodeURIComponent(link.projectSlug)}/services/${encodeURIComponent(service.name)}`, ServiceSchema, { signal });
 		for (const environment of view.environments) environments.push({ service: service.name, name: environment.name, state: environment.state, ...(environment.current_version ? { version: environment.current_version } : {}) });
 	}
-	return { project: `${link.organizationSlug}/${link.projectSlug}`, environments };
+	return { project: `${link.organizationSlug}/${link.projectSlug}`, services: link.services.slice(0, 10).map((service) => service.name), environments };
 }
 const PREVIEW_BYTES = 256 * 1024;
 const PREVIEW_LINES = 2000;

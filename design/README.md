@@ -24,11 +24,13 @@ Entrá a <http://127.0.0.1:4173/omi-code-preview.html>.
 - El control **Grilla** permite inspeccionar las celdas. Los controles de revisión de arriba y las notas de abajo no forman parte del producto.
 - Cabecera: tres filas. Pie: tres filas. Editor: cuatro filas, dentro de la columna de conversación. El resto es contenido.
 - Lateral de **32 columnas más un separador**, sin tarjetas ni barras gráficas CSS. Se oculta por debajo de 110 columnas o 26 filas; los detalles siguen en la paleta. No aparece como un drawer móvil, porque eso no es el comportamiento propuesto para un pane angosto.
+- **Secciones de la lateral distinguibles de un vistazo:** Proyecto violeta, GitHub azul, OMI verde, Contexto ámbar y Equipo celeste, con negrita, fondo tenue y un separador `▌ … ─`. En el runtime los tonos salen del tema activo, también en modo claro.
+- **Sincronización Git sin ceros ficticios:** `↑N ↓N` cuenta commits respecto al upstream local del último fetch, no cambios sin commit. `Al día (local)` sustituye al 0/0, `sin upstream` indica ausencia de configuración y `↑— ↓—` indica conteos no disponibles. El detalle muestra el upstream y explica `git fetch`; la UI no lo ejecuta automáticamente.
 - **Contexto vive en la lateral, justo arriba de Equipo:** tokens usados / límite, porcentaje y barra de caracteres. Al hacer clic abre el detalle. Cuando la lateral está oculta, queda un acceso compacto en el pie para no perder el dato.
 - **El modelo tiene una fila propia en el pie:** etiqueta `Modelo:`, nombre resaltado, proveedor, razonamiento y `Ctrl L cambiar` cuando el ancho lo permite. En panes angostos se prioriza el nombre, sin mezclarlo con la ubicación del repo.
 - **Barras más gruesas con caracteres `█`**, no líneas finitas: contexto, CPU, RAM y disco. El tramo usado tiene color y el resto un gris oscuro. Ocupan una fila de terminal, sin aumentar la fuente ni dibujar barras con altura CSS. En panes bajos, las de recursos se acortan y comparten fila con su etiqueta y valor.
 - Los paneles usan fondos planos. Los bordes, indicadores y barras son caracteres. No hay SVG, avatares, sombras, esquinas redondeadas, blur, chips ni tamaños de fuente particulares por componente.
-- La conversación conserva un único flujo vertical. La salida de la herramienta se puede desplegar, sin adornos de interfaz web.
+- La conversación conserva un único flujo vertical. Los mensajes propios tienen encabezado `▌ Vos` en negrita y color de acento, fondo verde oscuro `#182b23` y texto claro `#edf5f0`; las respuestas y herramientas no comparten ese fondo. El encabezado es sólo de presentación, no se agrega al mensaje original. La salida de la herramienta se puede desplegar, sin adornos de interfaz web.
 - Los diálogos se dibujan con caracteres y tienen el mismo tamaño de celda que el resto. No dependen de un selector de modelos del navegador para simular la TUI.
 
 ## Qué revisar
@@ -45,16 +47,17 @@ Entrá a <http://127.0.0.1:4173/omi-code-preview.html>.
 
 ## Interacciones
 
-- Clic en **Proyecto / Cambios / Entregas**, o **Control 1 / 2 / 3**.
+- Clic en **1 Chat / 2 Issues / 3 PRs / 4 Cambios / 5 OMI**, o **Control 1–5**. En panes angostos se conservan los cinco números y el nombre de la vista activa.
 - **Control K:** paleta; **Control L:** selector de modelo; **F4:** lateral.
-- **Esc:** cierra el diálogo o vuelve a Proyecto desde las vistas de sólo lectura.
-- En Cambios, flechas para seleccionar y Enter para abrir el extracto de diff; Backspace vuelve a la lista.
-- En Entregas, Enter o clic en la ejecución abre logs ilustrativos.
+- **Esc:** cierra el diálogo o vuelve a Chat desde las vistas de sólo lectura.
+- En Cambios, cada archivo muestra `+líneas` en verde y `−líneas` en rojo a la derecha; sólo se acorta la ruta cuando falta ancho. Los colores de los contadores se conservan al seleccionar la fila. En el runtime son cambios netos respecto a HEAD, incluyendo stage y working tree; los binarios se indican como `binario`, los conteos desconocidos como `—` y los archivos sin seguimiento como `nuevo`, sin leerlos automáticamente. Flechas para seleccionar y Enter para abrir el extracto de diff; Backspace vuelve a la lista.
+- Issues y PRs muestran listas abiertas de todo el repo, por separado; flechas seleccionan y Enter o clic abre un detalle ilustrativo. El runtime carga la descripción sólo al abrirla. No se consulta GitHub Actions.
+- OMI agrupa el proyecto vinculado, servicios y ambientes. El panel es de consulta; las operaciones siguen en Chat mediante las herramientas con sus confirmaciones.
 - Clic en la línea de `bash` despliega la salida.
 - Clic en el contexto de la lateral (encima de Equipo), o su acceso de respaldo en panes angostos, abre uso, límite y explicación. **No muestra el desglose inventado de sistema/chat/tools** de la versión anterior.
 - Clic en Proyecto o Equipo abre ubicación o recursos completos.
 - El selector de modelos permite buscar por nombre/proveedor, favoritos en memoria, Ctrl F para filtrar, Ctrl S para marcar, revisar la elección, ajustar razonamiento con izquierda/derecha y Enter para aplicar. Esc cancela. `#models` lo abre directamente.
-- El editor reconoce `/omi`, `/model`, `/omi-model`, `/omi-context`, `/omi-workspace`, `/omi-resources`, `/omi-changes` y `/omi-deliveries` **sólo dentro de la maqueta**.
+- El editor reconoce `/omi`, `/model`, `/omi-model`, `/omi-context`, `/omi-workspace`, `/omi-resources`, `/omi-chat`, `/omi-issues`, `/omi-prs`, `/omi-changes` y `/omi-platform` **sólo dentro de la maqueta**.
 
 Un navegador o macOS pueden reservar atajos antes de entregarlos al HTML. Todas las acciones tienen una alternativa por clic; el prototipo no modifica las preferencias del navegador, Herdr ni el sistema.
 
@@ -66,4 +69,4 @@ La TUI ya incorpora bienvenida, ocultación de la lista de componentes internos 
 
 Se comprobaron capturas de Inicio en un PTY real a 132 × 40, 110 × 26 y 80 × 24, además de tests de geometría con el renderer real. Esto no sustituye la revisión visual en Herdr en el Mac: hay que comparar el mismo estado y número de columnas y filas. La grilla hace que las proporciones sean reproducibles; los tests funcionales no garantizan paridad visual.
 
-Todos los datos de Git, CI, versiones, modelos, capacidades, contexto y recursos son **simulados**. Los diffs y logs son extractos inventados. Nada envía mensajes, llama a un modelo, ejecuta comandos, modifica el repo, crea worktrees, consulta servicios ni despliega.
+Todos los datos de Git, issues, PRs, versiones, modelos, capacidades, contexto y recursos son **simulados**. Los diffs y descripciones son extractos inventados. Nada envía mensajes, llama a un modelo, ejecuta comandos, modifica el repo, crea worktrees, consulta servicios ni despliega.

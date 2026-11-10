@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdir, readFile, realpath, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
-import { cpuPercent, linuxAvailable, macAvailable, parseStatus, readFileDiff, readGit, readGithub, readUntrackedPreview, resourceReader, safeText, sensitivePreviewPath, workspaceName, type ReadCommand } from "../src/tui/workspace/data.ts";
+import { cpuPercent, linuxAvailable, macAvailable, parseNumstat, parseStatus, readCommand, readFileDiff, readGit, readGithub, readGithubDetail, readUntrackedPreview, resourceReader, safeText, sensitivePreviewPath, workspaceName, type ReadCommand } from "../src/tui/workspace/data.ts";
 import { loadWorkspacePreferences, saveWorkspacePreferences } from "../src/tui/workspace/index.ts";
 import { tempDir } from "./helpers/io.ts";
 import { agentDir } from "../src/core/paths.ts";
@@ -29,6 +29,64 @@ test("workspace_status -z conserva rutas raras y consume el origen de un rename"
 	assert.equal(result.changeCount, 3); assert.deepEqual(result.changes[0], { status: "R ", path: "new name", previousPath: "old name" }); assert.equal(result.changes[1]?.path, "with\nnewline");
 	assert.equal(safeText("hello\x1b]52;c;secret\x07\nworld"), "hello]52;c;secretworld");
 	assert.equal(parseStatus(Array.from({ length: 150 }, (_, i) => `?? ${i}\0`).join("")).changes.length, 100);
+});
+
+test("workspace_numstat -z conserva rutas raras, renames y binarios, y rechaza datos incompletos", () => {
+	const stats = parseNumstat("10\t2\twith\ttab\nline.txt\0-\t-\tbinary.dat\0" + "1\t0\t\0old name\0new name\0");
+	assert.ok(stats);
+	assert.deepEqual(stats.get("with\ttab\nline.txt"), { added: 10, removed: 2 });
+	assert.equal(stats.get("binary.dat"), "binary"); assert.deepEqual(stats.get("new name"), { added: 1, removed: 0 });
+	assert.equal(stats.has("old name"), false); assert.equal(parseNumstat("")?.size, 0);
+	for (const invalid of ["1\t2\tfile", "1\t2\t\0old\0", "-\t0\tfile\0", "bad\t2\tfile\0", "9007199254740992\t0\tfile\0", "1\t0\tfile\0" + "1\t0\tfile\0"]) assert.equal(parseNumstat(invalid), undefined);
+});
+
+test("workspace_líneas por archivo son el cambio neto contra HEAD, sin duplicar stage y working", async (t) => {
+	const main = join(await tempDir(t), "main"); await repo(main);
+	await writeFile(join(main, "deleted.txt"), "one\ntwo\n"); await writeFile(join(main, "old.txt"), "rename one\nrename two\nrename three\n");
+	await writeFile(join(main, "binary.dat"), Buffer.from([0, 1, 2])); git(main, "add", "."); git(main, "commit", "-m", "fixtures");
+	await writeFile(join(main, "file.txt"), "staged\nextra\n"); git(main, "add", "file.txt"); await writeFile(join(main, "file.txt"), "final\n");
+	await writeFile(join(main, "added.txt"), "one\ntwo\nthree\n"); git(main, "add", "added.txt"); await writeFile(join(main, "added.txt"), "one\ntwo\n");
+	await unlink(join(main, "deleted.txt")); git(main, "mv", "old.txt", "renamed.txt");
+	await writeFile(join(main, "binary.dat"), Buffer.from([0, 3, 4])); await writeFile(join(main, ".env"), "DO_NOT_READ\n");
+	const before = await readFile(join(main, ".git/index"));
+	const snapshot = (await readGit(main))!; const lines = (path: string) => snapshot.changes.find((file) => file.path === path)?.lines;
+	assert.deepEqual(lines("file.txt"), { added: 1, removed: 1 }); assert.deepEqual(lines("added.txt"), { added: 2, removed: 0 });
+	assert.deepEqual(lines("deleted.txt"), { added: 0, removed: 2 }); assert.deepEqual(lines("renamed.txt"), { added: 0, removed: 0 });
+	assert.equal(lines("binary.dat"), "binary"); assert.equal(lines(".env"), undefined);
+	assert.deepEqual(await readFile(join(main, ".git/index")), before);
+	await writeFile(join(main, "renamed.txt"), "rename one\nrename two\nrename three\nrename four\n");
+	assert.deepEqual((await readGit(main))!.changes.find((file) => file.path === "renamed.txt")!.lines, { added: 1, removed: 0 });
+	// Un cambio en stage deshecho en el working tree no se cuenta dos veces.
+	await writeFile(join(main, "file.txt"), "initial\n");
+	assert.deepEqual((await readGit(main))!.changes.find((file) => file.path === "file.txt")!.lines, { added: 0, removed: 0 });
+});
+
+test("workspace_líneas funciona antes del primer commit con SHA-1 y SHA-256", async (t) => {
+	for (const format of ["sha1", "sha256"]) {
+		const main = join(await tempDir(t), "main"); await mkdir(main); git(main, "init", "-b", "main", `--object-format=${format}`);
+		await writeFile(join(main, "new.txt"), "one\ntwo\nthree\n"); git(main, "add", "new.txt");
+		await writeFile(join(main, "new.txt"), "one\ntwo\n");
+		assert.deepEqual((await readGit(main))!.changes[0]!.lines, { added: 2, removed: 0 });
+	}
+});
+
+test("workspace_líneas usa rutas literales desde la raíz, incluso al abrir un subdirectorio", { skip: process.platform === "win32" }, async (t) => {
+	const main = join(await tempDir(t), "main"); await repo(main); await mkdir(join(main, "nested"));
+	const path = "nested/with\ttab\n[1]*.txt"; await writeFile(join(main, path), "original\n"); git(main, "add", "."); git(main, "commit", "-m", "odd path");
+	await writeFile(join(main, path), "changed\nextra\n");
+	const snapshot = (await readGit(join(main, "nested")))!;
+	assert.deepEqual(snapshot.changes.find((file) => file.path === path)!.lines, { added: 2, removed: 1 });
+});
+
+test("workspace_líneas no inventa ceros ante error/truncado ni lee archivos sin seguimiento", async (t) => {
+	const main = join(await tempDir(t), "main"); await repo(main); await writeFile(join(main, "file.txt"), "changed\n");
+	for (const result of [{ code: 1, stdout: "" }, { code: 0, stdout: "1\t1\tfile.txt\0", truncated: true }, { code: 0, stdout: "1\t1\tfile.txt" }]) {
+		const run: ReadCommand = (command, args, cwd, signal) => args.includes("--numstat") ? Promise.resolve(result) : readCommand(command, args, cwd, signal);
+		assert.equal((await readGit(main, undefined, run))!.changes[0]!.lines, undefined);
+	}
+	await writeFile(join(main, "file.txt"), "initial\n"); await writeFile(join(main, ".env"), "PRIVATE\n");
+	const run: ReadCommand = (command, args, cwd, signal) => { assert.ok(!args.includes("--numstat"), "no pedir estadísticas de archivos sin seguimiento"); return readCommand(command, args, cwd, signal); };
+	assert.equal((await readGit(main, undefined, run))!.changes[0]!.lines, undefined);
 });
 
 test("workspace_diff lee working y staged sin ejecutar drivers externos; no abre untracked", async (t) => {
@@ -106,12 +164,35 @@ test("workspace_recursos reales incluyen host, memoria del proceso y volumen act
 	const sample = resourceReader(); const data = await sample(await tempDir(t)); assert.ok(data.host); assert.ok(data.totalRam > 0); assert.ok(data.rss > 0); if (process.platform !== "win32") assert.ok(data.disk && data.disk.available >= 0); assert.equal(data.cpu, undefined);
 });
 
-test("workspace_GitHub consulta branch, PR y jobs sin mutar", async (t) => {
-	const main = join(await tempDir(t), "main"); await repo(main); const snapshot = (await readGit(main))!;
+test("workspace_GitHub consulta sólo issues y PRs abiertos de todo el repo, incluso con HEAD separado", async (t) => {
+	const main = join(await tempDir(t), "main"); await repo(main); const snapshot = { ...(await readGit(main))!, detached: true };
 	const calls: string[][] = [];
-	const run: ReadCommand = async (command, args) => { assert.equal(command, "gh"); calls.push(args); return { code: 0, stdout: JSON.stringify(args[0] === "pr" ? { number: 7, title: "Native UI", isDraft: true } : args[1] === "list" ? [{ databaseId: 123, name: "CI", status: "in_progress", conclusion: null }] : { jobs: [{ name: "Tests", status: "in_progress" }] }) }; };
-	const value = await readGithub(snapshot, undefined, run); assert.match(value.pr!, /PR #7 · Draft/); assert.equal(value.runs[0]?.jobs, "Tests: in_progress"); assert.equal(calls.length, 3); assert.ok(calls[0]?.includes("main"));
-	await assert.rejects(readGithub(snapshot, undefined, async () => ({ code: 1, stdout: "" })), /no disponible/);
+	const run: ReadCommand = async (command, args, cwd) => {
+		assert.equal(command, "gh"); assert.equal(cwd, snapshot.root); calls.push(args);
+		return { code: 0, stdout: JSON.stringify([{ number: 7, title: "Native UI", author: { login: "ada" }, labels: [{ name: "ui" }], url: "https://github.com/example/repo/issues/7", isDraft: true, headRefName: "feature", baseRefName: "main", reviewDecision: "REVIEW_REQUIRED" }]) };
+	};
+	for (const kind of ["issue", "pr"] as const) {
+		const value = await readGithub(snapshot, kind, undefined, run);
+		assert.equal(value[0]?.number, 7); assert.equal(value[0]?.author, "ada"); assert.deepEqual(value[0]?.labels, ["ui"]);
+		assert.equal(value[0]?.draft, true); assert.equal(value[0]?.head, "feature");
+	}
+	assert.equal(calls.length, 2);
+	for (const args of calls) { assert.equal(args[1], "list"); assert.equal(args[args.indexOf("--state") + 1], "open"); assert.equal(args[args.indexOf("--limit") + 1], "100"); assert.ok(!args.includes("--branch")); assert.ok(!args.includes("run")); }
+	assert.deepEqual(await readGithub(snapshot, "issue", undefined, async () => ({ code: 0, stdout: "[]" })), []);
+	for (const result of [{ code: 1, stdout: "" }, { code: 0, stdout: "[]", truncated: true }, { code: 0, stdout: "{}" }, { code: 0, stdout: '[{"number":0,"title":"bad"}]' }]) await assert.rejects(readGithub(snapshot, "pr", undefined, async () => result));
+});
+
+test("workspace_GitHub sólo lee la descripción del issue/PR pedido al abrir el detalle", async (t) => {
+	const main = join(await tempDir(t), "main"); await repo(main); const snapshot = (await readGit(main))!;
+	for (const kind of ["issue", "pr"] as const) {
+		assert.equal(await readGithubDetail(snapshot, kind, 42, undefined, async (command, args, cwd) => {
+			assert.equal(command, "gh"); assert.equal(cwd, snapshot.root); assert.deepEqual(args, [kind, "view", "42", "--json", "body"]);
+			return { code: 0, stdout: JSON.stringify({ body: "Descripción\ncompleta" }) };
+		}), "Descripción\ncompleta");
+	}
+	await assert.rejects(readGithubDetail(snapshot, "issue", -1, undefined, async () => { throw new Error("no ejecutar"); }), /Número/);
+	await assert.rejects(readGithubDetail(snapshot, "pr", 42, undefined, async () => ({ code: 0, stdout: "{}" })), /no válido/);
+	await assert.rejects(readGithubDetail(snapshot, "issue", 42, undefined, async () => ({ code: 0, stdout: "{}", truncated: true })), /demasiado grande/);
 });
 
 test("workspace_Git no presenta un status truncado como limpio", async () => {
