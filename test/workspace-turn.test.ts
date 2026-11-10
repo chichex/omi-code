@@ -17,6 +17,10 @@ test("workspace_un turno real conserva streaming y tools; una confirmación vuel
 	const promptMarker = join(home, "prompt-ready"); const replyMarker = join(home, "reply-ready");
 	const requests: string[] = [];
 	const server = createServer((request, response) => {
+		// Las sondas HTTP al puerto local no son llamadas al modelo ni deben avanzar el turno.
+		if (request.method !== "POST" || request.url !== "/v1/chat/completions") {
+			request.resume(); response.writeHead(404); response.end(); return;
+		}
 		let body = ""; request.on("data", (data: Buffer) => { body += data; });
 		request.on("end", () => {
 			requests.push(body);
@@ -27,7 +31,15 @@ test("workspace_un turno real conserva streaming y tools; una confirmación vuel
 	});
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 	t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
-	await writeFile(join(agent, "models.json"), JSON.stringify({ providers: { mock: { baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`, api: "openai-completions", apiKey: "test-not-a-real-key", models: [{ id: "m", name: "Test model", contextWindow: 200000, maxTokens: 8192 }] } } }));
+	const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+	// Reproduce las sondas que hacían fallar intermitentemente el conteo (4 en vez de 2).
+	for (let probe = 0; probe < 2; probe++) {
+		const response = await fetch(baseUrl);
+		assert.equal(response.status, 404);
+		await response.text();
+	}
+	assert.equal(requests.length, 0, "las sondas no avanzan las respuestas del mock");
+	await writeFile(join(agent, "models.json"), JSON.stringify({ providers: { mock: { baseUrl: `${baseUrl}/v1`, api: "openai-completions", apiKey: "test-not-a-real-key", models: [{ id: "m", name: "Test model", contextWindow: 200000, maxTokens: 8192 }] } } }));
 	const extension = join(home, "confirm-probe.ts");
 	await writeFile(extension, `import { writeFile } from "node:fs/promises";
 	 export default function (pi) {
@@ -43,7 +55,7 @@ test("workspace_un turno real conserva streaming y tools; una confirmación vuel
 	const result = await exerciseWorkspace(process.execPath, [binary, "--provider", "mock", "--model", "m", "--no-session", "--no-extensions", "--extension", extension, "--no-context-files", "--no-skills", "--offline"], home, { ...process.env, HOME: home, OMI_HOME: "", OMI_TEST_TURN: "1", OMI_TEST_PROMPT: promptMarker, OMI_TEST_REPLY: replyMarker });
 	assert.equal(result.code, 0, result.output);
 	const plain = plainTerminal(result.output);
-	assert.equal(requests.length, 2, plain);
+	assert.equal(requests.length, 2, JSON.stringify(requests, null, 2) + "\n" + plain);
 	assert.ok(requests[1]?.includes("PROBE_OK"), requests[1]);
 	assert.match(plain, /▌ Vos/);
 	for (const body of requests) {
