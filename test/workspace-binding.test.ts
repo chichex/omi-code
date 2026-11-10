@@ -35,6 +35,7 @@ async function harness(home: string, options: { authenticated?: boolean; busy?: 
 	await extension.factory({
 		on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => { handlers.set(name, handler); },
 		registerCommand: (name: string, command: { handler: () => Promise<void> }) => { commands.set(name, command); },
+		registerMarkdownTransformer() {},
 		getSettings: () => ({}), setModel: async (model: Model<Api>) => { selections.push(model); return options.authenticated !== false; },
 		setThinkingLevel: (level: string) => thinking.push(level),
 	} as never);
@@ -42,13 +43,13 @@ async function harness(home: string, options: { authenticated?: boolean; busy?: 
 	return { commands, selections, thinking, notifications, pickerCount: () => pickerCount, input: (data: string) => terminalInput?.(data), stop: async () => { await handlers.get("session_shutdown")?.({}, context); } };
 }
 
-test("workspace_las vistas usan Control 1/2/3 con CSI-u y modifyOtherKeys, sin interceptar números ni Option", async (t) => {
+test("workspace_las vistas usan Control 1–5 con CSI-u y modifyOtherKeys, sin interceptar números ni Option", async (t) => {
 	const ui = await harness(await tempDir(t)); t.after(ui.stop);
-	for (const code of [49, 50, 51]) {
+	for (const code of [49, 50, 51, 52, 53]) {
 		assert.deepEqual(ui.input(`\x1b[${code};5u`), { consume: true });
 		assert.deepEqual(ui.input(`\x1b[27;5;${code}~`), { consume: true });
 	}
-	for (const input of ["1", "2", "3", "¡", "™", "£", "\x1b1", "\x1b2", "\x1b3", "\x01", "\x00"]) assert.equal(ui.input(input), undefined);
+	for (const input of ["1", "2", "3", "4", "5", "¡", "™", "£", "\x1b1", "\x1b2", "\x1b3", "\x1b4", "\x1b5", "\x01", "\x00"]) assert.equal(ui.input(input), undefined);
 });
 
 test("workspace_el selector respeta scopedModels y aplica mediante el runtime, no escribe auth ni defaults", async (t) => {

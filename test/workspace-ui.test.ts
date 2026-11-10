@@ -139,7 +139,7 @@ test("workspace_el fondo respeta un tema claro explícito para no dejar texto ne
 async function bind(extension: InlineExtension) {
 	if (typeof extension === "function") throw new Error("expected named extension");
 	const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>(); let commands = 0;
-	await extension.factory({ on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => { handlers.set(name, handler); }, registerCommand: () => { commands++; } } as never);
+	await extension.factory({ on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => { handlers.set(name, handler); }, registerCommand: () => { commands++; }, registerMarkdownTransformer() {} } as never);
 	return { handlers, commands };
 }
 for (const mode of ["rpc", "json", "print"] as const) {

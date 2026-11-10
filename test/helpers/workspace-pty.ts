@@ -10,7 +10,7 @@ def size(columns, rows):
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', rows, columns, 0, 0))
     os.kill(pid, signal.SIGWINCH)
 size(125, 42)
-actions = [(2.0, b'\\x0c'), (2.7, b'\\x1b'), (3.1, b'\\x1b[50;5u'), (3.35, b'\\x1b[51;5u'), (3.6, b'\\x1b[49;5u'),
+actions = [(2.0, b'\\x0c'), (2.7, b'\\x1b'), (3.0, b'\\x1b[50;5u'), (3.2, b'\\x1b[51;5u'), (3.4, b'\\x1b[52;5u'), (3.6, b'\\x1b[53;5u'), (3.8, b'\\x1b[49;5u'),
  (4.0, b'/omi-workspace\\r'), (4.7, b'\\x1b'), (5.1, b'/settings\\r'), (5.8, b'\\x1b'),
  (6.1, b'/reload\\r'), (7.0, b'/omi-resources\\r'), (7.7, b'\\x1b'), (8.2, b'\\x04')]
 turn = os.environ.get('OMI_TEST_TURN') == '1'
@@ -30,7 +30,7 @@ while time.monotonic() - start < 16:
             os.write(fd, b'hola\\r')
             phase = 1
         elif phase == 1 and b'Trabajando' in output:
-            os.write(fd, b'\\x1b[50;5u')
+            os.write(fd, b'\\x1b[52;5u')
             phase, phase_at = 2, elapsed
         elif phase == 2 and os.path.exists(os.environ['OMI_TEST_PROMPT']):
             phase, phase_at = 3, elapsed
@@ -44,7 +44,7 @@ while time.monotonic() - start < 16:
             phase = 6
     if preview:
         if phase == 0 and b'Enter enviar' in output:
-            os.write(fd, b'\\x1b[50;5u')
+            os.write(fd, b'\\x1b[52;5u')
             phase = 1
         elif phase == 1 and b'test/preview.test.ts' in output:
             os.write(fd, b'\\r')

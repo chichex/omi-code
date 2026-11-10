@@ -34,8 +34,9 @@ test("workspace_TUI real: layout, selector propio, vistas, métricas, settings, 
 	assert.doesNotMatch(plain, /\[Extensions\]|<inline:omi-|Update Available|pi update/);
 	assert.match(plain, /Elegir modelo · OMI/);
 	assert.match(plain, /Cambios locales/);
-	assert.match(plain, /GITHUB ACTIONS/);
-	assert.match(plain, /Ctrl 1\/2\/3 vistas/);
+	assert.match(plain, /Issues abiertos/); assert.match(plain, /PRs abiertos/); assert.match(plain, /PROYECTO OMI/);
+	assert.doesNotMatch(plain, /Entregas|ENTREGAS|GITHUB ACTIONS/);
+	assert.match(plain, /Ctrl 1–5 vistas/);
 	assert.match(plain, /Ubicación de trabajo/);
 	assert.match(plain, /Recursos · equipo donde corre OMI/);
 	assert.match(plain, /CPU total/);

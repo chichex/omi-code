@@ -1,6 +1,6 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
-import { parseColor, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { safeText } from "./data.ts";
+import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
+import { mixColors, parseColor, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { safeText, type ChangedFile, type GitSnapshot } from "./data.ts";
 
 export const BG = parseColor("#050607");
 export const PANEL = parseColor("#15191c");
@@ -10,6 +10,18 @@ export function fit(line: string, width: number): string { return truncateToWidt
 export function surface(theme: Theme, line: string, width: number, panel = false): string {
 	const light = theme.appearance === "light";
 	return theme.style(fit(line, width), { bg: light ? (panel ? LIGHT_PANEL : LIGHT_BG) : (panel ? PANEL : BG) });
+}
+export function sidebarSection(theme: Theme, title: string, width: number, color: ThemeColor): string {
+	const label = `▌ ${text(title)} `;
+	const base = theme.appearance === "light" ? LIGHT_PANEL : PANEL;
+	const tint = theme.colors?.[color];
+	return theme.style(fit(label + "─".repeat(Math.max(0, width - visibleWidth(label))), width), { fg: color, bg: tint ? mixColors(base, tint, .1) : base, bold: true });
+}
+export function gitSyncSummary(theme: Theme, git: Pick<GitSnapshot, "tracking" | "ahead" | "behind">): string {
+	if (git.tracking === false) return theme.fg("dim", "sin upstream");
+	if (git.tracking === undefined || git.ahead === undefined || git.behind === undefined) return theme.fg("warning", "↑— ↓—");
+	if (git.ahead === 0 && git.behind === 0) return theme.fg("success", "Al día (local)");
+	return `${theme.fg(git.ahead ? "success" : "dim", `↑${git.ahead}`)} ${theme.fg(git.behind ? "warning" : "dim", `↓${git.behind}`)}`;
 }
 export function text(value: string): string { return safeText(value); }
 export function tokens(value: number): string {
@@ -27,6 +39,15 @@ export function bar(theme: Theme, percent: number | undefined, width = 16): stri
 export function align(left: string, right: string, width: number): string {
 	if (visibleWidth(left) + visibleWidth(right) + 2 > width) return fit(left, width);
 	return left + " ".repeat(width - visibleWidth(left) - visibleWidth(right)) + right;
+}
+export function changedFileLine(theme: Theme, file: ChangedFile, width: number, selected = false): string {
+	const counts = file.lines === "binary" ? theme.fg("dim", "binario") : file.lines
+		? `${theme.fg("success", `+${file.lines.added}`)} ${theme.fg("error", `−${file.lines.removed}`)}`
+		: theme.fg("dim", file.status === "??" ? "nuevo" : "—");
+	const countWidth = visibleWidth(counts);
+	if (width < countWidth + 3) return fit(counts, width);
+	const name = fit(` ${selected ? "›" : " "} ${file.status} ${text(file.path)}`, width - countWidth - 2);
+	return (selected ? theme.fg("accent", name) : name) + "  " + counts;
 }
 export function modalLines(theme: Theme, title: string, content: string[], width: number): string[] {
 	if (width < 4) return content.map((line) => fit(line, width));
