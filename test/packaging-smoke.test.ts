@@ -13,6 +13,7 @@ import pkg from "../package.json" with { type: "json" };
 import { assetNames, currentPlatform } from "../src/upgrade/release.ts";
 import { FOREIGN, OWN, PI_MARKS, requestSeenByModel, seedConfig, seedPi } from "./helpers/foreign-config.ts";
 import { tempDir } from "./helpers/io.ts";
+import { exerciseWorkspace, plainTerminal } from "./helpers/workspace-pty.ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const enabled = process.env.OMI_PACKAGING_SMOKE === "1";
@@ -63,6 +64,13 @@ test("release real_compila, instala y arranca sin Node ni repo", { skip: !enable
 	assert.equal(version.stdout.trim(), pkg.version);
 	await assert.rejects(stat(join(installRoot, "runtime/skills")));
 	assert.equal((await stat(join(installRoot, "runtime/theme/dark.json"))).isFile(), true);
+
+	// El workspace también debe funcionar compilado, sin Node ni el repo en PATH.
+	const terminal = await exerciseWorkspace(binary, ["--no-extensions", "--no-context-files", "--no-skills", "--offline"], home, { HOME: home, PATH: "/usr/bin:/bin", OMI_HOME: installRoot });
+	assert.equal(terminal.code, 0, terminal.output);
+	const terminalText = plainTerminal(terminal.output);
+	for (const label of ["omi code", "¿Qué hacemos en", "CONTEXTO", "Modelo:", "█".repeat(30), "Elegir modelo · OMI", "Cambios locales", "Ubicación de trabajo", "Recursos · equipo donde corre OMI"]) assert.ok(terminalText.includes(label), label);
+	assert.doesNotMatch(terminalText, /Extension error|TypeError|no compatible|exceeds terminal width|\[Extensions\]|<inline:omi-|Update Available|pi update/);
 
 	const probe = join(home, "runtime-probe.ts");
 	await writeFile(probe, `import { VERSION, getPackageDir, getExamplesPath } from "@earendil-works/pi-coding-agent";\nimport { existsSync } from "node:fs";\nexport default function (pi) { pi.registerCommand("runtime-probe", { description: JSON.stringify({ version: VERSION, packageDir: getPackageDir(), examples: existsSync(getExamplesPath()) }), handler: async () => {} }); }\n`);

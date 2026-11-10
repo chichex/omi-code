@@ -16,20 +16,22 @@ interface Call {
 	agentDirEnv: string | undefined;
 	tools: string[];
 	extensions: string[];
+	hiddenExtensions: string[];
 }
 
 function fakePi(calls: Call[]): PiMain {
 	return async (args, options) => {
 		const tools: string[] = [];
-		const names: string[] = [];
+		const names: string[] = []; const hiddenExtensions: string[] = [];
 		for (const extension of options.extensionFactories ?? []) {
 			if (typeof extension === "function") continue;
 			names.push(extension.name);
+			if (extension.hidden) hiddenExtensions.push(extension.name);
 			if (extension.name !== "omi-tools") continue;
 			const { factory } = extension;
 			await factory({ registerTool: (tool: { name: string }) => tools.push(tool.name), on: () => {} } as never);
 		}
-		calls.push({ args, agentDirEnv: process.env.PI_CODING_AGENT_DIR, tools, extensions: names });
+		calls.push({ args, agentDirEnv: process.env.PI_CODING_AGENT_DIR, tools, extensions: names, hiddenExtensions });
 	};
 }
 
@@ -67,8 +69,40 @@ test("launchTui_una instalación nueva sólo trae lo de omi", async (t) => {
 	const home = await tempDir(t);
 	const calls: Call[] = [];
 	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi(calls) });
-	assert.deepEqual(calls[0]?.extensions, ["omi-tools", "omi-runtime-shell", "omi-isolated-context"]);
+	assert.deepEqual(calls[0]?.extensions, ["omi-tools", "omi-runtime-shell", "omi-herdr", "omi-workspace", "omi-isolated-context"]);
+	assert.deepEqual(calls[0]?.args, ["--tui-mode", "fullscreen", "--no-context-files"]);
+	assert.deepEqual(calls[0]?.hiddenExtensions, calls[0]?.extensions);
+});
+
+test("launchTui_classic conserva el modo anterior sin forzar fullscreen", async (t) => {
+	const calls: Call[] = [];
+	await launchTui([], testIo({ homeDir: await tempDir(t), env: { OMI_TUI: "classic" } }), { piMain: fakePi(calls) });
 	assert.deepEqual(calls[0]?.args, ["--no-context-files"]);
+	assert.deepEqual(calls[0]?.hiddenExtensions, []);
+});
+
+test("launchTui_no invita a actualizar Pi separado de OMI, sin apagar la red ni persistir ajustes", async (t) => {
+	const oldSkip = process.env.PI_SKIP_VERSION_CHECK; const offline = process.env.PI_OFFLINE;
+	t.after(() => { if (oldSkip === undefined) delete process.env.PI_SKIP_VERSION_CHECK; else process.env.PI_SKIP_VERSION_CHECK = oldSkip; });
+	process.env.PI_SKIP_VERSION_CHECK = "valor-anterior";
+	const home = await tempDir(t);
+	await assert.rejects(launchTui([], testIo({ homeDir: home }), { piMain: async () => {
+		assert.equal(process.env.PI_SKIP_VERSION_CHECK, "1"); assert.equal(process.env.PI_OFFLINE, offline);
+		throw new Error("prueba de fallo");
+	} }), /prueba de fallo/);
+	assert.equal(process.env.PI_SKIP_VERSION_CHECK, "valor-anterior");
+	delete process.env.PI_SKIP_VERSION_CHECK;
+	await launchTui([], testIo({ homeDir: home }), { piMain: async () => { assert.equal(process.env.PI_SKIP_VERSION_CHECK, "1"); } });
+	assert.equal(process.env.PI_SKIP_VERSION_CHECK, undefined);
+	assert.equal(JSON.parse(await readFile(join(agentDir(home), "settings.json"), "utf8")).quietStartup, undefined);
+	await launchTui([], testIo({ homeDir: home, env: { OMI_TUI: "classic" } }), { piMain: async () => { assert.equal(process.env.PI_SKIP_VERSION_CHECK, undefined); } });
+});
+
+test("launchTui_un --tui-mode explícito gana sobre el default de OMI", async (t) => {
+	const calls: Call[] = [];
+	await launchTui(["--tui-mode", "regular"], testIo({ homeDir: await tempDir(t) }), { piMain: fakePi(calls) });
+	const { parseArgs } = await import("@earendil-works/pi-coding-agent");
+	assert.equal(parseArgs(calls[0]!.args).tuiMode, "regular");
 });
 
 test("launchTui_excluye ~/.agents/skills y arma el contexto él mismo", async (t) => {

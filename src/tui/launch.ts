@@ -9,9 +9,11 @@ import { resolveRuntime } from "../core/runtime.ts";
 import { AGENT_SESSION_ENV } from "../guardrails/surfaces.ts";
 import { runPiImportOnboarding } from "../onboarding/pi-import.ts";
 import { CATALOG } from "../tools/catalog.ts";
+import { herdrExtension } from "./herdr.ts";
 import { isolatePi } from "./isolation.ts";
 import { registerCatalogTools } from "./tools.ts";
 import { runtimeShellExtension } from "./runtime-shell.ts";
+import { workspaceExtension } from "./workspace/index.ts";
 
 export type PiMain = (args: string[], options: { extensionFactories?: InlineExtension[] }) => Promise<void>;
 
@@ -38,6 +40,21 @@ export async function launchTui(args: string[], io: Io, deps: LaunchDeps = {}): 
 	const piMain = deps.piMain ?? (await import("@earendil-works/pi-coding-agent")).main;
 
 	const isolation = await isolatePi(args, dir, io);
-	await piMain([...isolation.args, ...args], { extensionFactories: [omiToolsExtension(io), await runtimeShellExtension(io), ...isolation.extensions] });
+	// El workspace usa fullscreen; --tui-mode explícito gana y OMI_TUI=classic conserva el arranque anterior.
+	const workspace = io.env.OMI_TUI !== "classic";
+	const presentation = workspace ? ["--tui-mode", "fullscreen"] : [];
+	const extensions = [omiToolsExtension(io), await runtimeShellExtension(io), herdrExtension(io, args), workspaceExtension(io, args), ...isolation.extensions];
+	// Son componentes del producto, no extensiones que el usuario deba administrar.
+	if (workspace) for (const extension of extensions) if (typeof extension !== "function") extension.hidden = true;
+	// Pi viene fijado dentro de OMI: actualizarlo por separado rompe el contrato del layout.
+	// No usar PI_OFFLINE: deben seguir funcionando proveedores, catálogos y extensiones del usuario.
+	const skipVersionCheck = process.env.PI_SKIP_VERSION_CHECK;
+	if (workspace) process.env.PI_SKIP_VERSION_CHECK = "1";
+	try {
+		await piMain([...presentation, ...isolation.args, ...args], { extensionFactories: extensions });
+	} finally {
+		if (skipVersionCheck === undefined) delete process.env.PI_SKIP_VERSION_CHECK;
+		else process.env.PI_SKIP_VERSION_CHECK = skipVersionCheck;
+	}
 	return typeof process.exitCode === "number" ? process.exitCode : EXIT_OK;
 }
