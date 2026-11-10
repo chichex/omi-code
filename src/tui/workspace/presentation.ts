@@ -1,5 +1,5 @@
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
-import { backgroundAnsi, mixColors, parseColor, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { backgroundAnsi, mixColors, parseColor, truncateToWidth, visibleWidth, type Color } from "@earendil-works/pi-tui";
 import { safeText, type ChangedFile, type GitSnapshot } from "./data.ts";
 
 export const BG = parseColor("#050607");
@@ -9,7 +9,9 @@ const LIGHT_PANEL = parseColor("#f3f4f5");
 export function fit(line: string, width: number): string { return truncateToWidth(line, Math.max(0, width), "…", true); }
 export function surface(theme: Theme, line: string, width: number, panel = false): string {
 	const light = theme.appearance === "light";
-	const bg = light ? (panel ? LIGHT_PANEL : LIGHT_BG) : (panel ? PANEL : BG);
+	return paintBackground(theme, line, width, light ? (panel ? LIGHT_PANEL : LIGHT_BG) : (panel ? PANEL : BG));
+}
+function paintBackground(theme: Theme, line: string, width: number, bg: Color): string {
 	const background = backgroundAnsi(bg, theme.getColorMode());
 	// truncateToWidth emite SGR 0 y los encabezados cierran su tinte con SGR 49.
 	// Restaurar sólo el fondo base: no borrar colores, atributos ni fondos internos.
@@ -54,10 +56,30 @@ export function changedFileLine(theme: Theme, file: ChangedFile, width: number, 
 	const name = fit(` ${selected ? "›" : " "} ${file.status} ${text(file.path)}`, width - countWidth - 2);
 	return (selected ? theme.fg("accent", name) : name) + "  " + counts;
 }
-export function modalLines(theme: Theme, title: string, content: string[], width: number): string[] {
-	if (width < 4) return content.map((line) => fit(line, width));
+export const MODAL_CONTENT_ROW = 4;
+export const MODAL_CHROME_ROWS = 7; // Cabecera (4), separador, una fila de atajos y borde inferior.
+export interface ModalOptions { color?: ThemeColor; subtitle?: string; footer?: string[] }
+export function modalHeight(rows: number): number { return Math.max(1, Math.floor(rows * .9)); }
+export function modalBodyRows(rows: number, footerRows = 1): number { return Math.max(1, modalHeight(rows) - MODAL_CHROME_ROWS - Math.max(0, footerRows - 1)); }
+export function modalHint(theme: Theme, key: string, label: string): string {
+	return theme.style(key, { fg: "accent", bold: true }) + theme.fg("muted", label ? ` ${label}` : "");
+}
+function modalTint(theme: Theme, color: ThemeColor, amount: number): Color {
+	const base = theme.appearance === "light" ? LIGHT_PANEL : PANEL;
+	return theme.colors?.[color] ? mixColors(base, theme.colors[color], amount) : base;
+}
+export function modalSelection(theme: Theme, line: string, width: number, color: ThemeColor = "accent"): string {
+	return paintBackground(theme, theme.style(line, { fg: color, bold: true }), width, modalTint(theme, color, .16));
+}
+export function modalLines(theme: Theme, title: string, content: string[], width: number, options: ModalOptions = {}): string[] {
+	const color = options.color ?? "accent";
+	const body = modalTint(theme, color, .025); const header = modalTint(theme, color, .12);
+	const footer = options.footer ?? [modalHint(theme, "Esc", "cerrar") + " · " + modalHint(theme, "Enter", "cerrar")];
+	if (width < 4) return [...content, ...footer].map((line) => paintBackground(theme, line, width, body));
 	const inner = width - 4;
-	return [theme.fg("border", `┌${"─".repeat(width - 2)}┐`),
-		...['', theme.bold(title), '', ...content, '', theme.fg("dim", "Esc cancelar / cerrar")].map((line) => theme.fg("border", "│ ") + fit(line, inner) + theme.fg("border", " │")),
-		theme.fg("border", `└${"─".repeat(width - 2)}┘`)];
+	const rule = (left: string, right: string, tone: ThemeColor = "border") => paintBackground(theme, theme.fg(tone, left + "─".repeat(width - 2) + right), width, body);
+	const row = (line: string, bg = body) => paintBackground(theme, theme.fg("border", "│ ") + fit(theme.fg("text", line), inner) + theme.fg("border", " │"), width, bg);
+	return [rule("┌", "┐", color), row(theme.style(`▌ ${text(title)}`, { fg: color, bold: true }), header),
+		row(theme.fg("muted", text(options.subtitle ?? "OMI · Detalle")), header), rule("├", "┤"),
+		...content.map((line) => row(line)), rule("├", "┤"), ...footer.map((line) => row(line)), rule("└", "┘", color)];
 }

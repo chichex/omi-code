@@ -8,15 +8,19 @@ import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Container, getOsc8LinkAtColumn, parseColor, sliceByColumn, stripTerminalSequences, Text, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 // Mismo contrato versionado que el adaptador de OMI, sin emular el algoritmo de layout.
 import { getLayoutBoxesAt, renderLayoutFrame } from "../node_modules/@earendil-works/pi-tui/dist/layout.js";
+import { getThemeByName } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import { workspaceExtension } from "../src/tui/workspace/index.ts";
 import { bar } from "../src/tui/workspace/presentation.ts";
+import { OmiCommandPalette } from "../src/tui/workspace/modals.ts";
 import { tempDir, testIo } from "./helpers/io.ts";
 import { linkedProject } from "./helpers/project.ts";
 import { WORKSPACE_VIEWS, workspaceTabs } from "../src/tui/workspace/navigation.ts";
 
 const theme = { fg: (_role: string, value: string) => value, bold: (value: string) => value, style: (value: string) => value, getColorMode: () => "truecolor" } as unknown as Theme;
 
-async function visualHarness(home: string, options: { cwd?: string; trusted?: boolean; online?: boolean; paletteAction?: string; browserCode?: number } = {}) {
+async function visualHarness(home: string, options: { cwd?: string; trusted?: boolean; online?: boolean; paletteAction?: string; browserCode?: number; theme?: Theme } = {}) {
+	const activeTheme = options.theme ?? theme;
+	const modals: { lines: string[]; width: number }[] = [];
 	const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
 	let root: Component | undefined; let focus: Component | undefined; let hasMessages = false; let unknownUsage = false; let approveSensitive = false;
 	const prompts: string[] = []; const confirmations: string[] = []; const paletteOptions: string[][] = []; const notices: string[] = [];
@@ -38,8 +42,8 @@ async function visualHarness(home: string, options: { cwd?: string; trusted?: bo
 		sessionManager: { getBranch: () => hasMessages ? [{ type: "message" }] : [] },
 		getContextUsage: () => unknownUsage ? undefined : { tokens: 56000, contextWindow: 200000, percent: 28 },
 		ui: {
-			theme, getTheme: () => undefined, setHeader() {}, getEditorComponent: () => undefined,
-			setFooter: (factory: (ui: TUI, theme: Theme, data: unknown) => Component) => footer.addChild(factory(ui, theme, { getExtensionStatuses: () => new Map() })),
+			theme: activeTheme, getTheme: () => undefined, setHeader() {}, getEditorComponent: () => undefined,
+			setFooter: (factory: (ui: TUI, theme: Theme, data: unknown) => Component) => footer.addChild(factory(ui, activeTheme, { getExtensionStatuses: () => new Map() })),
 			setEditorComponent: (factory: (ui: TUI, theme: unknown, keys: unknown) => Component) => editor.addChild(factory(ui, { borderColor: (value: string) => value }, { getKeys: () => ["ctrl+l"], matches: () => false })),
 			onTerminalInput: (handler: (data: string) => unknown) => { terminalInput = handler; return () => { terminalInput = undefined; }; }, notify: (message: string) => notices.push(message),
 			select: async (_title: string, values: string[]) => { paletteOptions.push(values); return options.paletteAction; },
@@ -47,10 +51,19 @@ async function visualHarness(home: string, options: { cwd?: string; trusted?: bo
 				confirmations.push(title); handlers.get("ui_prompt_start")?.({}, ctx); handlers.get("ui_prompt_end")?.({}, ctx);
 				return approveSensitive;
 			},
-			custom: async (factory: (ui: TUI, theme: Theme, keys: unknown, done: () => void) => Component) => {
+			custom: async (factory: (ui: TUI, theme: Theme, keys: unknown, done: (value?: unknown) => void) => Component, displayOptions?: { overlayOptions: () => { width: number } }) => {
 				handlers.get("ui_prompt_start")?.({}, ctx);
-				prompts.push(factory(ui, theme, {}, () => {}).render(90).map(stripTerminalSequences).join("\n"));
+				let result: unknown;
+				const component = factory(ui, activeTheme, { matches: () => false }, (value) => { result = value; });
+				const width = displayOptions?.overlayOptions().width ?? 90; const lines = component.render(width);
+				modals.push({ lines, width }); prompts.push(lines.map(stripTerminalSequences).join("\n"));
+				if (component instanceof OmiCommandPalette) {
+					paletteOptions.push(component.items.map((item) => item.label));
+					const index = component.items.findIndex((item) => item.value === options.paletteAction);
+					if (index >= 0) { for (let i = 0; i < index; i++) component.handleInput("\x1b[B"); component.handleInput("\r"); }
+				}
 				handlers.get("ui_prompt_end")?.({}, ctx);
+				return result;
 			},
 		},
 	} as unknown as ExtensionContext;
@@ -59,7 +72,7 @@ async function visualHarness(home: string, options: { cwd?: string; trusted?: bo
 	await extension.factory({ on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => handlers.set(name, handler), registerCommand: (name: string, command: { handler: () => Promise<void> }) => commands.set(name, command), getSettings: () => ({}), registerMarkdownTransformer() {}, exec: async (command: string, args: string[], execOptions = {}) => { browserCalls.push({ command, args, options: execOptions }); return { code: options.browserCode ?? 0, stdout: "", stderr: "" }; } } as never);
 	await handlers.get("session_start")!({}, ctx);
 	return {
-		resources, chat, prompts, confirmations, commands, paletteOptions, browserCalls, notices,
+		resources, chat, prompts, confirmations, commands, paletteOptions, browserCalls, notices, modals,
 		terminal: (data: string) => terminalInput?.(data),
 		click: (x: number, y: number, width = 132, height = 40) => {
 			Object.assign(ui.terminal, { columns: width, rows: height }); const frame = renderLayoutFrame(root!, width, height, () => {});
@@ -76,6 +89,23 @@ async function visualHarness(home: string, options: { cwd?: string; trusted?: bo
 		stop: async () => { await handlers.get("session_shutdown")!({}, ctx); },
 	};
 }
+
+test("workspace_todos los modales propios usan el marco común y el color de su sección", async (t) => {
+	const theme = getThemeByName("dark")!;
+	const ui = await visualHarness(await tempDir(t), { theme }); t.after(ui.stop);
+	for (const [command, color, limit] of [["omi-workspace", "syntaxType", 104], ["omi-pr", "mdLink", 104], ["omi-actions", "mdLink", 104],
+		["omi-context", "warning", 104], ["omi-resources", "syntaxVariable", 104], ["omi-model", "accent", 112], ["omi", "accent", 76]] as const) {
+		await ui.command(command);
+		const modal = ui.modals.at(-1)!;
+		assert.equal(modal.width, limit); assert.ok(modal.lines.every((line) => visibleWidth(line) === limit));
+		assert.ok(modal.lines[0]!.includes(theme.getFgAnsi(color)), command);
+		assert.match(stripTerminalSequences(modal.lines[1]!), /▌/); assert.ok(modal.lines[1]!.includes("\x1b[1m"));
+		assert.match(stripTerminalSequences(modal.lines.at(-1)!), /└.*┘$/);
+	}
+	ui.frame(40, 16); await ui.command("omi-pr");
+	assert.equal(ui.modals.at(-1)!.width, 36, "el ancho se recalcula al achicar el pane");
+	assert.ok(ui.modals.at(-1)!.lines.length <= 14);
+});
 
 test("workspace_geometría real: Inicio, contexto justo sobre Equipo, cuatro barras y modelo en su propia fila", async (t) => {
 	const ui = await visualHarness(await tempDir(t)); t.after(ui.stop);

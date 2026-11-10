@@ -33,6 +33,7 @@ test("workspace_TUI real: layout, selector propio, vistas, métricas, settings, 
 	assert.match(plain, /█{30}/);
 	assert.doesNotMatch(plain, /\[Extensions\]|<inline:omi-|Update Available|pi update/);
 	assert.match(plain, /Elegir modelo · OMI/);
+	assert.match(plain, /OMI · Comandos/); assert.match(plain, /Ventana de contexto/);
 	assert.match(plain, /Cambios locales/);
 	assert.match(plain, /Issues abiertos/); assert.match(plain, /PRs abiertos/); assert.match(plain, /PROYECTO OMI/);
 	assert.doesNotMatch(plain, /Entregas|ENTREGAS/);

@@ -11,8 +11,9 @@ def size(columns, rows):
     os.kill(pid, signal.SIGWINCH)
 size(125, 42)
 actions = [(2.0, b'\\x0c'), (2.7, b'\\x1b'), (3.0, b'\\x1b[50;5u'), (3.2, b'\\x1b[51;5u'), (3.4, b'\\x1b[52;5u'), (3.6, b'\\x1b[53;5u'), (3.8, b'\\x1b[49;5u'),
- (4.0, b'/omi-workspace\\r'), (4.7, b'\\x1b'), (5.1, b'/settings\\r'), (5.8, b'\\x1b'),
- (6.1, b'/reload\\r'), (7.0, b'/omi-resources\\r'), (7.7, b'\\x1b'), (8.2, b'\\x04')]
+ (4.0, b'/omi\\r'), (4.2, b'\\x1b[B' * 8 + b'\\r'), (4.7, b'\\x1b'),
+ (5.1, b'/omi-workspace\\r'), (5.8, b'\\x1b'), (6.1, b'/settings\\r'), (6.8, b'\\x1b'),
+ (7.1, b'/reload\\r'), (8.0, b'/omi-resources\\r'), (8.7, b'\\x1b'), (9.2, b'\\x04')]
 turn = os.environ.get('OMI_TEST_TURN') == '1'
 preview = os.environ.get('OMI_TEST_PREVIEW') == '1'
 pr_click = os.environ.get('OMI_TEST_PR_CLICK') == '1'
@@ -73,7 +74,7 @@ while time.monotonic() - start < 16:
         elif phase == 2 and elapsed - phase_at > 0.3:
             os.write(fd, b'\\x04')
             phase = 3
-    if elapsed > 7.9 and not resized and not turn and not preview and not pr_click:
+    if elapsed > 8.3 and not resized and not turn and not preview and not pr_click:
         size(72, 22)
         resized = True
     if select.select([fd], [], [], 0.1)[0]:
@@ -84,7 +85,7 @@ while time.monotonic() - start < 16:
         if not chunk:
             break
         output += chunk
-    if elapsed > 14 or (not turn and elapsed > 9):
+    if elapsed > 14 or (not turn and elapsed > 10):
         os.write(fd, b'\\x04')
 else:
     os.kill(pid, signal.SIGKILL)

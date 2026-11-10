@@ -8,7 +8,8 @@ import type { Io } from "../../cli/io.ts";
 import { agentDir } from "../../core/paths.ts";
 import { readEnvironments, readFileDiff, readGit, readGithub, readGithubDetail, readUntrackedPreview, resourceReader, sensitivePreviewPath, workspaceName, type EnvironmentStatus, type GitSnapshot, type GithubItem, type Resources } from "./data.ts";
 import { OmiModelPicker, type PickerResult } from "./model-picker.ts";
-import { align, bar, changedFileLine, fit, gib, gitSyncSummary, modalLines, percentage, sidebarSection, surface, text, tokens } from "./presentation.ts";
+import { align, bar, changedFileLine, fit, gib, gitSyncSummary, percentage, sidebarSection, surface, text, tokens, type ModalOptions } from "./presentation.ts";
+import { field, notice, OmiCommandPalette, OmiInfoModal, section, type ModalEntry } from "./modals.ts";
 
 import { WORKSPACE_VIEWS, workspaceTabs, type WorkspaceView } from "./navigation.ts";
 
@@ -170,27 +171,32 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			changed();
 			if (active && (previousIdentity !== gitIdentity() || Date.now() - lastRemote > 30_000)) void refreshRemote();
 		}
-		async function info(title: string, lines: string[]): Promise<void> {
+		const overlayOptions = (limit = 104) => ({ width: Math.max(1, Math.min(limit, Math.floor((tui?.terminal.columns ?? 80) * .9))), maxHeight: "90%" as const, anchor: "center" as const });
+		async function info(title: string, content: ModalEntry[], options: ModalOptions = {}): Promise<void> {
 			if (!active || finishModal) return;
 			infoPrompt = true;
-			try { await ctx.ui.custom<void>((ui, currentTheme, _keys, done) => {
-				let offset = 0; finishModal = () => done();
-				return { capturesViewportInput: true, invalidate() {}, render(width) { const count = Math.max(1, rows() - 12); const visible = lines.flatMap((line) => wrapTextWithAnsi(text(line), Math.max(1, width - 4))); offset = Math.min(offset, Math.max(0, visible.length - count)); return modalLines(currentTheme, title, visible.slice(offset, offset + count).map((line) => fit(line, Math.max(1, width - 4))), width); }, handleInput(data) { if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c") || matchesKey(data, "return")) done(); else if (matchesKey(data, "up")) offset = Math.max(0, offset - 1); else if (matchesKey(data, "down")) offset++; else if (matchesKey(data, "pageDown")) offset += 8; else if (matchesKey(data, "pageUp")) offset = Math.max(0, offset - 8); ui.requestRender(); } };
-			}, { overlay: true, overlayOptions: { width: "85%", maxHeight: "90%", anchor: "center" } }); }
+			try { await ctx.ui.custom<void>((ui, _currentTheme, _keys, done) => {
+				finishModal = () => done();
+				return new OmiInfoModal({ title, content, ...options, theme, rows, redraw: () => ui.requestRender(), done });
+			}, { overlay: true, overlayOptions: () => overlayOptions() }); }
 			finally { infoPrompt = false; finishModal = undefined; }
 		}
 		async function showWorkspace(): Promise<void> {
-			await info("Ubicación de trabajo", [workspaceName(git), `Branch: ${git ? `${git.detached ? "HEAD separado · " : ""}${git.branch}` : "—"}`, `Directorio activo: ${ctx.cwd}`, `Raíz del checkout: ${git?.root ?? "—"}`, `Repo principal: ${git?.mainRoot ?? "—"}`,
-				...(git ? [`Archivos modificados: ${git.changeCount}`, `Upstream: ${git.tracking === false ? "sin configurar" : git.upstream ?? "no disponible"}`, `Commits: ↑${git.ahead ?? "—"} ↓${git.behind ?? "—"}`, "↑ commits locales por subir · ↓ commits del upstream por traer.", "Comparación con la referencia local del último fetch; no consulta el remoto. Para actualizarla, ejecutá git fetch. Los archivos sin commit se cuentan por separado."] : []),
-				git?.linked ? "Este worktree tiene directorio e índice propios. Comparte historia y referencias Git. No es un sandbox: no aísla credenciales, procesos ni servicios." : "No hay un worktree enlazado activo.", ...(gitError ? ["Estado Git desactualizado: no se pudo refrescar."] : [])]);
+			await info("Ubicación de trabajo", [notice(workspaceName(git), "syntaxType"), field("Branch", git ? `${git.detached ? "HEAD separado · " : ""}${git.branch}` : "—", "syntaxType"),
+				"", section("Directorios"), field("Directorio activo", ctx.cwd), field("Raíz del checkout", git?.root ?? "—"), field("Repo principal", git?.mainRoot ?? "—"),
+				...(git ? ["", section("Estado Git"), field("Archivos modificados", String(git.changeCount)), field("Upstream", git.tracking === false ? "sin configurar" : git.upstream ?? "no disponible"),
+					field("Commits", `↑${git.ahead ?? "—"} ↓${git.behind ?? "—"}`), notice("↑ commits locales por subir · ↓ commits del upstream por traer."),
+					notice("Comparación con la referencia local del último fetch; no consulta el remoto. Para actualizarla, ejecutá git fetch. Los archivos sin commit se cuentan por separado.")] : []), "",
+				notice(git?.linked ? "Este worktree tiene directorio e índice propios. Comparte historia y referencias Git. No es un sandbox: no aísla credenciales, procesos ni servicios." : "No hay un worktree enlazado activo."),
+				...(gitError ? [notice("Estado Git desactualizado: no se pudo refrescar.", "warning")] : [])], { color: "syntaxType", subtitle: "Proyecto · checkout y sincronización local" });
 		}
 		async function showBranchPr(): Promise<void> {
-			await info("PR de la rama actual", [
-				`Rama: ${git ? text(git.branch) : "sin repositorio Git"}`,
-				...(branchPrError ? [branchPrError + (branchPr ? " · enlace desactualizado (*)" : "")] : []),
-				...(branchPr ? [`PR #${branchPr.number} · ${text(branchPr.title)}`, branchPr.url, `Estado: ${branchPr.state}${branchPr.draft ? " · borrador" : ""}`]
-					: [!git ? "Sin repositorio Git." : git.detached ? "HEAD separado: no hay una rama actual." : branchPrError ? "No se pudo consultar el PR." : remoteBusy || !lastRemote ? "Consultando PR…" : "No hay un PR asociado a esta rama."]),
-			]);
+			await info("PR de la rama actual", [field("Rama", git ? git.branch : "sin repositorio Git", "syntaxType"), "",
+				...(branchPrError ? [notice(branchPrError + (branchPr ? " · enlace desactualizado (*)" : ""), "warning")] : []),
+				...(branchPr ? [notice(`PR #${branchPr.number} · ${branchPr.title}`, "mdLink"), "", field("Estado", `${branchPr.state}${branchPr.draft ? " · borrador" : ""}`,
+					branchPr.draft ? "warning" : branchPr.state === "MERGED" ? "syntaxType" : branchPr.state === "OPEN" ? "success" : "muted"), "", branchPr.url]
+					: [notice(!git ? "Sin repositorio Git." : git.detached ? "HEAD separado: no hay una rama actual." : branchPrError ? "No se pudo consultar el PR." : remoteBusy || !lastRemote ? "Consultando PR…" : "No hay un PR asociado a esta rama.")]),
+			], { color: "mdLink", subtitle: "GitHub · pull request del checkout activo" });
 		}
 		async function openBranchPr(pr: BranchPullRequest): Promise<void> {
 			if (!active || blocked || openingBranchPr) return;
@@ -203,23 +209,43 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			} finally { openingBranchPr = false; }
 		}
 		async function showActions(): Promise<void> {
-			await info("GitHub Actions", ["Estado de las ejecuciones de Actions; un ✓ no significa aprobación del PR.", "", ...ACTION_GROUPS.flatMap((group) => {
+			await info("GitHub Actions", [notice("Estado de las ejecuciones de Actions; un ✓ no significa aprobación del PR."), "", ...ACTION_GROUPS.flatMap((group): ModalEntry[] => {
 				const state = actions[group.id];
-				return [group.label, ...(state.error ? [state.error + (state.runs ? " · datos desactualizados" : "")] : []),
-					...(state.runs?.flatMap((run) => [`${run.name} · ${run.status} · ${run.conclusion || "sin conclusión"}`, run.createdAt, run.url]) ?? ["Sin datos"]), ""];
-			})]);
+				return [section(group.label), ...(state.error ? [notice(state.error + (state.runs ? " · datos desactualizados" : ""), "warning")] : []),
+					...(state.runs?.flatMap((run) => [notice(`${run.name} · ${run.status} · ${run.conclusion || "sin conclusión"}`,
+						run.status !== "completed" ? "warning" : run.conclusion === "success" ? "success" : ["failure", "timed_out", "startup_failure", "action_required"].includes(run.conclusion) ? "error" : "muted"), notice(run.createdAt), run.url]) ?? [notice("Sin datos")]), ""];
+			})], { color: "mdLink", subtitle: "GitHub · Claude reviews y releases" });
 		}
-		async function showResources(): Promise<void> { const r = resources; await info("Recursos · equipo donde corre OMI", r ? [`Host: ${r.host}`, `CPU total: ${r.cpu === undefined ? "esperando muestra" : `${r.cpu.toFixed(1)}%`}`, `RAM usada: ${gib(r.totalRam - r.availableRam)} / ${gib(r.totalRam)}${r.memoryEstimated ? " (estimada)" : ""}`, `RAM disponible: ${gib(r.availableRam)}`, `Disco del proyecto: ${r.disk ? `${gib(r.disk.used)} usados / ${gib(r.disk.total)} · ${gib(r.disk.available)} disponibles` : "no disponible"}`, `Proceso OMI: CPU ${r.processCpu?.toFixed(1) ?? "—"}% · RAM ${gib(r.rss)}`, "RAM OMI es RSS de este proceso; no suma herramientas ni otros subprocesos.", "CPU de OMI normalizada a la capacidad total del equipo.", "Estas métricas son del host de OMI, no de tu Mac si te conectaste por SSH."] : ["Recolectando datos…"]); }
-		async function showContext(): Promise<void> { const usage = ctx.getContextUsage(); await info("Ventana de contexto", [`Modelo: ${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "sin modelo"}`, `Uso: ${usage?.tokens == null ? "desconocido" : `${tokens(usage.tokens)} tokens (estimado)`}`, `Límite: ${tokens(usage?.contextWindow ?? ctx.model?.contextWindow ?? 0)} tokens`, `Ocupación: ${usage?.percent == null ? "—" : `${usage.percent.toFixed(1)}%`}`, "El runtime usa el último uso informado por el modelo y estima los mensajes posteriores. Después de compactar puede ser desconocido hasta la siguiente respuesta.", "No inventamos un desglose por sistema, conversación y tools.", "Para compactar usá /compact. Cambiar el modelo no descarta contenido."]); }
+		async function showResources(): Promise<void> {
+			const r = resources;
+			await info("Recursos · equipo donde corre OMI", r ? [field("Host", r.host, "syntaxVariable"), "", section("Equipo"),
+				field("CPU total", r.cpu === undefined ? "esperando muestra" : `${r.cpu.toFixed(1)}%`, (r.cpu ?? 0) >= 90 ? "warning" : "syntaxVariable"),
+				field("RAM usada", `${gib(r.totalRam - r.availableRam)} / ${gib(r.totalRam)}${r.memoryEstimated ? " (estimada)" : ""}`), field("RAM disponible", gib(r.availableRam)),
+				field("Disco del proyecto", r.disk ? `${gib(r.disk.used)} usados / ${gib(r.disk.total)} · ${gib(r.disk.available)} disponibles` : "no disponible"), "", section("Proceso OMI"),
+				field("Proceso OMI", `CPU ${r.processCpu?.toFixed(1) ?? "—"}% · RAM ${gib(r.rss)}`, "syntaxVariable"),
+				notice("RAM OMI es RSS de este proceso; no suma herramientas ni otros subprocesos."), notice("CPU de OMI normalizada a la capacidad total del equipo."), "",
+				notice("Estas métricas son del host de OMI, no de tu Mac si te conectaste por SSH.")] : [notice("Recolectando datos…")], { color: "syntaxVariable", subtitle: "Equipo · métricas del host, no de la infraestructura desplegada" });
+		}
+		async function showContext(): Promise<void> {
+			const usage = ctx.getContextUsage();
+			await info("Ventana de contexto", [field("Modelo", ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "sin modelo", "accent"), "",
+				field("Uso", usage?.tokens == null ? "desconocido" : `${tokens(usage.tokens)} tokens (estimado)`), field("Límite", `${tokens(usage?.contextWindow ?? ctx.model?.contextWindow ?? 0)} tokens`),
+				field("Ocupación", usage?.percent == null ? "—" : `${usage.percent.toFixed(1)}%`, (usage?.percent ?? 0) >= 90 ? "error" : (usage?.percent ?? 0) >= 80 ? "warning" : "success"), "",
+				notice("El runtime usa el último uso informado por el modelo y estima los mensajes posteriores. Después de compactar puede ser desconocido hasta la siguiente respuesta."),
+				notice("No inventamos un desglose por sistema, conversación y tools."), "", notice("Para compactar usá /compact. Cambiar el modelo no descarta contenido.", "warning")], { color: "warning", subtitle: "Sesión · uso estimado de la ventana del modelo" });
+		}
 		async function showModel(query = ""): Promise<void> {
 			if (!active || finishModal) return;
 			if (!ctx.isIdle()) { ctx.ui.notify("Esperá a que termine el turno antes de cambiar el modelo", "warning"); return; }
 			const available = ctx.scopedModels.length ? ctx.scopedModels.map((entry) => entry.model) : ctx.modelRegistry.getAvailable();
-			const result = await ctx.ui.custom<PickerResult>((ui, currentTheme, _keys, done) => {
-				finishModal = () => done({ favorites: prefs.favorites });
-				return new OmiModelPicker({ models: available, current: ctx.model, thinking: ctx.thinkingLevel ?? "off", favorites: prefs.favorites, initialQuery: query, contextTokens: ctx.getContextUsage()?.tokens ?? null, theme: currentTheme, maxRows: rows, render: () => ui.requestRender(), done });
-			}, { overlay: true, overlayOptions: { width: "85%", maxHeight: "95%", anchor: "center" } });
-			finishModal = undefined; if (!active || !result) return;
+			let result: PickerResult | undefined;
+			try {
+				result = await ctx.ui.custom<PickerResult>((ui, _currentTheme, _keys, done) => {
+					finishModal = () => done({ favorites: prefs.favorites });
+					return new OmiModelPicker({ models: available, current: ctx.model, thinking: ctx.thinkingLevel ?? "off", favorites: prefs.favorites, initialQuery: query, contextTokens: ctx.getContextUsage()?.tokens ?? null, theme, maxRows: rows, render: () => ui.requestRender(), done });
+				}, { overlay: true, overlayOptions: () => overlayOptions(112) });
+			} finally { finishModal = undefined; }
+			if (!active || !result) return;
 			prefs.favorites = result.favorites; await save();
 			if (!active) return;
 			if (result.choice) {
@@ -243,7 +269,13 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			if (!active || finishModal) return;
 			const actions: [string, () => void | Promise<void>][] = [...WORKSPACE_VIEWS.map((item): [string, () => void] => [item.label, () => switchView(item.id)]),
 				["PR de la rama actual", showBranchPr], ["GitHub Actions", showActions], ["Elegir modelo", showModel], ["Ventana de contexto", showContext], ["Ubicación / worktree", showWorkspace], ["Recursos del equipo", showResources], ["Mostrar / ocultar lateral", toggleSidebar], ["Actualizar datos", () => { void refreshLocal(); void refreshRemote(); }]];
-			const selected = await ctx.ui.select("OMI · Comandos", actions.map(([label]) => label));
+			let selected: string | undefined;
+			try {
+				selected = await ctx.ui.custom<string | undefined>((ui, _theme, keys, done) => {
+					finishModal = () => done(undefined);
+					return new OmiCommandPalette({ items: actions.map(([label]) => ({ value: label, label })), keys, theme, rows, redraw: () => ui.requestRender(), done });
+				}, { overlay: true, overlayOptions: () => overlayOptions(76) });
+			} finally { finishModal = undefined; }
 			if (active) await actions.find(([label]) => label === selected)?.[1]();
 		}
 		const header = new Lines((width) => {
@@ -339,8 +371,11 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			try {
 				const body = await readGithubDetail(snapshot, kind === "issues" ? "issue" : "pr", item.number, AbortSignal.any([controller.signal, AbortSignal.timeout(6000)]));
 				const description = body.split("\n");
-				if (current()) await info(`${kind === "issues" ? "Issue" : "PR"} #${item.number} · ${text(item.title)}`, [`Autor: ${item.author}`, `Etiquetas: ${item.labels.join(", ") || "—"}`, ...(kind === "prs" ? [`${item.draft ? "Borrador" : "Abierto"} · ${item.head} → ${item.base}`, `Revisión: ${item.review || "sin decisión"}`] : []), item.url, "", ...description.slice(0, 1000), ...(description.length > 1000 ? ["[Descripción recortada a 1000 líneas]"] : [])]);
-			} catch { if (current()) await info("GitHub · detalle no disponible", ["Revisá gh, autenticación o red. El detalle también puede ser demasiado grande."]); }
+				if (current()) await info(`${kind === "issues" ? "Issue" : "PR"} #${item.number} · ${text(item.title)}`, [field("Autor", item.author, "accent"), field("Etiquetas", item.labels.join(", ") || "—", "syntaxType"),
+					...(kind === "prs" ? [notice(`${item.draft ? "Borrador" : "Abierto"} · ${item.head} → ${item.base}`, item.draft ? "warning" : "success"), field("Revisión", item.review || "sin decisión")] : []),
+					item.url, "", section("Descripción"), ...description.slice(0, 1000), ...(description.length > 1000 ? [notice("[Descripción recortada a 1000 líneas]", "warning")] : [])],
+					{ color: kind === "issues" ? "syntaxType" : "mdLink", subtitle: `GitHub · ${kind === "issues" ? "issue" : "pull request"} · sólo lectura` });
+			} catch { if (current()) await info("GitHub · detalle no disponible", [notice("Revisá gh, autenticación o red. El detalle también puede ser demasiado grande.", "warning")], { color: "warning", subtitle: "GitHub · no se pudo cargar el detalle" }); }
 			finally { githubDetailBusy = false; changed(); }
 		}
 		function githubPane(kind: GithubView): ReadView {
