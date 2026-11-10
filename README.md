@@ -34,7 +34,7 @@ Se instala en `~/.omi`; `OMI_HOME=/ruta/absoluta` permite otra raíz. El binario
 
 ### Instalación limpia
 
-Una instalación nueva viene vacía: sin skills, sin extensiones ajenas y sin modelo. Sólo trae las tools de OMI, que son las tres entradas de `[Extensions]`.
+Una instalación nueva viene vacía: sin skills, sin extensiones ajenas y sin modelo. Sólo trae las tools y las integraciones propias de OMI.
 Para usar un modelo, entrá con `/login` o importá credenciales.
 
 omi sólo lee configuración de `~/.omi/agent` y del proyecto, del directorio actual hasta la raíz del repo.
@@ -42,6 +42,103 @@ Por ejemplo, no carga `~/.pi/agent`, `~/.agents/skills` ni `~/AGENTS.md`. Para i
 La configuración del repo (`.pi/`, `.agents/skills`) sigue valiendo, con la confirmación de confianza.
 
 Las API keys del shell no le dan un modelo a omi. Por ejemplo, con `GEMINI_API_KEY` exportada, omi arranca igual sin modelo. Los comandos que corre el agente sí la ven, como cualquier comando de tu shell.
+
+### Workspace de terminal
+
+`omi` arranca con un layout fullscreen propio: cabecera con **Proyecto / Cambios / Entregas**, conversación y editor,
+lateral plegable con contexto encima de recursos y pie con actividad y una fila propia para el modelo. El fondo por defecto es negro; una selección de tema
+explícita sigue controlando los colores del runtime. La conversación, las tools, sus confirmaciones, el streaming,
+el historial y la edición siguen usando el renderer de Pi; no hay un segundo proceso de chat ni una UI web.
+
+- **Proyecto:** branch, cambios locales, divergencia cuando existe upstream, tipo de checkout y ruta activa.
+  Distingue `Repo principal`, `Worktree · nombre`, HEAD separado y carpetas sin Git. Un worktree no es un sandbox.
+- **Cambios:** lista de hasta 100 archivos y diffs de working tree / stage, sin drivers de diff ni textconv externos.
+  Los archivos nuevos se enumeran individualmente y **Enter** abre una previsualización local de sólo lectura (hasta 256 KiB o 2000 líneas).
+  No se leen durante el refresco ni se envían al modelo. Las rutas que parecen sensibles (`.env`, claves, credenciales) piden confirmación adicional;
+  esa detección es orientativa, no una garantía de detectar todos los secretos. No se abren binarios, enlaces simbólicos ni archivos fuera del checkout.
+  Esta vista no edita, agrega al stage, comitea ni cambia de branch.
+- **Entregas:** PR, últimas ejecuciones de GitHub Actions y jobs; Enter consulta los logs fallidos de la última ejecución.
+  Requiere `gh` instalado y autenticado. Los ambientes se leen desde el proyecto OMI vinculado y la sesión de `omi login`.
+  No se ejecutan deploys desde estos paneles ni se saltean guardrails.
+- **Contexto:** encima de Equipo, con tokens estimados / límite real del modelo, porcentaje y barra sólida `█`.
+  Si el runtime no conoce el uso se muestra `—`, no cero. Con la lateral oculta, el dato queda en el pie.
+  No se inventa un desglose de tokens. `/omi-context` explica el dato y `/compact` sigue siendo explícito.
+- **Recursos:** CPU total, RAM disponible, volumen del proyecto y consumo separado del proceso OMI. Son del **host donde corre OMI**:
+  conectado por SSH a Linux, no representan tu Mac. La RAM aproximada se marca `≈` y una métrica no soportada queda como no disponible.
+- **Modelo:** fila dedicada en el pie con nombre destacado, proveedor, razonamiento y atajo según el ancho disponible.
+  `/model`, su atajo configurado (por defecto Ctrl L) o esa fila abren el selector propio de OMI.
+  Abre en el proveedor actual; **Tab / Shift+Tab** recorren los proveedores configurados y la vista de todos.
+  Por defecto reduce versiones repetidas por familia conocida (Claude, GPT, Gemini, Grok y Kimi), conservando el modelo actual, los favoritos y los modelos custom.
+  En OpenAI prioriza una lista corta: la última versión disponible de **Sol, Terra, Luna y Astra**, cuando existen en el scope; si no, las ramas GPT estándar disponibles.
+  Daybreak, aliases `latest` y ramas anteriores quedan en el catálogo completo o se recuperan buscando; también aparecen si son el modelo actual o un favorito.
+  **Ctrl+A** alterna recomendados/catálogo completo; buscar también incluye versiones anteriores dentro del proveedor elegido.
+  **Ctrl+F** filtra favoritos y **Ctrl+S** marca/desmarca. Respeta `--models` y permite revisar el razonamiento antes de aplicar.
+  La lista muestra nombre, contexto y una etiqueta corta de capacidad: **Máxima**, **Muy alta**, **Alta** o **Especializado**.
+  Son categorías orientativas basadas en fichas del fabricante, no un benchmark propio ni un puntaje deducido del precio o del contexto.
+  Se asignan sólo a versiones verificadas; las demás muestran **Sin referencia**. La fuente y fecha de revisión quedan en **Enter**, sin consultas de red al abrir el selector.
+  Debajo hay dos líneas del modelo seleccionado: una explicación corta y el precio API base de entrada/salida.
+  **Enter** abre la configuración y la ficha técnica (entrada, salida máxima, caché y tarifas por tramos). El análisis se ajusta con izquierda/derecha y niveles en castellano; otro Enter aplica.
+  Que un modelo no permita apagar el análisis significa que analiza antes de cada respuesta, no que trabaje en segundo plano.
+  Los precios son referencias del catálogo en USD por millón de tokens, no saldo ni cuotas de una suscripción. Los ceros no se anuncian como gratuidad.
+  Los límites y ajustes salen del runtime; las descripciones de uso verificadas tienen fuente oficial. Las pistas por nombre se indican como tales.
+  Sin una descripción verificada (por ejemplo Cyber), se muestra **uso no documentado**. Daybreak Blue tiene una ficha oficial: es un alias de seguridad defensiva marcado como obsoleto.
+  La selección parte del catálogo disponible del runtime: no prueba llamadas pagas ni garantiza permisos, saldo o disponibilidad de cada modelo en tu cuenta.
+  Usa el catálogo, capacidades y autenticación reales. No cambia de modelo durante un turno ni si el contexto conocido supera su límite.
+  Se aplica a la sesión, no a los defaults globales. Si otra extensión reemplaza el editor, `/omi-model` sigue disponible.
+
+| Atajo / comando | Acción |
+|---|---|
+| Ctrl 1 / Ctrl 2 / Ctrl 3 | Proyecto / Cambios / Entregas (Control también en Mac, no Option ni Command) |
+| Ctrl K o `/omi` | Paleta de comandos (Ctrl K reemplaza borrar hasta fin de línea en el editor) |
+| F4 o `/omi-sidebar` | Mostrar / ocultar lateral |
+| `/omi-model` | Selector propio, también si otra extensión personaliza el editor |
+| `/omi-workspace` | Ubicación, repo principal y worktree |
+| `/omi-resources` | CPU, RAM, disco y host |
+| `/omi-context` | Detalle del contexto |
+| `/omi-changes` / `/omi-deliveries` | Abrir las vistas de sólo lectura |
+
+La lateral ocupa 33 columnas (incluido el separador) y se oculta por debajo de 110 columnas o 26 filas;
+los comandos y el pie siguen disponibles. Contexto, CPU, RAM y disco usan barras de bloques `█` de una fila;
+en panes bajos, las barras de recursos se acortan para conservar todos los datos.
+El inicio vacío muestra una bienvenida breve, sin inventar una conversación. Los componentes internos de OMI
+no aparecen en la lista de extensiones ni se ofrece actualizar Pi por separado. Las extensiones del usuario,
+sus diagnósticos y sus avisos de actualización se conservan; no se modifica `quietStartup` en los ajustes.
+Los datos locales se refrescan aproximadamente cada 3 segundos y los remotos cada 30, sin bloquear el streaming.
+Errores de GitHub u OMI se muestran como no disponibles / desactualizados, nunca como checks exitosos ni ambientes saludables inventados.
+`--offline` y los proyectos sin confianza no disparan estas consultas remotas. Favoritos y visibilidad de la lateral se guardan
+sólo en `~/.omi/agent/workspace-ui.json` (o la raíz elegida con `OMI_HOME`).
+
+Para volver a la presentación anterior:
+
+```sh
+OMI_TUI=classic omi
+# Desde el repo:
+OMI_TUI=classic npm run omi
+```
+
+`--tui-mode regular` conserva el modo de scrollback del terminal, sin las vistas fullscreen ni la lateral.
+RPC, JSON, print y MCP no abren recursos de la UI. El adaptador del layout está verificado con Pi 1.5.0;
+si cambia su contrato, conserva la vista base y avisa. No parchea archivos de `node_modules`.
+
+### Herdr
+
+Dentro de un pane de [Herdr](https://herdr.dev), omi se registra automáticamente como **`omi`**.
+No hace falta instalar la integración de Pi ni copiar extensiones. Reporta `working` mientras trabaja,
+`blocked` cuando una UI de extensión espera una decisión e `idle` cuando termina, incluso si se interrumpe el turno.
+Los reintentos y las continuaciones no se anuncian como trabajo terminado.
+
+Con **Herdr 0.9.2 o posterior**, también registra `omi --session …` para restaurar la conversación después de reiniciar
+el servidor de Herdr. Actualiza esa referencia al cambiar de sesión, modelo o nivel de razonamiento.
+Conserva las opciones conocidas de tools y recursos del arranque, pero no reenvía el prompt inicial, adjuntos ni API keys.
+Los flags particulares de extensiones no se restauran: usá configuración persistente si la sesión depende de ellos.
+La restauración requiere `omi` en el `PATH` y una sesión persistente; `--no-session` sólo reporta estados.
+Si el comando supera los límites de Herdr (64 argumentos, 8 KiB, sin apóstrofes ni caracteres de control),
+se omite la restauración, no los estados. Herdr también permite desactivarla con `[session] resume_agents_on_restore = false`.
+
+La integración sólo se activa en modo interactivo (`tui`) con `HERDR_ENV=1`, `HERDR_PANE_ID` y `HERDR_SOCKET_PATH`.
+Fuera de Herdr, en CLI/MCP o en modos RPC/JSON/print, no reporta nada ni reclama el pane del proceso padre.
+La comunicación usa el socket local, en background y con timeout corto; un error de Herdr no interrumpe omi.
+Al salir libera el pane; `/reload`, `/new`, `/resume` y `/fork` mantienen la integración sin liberar la autoridad.
 
 ### Importar de Pi
 
