@@ -1,5 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { hyperlink, visibleWidth } from "@earendil-works/pi-tui";
+import { hyperlink, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { readCommand, type GitSnapshot, type ReadCommand } from "./data.ts";
 import { fit } from "./presentation.ts";
 
@@ -22,18 +22,20 @@ export async function readBranchPullRequest(git: GitSnapshot, signal?: AbortSign
 	return { number: Number(item.number), title: item.title, url: url.href, draft: item.isDraft === true, state: item.state as BranchPullRequest["state"] };
 }
 
-export interface FooterStatus { line: string; hintStart: number; prStart?: number; prEnd?: number }
-/** Reservar el enlace antes de recortar la rama, sin perder el contexto en panes angostos. */
+export interface FooterStatus { line: string; workspaceEnd: number; hintStart: number; prStart?: number; prEnd?: number }
+/** Botón junto a la rama; el padding del botón también es clickeable, no el espacio libre del pie. */
 export function footerStatus(theme: Theme, left: string, hint: string, width: number, pr?: BranchPullRequest, stale = false): FooterStatus {
 	width = Math.max(0, width);
-	const rightWidth = Math.min(visibleWidth(hint), Math.floor(width * .48));
-	const label = pr ? `PR #${pr.number}${stale ? "*" : ""} ↗` : "";
-	const showLink = pr && visibleWidth(label) + 3 <= width - rightWidth - 1;
+	const label = pr ? `[ PR #${pr.number}${stale ? "*" : ""} ↗ ]` : "";
+	const showLink = pr && visibleWidth(label) + 4 <= width;
 	const linkWidth = showLink ? visibleWidth(label) + 3 : 0;
-	const leftWidth = Math.max(0, width - rightWidth - (width ? 1 : 0) - linkWidth);
-	const link = showLink ? ` · ${hyperlink(theme.fg(stale ? "warning" : "accent", label), pr.url)}` : "";
+	const rightWidth = Math.min(visibleWidth(hint), Math.floor(width * .48), Math.max(0, width - linkWidth - (width ? 1 : 0)));
+	const contentWidth = Math.max(0, width - rightWidth - (width ? 1 : 0));
+	const leftText = truncateToWidth(left, Math.max(0, contentWidth - linkWidth), "…");
+	const workspaceEnd = visibleWidth(leftText);
+	const link = showLink ? ` · ${hyperlink(theme.style(label, { fg: stale ? "warning" : "accent", bold: true, underline: true }), pr.url)}` : "";
 	return {
-		line: fit(left, leftWidth) + link + (width ? " " : "") + theme.fg("muted", fit(hint, rightWidth)), hintStart: width - rightWidth,
-		...(showLink ? { prStart: leftWidth + 3, prEnd: leftWidth + linkWidth } : {}),
+		line: fit(leftText + link, contentWidth) + (width ? " " : "") + theme.fg("muted", fit(hint, rightWidth)), workspaceEnd, hintStart: width - rightWidth,
+		...(showLink ? { prStart: workspaceEnd + 3, prEnd: workspaceEnd + linkWidth } : {}),
 	};
 }

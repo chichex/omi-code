@@ -122,9 +122,10 @@ el historial y la edición siguen usando el renderer de Pi; no hay un segundo pr
 Los atajos son **Control** también en Mac, no Option ni Command. **Esc** vuelve a Chat desde las vistas de consulta.
 Las pestañas también funcionan por clic; en panes angostos conservan los cinco números y el nombre de la vista activa.
 
-El pie muestra **`PR #123 ↗`** como enlace al PR de la rama actual, incluso si debe recortar el nombre de la rama.
+El pie muestra **`[ PR #123 ↗ ]`** como botón junto a la rama actual, incluso si debe recortar su nombre.
 Se resuelve con `gh pr status`, incluyendo el remoto y los forks, sin inferirlo de la lista de PRs del repo.
-El enlace OSC 8 abre la URL desde el terminal; `/omi-pr` y la paleta permiten ver y copiar la URL por teclado.
+En fullscreen, un clic normal en cualquier parte del botón (incluidos bordes y espacios internos) abre la URL mediante `gh pr view <URL> --web`; los espacios libres del pie no abren Ubicación.
+También conserva el enlace OSC 8 para la interacción nativa del terminal. `/omi-pr` y la paleta permiten ver y copiar la URL por teclado; si falla el navegador, se muestra una advertencia con ese detalle.
 Si falla una actualización, se conserva el enlace con `*` como dato desactualizado; al cambiar de rama se descarta el anterior.
 Sin PR, con HEAD separado o sin datos no se inventa un enlace. Se respeta `--offline` y la confianza del proyecto.
 

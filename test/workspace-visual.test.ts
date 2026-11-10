@@ -16,10 +16,11 @@ import { WORKSPACE_VIEWS, workspaceTabs } from "../src/tui/workspace/navigation.
 
 const theme = { fg: (_role: string, value: string) => value, bold: (value: string) => value, style: (value: string) => value, getColorMode: () => "truecolor" } as unknown as Theme;
 
-async function visualHarness(home: string, options: { cwd?: string; trusted?: boolean; online?: boolean; paletteAction?: string } = {}) {
+async function visualHarness(home: string, options: { cwd?: string; trusted?: boolean; online?: boolean; paletteAction?: string; browserCode?: number } = {}) {
 	const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
 	let root: Component | undefined; let focus: Component | undefined; let hasMessages = false; let unknownUsage = false; let approveSensitive = false;
-	const prompts: string[] = []; const confirmations: string[] = []; const paletteOptions: string[][] = [];
+	const prompts: string[] = []; const confirmations: string[] = []; const paletteOptions: string[][] = []; const notices: string[] = [];
+	const browserCalls: { command: string; args: string[]; options: { cwd?: string; timeout?: number } }[] = [];
 	let terminalInput: ((data: string) => unknown) | undefined;
 	const commands = new Map<string, { handler: () => Promise<void> }>();
 	const resources = new Container(); const chat = new Container(); const document = new Container();
@@ -40,7 +41,7 @@ async function visualHarness(home: string, options: { cwd?: string; trusted?: bo
 			theme, getTheme: () => undefined, setHeader() {}, getEditorComponent: () => undefined,
 			setFooter: (factory: (ui: TUI, theme: Theme, data: unknown) => Component) => footer.addChild(factory(ui, theme, { getExtensionStatuses: () => new Map() })),
 			setEditorComponent: (factory: (ui: TUI, theme: unknown, keys: unknown) => Component) => editor.addChild(factory(ui, { borderColor: (value: string) => value }, { getKeys: () => ["ctrl+l"], matches: () => false })),
-			onTerminalInput: (handler: (data: string) => unknown) => { terminalInput = handler; return () => { terminalInput = undefined; }; }, notify() {},
+			onTerminalInput: (handler: (data: string) => unknown) => { terminalInput = handler; return () => { terminalInput = undefined; }; }, notify: (message: string) => notices.push(message),
 			select: async (_title: string, values: string[]) => { paletteOptions.push(values); return options.paletteAction; },
 			confirm: async (title: string) => {
 				confirmations.push(title); handlers.get("ui_prompt_start")?.({}, ctx); handlers.get("ui_prompt_end")?.({}, ctx);
@@ -55,10 +56,10 @@ async function visualHarness(home: string, options: { cwd?: string; trusted?: bo
 	} as unknown as ExtensionContext;
 	const extension = workspaceExtension(testIo({ cwd: options.cwd ?? home, homeDir: home, env: {} }), options.online ? [] : ["--offline"]);
 	if (typeof extension === "function") throw new Error("expected named extension");
-	await extension.factory({ on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => handlers.set(name, handler), registerCommand: (name: string, command: { handler: () => Promise<void> }) => commands.set(name, command), getSettings: () => ({}), registerMarkdownTransformer() {} } as never);
+	await extension.factory({ on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => handlers.set(name, handler), registerCommand: (name: string, command: { handler: () => Promise<void> }) => commands.set(name, command), getSettings: () => ({}), registerMarkdownTransformer() {}, exec: async (command: string, args: string[], execOptions = {}) => { browserCalls.push({ command, args, options: execOptions }); return { code: options.browserCode ?? 0, stdout: "", stderr: "" }; } } as never);
 	await handlers.get("session_start")!({}, ctx);
 	return {
-		resources, chat, prompts, confirmations, commands, paletteOptions,
+		resources, chat, prompts, confirmations, commands, paletteOptions, browserCalls, notices,
 		terminal: (data: string) => terminalInput?.(data),
 		click: (x: number, y: number, width = 132, height = 40) => {
 			Object.assign(ui.terminal, { columns: width, rows: height }); const frame = renderLayoutFrame(root!, width, height, () => {});
@@ -104,6 +105,7 @@ test("workspace_el espacio libre al final de la lateral no abre detalles al hace
 	const end = lines.findIndex((line) => line.includes("Detalles del host >"));
 	assert.ok(end > 0 && end < 65);
 	ui.click(120, end + 2, 132, 70);
+	ui.click(70, 68, 132, 70); // Padding del pie, fuera del texto de ubicación y del acceso derecho.
 	assert.equal(ui.prompts.length, 0);
 });
 
@@ -232,11 +234,28 @@ console.log(JSON.stringify(args[1] === 'view' ? {body: 'DETAIL_' + args[0] + '_'
 	assert.doesNotMatch(screen(), /Copilot/);
 	await waitFor(() => screen().includes("PR #9 ↗"));
 	for (const width of [28, 40, 80, 132]) {
-		const row = app.frame(width, 40).lines[38]!; const plain = stripTerminalSequences(row); const x = plain.indexOf("PR #9");
+		const row = app.frame(width, 40).lines[38]!; const plain = stripTerminalSequences(row); const badge = "[ PR #9 ↗ ]"; const x = plain.indexOf(badge);
 		assert.ok(x >= 0); assert.equal(getOsc8LinkAtColumn(row, x), "https://github.com/test/repo/pull/9");
-		app.click(x, 38, width, 40); assert.match(app.prompts.at(-1)!, /CURRENT_BRANCH_PR/); assert.match(app.prompts.at(-1)!, /https:\/\/github.com\/test\/repo\/pull\/9/); await Promise.resolve();
+		for (const offset of [0, 1, 2, badge.length - 2, badge.length - 1]) {
+			const prompts = app.prompts.length; const calls = app.browserCalls.length;
+			app.click(x + offset, 38, width, 40); await Promise.resolve();
+			assert.equal(app.prompts.length, prompts, "ni el texto ni el padding abren otro modal"); assert.equal(app.browserCalls.length, calls + 1);
+			assert.deepEqual(app.browserCalls.at(-1), { command: "gh", args: ["pr", "view", "https://github.com/test/repo/pull/9", "--web"], options: { cwd: linked.repo, timeout: 5000, maxBuffer: 8192 } });
+		}
 	}
+	const footerPlain = stripTerminalSequences(app.frame().lines[38]!); const emptyX = footerPlain.indexOf("[ PR #9 ↗ ]") + "[ PR #9 ↗ ]".length + 5;
+	const promptsBeforeEmptyClick = app.prompts.length; const callsBeforeEmptyClick = app.browserCalls.length;
+	app.click(emptyX, 38); assert.equal(app.prompts.length, promptsBeforeEmptyClick); assert.equal(app.browserCalls.length, callsBeforeEmptyClick);
 	await app.command("omi-pr"); assert.match(app.prompts.at(-1)!, /borrador/);
+	// Si el launcher falla, mostrar una advertencia y el PR correcto con su URL, nunca Ubicación.
+	const failed = await visualHarness(linked.home, { cwd: linked.repo, trusted: true, online: true, browserCode: 1 });
+	try {
+		for (let i = 0; i < 120 && !failed.frame().lines.map(stripTerminalSequences).join("\n").includes("PR #9"); i++) await setTimeout(25);
+		const x = stripTerminalSequences(failed.frame().lines[38]!).indexOf("[ PR #9"); assert.ok(x >= 0); failed.click(x, 38);
+		for (let i = 0; i < 120 && !failed.prompts.length; i++) await setTimeout(25);
+		assert.match(failed.notices.join("\n"), /No se pudo abrir el navegador/);
+		assert.match(failed.prompts.at(-1)!, /CURRENT_BRANCH_PR/); assert.match(failed.prompts.at(-1)!, /https:\/\/github.com\/test\/repo\/pull\/9/); assert.doesNotMatch(failed.prompts.at(-1)!, /Ubicación de trabajo/);
+	} finally { await failed.stop(); }
 	for (const height of [26, 28, 30, 32, 36, 40, 70]) {
 		const side = app.frame(132, height).lines.slice(3, -3).map((line) => stripTerminalSequences(sliceByColumn(line, 99, 33)));
 		for (const title of ["PROYECTO", "GITHUB ACTIONS", "OMI", "CONTEXTO", "EQUIPO"]) assert.ok(side.some((line) => line.includes(`▌ ${title}`)), `132x${height}: ${title}`);

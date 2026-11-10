@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 
 // Node y binario compilado recorren el mismo flujo de TUI en un PTY real.
 const driver = `
-import fcntl, os, pty, select, signal, struct, sys, termios, time
+import fcntl, os, pty, re, select, signal, struct, sys, termios, time
 pid, fd = pty.fork()
 if pid == 0:
     os.execv(sys.argv[1], sys.argv[1:])
@@ -15,7 +15,8 @@ actions = [(2.0, b'\\x0c'), (2.7, b'\\x1b'), (3.0, b'\\x1b[50;5u'), (3.2, b'\\x1
  (6.1, b'/reload\\r'), (7.0, b'/omi-resources\\r'), (7.7, b'\\x1b'), (8.2, b'\\x04')]
 turn = os.environ.get('OMI_TEST_TURN') == '1'
 preview = os.environ.get('OMI_TEST_PREVIEW') == '1'
-if turn or preview:
+pr_click = os.environ.get('OMI_TEST_PR_CLICK') == '1'
+if turn or preview or pr_click:
     actions = []
 start = time.monotonic()
 output = b''
@@ -54,7 +55,25 @@ while time.monotonic() - start < 16:
         elif phase == 3 and elapsed - phase_at > 0.3:
             os.write(fd, b'\\x04')
             phase = 4
-    if elapsed > 7.9 and not resized and not turn and not preview:
+    if pr_click:
+        # Leer la posición que se pintó realmente, no llamar el callback con coordenadas inventadas.
+        footer_rows = re.findall(rb'\\x1b\\[41;1H\\x1b\\[2K(.*?)(?=\\x1b\\[\\d+;\\d+H|$)', output, re.S)
+        if phase == 0 and footer_rows and elapsed > 1:
+            row = re.sub(rb'\\x1b\\].*?(?:\\x07|\\x1b\\\\)', b'', footer_rows[-1], flags=re.S)
+            row = re.sub(rb'\\x1b\\[[0-?]*[ -/]*[@-~]', b'', row).decode('utf-8', errors='replace')
+            column = row.find('PR #21')
+            if column >= 0:
+                # El padding a la izquierda del texto forma parte del botón.
+                x, y = column, 41
+                os.write(fd, ('\\x1b[<0;%d;%dM\\x1b[<0;%d;%dm' % (x, y, x, y)).encode())
+                phase, phase_at = 1, elapsed
+        elif phase == 1 and (os.path.exists(os.environ['OMI_TEST_BROWSER_LOG']) or b'Ubicaci\\xc3\\xb3n de trabajo' in output):
+            os.write(fd, b'\\x1b')
+            phase, phase_at = 2, elapsed
+        elif phase == 2 and elapsed - phase_at > 0.3:
+            os.write(fd, b'\\x04')
+            phase = 3
+    if elapsed > 7.9 and not resized and not turn and not preview and not pr_click:
         size(72, 22)
         resized = True
     if select.select([fd], [], [], 0.1)[0]:

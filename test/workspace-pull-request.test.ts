@@ -33,6 +33,16 @@ test("workspace_PR actual no convierte errores en ausencia de PR ni permite inye
 	}
 });
 
+test("workspace_footer acerca el botón a la rama y excluye el espacio libre de los destinos de clic", () => {
+	const theme = getThemeByName("dark")!; const left = " ● Listo · feature";
+	for (const width of [80, 132, 240]) {
+		const footer = footerStatus(theme, left, "Ctrl 1–5 vistas · /omi", width, pr);
+		assert.equal(footer.workspaceEnd, visibleWidth(left)); assert.equal(footer.prStart, visibleWidth(left) + 3);
+		assert.match(stripTerminalSequences(footer.line), /feature · \[ PR #7 ↗ \] +Ctrl/);
+		assert.ok(footer.prEnd! < footer.hintStart - 1, "el espacio libre queda después del botón, no antes");
+	}
+});
+
 test("workspace_footer reserva el PR aunque trunque la rama y cierra el enlace antes del contexto", () => {
 	for (const name of ["dark", "light"]) {
 		const theme = getThemeByName(name)!;

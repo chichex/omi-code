@@ -13,7 +13,7 @@ import { align, bar, changedFileLine, fit, gib, gitSyncSummary, modalLines, perc
 import { WORKSPACE_VIEWS, workspaceTabs, type WorkspaceView } from "./navigation.ts";
 
 import { ACTION_GROUPS, actionsPanel, readActionRuns, type ActionGroup, type ActionState } from "./github-actions.ts";
-import { footerStatus, readBranchPullRequest, type BranchPullRequest, type FooterStatus } from "./pull-request.ts";
+import { footerStatus, readBranchPullRequest, type BranchPullRequest } from "./pull-request.ts";
 
 type View = WorkspaceView;
 type GithubView = "issues" | "prs";
@@ -91,7 +91,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		const github: Record<GithubView, GithubList> = { issues: emptyGithubList(), prs: emptyGithubList() };
 		let actions: Record<ActionGroup, ActionState> = { reviews: {}, releases: {} };
 		let branchPr: BranchPullRequest | undefined; let branchPrError: string | undefined;
-		let footerStatusBounds: FooterStatus | undefined;
+		let openingBranchPr = false;
 		let githubDetailBusy = false; let infoPrompt = false;
 		let environments: EnvironmentStatus[] = []; let services: string[] = []; let project: string | undefined; let envError: string | undefined; let envAt: number | undefined;
 		let localBusy = false; let remoteBusy = false; let timer: ReturnType<typeof setInterval> | undefined;
@@ -191,6 +191,16 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 				...(branchPr ? [`PR #${branchPr.number} · ${text(branchPr.title)}`, branchPr.url, `Estado: ${branchPr.state}${branchPr.draft ? " · borrador" : ""}`]
 					: [!git ? "Sin repositorio Git." : git.detached ? "HEAD separado: no hay una rama actual." : branchPrError ? "No se pudo consultar el PR." : remoteBusy || !lastRemote ? "Consultando PR…" : "No hay un PR asociado a esta rama."]),
 			]);
+		}
+		async function openBranchPr(pr: BranchPullRequest): Promise<void> {
+			if (!active || blocked || openingBranchPr) return;
+			openingBranchPr = true;
+			try {
+				const result = await pi.exec("gh", ["pr", "view", pr.url, "--web"], { cwd: git?.root ?? ctx.cwd, timeout: 5000, maxBuffer: 8192 });
+				if (result.code !== 0) throw new Error("No se pudo abrir el navegador");
+			} catch {
+				if (active) { ctx.ui.notify("No se pudo abrir el navegador. Podés copiar la URL del PR desde este detalle.", "warning"); await showBranchPr(); }
+			} finally { openingBranchPr = false; }
 		}
 		async function showActions(): Promise<void> {
 			await info("GitHub Actions", ["Estado de las ejecuciones de Actions; un ✓ no significa aprobación del PR.", "", ...ACTION_GROUPS.flatMap((group) => {
@@ -447,19 +457,40 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			ctx.ui.setHeader(() => new Lines((width) => tui?.mode === "fullscreen" && layoutCompatible ? [] : header.render(width)));
 			ctx.ui.setFooter((ui, _theme, footerData) => {
 				tui = ui;
-				return new Lines((width) => {
+				let pressedPr: BranchPullRequest | undefined;
+				const statusAt = (width: number) => {
 					const t = theme(); const context = contextState(); const side = sidebarVisible(width);
 					const state = blocked ? "Esperando decisión" : working ? activity : "Listo";
 					const left = ` ${t.fg(blocked ? "warning" : "success", "●")} ${text(state)} · ${text(workspaceName(git))}${git ? ` · ${text(git.branch)}` : ""}`;
 					const extra = text([...footerData.getExtensionStatuses().values()].join(" · "));
 					const hint = side ? extra || "Ctrl 1–5 vistas · /omi" : `Contexto ${context.label}${context.percent === undefined ? "" : ` · ${context.percent.toFixed(0)}%`}`;
-					footerStatusBounds = footerStatus(t, left, hint, width, branchPr, branchPrError !== undefined);
-					const statusLine = footerStatusBounds.line;
+					return footerStatus(t, left, hint, width, branchPr, branchPrError !== undefined);
+				};
+				return new Lines((width) => {
+					const t = theme(); const statusLine = statusAt(width).line;
 					const name = ctx.model ? text(ctx.model.name) : "Sin modelo";
 					const modelName = fit(name, Math.min(name.length, Math.max(0, width - 9)));
 					const details = !ctx.model ? " · /login" : width >= 110 ? `  ·  ${text(ctx.model.provider)}  ·  Razonamiento: ${ctx.thinkingLevel ?? "off"}  ·  ${modelShortcut} cambiar` : width >= 70 ? `  ·  ${text(ctx.model.provider)}  ·  ${ctx.thinkingLevel ?? "off"}  ·  ${modelShortcut} cambiar` : ` · ${modelShortcut}`;
 					return [t.fg("border", "─".repeat(width)), surface(t, statusLine, width, true), surface(t, t.fg("muted", " Modelo: ") + t.fg("accent", t.bold(modelName)) + t.fg("muted", details), width, true)];
-				}, (event) => { if (event.type !== "click") return; if (event.y === 2) void showModel(); else if (event.y === 1 && footerStatusBounds?.prStart !== undefined && event.x >= footerStatusBounds.prStart && event.x < footerStatusBounds.prEnd!) void showBranchPr(); else if (event.y === 1 && event.x >= (footerStatusBounds?.hintStart ?? event.width * .52)) { if (sidebarVisible(event.width)) void palette(); else void showContext(); } else if (event.y === 1) void showWorkspace(); return { handled: true }; });
+				}, (event) => {
+					if (event.button === "right" || event.button === "middle") return;
+					// Calcular con el ancho del evento: una medición de layout no debe alterar los hit targets.
+					const status = statusAt(event.width);
+					const onPr = event.y === 1 && status.prStart !== undefined && event.x >= status.prStart && event.x < (status.prEnd ?? 0);
+					if (event.type === "press") {
+						pressedPr = onPr ? branchPr : undefined;
+						// El clic completo pertenece al botón, no al fallback OSC 8 best-effort del renderer.
+						return pressedPr ? { handled: true, render: false } : undefined;
+					}
+					if (event.type === "drag") { if (pressedPr) { pressedPr = undefined; return { handled: true, render: false }; } return; }
+					if (event.type !== "click") return;
+					const targetPr = pressedPr ?? (onPr ? branchPr : undefined); pressedPr = undefined;
+					if (targetPr) { if (targetPr.url === branchPr?.url) void openBranchPr(targetPr); }
+					else if (event.y === 2) void showModel();
+					else if (event.y === 1 && event.x >= status.hintStart) { if (sidebarVisible(event.width)) void palette(); else void showContext(); }
+					else if (event.y === 1 && event.x < status.workspaceEnd) void showWorkspace();
+					return { handled: true };
+				});
 			});
 			// Adaptador acotado a Pi 1.5.0: sus siete componentes públicos montados, sin tocar node_modules.
 			// Si cambia ese contrato, conservar la TUI base en lugar de apropiarse de un árbol desconocido.
