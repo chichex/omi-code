@@ -3,7 +3,7 @@ import { getSupportedThinkingLevels, type Api, type Model } from "@earendil-work
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Input, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type Focusable, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { modelCapabilities, modelDescription, modelPrice, modelPriceNote, modelProfile, openAIChoice, openAIModelId, thinkingLabel } from "./model-info.ts";
-import { align, fit, modalLines, text, tokens } from "./presentation.ts";
+import { align, fit, MODAL_CONTENT_ROW, modalBodyRows, modalHint, modalLines, modalSelection, text, tokens } from "./presentation.ts";
 
 export interface ModelChoice { model: Model<Api>; thinking: ThinkingLevel }
 export interface PickerResult { choice?: ModelChoice; favorites: string[] }
@@ -53,7 +53,7 @@ export function recommendedModels(models: Model<Api>[], keep: ReadonlySet<string
 export class OmiModelPicker implements Component, Focusable {
 	focused = true;
 	capturesViewportInput = true;
-	private input = new Input();
+	private input = new Input({ prompt: "", placeholder: "Nombre o proveedor…", placeholderStyle: (value) => this.theme().fg("dim", value) });
 	private index = 0;
 	private onlyFavorites = false;
 	private showAll = false;
@@ -64,10 +64,13 @@ export class OmiModelPicker implements Component, Focusable {
 	private selected: Model<Api> | undefined;
 	private phase: "list" | "review" = "list";
 	private rowMap = new Map<number, number>();
+	private reviewOffset = 0;
+	private reviewLastOffset = 0;
+	private reviewPageSize = 1;
 	private favoriteSet: Set<string>;
 	private options: {
 		models: Model<Api>[]; current?: Model<Api> | undefined; thinking: ThinkingLevel; favorites: string[]; initialQuery?: string;
-		contextTokens: number | null; theme: Theme; maxRows: () => number; render: () => void; done: (result: PickerResult) => void;
+		contextTokens: number | null; theme: Theme | (() => Theme); maxRows: () => number; render: () => void; done: (result: PickerResult) => void;
 	};
 	constructor(options: OmiModelPicker["options"]) {
 		this.options = options;
@@ -97,10 +100,11 @@ export class OmiModelPicker implements Component, Focusable {
 		this.provider = tabs[(tabs.indexOf(this.provider) + tabs.length + direction) % tabs.length];
 		this.index = 0;
 	}
+	private theme(): Theme { return typeof this.options.theme === "function" ? this.options.theme() : this.options.theme; }
 	private cancel(): void { this.options.done({ favorites: [...this.favoriteSet] }); }
 	private choose(): void {
 		const model = this.list()[this.index]; if (!model) return;
-		this.selected = model; this.phase = "review";
+		this.selected = model; this.phase = "review"; this.reviewOffset = 0;
 		const levels = getSupportedThinkingLevels(model) as ThinkingLevel[];
 		if (!levels.includes(this.thinking)) this.thinking = levels.includes("high") ? "high" : levels[0] ?? "off";
 	}
@@ -108,6 +112,12 @@ export class OmiModelPicker implements Component, Focusable {
 		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) { this.cancel(); return; }
 		if (this.phase === "review" && this.selected) {
 			if (matchesKey(data, "backspace")) { this.phase = "list"; }
+			else if (matchesKey(data, "up")) this.reviewOffset = Math.max(0, this.reviewOffset - 1);
+			else if (matchesKey(data, "down")) this.reviewOffset = Math.min(this.reviewLastOffset, this.reviewOffset + 1);
+			else if (matchesKey(data, "pageUp")) this.reviewOffset = Math.max(0, this.reviewOffset - this.reviewPageSize);
+			else if (matchesKey(data, "pageDown")) this.reviewOffset = Math.min(this.reviewLastOffset, this.reviewOffset + this.reviewPageSize);
+			else if (matchesKey(data, "home")) this.reviewOffset = 0;
+			else if (matchesKey(data, "end")) this.reviewOffset = this.reviewLastOffset;
 			else if (matchesKey(data, "tab") || matchesKey(data, "right") || matchesKey(data, "left")) {
 				const levels = getSupportedThinkingLevels(this.selected) as ThinkingLevel[];
 				const direction = matchesKey(data, "left") ? -1 : 1;
@@ -132,14 +142,18 @@ export class OmiModelPicker implements Component, Focusable {
 		this.options.render();
 	}
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-		if (this.phase !== "list") return undefined;
+		if (this.phase !== "list") {
+			if (event.type !== "wheel" || !this.reviewLastOffset) return undefined;
+			this.reviewOffset = Math.max(0, Math.min(this.reviewLastOffset, this.reviewOffset + (event.wheelDelta ?? 0)));
+			this.options.render(); return { handled: true };
+		}
 		if (event.type === "wheel") { const list = this.list(); this.index = Math.max(0, Math.min(list.length - 1, this.index + Math.sign(event.wheelDelta ?? 0))); this.options.render(); return { handled: true }; }
 		const index = this.rowMap.get(event.y);
 		if (event.type === "click" && index !== undefined) { this.index = index; this.choose(); this.options.render(); return { handled: true }; }
 		return undefined;
 	}
 	private details(model: Model<Api>, width: number): string[] {
-		const { theme } = this.options; const profile = modelProfile(model);
+		const theme = this.theme(); const profile = modelProfile(model);
 		return [
 			...wrapTextWithAnsi(text(modelDescription(model)), Math.max(1, width - 4)).slice(0, 2).map((line) => theme.fg("muted", line)),
 			theme.fg("muted", `Capacidad: ${profile?.capability ?? "Sin referencia"}${profile ? " · guía de OpenAI" : ""}`),
@@ -150,36 +164,55 @@ export class OmiModelPicker implements Component, Focusable {
 		];
 	}
 	render(width: number): string[] {
-		const { theme } = this.options; this.rowMap.clear();
+		const theme = this.theme(); const inner = Math.max(0, width - 4); this.rowMap.clear();
+		const bodyRows = modalBodyRows(this.options.maxRows(), 2);
 		if (this.phase === "review" && this.selected) {
 			const overflow = (this.options.contextTokens ?? 0) > this.selected.contextWindow;
-			return modalLines(theme, "Usar modelo", [theme.fg("accent", text(this.selected.name)), text(modelKey(this.selected)), ...this.details(this.selected, width), '', `Contexto: ${tokens(this.selected.contextWindow)} tokens`, `Análisis: ${thinkingLabel(this.thinking)}  ← / → cambiar`, '',
-				...(overflow ? [theme.fg("warning", "La sesión supera el límite del modelo."), "Revisá /compact antes de cambiar. No se descarta contenido."] : ["Misma conversación. Se aplica al próximo turno.", theme.fg("success", "Enter aplicar · Backspace volver")])], width);
+			const content = [theme.style(text(this.selected.name), { fg: "accent", bold: true }), theme.fg("muted", text(modelKey(this.selected))),
+				...(overflow ? [theme.fg("warning", "La sesión supera el límite del modelo."), theme.fg("muted", "Revisá /compact antes de cambiar. No se descarta contenido.")] : []), "",
+				...this.details(this.selected, width), "", theme.fg("muted", "Contexto: ") + theme.fg("syntaxVariable", `${tokens(this.selected.contextWindow)} tokens`),
+				theme.fg("muted", "Análisis: ") + theme.fg("syntaxType", thinkingLabel(this.thinking)), "",
+				...(!overflow ? [theme.fg("success", "Misma conversación. Se aplica al próximo turno.")] : [])]
+				.flatMap((line) => wrapTextWithAnsi(line, Math.max(1, inner)));
+			this.reviewPageSize = bodyRows; this.reviewLastOffset = Math.max(0, content.length - bodyRows);
+			this.reviewOffset = Math.min(this.reviewOffset, this.reviewLastOffset);
+			const scroll = this.reviewLastOffset ? ` · ${modalHint(theme, "↑ ↓", "detalle")} · ${this.reviewOffset + 1}–${Math.min(content.length, this.reviewOffset + bodyRows)}/${content.length}` : "";
+			return modalLines(theme, "Usar modelo", content.slice(this.reviewOffset, this.reviewOffset + bodyRows), width, { color: overflow ? "warning" : "accent",
+				subtitle: overflow ? "Contexto insuficiente · usá /compact antes de cambiar" : "Revisá el modelo y el nivel de razonamiento antes de aplicar", footer: [
+				modalHint(theme, "Esc", "cancelar") + " · " + modalHint(theme, width < 70 ? "⌫" : "Backspace", "volver") + (overflow ? "" : " · " + modalHint(theme, "Enter", "aplicar")),
+				modalHint(theme, "← / →", `análisis: ${thinkingLabel(this.thinking)}`) + scroll,
+			] });
 		}
 		this.input.focused = this.focused;
-		const list = this.list();
-		const selected = list[this.index]; const maxRows = this.options.maxRows();
-		const detail = selected && maxRows >= 20 ? ['', theme.fg("muted", modelDescription(selected)), theme.fg("muted", modelPrice(selected, true))] : [];
-		const pageSize = Math.max(1, Math.min(8, maxRows - 16 - detail.length));
+		const list = this.list(); this.index = Math.max(0, Math.min(this.index, list.length - 1));
+		const selected = list[this.index];
+		const detail = selected && bodyRows >= 13 ? ["", theme.fg("muted", text(modelDescription(selected))), theme.fg("syntaxVariable", modelPrice(selected, true))] : [];
+		const prefix = theme.fg("muted", "Buscar: ");
+		const lines = bodyRows >= 3 ? [prefix + (this.input.render(Math.max(1, inner - 8))[0] ?? ""), ""] : [];
+		const pageSize = Math.max(1, Math.min(8, bodyRows - lines.length - detail.length));
 		const start = Math.max(0, Math.min(this.index - Math.floor(pageSize / 2), list.length - pageSize));
 		const providerLabel = this.provider ?? "Todos los proveedores";
 		const mode = this.onlyFavorites ? "★ Favoritos" : this.showAll || this.input.getValue().trim() ? "Catálogo" : "Recomendados";
 		const position = list.length > pageSize ? ` · ${this.index + 1}/${list.length}` : "";
-		const lines = [theme.fg("accent", `‹ ${text(providerLabel)} ›  · Tab / Shift Tab`),
-			this.input.render(Math.max(1, width - 4))[0] ?? "", '', theme.fg("muted", `${mode} · ${list.length} modelos${position}`), ''];
 		for (let i = start; i < Math.min(list.length, start + pageSize); i++) {
 			const model = list[i]!;
 			const active = this.options.current && modelKey(model) === modelKey(this.options.current);
 			const label = `${i === this.index ? "›" : " "} ${this.favoriteSet.has(modelKey(model)) ? "★" : " "} ${text(model.name)}${!this.provider ? ` · ${text(model.provider)}` : ""}${active ? " · actual" : ""}`;
-			this.rowMap.set(4 + lines.length, i);
+			this.rowMap.set(MODAL_CONTENT_ROW + lines.length, i);
 			const context = tokens(model.contextWindow);
 			const badge = width >= 60 ? `  [${modelProfile(model)?.capability ?? "Sin referencia"}]` : "";
-			const row = truncateToWidth(label, Math.max(1, width - 6 - context.length - visibleWidth(badge)), "…") + badge;
-			lines.push(i === this.index ? theme.fg("accent", align(row, context, width - 4)) : align(row, theme.fg("muted", context), width - 4));
+			const row = truncateToWidth(label, Math.max(1, inner - 2 - context.length - visibleWidth(badge)), "…") + theme.fg("muted", badge);
+			const line = align(row, theme.fg("syntaxVariable", context), inner);
+			lines.push(i === this.index ? modalSelection(theme, line, inner) : line);
 		}
 		if (!list.length) lines.push(theme.fg("muted", "Sin modelos. Cambiá filtros/proveedor o usá /login."));
-		lines.push(...detail, '', theme.fg("dim", "↑ ↓ elegir · Enter configurar"), theme.fg("dim", `Ctrl A ${this.showAll ? "recomendados" : "catálogo"} · Ctrl F favoritos · Ctrl S marcar`));
-		return modalLines(theme, "Elegir modelo · OMI", lines, width).map((line) => fit(line, width));
+		lines.push(...detail);
+		return modalLines(theme, "Elegir modelo · OMI", lines, width, { color: "accent", subtitle: `‹ ${text(providerLabel)} › · ${mode} · ${list.length} modelos${position}`, footer: [
+			width < 70 ? modalHint(theme, "Esc", "salir") + " · " + modalHint(theme, "↑↓", "") + " · " + modalHint(theme, "Enter", "elegir")
+				: modalHint(theme, "Esc", "cancelar") + " · " + modalHint(theme, "↑ ↓", "elegir") + " · " + modalHint(theme, "Enter", "configurar") + " · " + modalHint(theme, "Tab / Shift Tab", "proveedor"),
+			width < 70 ? modalHint(theme, "Tab", "prov.") + " · " + modalHint(theme, "Ctrl F/S", "★")
+				: modalHint(theme, "Ctrl A", this.showAll ? "recomendados" : "catálogo") + " · " + modalHint(theme, "Ctrl F", "favoritos") + " · " + modalHint(theme, "Ctrl S", "marcar"),
+		] }).map((line) => fit(line, width));
 	}
 	invalidate(): void { this.input.invalidate(); }
 }

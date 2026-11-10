@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { backgroundAnsi, colorToHex, mixColors, parseColor, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { backgroundAnsi, colorToHex, mixColors, parseColor, sliceByColumn, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+// El mismo lector de SGR que usa el renderer versionado, no sólo texto sin ANSI.
+import { getActiveBackgroundAnsi } from "../node_modules/@earendil-works/pi-tui/dist/utils.js";
 import { Theme, getThemeByName } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
-import { gitSyncSummary, sidebarSection, surface } from "../src/tui/workspace/presentation.ts";
+import { actionRunLine } from "../src/tui/workspace/github-actions.ts";
+import { fit, gitSyncSummary, sidebarSection, surface } from "../src/tui/workspace/presentation.ts";
 
-const sections = [["PROYECTO", "syntaxType"], ["GITHUB", "mdLink"], ["OMI", "success"], ["CONTEXTO", "warning"], ["EQUIPO", "syntaxVariable"]] as const;
+const sections = [["PROYECTO", "syntaxType"], ["GITHUB ACTIONS", "mdLink"], ["OMI", "success"], ["CONTEXTO", "warning"], ["EQUIPO", "syntaxVariable"]] as const;
 
 test("workspace_lateral divide las cinco secciones con color, negrita, fondo tenue y separadores sin overflow", () => {
 	for (const name of ["dark", "light"]) for (const mode of ["truecolor", "256color"] as const) {
@@ -28,6 +31,36 @@ test("workspace_lateral divide las cinco secciones con color, negrita, fondo ten
 			const row = sidebarSection(theme, "EQUIPO · host-漢字-🙂-muy-largo".repeat(4) + "\x1b\n", width, "syntaxVariable");
 			assert.equal(visibleWidth(row), width); assert.doesNotMatch(stripTerminalSequences(row), /\x1b|\n/);
 		}
+	}
+});
+
+test("workspace_superficies conservan el fondo en cada celda al truncar y al cerrar encabezados", () => {
+	for (const name of ["dark", "light"]) for (const mode of ["truecolor", "256color"] as const) {
+		const base = getThemeByName(name)!;
+		const colors = Object.fromEntries(Object.entries(base.colors).map(([key, value]) => [key, colorToHex(value)])) as Record<keyof typeof base.colors, string>;
+		const theme = new Theme(colors, colors, mode);
+		const run = { id: 1, name: "Merge pull request #123 from branch-".repeat(4), status: "completed", conclusion: "success", createdAt: "2026-11-10T10:00:00Z", url: "" };
+		for (const panel of [false, true]) {
+			const bg = parseColor(name === "light" ? (panel ? "#f3f4f5" : "#ffffff") : (panel ? "#15191c" : "#050607"));
+			const expected = backgroundAnsi(bg, mode);
+			for (const content of [
+				theme.fg("accent", "feat/github-actions-sidebar · repo".repeat(4)),
+				`│ ${fit(theme.fg("accent", "漢字🙂".repeat(30)), 30)} `,
+				`│ ${actionRunLine(theme, run, 30, Date.parse("2026-11-10T12:00:00Z"))} `,
+				"antes\x1b[0mdespués\x1b[49mfin\x1b[m",
+			]) {
+				const row = surface(theme, content, 33, panel);
+				assert.equal(visibleWidth(row), 33);
+				for (let column = 0; column < 33; column++) assert.equal(getActiveBackgroundAnsi(sliceByColumn(row, 0, column + 1)), expected, `${name}/${mode} columna ${column}: ${JSON.stringify(row)}`);
+				assert.equal(getActiveBackgroundAnsi(row), "", "el fondo no se filtra a otro componente");
+			}
+		}
+		const header = sidebarSection(theme, "OMI", 30, "success");
+		const row = surface(theme, `│ ${header} `, 33, true);
+		const panelBg = backgroundAnsi(parseColor(name === "light" ? "#f3f4f5" : "#15191c"), mode);
+		assert.equal(getActiveBackgroundAnsi(sliceByColumn(row, 0, 2)), panelBg);
+		assert.equal(getActiveBackgroundAnsi(sliceByColumn(row, 0, 3)), getActiveBackgroundAnsi(sliceByColumn(header, 0, 1)), "se conserva el tinte del encabezado");
+		assert.equal(getActiveBackgroundAnsi(sliceByColumn(row, 0, 33)), panelBg, "el margen recupera el fondo del panel");
 	}
 });
 

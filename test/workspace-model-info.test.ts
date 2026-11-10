@@ -14,7 +14,7 @@ const base: Model<Api> = {
 	cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
 };
 const model = (id: string, patch: Partial<Model<Api>> = {}): Model<Api> => ({ ...base, id, name: id, ...patch });
-const theme = { fg: (_role: string, value: string) => value, bold: (value: string) => value } as Theme;
+const theme = { fg: (_role: string, value: string) => value, bold: (value: string) => value, style: (value: string) => value, getColorMode: () => "truecolor" } as unknown as Theme;
 const ids = (models: Model<Api>[]) => models.map((entry) => entry.id);
 const catalog = ["gpt-4o", "o3", "gpt-5.5", "gpt-5.5-pro", "gpt-5.3-codex", "gpt-9-sol", "gpt-9.1-sol",
 	"gpt-9.1-terra", "gpt-9-luna", "gpt-9-astra", "gpt-daybreak-blue-latest", "gpt-daybreak-red-latest", "gpt-5.6-cyber"]
