@@ -35,7 +35,8 @@ test("workspace_TUI real: layout, selector propio, vistas, métricas, settings, 
 	assert.match(plain, /Elegir modelo · OMI/);
 	assert.match(plain, /Cambios locales/);
 	assert.match(plain, /Issues abiertos/); assert.match(plain, /PRs abiertos/); assert.match(plain, /PROYECTO OMI/);
-	assert.doesNotMatch(plain, /Entregas|ENTREGAS|GITHUB ACTIONS/);
+	assert.doesNotMatch(plain, /Entregas|ENTREGAS/);
+	assert.match(plain, /▌ GITHUB ACTIONS/); assert.match(plain, /Claude reviews/); assert.match(plain, /Releases/);
 	assert.match(plain, /Ctrl 1–5 vistas/);
 	assert.match(plain, /Ubicación de trabajo/);
 	assert.match(plain, /Recursos · equipo donde corre OMI/);

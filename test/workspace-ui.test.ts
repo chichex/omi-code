@@ -8,7 +8,7 @@ import { workspaceExtension } from "../src/tui/workspace/index.ts";
 import { align, bar, fit, surface, tokens } from "../src/tui/workspace/presentation.ts";
 import { testIo } from "./helpers/io.ts";
 
-const theme = { fg: (_role: string, value: string) => `\x1b[36m${value}\x1b[39m`, bold: (value: string) => value, style: (value: string) => value } as unknown as Theme;
+const theme = { fg: (_role: string, value: string) => `\x1b[36m${value}\x1b[39m`, bold: (value: string) => value, style: (value: string) => value, getColorMode: () => "truecolor" } as unknown as Theme;
 const base: Model<Api> = { id: "base", name: "Base", provider: "alpha", api: "anthropic-messages", baseUrl: "https://example.invalid", reasoning: true, input: ["text"], contextWindow: 200000, maxTokens: 8192, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
 const models: Model<Api>[] = [
 	{ ...base, provider: "alpha", id: "large", name: "中 Model Large", contextWindow: 200000, reasoning: true },

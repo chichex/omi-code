@@ -56,7 +56,7 @@ el historial y la edición siguen usando el renderer de Pi; no hay un segundo pr
 - **3 · PRs:** hasta 100 PRs abiertos de todo el repo, incluidos los borradores.
   Ambas listas requieren `gh` instalado y autenticado; flechas seleccionan, **Enter** carga la descripción del elemento elegido y **r** actualiza.
   Los errores se muestran por separado y conservan la última lista como desactualizada, no como una lista vacía exitosa.
-  Estas vistas son de sólo lectura; no crean issues, no cierran ni fusionan PRs y no consultan GitHub Actions.
+  Estas vistas son de sólo lectura; no crean issues ni cierran o fusionan PRs.
 - **4 · Cambios:** lista de hasta 100 archivos y diffs de working tree / stage, sin drivers de diff ni textconv externos.
   Cada archivo con seguimiento muestra `+líneas` en verde y `−líneas` en rojo, alineadas a la derecha incluso al acortar una ruta larga.
   Es el cambio neto respecto de HEAD (stage + working tree, sin contar dos veces la misma edición); sin commits se compara con el árbol vacío.
@@ -74,7 +74,9 @@ el historial y la edición siguen usando el renderer de Pi; no hay un segundo pr
   `↑N ↓N` son **commits** por subir/traer, no archivos ni líneas sin commit. Se comparan con la referencia local del último fetch;
   la lateral muestra `Al día (local)` si ambos son cero, `sin upstream` si no está configurado y `↑— ↓—` si el conteo no está disponible.
   No hace fetch automático ni convierte errores en ceros. `/omi-workspace` muestra el upstream y explica cómo actualizarlo con `git fetch`.
-  Las secciones Proyecto, GitHub, OMI, Contexto y Equipo tienen encabezados de distintos colores, fondo tenue y separadores de caracteres, respetando el tema claro/oscuro.
+  Las secciones Proyecto, GitHub Actions, OMI, Contexto y Equipo tienen encabezados de distintos colores, fondo tenue y separadores de caracteres, respetando el tema claro/oscuro.
+  Se agrupan sin dejar un hueco creciente antes de Contexto; el espacio libre queda al final. Los recortes y los márgenes conservan el fondo del panel.
+- **GitHub Actions en la lateral:** agrupa **Claude reviews** (`claude-review.yml`) y **Releases** (`release.yml`) con el mismo encabezado que las demás secciones, sin un marco adicional que reste ancho. Muestra hasta tres ejecuciones recientes por workflow de todo el repo, con estado, nombre y antigüedad alineada a la derecha y separada por al menos dos espacios. Se adapta al espacio disponible; en terminales bajas muestra un resumen por workflow sin ocultar OMI. Los nombres corresponden a las ejecuciones reales, no a tags inferidos. Un check indica ejecución exitosa, no aprobación del PR. Clic en la sección o `/omi-actions` abre el detalle con las URLs. Sólo consulta: no dispara reviews ni releases.
 - **Contexto:** encima de Equipo, con tokens estimados / límite real del modelo, porcentaje y barra sólida `█`.
   Si el runtime no conoce el uso se muestra `—`, no cero. Con la lateral oculta, el dato queda en el pie.
   No se inventa un desglose de tokens. `/omi-context` explica el dato y `/compact` sigue siendo explícito.
@@ -110,6 +112,8 @@ el historial y la edición siguen usando el renderer de Pi; no hay un segundo pr
 | Ctrl 5 o `/omi-platform` | OMI: proyecto, servicios y ambientes |
 | Ctrl K o `/omi` | Paleta de comandos (Ctrl K reemplaza borrar hasta fin de línea en el editor) |
 | F4 o `/omi-sidebar` | Mostrar / ocultar lateral |
+| `/omi-actions` | Detalle de Claude reviews y releases de GitHub Actions |
+| `/omi-pr` | URL, título y estado del PR de la rama actual |
 | `/omi-model` | Selector propio, también si otra extensión personaliza el editor |
 | `/omi-workspace` | Ubicación, repo principal y worktree |
 | `/omi-resources` | CPU, RAM, disco y host |
@@ -117,6 +121,12 @@ el historial y la edición siguen usando el renderer de Pi; no hay un segundo pr
 
 Los atajos son **Control** también en Mac, no Option ni Command. **Esc** vuelve a Chat desde las vistas de consulta.
 Las pestañas también funcionan por clic; en panes angostos conservan los cinco números y el nombre de la vista activa.
+
+El pie muestra **`PR #123 ↗`** como enlace al PR de la rama actual, incluso si debe recortar el nombre de la rama.
+Se resuelve con `gh pr status`, incluyendo el remoto y los forks, sin inferirlo de la lista de PRs del repo.
+El enlace OSC 8 abre la URL desde el terminal; `/omi-pr` y la paleta permiten ver y copiar la URL por teclado.
+Si falla una actualización, se conserva el enlace con `*` como dato desactualizado; al cambiar de rama se descarta el anterior.
+Sin PR, con HEAD separado o sin datos no se inventa un enlace. Se respeta `--offline` y la confianza del proyecto.
 
 La lateral ocupa 33 columnas (incluido el separador) y se oculta por debajo de 110 columnas o 26 filas;
 los comandos y el pie siguen disponibles. Contexto, CPU, RAM y disco usan barras de bloques `█` de una fila;

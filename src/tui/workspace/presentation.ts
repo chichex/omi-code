@@ -1,5 +1,5 @@
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
-import { mixColors, parseColor, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { backgroundAnsi, mixColors, parseColor, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { safeText, type ChangedFile, type GitSnapshot } from "./data.ts";
 
 export const BG = parseColor("#050607");
@@ -9,7 +9,12 @@ const LIGHT_PANEL = parseColor("#f3f4f5");
 export function fit(line: string, width: number): string { return truncateToWidth(line, Math.max(0, width), "…", true); }
 export function surface(theme: Theme, line: string, width: number, panel = false): string {
 	const light = theme.appearance === "light";
-	return theme.style(fit(line, width), { bg: light ? (panel ? LIGHT_PANEL : LIGHT_BG) : (panel ? PANEL : BG) });
+	const bg = light ? (panel ? LIGHT_PANEL : LIGHT_BG) : (panel ? PANEL : BG);
+	const background = backgroundAnsi(bg, theme.getColorMode());
+	// truncateToWidth emite SGR 0 y los encabezados cierran su tinte con SGR 49.
+	// Restaurar sólo el fondo base: no borrar colores, atributos ni fondos internos.
+	const content = fit(line, width).replace(/\x1b\[(?:0|49)?m/g, (reset) => reset + background);
+	return theme.style(content, { bg });
 }
 export function sidebarSection(theme: Theme, title: string, width: number, color: ThemeColor): string {
 	const label = `▌ ${text(title)} `;

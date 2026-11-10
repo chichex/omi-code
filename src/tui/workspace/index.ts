@@ -12,6 +12,9 @@ import { align, bar, changedFileLine, fit, gib, gitSyncSummary, modalLines, perc
 
 import { WORKSPACE_VIEWS, workspaceTabs, type WorkspaceView } from "./navigation.ts";
 
+import { ACTION_GROUPS, actionsPanel, readActionRuns, type ActionGroup, type ActionState } from "./github-actions.ts";
+import { footerStatus, readBranchPullRequest, type BranchPullRequest, type FooterStatus } from "./pull-request.ts";
+
 type View = WorkspaceView;
 type GithubView = "issues" | "prs";
 interface GithubList { items: GithubItem[] | undefined; error: string | undefined; at: number | undefined; selected: number }
@@ -86,6 +89,9 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		const runningTools = new Map<string, string>();
 		let git: GitSnapshot | undefined; let gitError = false; let resources: Resources | undefined;
 		const github: Record<GithubView, GithubList> = { issues: emptyGithubList(), prs: emptyGithubList() };
+		let actions: Record<ActionGroup, ActionState> = { reviews: {}, releases: {} };
+		let branchPr: BranchPullRequest | undefined; let branchPrError: string | undefined;
+		let footerStatusBounds: FooterStatus | undefined;
 		let githubDetailBusy = false; let infoPrompt = false;
 		let environments: EnvironmentStatus[] = []; let services: string[] = []; let project: string | undefined; let envError: string | undefined; let envAt: number | undefined;
 		let localBusy = false; let remoteBusy = false; let timer: ReturnType<typeof setInterval> | undefined;
@@ -93,8 +99,8 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		let baseRoot: Component | undefined; let root: Component | undefined; let projectRoot: Component | undefined; let layoutCompatible = false;
 		let document: Component; let pending: Component; let status: Component; let above: Component; let editor: Container; let below: Component; let footer: Component;
 		let workspaceDocument: Component; let modelShortcut = "Ctrl L";
-		let sidebarContextStart = 0; let sidebarResourceStart = 0; let welcomeCommandStart = 8;
-		let sidebarLinks = new Map<number, View>();
+		let sidebarProjectEnd = 4; let sidebarContextStart = 0; let sidebarResourceStart = 0; let sidebarResourceEnd = 0; let welcomeCommandStart = 8;
+		let sidebarLinks = new Map<number, View | "actions">();
 		let unsubscribeInput: (() => void) | undefined; let finishModal: (() => void) | undefined;
 		const controller = new AbortController(); const sampleResources = resourceReader();
 		const theme = (): Theme => ctx.ui.theme;
@@ -112,14 +118,26 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		let saveQueue = Promise.resolve();
 		const save = (): Promise<void> => { const snapshot = { ...prefs, favorites: [...prefs.favorites] }; saveQueue = saveQueue.then(() => saveWorkspacePreferences(io.homeDir, snapshot)).catch(() => { if (active) ctx.ui.notify("No se pudieron guardar las preferencias de la UI", "warning"); }); return saveQueue; };
 		const age = (at?: number): string => at === undefined ? "sin datos" : `hace ${Math.max(0, Math.floor((Date.now() - at) / 1000))}s`;
-		const gitIdentity = (): string => git ? `${git.root}\0${git.branch}` : "";
+		const gitIdentity = (): string => git ? `${git.root}\0${git.detached}\0${git.branch}` : "";
 
 		async function refreshRemote(): Promise<void> {
 			if (!active || remoteBusy) return;
-			if (parsed.offline || !ctx.isProjectTrusted()) { const error = parsed.offline ? "Offline" : "Proyecto sin confianza"; github.issues.error = error; github.prs.error = error; envError = error; changed(); return; }
+			if (parsed.offline || !ctx.isProjectTrusted()) { const error = parsed.offline ? "Offline" : "Proyecto sin confianza"; github.issues.error = error; github.prs.error = error; actions.reviews.error = error; actions.releases.error = error; branchPrError = error; envError = error; changed(); return; }
 			remoteBusy = true; lastRemote = Date.now(); const identity = gitIdentity(); const snapshot = git; changed();
 			const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(6000)]);
 			await Promise.all([
+				(async () => {
+					try {
+						const pr = snapshot ? await readBranchPullRequest(snapshot, signal) : undefined;
+						if (active && identity === gitIdentity()) { branchPr = pr; branchPrError = undefined; }
+					} catch { if (active && identity === gitIdentity()) branchPrError = "PR no disponible · revisá gh / login / red"; }
+				})(),
+				...ACTION_GROUPS.map(async (group) => {
+					try {
+						const runs = snapshot ? await readActionRuns(snapshot, group.id, signal) : undefined;
+						if (active && identity === gitIdentity()) actions[group.id] = runs ? { runs } : { error: "Sin repositorio Git" };
+					} catch { if (active && identity === gitIdentity()) actions[group.id].error = "No disponible"; }
+				}),
 				...(["issues", "prs"] as const).map(async (kind) => {
 					const state = github[kind];
 					try {
@@ -148,7 +166,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 				(async () => { try { const value = await sampleResources(ctx.cwd, controller.signal); if (active) resources = value; } catch { /* conservar última muestra, nunca inventar ceros */ } })(),
 			]);
 			localBusy = false;
-			if (active && previousIdentity !== gitIdentity()) { github.issues = emptyGithubList(); github.prs = emptyGithubList(); environments = []; services = []; envAt = undefined; envError = undefined; project = undefined; diffRequest++; diffLoading = false; diff = undefined; selectedFile = 0; issuesPane.offset = 0; prsPane.offset = 0; }
+			if (active && previousIdentity !== gitIdentity()) { github.issues = emptyGithubList(); github.prs = emptyGithubList(); actions = { reviews: {}, releases: {} }; branchPr = undefined; branchPrError = undefined; environments = []; services = []; envAt = undefined; envError = undefined; project = undefined; diffRequest++; diffLoading = false; diff = undefined; selectedFile = 0; issuesPane.offset = 0; prsPane.offset = 0; }
 			changed();
 			if (active && (previousIdentity !== gitIdentity() || Date.now() - lastRemote > 30_000)) void refreshRemote();
 		}
@@ -165,6 +183,21 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			await info("Ubicación de trabajo", [workspaceName(git), `Branch: ${git ? `${git.detached ? "HEAD separado · " : ""}${git.branch}` : "—"}`, `Directorio activo: ${ctx.cwd}`, `Raíz del checkout: ${git?.root ?? "—"}`, `Repo principal: ${git?.mainRoot ?? "—"}`,
 				...(git ? [`Archivos modificados: ${git.changeCount}`, `Upstream: ${git.tracking === false ? "sin configurar" : git.upstream ?? "no disponible"}`, `Commits: ↑${git.ahead ?? "—"} ↓${git.behind ?? "—"}`, "↑ commits locales por subir · ↓ commits del upstream por traer.", "Comparación con la referencia local del último fetch; no consulta el remoto. Para actualizarla, ejecutá git fetch. Los archivos sin commit se cuentan por separado."] : []),
 				git?.linked ? "Este worktree tiene directorio e índice propios. Comparte historia y referencias Git. No es un sandbox: no aísla credenciales, procesos ni servicios." : "No hay un worktree enlazado activo.", ...(gitError ? ["Estado Git desactualizado: no se pudo refrescar."] : [])]);
+		}
+		async function showBranchPr(): Promise<void> {
+			await info("PR de la rama actual", [
+				`Rama: ${git ? text(git.branch) : "sin repositorio Git"}`,
+				...(branchPrError ? [branchPrError + (branchPr ? " · enlace desactualizado (*)" : "")] : []),
+				...(branchPr ? [`PR #${branchPr.number} · ${text(branchPr.title)}`, branchPr.url, `Estado: ${branchPr.state}${branchPr.draft ? " · borrador" : ""}`]
+					: [!git ? "Sin repositorio Git." : git.detached ? "HEAD separado: no hay una rama actual." : branchPrError ? "No se pudo consultar el PR." : remoteBusy || !lastRemote ? "Consultando PR…" : "No hay un PR asociado a esta rama."]),
+			]);
+		}
+		async function showActions(): Promise<void> {
+			await info("GitHub Actions", ["Estado de las ejecuciones de Actions; un ✓ no significa aprobación del PR.", "", ...ACTION_GROUPS.flatMap((group) => {
+				const state = actions[group.id];
+				return [group.label, ...(state.error ? [state.error + (state.runs ? " · datos desactualizados" : "")] : []),
+					...(state.runs?.flatMap((run) => [`${run.name} · ${run.status} · ${run.conclusion || "sin conclusión"}`, run.createdAt, run.url]) ?? ["Sin datos"]), ""];
+			})]);
 		}
 		async function showResources(): Promise<void> { const r = resources; await info("Recursos · equipo donde corre OMI", r ? [`Host: ${r.host}`, `CPU total: ${r.cpu === undefined ? "esperando muestra" : `${r.cpu.toFixed(1)}%`}`, `RAM usada: ${gib(r.totalRam - r.availableRam)} / ${gib(r.totalRam)}${r.memoryEstimated ? " (estimada)" : ""}`, `RAM disponible: ${gib(r.availableRam)}`, `Disco del proyecto: ${r.disk ? `${gib(r.disk.used)} usados / ${gib(r.disk.total)} · ${gib(r.disk.available)} disponibles` : "no disponible"}`, `Proceso OMI: CPU ${r.processCpu?.toFixed(1) ?? "—"}% · RAM ${gib(r.rss)}`, "RAM OMI es RSS de este proceso; no suma herramientas ni otros subprocesos.", "CPU de OMI normalizada a la capacidad total del equipo.", "Estas métricas son del host de OMI, no de tu Mac si te conectaste por SSH."] : ["Recolectando datos…"]); }
 		async function showContext(): Promise<void> { const usage = ctx.getContextUsage(); await info("Ventana de contexto", [`Modelo: ${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "sin modelo"}`, `Uso: ${usage?.tokens == null ? "desconocido" : `${tokens(usage.tokens)} tokens (estimado)`}`, `Límite: ${tokens(usage?.contextWindow ?? ctx.model?.contextWindow ?? 0)} tokens`, `Ocupación: ${usage?.percent == null ? "—" : `${usage.percent.toFixed(1)}%`}`, "El runtime usa el último uso informado por el modelo y estima los mensajes posteriores. Después de compactar puede ser desconocido hasta la siguiente respuesta.", "No inventamos un desglose por sistema, conversación y tools.", "Para compactar usá /compact. Cambiar el modelo no descarta contenido."]); }
@@ -199,7 +232,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		async function palette(): Promise<void> {
 			if (!active || finishModal) return;
 			const actions: [string, () => void | Promise<void>][] = [...WORKSPACE_VIEWS.map((item): [string, () => void] => [item.label, () => switchView(item.id)]),
-				["Elegir modelo", showModel], ["Ventana de contexto", showContext], ["Ubicación / worktree", showWorkspace], ["Recursos del equipo", showResources], ["Mostrar / ocultar lateral", toggleSidebar], ["Actualizar datos", () => { void refreshLocal(); void refreshRemote(); }]];
+				["PR de la rama actual", showBranchPr], ["GitHub Actions", showActions], ["Elegir modelo", showModel], ["Ventana de contexto", showContext], ["Ubicación / worktree", showWorkspace], ["Recursos del equipo", showResources], ["Mostrar / ocultar lateral", toggleSidebar], ["Actualizar datos", () => { void refreshLocal(); void refreshRemote(); }]];
 			const selected = await ctx.ui.select("OMI · Comandos", actions.map(([label]) => label));
 			if (active) await actions.find(([label]) => label === selected)?.[1]();
 		}
@@ -214,17 +247,9 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			const inner = Math.max(1, width - 3); const height = Math.max(1, rows() - 6);
 			const section = (title: string, color: Parameters<typeof sidebarSection>[3]) => sidebarSection(t, title, inner, color);
 			const lines = [section("PROYECTO", "syntaxType"), t.bold(text(basename(git?.root ?? ctx.cwd))), t.fg("accent", text(git ? `${git.detached ? "HEAD · " : ""}${git.branch} · ${workspaceName(git)}` : "Sin repositorio Git")), git ? label(`${git.changeCount} archivos · `) + gitSyncSummary(t, git) : label("Git no disponible")];
-			if (gitError) lines.push(t.fg("warning", "Git desactualizado"));
-			const targets = new Map<string, View>();
-			const nav = (line: string, target: View): void => { lines.push(line); targets.set(line, target); };
-			lines.push("", section("GITHUB", "mdLink"));
-			for (const kind of ["issues", "prs"] as const) {
-				const state = github[kind]; const name = kind === "issues" ? "Issues" : "PRs";
-				const summary = state.items ? `${state.items.length}${state.items.length === 100 ? "+" : ""} ${name} abiertos` : `${name} · ${remoteBusy ? "consultando…" : "sin datos"}`;
-				nav(state.error ? t.fg("warning", `${name} · ${state.items ? "desactualizados" : state.error === "Offline" ? "offline" : "no disponible"}`) : label(summary), kind);
-			}
-			lines.push(""); nav(section("OMI", "success"), "omi");
-			nav(envError ? t.fg("warning", project ? "Datos desactualizados" : envError === "Offline" ? "Offline" : "No disponible") : label(text(project ?? (envAt ? "Sin proyecto vinculado" : "Consultando…"))), "omi");
+			if (gitError) lines[3] = t.fg("warning", "Git desactualizado");
+			const targets = new Map<number, View | "actions">();
+			const nav = (line: string, target: View | "actions"): void => { targets.set(lines.length, target); lines.push(line); };
 			const r = resources; const ram = r ? percentage(r.totalRam - r.availableRam, r.totalRam) : undefined;
 			const disk = r?.disk ? percentage(r.disk.used, r.disk.total) : undefined;
 			const resourceLines = [section(`EQUIPO · ${text(r?.host ?? "…")}`, "syntaxVariable")];
@@ -241,14 +266,29 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			const context = contextState();
 			const contextLines = [section("CONTEXTO", "warning"), align(`${context.label}${context.limit === undefined ? "" : " tokens"}`, context.percent === undefined ? "—" : `${context.percent.toFixed(0)}%`, inner), bar(t, context.percent, inner), ""];
 			const space = Math.max(0, height - contextLines.length - resourceLines.length - 1);
+			if (space < lines.length + 5) lines.splice(1, 1); // Priorizar Actions y OMI aun con alertas en un pane bajo.
+			sidebarProjectEnd = lines.length;
+			const actionSpace = Math.max(3, space - lines.length - 2); const now = Date.now();
+			let panel = actionsPanel(t, actions, inner, 3, now);
+			for (let count = 2; panel.length > actionSpace && count >= 0; count--) panel = actionsPanel(t, actions, inner, count, now);
+			lines.push(""); for (const line of panel) nav(line, "actions");
+			lines.push(""); nav(section("OMI", "success"), "omi");
+			nav(envError ? t.fg("warning", project ? "Datos desactualizados" : envError === "Offline" ? "Offline" : "No disponible") : label(text(project ?? (envAt ? "Sin proyecto vinculado" : "Consultando…"))), "omi");
 			let blanks = Math.max(0, lines.length - space);
-			const compact = lines.filter((line) => line || blanks-- <= 0).slice(0, space);
-			while (compact.length < space + 1) compact.push("");
-			sidebarLinks = new Map(); compact.forEach((line, index) => { const target = targets.get(line); if (target) sidebarLinks.set(index, target); });
-			sidebarContextStart = compact.length; sidebarResourceStart = compact.length + contextLines.length;
-			return [...compact, ...contextLines, ...resourceLines].slice(0, height).map((line) => surface(t, `│ ${fit(line, inner)} `, width, true));
+			const compact: string[] = []; sidebarLinks = new Map();
+			for (const [index, line] of lines.entries()) {
+				if (!line && blanks-- > 0) continue;
+				if (compact.length >= space) break;
+				const target = targets.get(index); if (target) sidebarLinks.set(compact.length, target);
+				compact.push(line);
+			}
+			compact.push(""); // Agrupar la información, sin un hueco creciente antes de Contexto.
+			sidebarContextStart = compact.length; sidebarResourceStart = compact.length + contextLines.length; sidebarResourceEnd = sidebarResourceStart + resourceLines.length;
+			const result = [...compact, ...contextLines, ...resourceLines];
+			while (result.length < height) result.push("");
+			return result.slice(0, height).map((line) => surface(t, `│ ${fit(line, inner)} `, width, true));
 		}
-		const sidebar = new Lines(sidebarLines, (event) => { if (event.type !== "click") return; if (event.y >= sidebarResourceStart) void showResources(); else if (event.y >= sidebarContextStart) void showContext(); else if (event.y < 4) void showWorkspace(); else { const target = sidebarLinks.get(event.y); if (target) switchView(target); } return { handled: true }; });
+		const sidebar = new Lines(sidebarLines, (event) => { if (event.type !== "click") return; if (event.y >= sidebarResourceStart && event.y < sidebarResourceEnd) void showResources(); else if (event.y >= sidebarContextStart && event.y < sidebarResourceStart) void showContext(); else if (event.y < sidebarProjectEnd) void showWorkspace(); else { const target = sidebarLinks.get(event.y); if (target === "actions") void showActions(); else if (target) switchView(target); } return { handled: true }; });
 		async function openChange(): Promise<void> {
 			const snapshot = git; const file = snapshot?.changes[selectedFile]; if (!snapshot || !file) return;
 			const request = ++diffRequest; diffLoading = true; changed();
@@ -388,6 +428,8 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		const commands: [string, string, () => void | Promise<void>][] = [
 			["omi", "Paleta de comandos de OMI", palette], ["omi-model", "Selector propio de modelo", showModel],
 			["omi-workspace", "Ubicación y worktree", showWorkspace], ["omi-resources", "CPU, RAM y disco del host", showResources],
+			["omi-actions", "Claude reviews y releases de GitHub Actions", showActions],
+			["omi-pr", "Enlace al PR de la rama actual", showBranchPr],
 			["omi-context", "Ventana de contexto", showContext], ["omi-sidebar", "Mostrar / ocultar lateral", toggleSidebar],
 			...WORKSPACE_VIEWS.map((item): [string, string, () => void] => [item.command, `Vista ${item.label}`, () => switchView(item.id)]),
 		];
@@ -411,13 +453,13 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 					const left = ` ${t.fg(blocked ? "warning" : "success", "●")} ${text(state)} · ${text(workspaceName(git))}${git ? ` · ${text(git.branch)}` : ""}`;
 					const extra = text([...footerData.getExtensionStatuses().values()].join(" · "));
 					const hint = side ? extra || "Ctrl 1–5 vistas · /omi" : `Contexto ${context.label}${context.percent === undefined ? "" : ` · ${context.percent.toFixed(0)}%`}`;
-					const rightWidth = Math.min(hint.length, Math.floor(width * .48));
-					const statusLine = fit(left, Math.max(0, width - rightWidth - 1)) + " " + t.fg("muted", fit(hint, rightWidth));
+					footerStatusBounds = footerStatus(t, left, hint, width, branchPr, branchPrError !== undefined);
+					const statusLine = footerStatusBounds.line;
 					const name = ctx.model ? text(ctx.model.name) : "Sin modelo";
 					const modelName = fit(name, Math.min(name.length, Math.max(0, width - 9)));
 					const details = !ctx.model ? " · /login" : width >= 110 ? `  ·  ${text(ctx.model.provider)}  ·  Razonamiento: ${ctx.thinkingLevel ?? "off"}  ·  ${modelShortcut} cambiar` : width >= 70 ? `  ·  ${text(ctx.model.provider)}  ·  ${ctx.thinkingLevel ?? "off"}  ·  ${modelShortcut} cambiar` : ` · ${modelShortcut}`;
 					return [t.fg("border", "─".repeat(width)), surface(t, statusLine, width, true), surface(t, t.fg("muted", " Modelo: ") + t.fg("accent", t.bold(modelName)) + t.fg("muted", details), width, true)];
-				}, (event) => { if (event.type !== "click") return; if (event.y === 2) void showModel(); else if (event.y === 1 && event.x >= event.width * .52) { if (sidebarVisible(event.width)) void palette(); else void showContext(); } else if (event.y === 1) void showWorkspace(); return { handled: true }; });
+				}, (event) => { if (event.type !== "click") return; if (event.y === 2) void showModel(); else if (event.y === 1 && footerStatusBounds?.prStart !== undefined && event.x >= footerStatusBounds.prStart && event.x < footerStatusBounds.prEnd!) void showBranchPr(); else if (event.y === 1 && event.x >= (footerStatusBounds?.hintStart ?? event.width * .52)) { if (sidebarVisible(event.width)) void palette(); else void showContext(); } else if (event.y === 1) void showWorkspace(); return { handled: true }; });
 			});
 			// Adaptador acotado a Pi 1.5.0: sus siete componentes públicos montados, sin tocar node_modules.
 			// Si cambia ese contrato, conservar la TUI base en lugar de apropiarse de un árbol desconocido.
