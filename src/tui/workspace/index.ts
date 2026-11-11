@@ -1,8 +1,8 @@
 // Shell propio de OMI sobre los componentes y el renderer de Pi. No hay un segundo TUI.
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { basename, join } from "node:path";
-import type { ExtensionAPI, ExtensionContext, InlineExtension, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
+import { basename, join, resolve } from "node:path";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, InlineExtension, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { colorToHex, Container, HStack, isViewportTUI, matchesKey, ScrollView, VStack, wrapTextWithAnsi, type Component, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import type { Io } from "../../cli/io.ts";
 import { agentDir } from "../../core/paths.ts";
@@ -15,6 +15,11 @@ import { WORKSPACE_VIEWS, workspaceTabs, type WorkspaceView } from "./navigation
 
 import { ACTION_GROUPS, actionsPanel, readActionRuns, type ActionGroup, type ActionState } from "./github-actions.ts";
 import { footerStatus, readBranchPullRequest, type BranchPullRequest } from "./pull-request.ts";
+import { ISSUE_TYPES } from "./issue-worktree.ts";
+import { classifyIssue, restoreIssueTriage, type IssueTriageState } from "./issue-triage.ts";
+import { assertIssueIdentity, discoverLegacyPreparations, IssuePreparationBusyError, loadIssuePreparations, readIssuePreparation, rememberIssueSession, verifyIssuePreparation, type IssuePreparationEntry } from "./issue-registry.ts";
+import { prepareIssue, type IssueClassification } from "./issue-preparation.ts";
+import { preparePrincipalSession, PrincipalSessionBusyError } from "./main-workspace.ts";
 
 type View = WorkspaceView;
 type GithubView = "issues" | "prs";
@@ -82,7 +87,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 	return { name: "omi-workspace", factory: async (pi: ExtensionAPI) => {
 		if (io.env.OMI_TUI === "classic") return;
 		// El import de coding-agent sucede después de fijar PI_CODING_AGENT_DIR en launchTui.
-		const { CustomEditor, Theme: PiTheme, VERSION, parseArgs } = await import("@earendil-works/pi-coding-agent");
+		const { BorderedLoader, CustomEditor, Theme: PiTheme, VERSION, parseArgs } = await import("@earendil-works/pi-coding-agent");
 		const parsed = parseArgs(args);
 		let active = false; let ctx: ExtensionContext; let tui: TUI | undefined;
 		let prefs: WorkspacePreferences = { favorites: [], sidebar: true };
@@ -93,7 +98,12 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		let actions: Record<ActionGroup, ActionState> = { reviews: {}, releases: {} };
 		let branchPr: BranchPullRequest | undefined; let branchPrError: string | undefined;
 		let openingBranchPr = false;
-		let githubDetailBusy = false; let infoPrompt = false;
+		let githubDetailBusy = false; let infoPrompt = false; let triageBusy = false; let mainBusy = false;
+		let issueTriage: IssueTriageState | undefined;
+		let preparations = new Map<number, IssuePreparationEntry>(); let preparationsError: string | undefined;
+		let preparationsRepo: string | undefined; let legacyScanned = false; let sessionRemembered = false;
+		let legacyPreparations = new Map<number, IssuePreparationEntry>();
+		let issuePreparationTask: Promise<unknown> | undefined; let issueSessionTask: Promise<void> | undefined; let mainSessionTask: Promise<unknown> | undefined;
 		let environments: EnvironmentStatus[] = []; let services: string[] = []; let project: string | undefined; let envError: string | undefined; let envAt: number | undefined;
 		let localBusy = false; let remoteBusy = false; let timer: ReturnType<typeof setInterval> | undefined;
 		let lastRemote = 0; let selectedFile = 0; let diff: string | undefined; let diffLoading = false; let diffRequest = 0;
@@ -166,29 +176,52 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 				(async () => { try { const value = await readGit(ctx.cwd, controller.signal); if (active) { git = value; gitError = false; } } catch { if (active) gitError = true; } })(),
 				(async () => { try { const value = await sampleResources(ctx.cwd, controller.signal); if (active) resources = value; } catch { /* conservar última muestra, nunca inventar ceros */ } })(),
 			]);
+			if (active) {
+				const snapshot = git;
+				if (preparationsRepo !== snapshot?.commonDir) { preparations = new Map(); preparationsError = undefined; preparationsRepo = snapshot?.commonDir; legacyScanned = false; legacyPreparations = new Map(); }
+				if (snapshot) {
+					try {
+						const sessionFile = ctx.sessionManager.getSessionFile?.();
+						if (!sessionRemembered && issueTriage && sessionFile && ctx.isProjectTrusted()) {
+							try { issueSessionTask = rememberIssueSession(snapshot, issueTriage, sessionFile, controller.signal); await issueSessionTask; }
+							catch (error) { if (active) ctx.ui.notify(text(error instanceof Error ? error.message : "No se pudo vincular la sesión del issue activo"), "warning"); }
+							finally { issueSessionTask = undefined; sessionRemembered = true; }
+						}
+						const saved = await loadIssuePreparations(snapshot);
+						if (!legacyScanned && ctx.isProjectTrusted()) {
+							legacyPreparations = await discoverLegacyPreparations(snapshot, saved, parsed.sessionDir, controller.signal); legacyScanned = true;
+						}
+						for (const [number, entry] of legacyPreparations) if (!saved.has(number)) saved.set(number, entry);
+						if (active) { preparations = saved; preparationsError = undefined; }
+					} catch { if (active) preparationsError = "Registro local no disponible; no se inicia otro triage hasta poder leerlo."; }
+				}
+			}
 			localBusy = false;
 			if (active && previousIdentity !== gitIdentity()) { github.issues = emptyGithubList(); github.prs = emptyGithubList(); actions = { reviews: {}, releases: {} }; branchPr = undefined; branchPrError = undefined; environments = []; services = []; envAt = undefined; envError = undefined; project = undefined; diffRequest++; diffLoading = false; diff = undefined; selectedFile = 0; issuesPane.offset = 0; prsPane.offset = 0; }
 			changed();
 			if (active && (previousIdentity !== gitIdentity() || Date.now() - lastRemote > 30_000)) void refreshRemote();
 		}
 		const overlayOptions = (limit = 104) => ({ width: Math.max(1, Math.min(limit, Math.floor((tui?.terminal.columns ?? 80) * .9))), maxHeight: "90%" as const, anchor: "center" as const });
-		async function info(title: string, content: ModalEntry[], options: ModalOptions = {}): Promise<void> {
-			if (!active || finishModal) return;
+		async function info(title: string, content: ModalEntry[], options: ModalOptions & { confirmLabel?: string } = {}): Promise<boolean> {
+			if (!active || finishModal) return false;
 			infoPrompt = true;
-			try { await ctx.ui.custom<void>((ui, _currentTheme, _keys, done) => {
-				finishModal = () => done();
+			try { return await ctx.ui.custom<boolean | undefined>((ui, _currentTheme, _keys, done) => {
+				finishModal = () => done(undefined);
 				return new OmiInfoModal({ title, content, ...options, theme, rows, redraw: () => ui.requestRender(), done });
-			}, { overlay: true, overlayOptions: () => overlayOptions() }); }
+			}, { overlay: true, overlayOptions: () => overlayOptions() }) === true; }
 			finally { infoPrompt = false; finishModal = undefined; }
 		}
 		async function showWorkspace(): Promise<void> {
-			await info("Ubicación de trabajo", [notice(workspaceName(git), "syntaxType"), field("Branch", git ? `${git.detached ? "HEAD separado · " : ""}${git.branch}` : "—", "syntaxType"),
+			const linked = git?.linked === true;
+			const back = await info("Ubicación de trabajo", [notice(workspaceName(git), "syntaxType"), field("Branch", git ? `${git.detached ? "HEAD separado · " : ""}${git.branch}` : "—", "syntaxType"),
 				"", section("Directorios"), field("Directorio activo", ctx.cwd), field("Raíz del checkout", git?.root ?? "—"), field("Repo principal", git?.mainRoot ?? "—"),
 				...(git ? ["", section("Estado Git"), field("Archivos modificados", String(git.changeCount)), field("Upstream", git.tracking === false ? "sin configurar" : git.upstream ?? "no disponible"),
 					field("Commits", `↑${git.ahead ?? "—"} ↓${git.behind ?? "—"}`), notice("↑ commits locales por subir · ↓ commits del upstream por traer."),
 					notice("Comparación con la referencia local del último fetch; no consulta el remoto. Para actualizarla, ejecutá git fetch. Los archivos sin commit se cuentan por separado.")] : []), "",
 				notice(git?.linked ? "Este worktree tiene directorio e índice propios. Comparte historia y referencias Git. No es un sandbox: no aísla credenciales, procesos ni servicios." : "No hay un worktree enlazado activo."),
-				...(gitError ? [notice("Estado Git desactualizado: no se pudo refrescar.", "warning")] : [])], { color: "syntaxType", subtitle: "Proyecto · checkout y sincronización local" });
+				...(linked ? [notice("Enter vuelve al repo principal y retoma su conversación. Conserva la rama actual de ese checkout y todo el trabajo del issue; no hace git checkout main.", "accent")] : []),
+				...(gitError ? [notice("Estado Git desactualizado: no se pudo refrescar.", "warning")] : [])], { color: "syntaxType", subtitle: "Proyecto · checkout y sincronización local", ...(linked ? { confirmLabel: "volver al repo" } : {}) });
+			if (back && active) pi.sendUserMessage("/omi-main", { expandPromptTemplates: true });
 		}
 		async function showBranchPr(): Promise<void> {
 			await info("PR de la rama actual", [field("Rama", git ? git.branch : "sin repositorio Git", "syntaxType"), "",
@@ -268,7 +301,9 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		async function palette(): Promise<void> {
 			if (!active || finishModal) return;
 			const actions: [string, () => void | Promise<void>][] = [...WORKSPACE_VIEWS.map((item): [string, () => void] => [item.label, () => switchView(item.id)]),
-				["PR de la rama actual", showBranchPr], ["GitHub Actions", showActions], ["Elegir modelo", showModel], ["Ventana de contexto", showContext], ["Ubicación / worktree", showWorkspace], ["Recursos del equipo", showResources], ["Mostrar / ocultar lateral", toggleSidebar], ["Actualizar datos", () => { void refreshLocal(); void refreshRemote(); }]];
+				["PR de la rama actual", showBranchPr], ["GitHub Actions", showActions], ["Elegir modelo", showModel], ["Ventana de contexto", showContext], ["Ubicación / worktree", showWorkspace], ["Recursos del equipo", showResources], ["Mostrar / ocultar lateral", toggleSidebar], ["Actualizar datos", () => { void refreshLocal(); void refreshRemote(); }],
+				["Preparar / retomar el issue seleccionado", () => pi.sendUserMessage("/omi-triage", { expandPromptTemplates: true })]];
+			if (git?.linked) actions.splice(WORKSPACE_VIEWS.length, 0, ["Volver al repo principal", () => pi.sendUserMessage("/omi-main", { expandPromptTemplates: true })]);
 			let selected: string | undefined;
 			try {
 				selected = await ctx.ui.custom<string | undefined>((ui, _theme, keys, done) => {
@@ -307,7 +342,11 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			resourceLines.push(label("Detalles del host >"));
 			const context = contextState();
 			const contextLines = [section("CONTEXTO", "warning"), align(`${context.label}${context.limit === undefined ? "" : " tokens"}`, context.percent === undefined ? "—" : `${context.percent.toFixed(0)}%`, inner), bar(t, context.percent, inner), ""];
-			const space = Math.max(0, height - contextLines.length - resourceLines.length - 1);
+			const triage = issueTriage && (!git || git.root === issueTriage.worktree && git.branch === issueTriage.branch) ? issueTriage : undefined;
+			const issueLines = triage ? [...(height >= 24 ? [""] : []), section("ISSUE ACTIVO", "accent"), t.fg("accent", `#${triage.issue.number} · ${ISSUE_TYPES[triage.triage.type].label}`), label(text(triage.issue.title))] : [];
+			// En panes bajos ceder espacio de métricas/Actions, nunca ocultar el tipo del issue.
+			if (issueLines.length && height < 28) resourceLines.splice(4);
+			const space = Math.max(0, height - contextLines.length - resourceLines.length - 1 - issueLines.length);
 			if (space < lines.length + 5) lines.splice(1, 1); // Priorizar Actions y OMI aun con alertas en un pane bajo.
 			sidebarProjectEnd = lines.length;
 			const actionSpace = Math.max(3, space - lines.length - 2); const now = Date.now();
@@ -326,7 +365,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			}
 			compact.push(""); // Agrupar la información, sin un hueco creciente antes de Contexto.
 			sidebarContextStart = compact.length; sidebarResourceStart = compact.length + contextLines.length; sidebarResourceEnd = sidebarResourceStart + resourceLines.length;
-			const result = [...compact, ...contextLines, ...resourceLines];
+			const result = [...compact, ...contextLines, ...resourceLines, ...issueLines];
 			while (result.length < height) result.push("");
 			return result.slice(0, height).map((line) => surface(t, `│ ${fit(line, inner)} `, width, true));
 		}
@@ -365,16 +404,38 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		}, changed, () => rows() - 6);
 		async function showGithubDetail(kind: GithubView): Promise<void> {
 			const item = github[kind].items?.[github[kind].selected]; const snapshot = git;
-			if (!item || !snapshot || githubDetailBusy || finishModal || !active || parsed.offline || !ctx.isProjectTrusted()) return;
+			if (!item || !snapshot || githubDetailBusy || finishModal || !active || !ctx.isProjectTrusted()) return;
 			githubDetailBusy = true; const identity = gitIdentity(); changed();
 			const current = () => active && identity === gitIdentity() && view === kind && github[kind].items?.[github[kind].selected]?.number === item.number;
 			try {
-				const body = await readGithubDetail(snapshot, kind === "issues" ? "issue" : "pr", item.number, AbortSignal.any([controller.signal, AbortSignal.timeout(6000)]));
-				const description = body.split("\n");
-				if (current()) await info(`${kind === "issues" ? "Issue" : "PR"} #${item.number} · ${text(item.title)}`, [field("Autor", item.author, "accent"), field("Etiquetas", item.labels.join(", ") || "—", "syntaxType"),
+				const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(6000)]);
+				let saved = kind === "issues" ? preparations.get(item.number) : undefined;
+				if (kind === "issues") {
+					try { const record = await readIssuePreparation(snapshot, item.number); if (record) saved = { record }; }
+					catch (error) { saved = { error: error instanceof Error ? error.message : "Registro local no disponible" }; }
+					if (saved?.record) {
+						try { assertIssueIdentity(saved.record, item); if (saved.record.phase === "ready") await verifyIssuePreparation(snapshot, saved.record, signal); }
+						catch (error) { saved = { ...saved, error: error instanceof Error ? error.message : "Preparación no disponible" }; }
+					}
+					if (!saved && preparationsError) saved = { error: preparationsError };
+					if (saved) preparations.set(item.number, saved);
+				}
+				let body = saved?.record?.source.body ?? ""; let staleBody = false;
+				try {
+					if (parsed.offline) throw new Error("Offline");
+					body = await readGithubDetail(snapshot, kind === "issues" ? "issue" : "pr", item.number, signal);
+				} catch (error) { if (!saved) throw error; staleBody = true; }
+				const description = body.split("\n"); const record = saved?.record;
+				if (!current()) return;
+				const start = await info(`${kind === "issues" ? "Issue" : "PR"} #${item.number} · ${text(item.title)}`, [field("Autor", item.author, "accent"), field("Etiquetas GitHub", item.labels.join(", ") || "—", "syntaxType"),
+					...(record ? [field("Clasificación local", ISSUE_TYPES[record.state.triage.type].label, "accent"), field("Rama", record.state.branch), field("Worktree", record.state.worktree),
+						...(saved?.error ? [] : [notice(record.phase === "ready" ? "Enter retoma la sesión guardada en este worktree. Conserva la conversación y los cambios; no reclasifica." : "Preparación pendiente. Enter continúa lo guardado sin repetir el triage ni sobrescribir trabajo.", "accent")])] : kind === "issues" && !saved?.error ? [notice("Enter inicia el triage y abre una sesión en un worktree nuevo desde main local. No implementa todavía.", "accent")] : []),
+					...(saved?.error ? [notice(`Recuperación pendiente: ${saved.error}`, "warning")] : []),
 					...(kind === "prs" ? [notice(`${item.draft ? "Borrador" : "Abierto"} · ${item.head} → ${item.base}`, item.draft ? "warning" : "success"), field("Revisión", item.review || "sin decisión")] : []),
-					item.url, "", section("Descripción"), ...description.slice(0, 1000), ...(description.length > 1000 ? [notice("[Descripción recortada a 1000 líneas]", "warning")] : [])],
-					{ color: kind === "issues" ? "syntaxType" : "mdLink", subtitle: `GitHub · ${kind === "issues" ? "issue" : "pull request"} · sólo lectura` });
+					item.url, "", section("Descripción"), ...(staleBody ? [notice(body ? "No se pudo actualizar GitHub; se muestra la descripción local guardada." : "No se pudo cargar la descripción de GitHub. El estado local guardado sigue disponible.", "warning")] : []), ...description.slice(0, 1000), ...(description.length > 1000 ? [notice("[Descripción recortada a 1000 líneas]", "warning")] : [])],
+					{ color: kind === "issues" ? "syntaxType" : "mdLink", subtitle: `GitHub · ${kind === "issues" ? "issue · preparar o retomar" : "pull request · sólo lectura"}`, ...(kind === "issues" && !saved?.error ? { confirmLabel: record ? "retomar worktree" : "iniciar triage" } : {}) });
+				// Siempre detalle primero. Sólo su segundo Enter despacha una acción de sesión.
+				if (start && kind === "issues" && current()) pi.sendUserMessage(`/omi-triage ${item.number}`, { expandPromptTemplates: true });
 			} catch { if (current()) await info("GitHub · detalle no disponible", [notice("Revisá gh, autenticación o red. El detalle también puede ser demasiado grande.", "warning")], { color: "warning", subtitle: "GitHub · no se pudo cargar el detalle" }); }
 			finally { githubDetailBusy = false; changed(); }
 		}
@@ -384,11 +445,14 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 				state.selected = Math.max(0, Math.min(state.selected, (state.items?.length ?? 1) - 1));
 				const lines = [t.bold(` ${name} abiertos`), t.fg("dim", " ↑ ↓ seleccionar · Enter detalle · r actualizar · Esc chat"), t.fg("dim", ` Todo el repositorio · ${age(state.at)}`), ""];
 				if (state.error) lines.push(t.fg("warning", ` ${state.error}${state.items ? " · datos desactualizados" : ""}`));
+				if (kind === "issues" && preparationsError) lines.push(t.fg("warning", ` ${preparationsError}`));
 				if (!git) lines.push(" No hay un repositorio Git disponible.");
 				else if (!state.items && !state.error) lines.push(remoteBusy ? " Consultando GitHub…" : " Sin datos. Pulsá r para actualizar.");
 				else if (state.items?.length === 0) lines.push(` No hay ${name.toLowerCase()} abiertos en la última consulta.`);
 				for (const [index, item] of (state.items ?? []).entries()) {
-					const line = align(` ${index === state.selected ? "›" : " "} #${item.number}${item.draft ? " [borrador]" : ""} ${text(item.title)}`, text(`@${item.author}`), width);
+					const saved = kind === "issues" ? preparations.get(item.number) : undefined;
+					const badges = kind === "prs" ? "" : saved?.record ? ` [${ISSUE_TYPES[saved.record.state.triage.type].label}] [${saved.error ? "Revisar" : saved.record.phase === "ready" ? basename(saved.record.state.worktree) : "Pendiente"}]` : saved?.error || preparationsError ? " [Registro no disponible]" : " [Sin triage]";
+					const line = align(` ${index === state.selected ? "›" : " "} #${item.number}${item.draft ? " [borrador]" : ""}${badges} ${text(item.title)}`, text(`@${item.author}`), width);
 					lines.push(index === state.selected ? t.fg("accent", line) : line);
 				}
 				if (state.items?.length === 100) lines.push(t.fg("dim", " Mostrando hasta 100 resultados abiertos."));
@@ -396,7 +460,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 				return lines.map((line) => surface(t, line, width));
 			}, (data) => {
 				if (matchesKey(data, "escape")) { switchView("chat"); return true; }
-				if (data === "r") { void refreshRemote(); return true; }
+				if (data === "r") { if (kind === "issues") { legacyScanned = false; void refreshLocal(); } void refreshRemote(); return true; }
 				if (matchesKey(data, "return")) { void showGithubDetail(kind); return true; }
 				const state = github[kind]; const page = Math.max(1, rows() - 11);
 				const move = matchesKey(data, "up") ? -1 : matchesKey(data, "down") ? 1 : matchesKey(data, "pageUp") ? -page : matchesKey(data, "pageDown") ? page : 0;
@@ -409,6 +473,85 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			return pane;
 		}
 		const issuesPane = githubPane("issues"); const prsPane = githubPane("prs");
+		async function returnToPrincipal(_args: string, command: ExtensionCommandContext): Promise<void> {
+			if (!active || command.mode !== "tui" || mainBusy || triageBusy || blocked || finishModal) return;
+			const warn = (message: string) => command.ui.notify(message, "warning");
+			if (!command.isProjectTrusted()) { warn("Volver al repo principal requiere un proyecto de confianza."); return; }
+			if (!command.isIdle() || command.hasPendingMessages()) { warn("Esperá a que el agente termine antes de volver al repo principal."); return; }
+			if (parsed.noSession) { warn("Volver al repo principal requiere una sesión persistente. Volvé a abrir OMI sin --no-session."); return; }
+			mainBusy = true;
+			const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]);
+			const current = () => active && !signal.aborted && ctx.cwd === command.cwd && command.isIdle() && !command.hasPendingMessages();
+			try {
+				const snapshot = await readGit(command.cwd, signal);
+				if (!current()) return;
+				if (!snapshot) { warn("No hay un repositorio Git disponible para volver al principal."); return; }
+				if (!snapshot.linked) { switchView("chat"); command.ui.notify("Ya estás en el repo principal. No se creó ni se cambió ninguna sesión o rama.", "info"); return; }
+				const preparing = preparePrincipalSession(snapshot, command, { signal, isCurrent: current, ...(parsed.sessionDir ? { sessionDir: parsed.sessionDir } : {}) });
+				mainSessionTask = preparing; const destination = await preparing; mainSessionTask = undefined;
+				if (!current()) return;
+				const message = `Repo principal · ${destination.detached ? "HEAD separado · " : ""}${destination.branch}. ${destination.created ? "Sesión nueva, sin heredar el contexto del issue." : "Conversación retomada."} El worktree y sus cambios quedaron intactos.`;
+				const result = await command.switchSession(destination.sessionFile, { withSession: async (replacement) => { replacement.ui.notify(message, "info"); } });
+				if (result.cancelled) warn("Regreso cancelado. Seguís en el worktree; la sesión del repo principal quedó disponible para reintentar.");
+			} catch (error) {
+				if (active && !controller.signal.aborted) command.ui.notify(text(error instanceof Error ? error.message : "No se pudo volver al repo principal"), error instanceof PrincipalSessionBusyError ? "warning" : "error");
+			} finally { mainSessionTask = undefined; mainBusy = false; changed(); }
+		}
+		pi.registerCommand("omi-main", { description: "Volver del worktree al repo principal y retomar su sesión, sin cambiar ramas", handler: returnToPrincipal });
+		async function startIssueTriage(args: string, command: ExtensionCommandContext): Promise<void> {
+			if (!active || command.mode !== "tui" || triageBusy || mainBusy || blocked || finishModal) return;
+			const warn = (message: string) => command.ui.notify(message, "warning");
+			if (!command.isProjectTrusted()) { warn("El triage y retomar un worktree requieren un proyecto de confianza."); return; }
+			if (!command.isIdle() || command.hasPendingMessages()) { warn("Esperá a que el agente termine antes de preparar o retomar un issue."); return; }
+			if (parsed.noSession) { warn("El worktree requiere una sesión persistente. Volvé a abrir OMI sin --no-session."); return; }
+			const number = args.trim() ? /^[1-9]\d*$/.test(args.trim()) ? Number(args.trim()) : NaN : github.issues.items?.[github.issues.selected]?.number ?? NaN;
+			const item = github.issues.items?.find((item) => item.number === number); const snapshot = git;
+			if (!snapshot || !Number.isSafeInteger(number) || number <= 0) { warn("Abrí Issues y seleccioná un issue cargado. Uso: /omi-triage [número]."); return; }
+			triageBusy = true; const identity = gitIdentity(); const abort = new AbortController();
+			const current = () => active && identity === gitIdentity() && command.isIdle() && !command.hasPendingMessages();
+			try {
+				const preparing = prepareIssue(snapshot, number, item, command, {
+					...(parsed.sessionDir ? { sessionDir: parsed.sessionDir } : {}), signal: controller.signal, isCurrent: current,
+					classify: async () => {
+						if (parsed.offline) { warn("Un triage nuevo requiere conexión; quitá --offline. Los ya guardados se pueden retomar."); return; }
+						if (!command.model || !command.modelRegistry.hasConfiguredAuth(command.model)) { warn("Elegí un modelo autenticado con /omi-model o /login antes de iniciar el triage."); return; }
+						if (!item) return;
+						let failure: unknown; infoPrompt = true;
+						const classification = await command.ui.custom<IssueClassification | undefined>((ui, modalTheme, _keys, done) => {
+							const loader = new BorderedLoader(ui, modalTheme, `Issue triage · #${number} · Esc cancelar`);
+							let finished = false;
+							const finish = (value?: IssueClassification) => { if (!finished) { finished = true; done(value); } };
+							finishModal = () => { abort.abort(); finish(); }; loader.onAbort = finishModal;
+							const signal = AbortSignal.any([controller.signal, abort.signal, AbortSignal.timeout(90_000)]);
+							void (async () => {
+								const body = await readGithubDetail(snapshot, "issue", item.number, signal);
+								return { ...await classifyIssue(command, item, body, signal), body };
+							})().then(finish, (error) => { failure = error; finish(); });
+							return loader;
+						}, { overlay: true, overlayOptions: () => overlayOptions() });
+						infoPrompt = false; finishModal = undefined;
+						if (!current() || abort.signal.aborted) return;
+						if (failure) throw failure;
+						return classification;
+					},
+				});
+				issuePreparationTask = preparing;
+				const prepared = await preparing; issuePreparationTask = undefined;
+				if (!prepared || !current()) return;
+				const { record, resumed } = prepared; const { state, sessionFile } = record;
+				preparations.set(number, { record }); changed();
+				const activeSession = command.sessionManager.getSessionFile();
+				if (activeSession && resolve(activeSession) === resolve(sessionFile!) && resolve(command.cwd) === resolve(state.worktree)) {
+					switchView("chat"); command.ui.notify(`Ya estás en la sesión del issue #${number}. No se creó ni se cambió nada.`, "info"); return;
+				}
+				const message = resumed ? `Issue #${number} · ${ISSUE_TYPES[state.triage.type].label}. Sesión retomada; conversación y cambios conservados.` : `Issue #${number} · ${ISSUE_TYPES[state.triage.type].label}. Worktree listo; implementación no iniciada.`;
+				const result = await command.switchSession(sessionFile!, { withSession: async (replacement) => { replacement.ui.notify(message, "info"); } });
+				if (result.cancelled) warn(`Cambio de sesión cancelado. La preparación quedó guardada en ${state.worktree}. Volvé al detalle y elegí retomar worktree.`);
+			} catch (error) {
+				if (active && !controller.signal.aborted) command.ui.notify(text(error instanceof Error ? error.message : "No se pudo preparar o retomar el issue"), error instanceof IssuePreparationBusyError ? "warning" : "error");
+			} finally { abort.abort(); issuePreparationTask = undefined; triageBusy = false; infoPrompt = false; finishModal = undefined; changed(); }
+		}
+		pi.registerCommand("omi-triage", { description: "Preparar o retomar el triage, worktree y sesión del issue", handler: startIssueTriage });
 		const omiPane = new ReadView((width) => {
 			const t = theme(); const lines = [t.bold(" OMI"), t.fg("dim", " r actualizar · Esc chat · infraestructura del proyecto"), "", t.fg("accent", ` PROYECTO OMI · ${age(envAt)}`)];
 			if (envError) lines.push(t.fg("warning", ` ${envError}${project ? " · datos desactualizados" : ""}`));
@@ -483,6 +626,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		pi.on("session_start", async (_event, context) => {
 			if (context.mode !== "tui") return;
 			ctx = context; prefs = await loadWorkspacePreferences(io.homeDir); active = true;
+			issueTriage = restoreIssueTriage(ctx.sessionManager.getBranch(), ctx.cwd);
 			if (!parsed.useTheme && !pi.getSettings().theme) {
 				const base = ctx.ui.getTheme("dark");
 				if (base) { const colors = Object.fromEntries(Object.entries(base.colors).map(([key, value]) => [key, colorToHex(value)])) as Record<keyof typeof base.colors, string>;
@@ -555,7 +699,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			working = !ctx.isIdle();
 			timer = setInterval(() => { void refreshLocal(); }, 3000); timer.unref(); void refreshLocal(); changed();
 		});
-		pi.on("session_shutdown", () => { active = false; controller.abort(); if (timer) clearInterval(timer); unsubscribeInput?.(); finishModal?.(); finishModal = undefined; if (tui && baseRoot && isViewportTUI(tui)) tui.setLayoutRoot(baseRoot); return saveQueue; });
+		pi.on("session_shutdown", async () => { active = false; controller.abort(); if (timer) clearInterval(timer); unsubscribeInput?.(); finishModal?.(); finishModal = undefined; if (tui && baseRoot && isViewportTUI(tui)) tui.setLayoutRoot(baseRoot); await Promise.all([saveQueue, issuePreparationTask?.catch(() => {}), issueSessionTask?.catch(() => {}), mainSessionTask?.catch(() => {})]); });
 		pi.on("before_agent_start", (_event, context) => { ctx = context; working = true; activity = "Preparando turno"; changed(); });
 		pi.on("agent_start", (_event, context) => { ctx = context; working = true; activity = "Trabajando"; changed(); });
 		pi.on("agent_settled", (_event, context) => { ctx = context; working = false; runningTools.clear(); activity = "Listo"; void refreshLocal(); changed(); });
@@ -565,6 +709,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		pi.on("ui_prompt_end", () => { blocked = false; changed(); });
 		const update = (_event: unknown, context: ExtensionContext): void => { ctx = context; changed(); };
 		pi.on("message_end", update); pi.on("session_compact", update); pi.on("session_compact_failed", update);
-		pi.on("model_select", update); pi.on("thinking_level_select", update); pi.on("session_tree", update);
+		pi.on("model_select", update); pi.on("thinking_level_select", update);
+		pi.on("session_tree", (_event, context) => { issueTriage = restoreIssueTriage(context.sessionManager.getBranch(), context.cwd); update(_event, context); });
 	} };
 }

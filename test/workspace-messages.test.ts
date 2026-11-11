@@ -13,6 +13,7 @@ async function harness(home: string, options: { args?: string[]; setting?: strin
 	let theme = getThemeByName(options.setting ?? "dark")!; setThemeInstance(theme);
 	const ctx = {
 		mode: options.mode ?? "tui", cwd: home, isIdle: () => true, isProjectTrusted: () => false,
+		sessionManager: { getBranch: () => [] },
 		ui: {
 			get theme() { return theme; }, getTheme: getThemeByName,
 			setTheme: (value: Theme) => { applied.push(value); theme = value; setThemeInstance(value); },

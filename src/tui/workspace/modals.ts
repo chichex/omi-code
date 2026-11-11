@@ -34,7 +34,7 @@ export class OmiInfoModal implements Component {
 	private offset = 0;
 	private lastOffset = 0;
 	private pageSize = 1;
-	private options: ModalContext & { title: string; content: ModalEntry[]; done: () => void } & ModalOptions;
+	private options: ModalContext & { title: string; content: ModalEntry[]; done: (confirmed?: boolean) => void; confirmLabel?: string } & ModalOptions;
 	constructor(options: OmiInfoModal["options"]) { this.options = options; }
 	render(width: number): string[] {
 		const { title, content, rows, theme: getTheme } = this.options;
@@ -44,11 +44,12 @@ export class OmiInfoModal implements Component {
 		this.offset = Math.min(this.offset, this.lastOffset);
 		const position = `${this.offset + 1}–${Math.min(lines.length, this.offset + this.pageSize)}/${lines.length}`;
 		const scroll = this.lastOffset ? ` · ${modalHint(theme, width < 70 ? "↑↓" : "↑↓ / PgUp PgDn", width < 70 ? position : `desplazar · ${position}`)}` : "";
-		return modalLines(theme, title, lines.slice(this.offset, this.offset + this.pageSize), width, { ...this.options,
-			footer: [modalHint(theme, width < 70 ? "Esc" : "Esc / Enter", "cerrar") + scroll] });
+		const action = this.options.confirmLabel ? modalHint(theme, "Esc", "cerrar") + " · " + modalHint(theme, "Enter", this.options.confirmLabel) : modalHint(theme, width < 70 ? "Esc" : "Esc / Enter", "cerrar");
+		return modalLines(theme, title, lines.slice(this.offset, this.offset + this.pageSize), width, { ...this.options, footer: [action + scroll] });
 	}
 	handleInput(data: string): void {
-		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c") || matchesKey(data, "return")) { this.options.done(); return; }
+		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) { this.options.done(); return; }
+		if (matchesKey(data, "return")) { this.options.done(this.options.confirmLabel ? true : undefined); return; }
 		if (matchesKey(data, "up")) this.move(-1);
 		else if (matchesKey(data, "down")) this.move(1);
 		else if (matchesKey(data, "pageUp")) this.move(-this.pageSize);

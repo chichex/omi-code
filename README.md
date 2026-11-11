@@ -56,7 +56,22 @@ el historial y la edición siguen usando el renderer de Pi; no hay un segundo pr
 - **3 · PRs:** hasta 100 PRs abiertos de todo el repo, incluidos los borradores.
   Ambas listas requieren `gh` instalado y autenticado; flechas seleccionan, **Enter** carga la descripción del elemento elegido y **r** actualiza.
   Los errores se muestran por separado y conservan la última lista como desactualizada, no como una lista vacía exitosa.
-  Estas vistas son de sólo lectura; no crean issues ni cierran o fusionan PRs.
+  No crean issues ni cierran o fusionan PRs. El detalle de PR sigue siendo de sólo lectura.
+  **Issue triage:** **Enter en la lista siempre abre el detalle**, también si el issue ya está preparado. **Esc** sólo lo cierra, sin cambiar de workspace.
+  Sin preparación guardada, el detalle ofrece **Enter iniciar triage**. Usa el modelo seleccionado (sin tools) para clasificarlo como **Nuevo feature**, **Fix**, **Mejora** o **Chore**, con objetivo, alcance inicial, criterios de aceptación sugeridos y dudas.
+  Crea una rama `feat/issue-N-título`, `fix/issue-N-título`, `improve/issue-N-título` o `chore/issue-N-título` desde el commit de **`main` local**, no desde HEAD ni `origin/main`.
+  El worktree queda en `<repo-principal>-worktrees/issue-N`, fuera del checkout original. No hace fetch, pull, stash, commit ni push; tampoco mueve la rama, índice o cambios del origen.
+  Abre una sesión nueva en ese directorio, con el issue y su triage en el contexto. La lateral muestra **ISSUE ACTIVO** debajo de **Equipo / recursos**, con número, título y tipo; se restaura con `/reload` y `/resume`.
+  **Se detiene ahí:** no inicia la implementación ni define todavía etapas. La conversación anterior queda en su sesión.
+  **Idempotente:** la lista muestra badges locales, por ejemplo `#42 [Fix] [issue-42]`, o `[Sin triage]`. No son etiquetas de GitHub ni generan llamadas al modelo al abrir la lista.
+  El detalle de uno preparado muestra clasificación, rama y ruta, con **Enter retomar worktree**: vuelve a la misma sesión, conservando conversación y cambios, sin reclasificar ni crear otra rama, worktree o sesión. Si ya estás en esa sesión, permanece ahí.
+  El vínculo se guarda por issue en `<git-common-dir>/omi/issue-workspaces/N.json`, compartido por todos los worktrees del clon. `/resume` y `/fork` explícitos vinculan la sesión elegida si conserva el mismo triage y worktree.
+  Las preparaciones anteriores se reconocen por su metadata de sesión y su identidad Git, no sólo por el nombre de la carpeta. Si coinciden varias sesiones antiguas, pide elegir con `/resume`.
+  Para **preparar uno nuevo** requiere `gh`, conexión, proyecto de confianza, modelo autenticado y sesión persistente (sin `--offline` ni `--no-session`), con el agente en reposo. **Retomar** no necesita reclasificación ni autenticación del modelo; `/omi-triage N` también funciona con `--offline` usando el registro local.
+  Se puede cancelar con **Esc** mientras clasifica. Si falta `main`, el modelo falla o una ruta/rama ajena ya existe, no usa otra base ni sobrescribe nada.
+  Guarda el progreso de preparación para continuar un intento interrumpido sin repetir el triage. Si falta un worktree o una conversación que ya estaban listos, o no coincide su identidad, indica recuperación pendiente en lugar de reemplazarlos.
+  Un lock por issue impide preparaciones simultáneas desde dos ventanas. Tras un cierre abrupto, un lock abandonado no se roba por antigüedad: hay que verificar el PID/host indicado en `N.lock` antes de quitarlo.
+  Si se cancela el cambio de sesión, conserva la preparación y el segundo Enter permite retomarla. Un worktree no es un sandbox.
 - **4 · Cambios:** lista de hasta 100 archivos y diffs de working tree / stage, sin drivers de diff ni textconv externos.
   Cada archivo con seguimiento muestra `+líneas` en verde y `−líneas` en rojo, alineadas a la derecha incluso al acortar una ruta larga.
   Es el cambio neto respecto de HEAD (stage + working tree, sin contar dos veces la misma edición); sin commits se compara con el árbol vacío.
@@ -71,6 +86,10 @@ el historial y la edición siguen usando el renderer de Pi; no hay un segundo pr
   siguen disponibles mediante las herramientas en Chat, con sus confirmaciones habituales; el panel no las ejecuta automáticamente.
 - **Ubicación del repo:** la lateral y `/omi-workspace` muestran branch, cambios locales, divergencia cuando existe upstream, tipo de checkout y ruta activa.
   Distingue `Repo principal`, `Worktree · nombre`, HEAD separado y carpetas sin Git. Un worktree no es un sandbox.
+  **Volver al repo principal:** si estás en un worktree, aparece esa opción en la paleta **Ctrl K** y **Enter volver al repo** en `/omi-workspace` (también al hacer clic en Proyecto). **Esc** cierra sin cambiar de sesión. `/omi-main` ejecuta el regreso directamente.
+  Retoma primero la conversación de origen si pertenece al principal; si no está disponible, busca la más reciente de ese checkout. Si no hay ninguna, crea una sesión vacía allí, sin copiar el contexto del issue ni llamar al modelo. Los reintentos reutilizan esa sesión, incluso si se canceló el cambio anterior.
+  Vuelve al **directorio del checkout principal**, no fuerza la branch `main`: conserva la rama o HEAD separado, índice y cambios que ya tenía. No hace checkout, reset, stash, fetch ni borra el worktree del issue; podés retomarlo después desde Issues. Si ya estás en el principal, `/omi-main` no cambia nada.
+  Funciona sin conexión ni auth del modelo, con proyecto de confianza, sesión persistente y agente en reposo. Verifica la identidad Git del destino y no pisa sesiones inválidas. Un lock compartido (`<git-common-dir>/omi/main-session.lock`) evita crear dos sesiones nuevas en simultáneo; tras un cierre abrupto hay que revisar el PID/host antes de quitar un lock abandonado.
   `↑N ↓N` son **commits** por subir/traer, no archivos ni líneas sin commit. Se comparan con la referencia local del último fetch;
   la lateral muestra `Al día (local)` si ambos son cero, `sin upstream` si no está configurado y `↑— ↓—` si el conteo no está disponible.
   No hace fetch automático ni convierte errores en ceros. `/omi-workspace` muestra el upstream y explica cómo actualizarlo con `git fetch`.
@@ -114,8 +133,10 @@ el historial y la edición siguen usando el renderer de Pi; no hay un segundo pr
 | F4 o `/omi-sidebar` | Mostrar / ocultar lateral |
 | `/omi-actions` | Detalle de Claude reviews y releases de GitHub Actions |
 | `/omi-pr` | URL, título y estado del PR de la rama actual |
+| `/omi-triage [número]` | Preparar el issue seleccionado desde main local o retomar su worktree/sesión guardados |
 | `/omi-model` | Selector propio, también si otra extensión personaliza el editor |
-| `/omi-workspace` | Ubicación, repo principal y worktree |
+| `/omi-workspace` | Ubicación y, desde un worktree, opción para volver al repo principal |
+| `/omi-main` | Retomar la sesión del repo principal sin cambiar ramas ni tocar el worktree |
 | `/omi-resources` | CPU, RAM, disco y host |
 | `/omi-context` | Detalle del contexto |
 
