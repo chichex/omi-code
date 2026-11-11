@@ -243,6 +243,14 @@ test("el progreso de una tool tiene una cola acotada en la TUI", async (t) => {
 	assert.match(last, /499:/);
 });
 
+test("registerCatalogTools usa el cwd de la sesión activa después de pasar a un worktree", async (t) => {
+	const { Type } = await import("typebox"); const { defineTool } = await import("../src/tools/types.ts");
+	const home = await tempDir(t); const worktree = join(home, "issue-42"); const { pi, tools } = fakeExtensionApi();
+	registerCatalogTools(pi, [defineTool({ name: "cwd_probe", label: "cwd", description: "cwd", parameters: Type.Object({}), run: async (_params, runtime) => ({ text: runtime.io.cwd, data: {} }) })], testIo({ cwd: home, homeDir: home }));
+	const result = await tools.get("cwd_probe")!.execute("1", {}, undefined, undefined, { cwd: worktree, hasUI: false });
+	assert.equal(result.content[0]?.text, worktree);
+});
+
 test("launchTui_marca la sesión como agéntica para los procesos hijos", async (t) => {
 	const home = await tempDir(t);
 	const calls: Call[] = [];

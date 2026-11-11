@@ -1,24 +1,25 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import type { ExtensionContext, InlineExtension } from "@earendil-works/pi-coding-agent";
+import type { ExtensionCommandContext, ExtensionContext, InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { OmiModelPicker, PickerResult } from "../src/tui/workspace/model-picker.ts";
 import { workspaceExtension } from "../src/tui/workspace/index.ts";
 import { tempDir, testIo } from "./helpers/io.ts";
 
 const base: Model<Api> = { id: "model", name: "Model", provider: "test", api: "anthropic-messages", baseUrl: "https://example.invalid", reasoning: false, input: ["text"], contextWindow: 200000, maxTokens: 8192, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
 
-async function harness(home: string, options: { authenticated?: boolean; busy?: boolean; cancel?: boolean } = {}) {
+async function harness(home: string, options: { authenticated?: boolean; busy?: boolean; cancel?: boolean; args?: string[]; trusted?: boolean; pending?: boolean } = {}) {
 	const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
-	const commands = new Map<string, { handler: () => Promise<void> }>();
+	const commands = new Map<string, { handler: (args?: string, ctx?: ExtensionCommandContext) => Promise<void> }>();
 	const selections: Model<Api>[] = []; const thinking: string[] = []; const notifications: string[] = [];
 	const scoped = { ...base, id: "scoped", name: "Scoped model" }; let pickerCount = 0;
 	let terminalInput: ((data: string) => { consume?: boolean } | undefined) | undefined;
 	const context = {
 		mode: "tui", cwd: home, model: base, scopedModels: [{ model: scoped }], thinkingLevel: "off",
-		isIdle: () => !options.busy, isProjectTrusted: () => false,
+		isIdle: () => !options.busy, isProjectTrusted: () => options.trusted ?? false, hasPendingMessages: () => options.pending ?? false,
+		sessionManager: { getBranch: () => [] },
 		getContextUsage: () => ({ tokens: 1000, contextWindow: 200000, percent: .5 }),
-		modelRegistry: { getAvailable: () => { throw new Error("No enumerar fuera de --models"); } },
+		modelRegistry: { getAvailable: () => { throw new Error("No enumerar fuera de --models"); }, hasConfiguredAuth: () => options.authenticated !== false },
 		ui: {
 			getTheme: () => undefined, setHeader() {}, setFooter() {}, getEditorComponent: () => () => undefined,
 			onTerminalInput: (handler: typeof terminalInput) => { terminalInput = handler; return () => { terminalInput = undefined; }; }, notify: (message: string) => notifications.push(message),
@@ -30,17 +31,17 @@ async function harness(home: string, options: { authenticated?: boolean; busy?: 
 			},
 		},
 	} as unknown as ExtensionContext;
-	const extension: InlineExtension = workspaceExtension(testIo({ homeDir: home, cwd: home, env: {} }), ["--offline"]);
+	const extension: InlineExtension = workspaceExtension(testIo({ homeDir: home, cwd: home, env: {} }), options.args ?? ["--offline"]);
 	if (typeof extension === "function") throw new Error("expected named extension");
 	await extension.factory({
 		on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => { handlers.set(name, handler); },
-		registerCommand: (name: string, command: { handler: () => Promise<void> }) => { commands.set(name, command); },
+		registerCommand: (name: string, command: { handler: (args?: string, ctx?: ExtensionCommandContext) => Promise<void> }) => { commands.set(name, command); },
 		registerMarkdownTransformer() {},
 		getSettings: () => ({}), setModel: async (model: Model<Api>) => { selections.push(model); return options.authenticated !== false; },
 		setThinkingLevel: (level: string) => thinking.push(level),
 	} as never);
 	await handlers.get("session_start")?.({}, context);
-	return { commands, selections, thinking, notifications, pickerCount: () => pickerCount, input: (data: string) => terminalInput?.(data), stop: async () => { await handlers.get("session_shutdown")?.({}, context); } };
+	return { commands, selections, thinking, notifications, triage: () => commands.get("omi-triage")!.handler("", context as ExtensionCommandContext), main: () => commands.get("omi-main")!.handler("", context as ExtensionCommandContext), pickerCount: () => pickerCount, input: (data: string) => terminalInput?.(data), stop: async () => { await handlers.get("session_shutdown")?.({}, context); } };
 }
 
 test("workspace_las vistas usan Control 1–5 con CSI-u y modifyOtherKeys, sin interceptar números ni Option", async (t) => {
@@ -66,6 +67,31 @@ test("workspace_sin autenticación no cambia razonamiento y explica /login", asy
 test("workspace_cancelar selector no llama setModel", async (t) => {
 	const ui = await harness(await tempDir(t), { cancel: true }); t.after(ui.stop);
 	await ui.commands.get("omi-model")!.handler(); assert.equal(ui.selections.length, 0);
+});
+
+test("workspace_triage exige confianza/sesión persistente, reposo y selección; no exige auth/red antes de resolver lo guardado", async (t) => {
+	const cases: [Parameters<typeof harness>[1], RegExp][] = [
+		[{ trusted: true }, /seleccioná/], [{ args: [] }, /confianza/], [{ args: [], trusted: true, busy: true }, /termine/],
+		[{ args: [], trusted: true, pending: true }, /termine/], [{ args: ["--no-session"], trusted: true }, /persistente/],
+		[{ args: [], trusted: true, authenticated: false }, /seleccioná/], [{ args: [], trusted: true }, /seleccioná/],
+	];
+	for (const [options, expected] of cases) {
+		const ui = await harness(await tempDir(t), options);
+		try { await ui.triage(); assert.match(ui.notifications.join("\n"), expected); assert.equal(ui.pickerCount(), 0); }
+		finally { await ui.stop(); }
+	}
+});
+
+test("workspace_main exige confianza, reposo y sesión persistente antes de cambiar de workspace", async (t) => {
+	const cases: [Parameters<typeof harness>[1], RegExp][] = [
+		[{}, /confianza/], [{ trusted: true, busy: true }, /termine/], [{ trusted: true, pending: true }, /termine/],
+		[{ trusted: true, args: ["--no-session"] }, /persistente/], [{ trusted: true }, /repositorio Git/],
+	];
+	for (const [options, expected] of cases) {
+		const ui = await harness(await tempDir(t), options);
+		try { await ui.main(); assert.match(ui.notifications.join("\n"), expected); assert.equal(ui.pickerCount(), 0); }
+		finally { await ui.stop(); }
+	}
 });
 
 test("workspace_un turno activo no se cambia de modelo por detrás", async (t) => {

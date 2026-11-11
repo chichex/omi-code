@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import { processRunner } from "../src/core/exec.ts";
 import { childEnvironment, hideFromHost } from "../src/core/process-environment.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -31,6 +33,17 @@ test("la tool bash nativa conserva su contrato pero no contamina el proceso ejec
 	const result = await bash.execute("1", { command: 'printf "%s" "${PI_PACKAGE_DIR-unset}"' }, undefined, undefined,
 		{ cwd: home, sessionManager: { getSessionId: () => "test", getSessionFile: () => undefined } } as never);
 	assert.equal(result.content.map((part) => part.type === "text" ? part.text : "").join(""), "unset");
+});
+
+test("la tool bash usa el cwd de la sesión reemplazada, no el cwd del arranque", async (t) => {
+	const home = await tempDir(t); const worktree = join(home, "issue-42"); await mkdir(worktree);
+	const extension = await runtimeShellExtension(testIo({ homeDir: home, cwd: home }));
+	const tools: Parameters<ExtensionAPI["registerTool"]>[0][] = [];
+	const factory = typeof extension === "function" ? extension : extension.factory;
+	await factory({ registerTool: (tool: Parameters<ExtensionAPI["registerTool"]>[0]) => tools.push(tool), on() {} } as never);
+	const result = await tools.find((tool) => tool.name === "bash")!.execute("1", { command: "pwd" }, undefined, undefined,
+		{ cwd: worktree, sessionManager: { getSessionId: () => "test", getSessionFile: () => undefined } } as never);
+	assert.equal(result.content.map((part) => part.type === "text" ? part.text : "").join("").trim(), worktree);
 });
 
 test("hideFromHost_saca la variable del host y se la devuelve a los hijos", (t) => {

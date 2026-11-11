@@ -19,7 +19,7 @@ export function registerCatalogTools(pi: ExtensionAPI, catalog: readonly OmiTool
 			async execute(_toolCallId, params, signal, onUpdate, context: ExtensionToolContext) {
 				const lines: string[] = [];
 				const runtime: ToolRuntime = {
-					io,
+					io: { ...io, cwd: context.cwd ?? io.cwd },
 					runner,
 					guard: tuiGuard(session, context.hasUI ? context.ui : undefined),
 					...(signal === undefined ? {} : { signal }),

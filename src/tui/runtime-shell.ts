@@ -17,7 +17,8 @@ export async function runtimeShellExtension(io: Io): Promise<InlineExtension> {
 	return {
 		name: "omi-runtime-shell",
 		factory: (pi) => {
-			pi.registerTool(createBashToolDefinition(io.cwd, { operations }));
+			const definition = createBashToolDefinition(io.cwd, { operations });
+			pi.registerTool({ ...definition, execute: (id, params, signal, onUpdate, ctx) => createBashToolDefinition(ctx.cwd, { operations }).execute(id, params, signal, onUpdate, ctx) });
 			pi.on("user_bash", () => ({ operations }));
 		},
 	};
