@@ -70,7 +70,7 @@ test("login_el header del token no viaja en los demás pedidos", async (t) => {
 	assert.equal(omi.requests.at(-1)?.sessionToken, undefined);
 });
 
-test("login_contra una API anterior, que entrega el token sin mirar el header, sigue funcionando", async (t) => {
+test("login_contra una API que todavía no exige el header y entrega el token siempre sigue funcionando", async (t) => {
 	const home = await tempDir(t);
 	const omi = await startMockOmi(t);
 	omi.route("POST /api/v1/sessions", () => ({
@@ -94,9 +94,12 @@ test("login_contra una API que no entrega el token explica las causas posibles",
 	const report = JSON.parse(io.errors()) as { error: { code: string; message: string; hint: string } };
 	assert.equal(report.error.code, "session_token_unavailable");
 	assert.match(report.error.message, /no entregó el token de sesión/);
-	// Las dos causas reales: un intermediario que no reenvía el header, o una API anterior al Bearer.
+	// Las dos causas para este omi: una API anterior a chichex/omi#140, que no conoce el header,
+	// o un intermediario que lo quita. `omi upgrade` no arregla ninguna de las dos.
+	assert.match(report.error.hint, /anterior a chichex\/omi#140/);
+	assert.match(report.error.hint, /intermediario/);
 	assert.match(report.error.hint, /X-Omi-Session-Token/);
-	assert.match(report.error.hint, /chichex\/omi#140/);
+	assert.doesNotMatch(report.error.hint, /omi upgrade/);
 	assert.equal(await loadCredentials(credentialsPath(home)), null);
 	// Sin cookie en la respuesta no hay sesión que cerrar.
 	assert.equal(omi.requests.length, 1);

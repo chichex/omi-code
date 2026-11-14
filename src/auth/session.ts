@@ -37,7 +37,7 @@ export async function login(input: LoginInput, io: Io): Promise<Principal> {
 	if (session.token === undefined || session.token === "" || session.expires_at === undefined) {
 		await closeUnusableSession(client, setCookies);
 		throw new OmiError("session_token_unavailable", "omi-api abrió la sesión pero no entregó el token de sesión", {
-			hint: `un proxy intermedio puede estar quitando el header ${HEADER_SESSION_TOKEN}, o esa API es anterior a chichex/omi#140: revisá la URL con --api u OMI_API_URL`,
+			hint: `esa API puede ser anterior a chichex/omi#140 y no conocer el header ${HEADER_SESSION_TOKEN}, o un intermediario puede estar quitándolo en el camino: revisá la URL con --api u OMI_API_URL`,
 		});
 	}
 	await saveCredentials(credentialsPath(io.homeDir), {
