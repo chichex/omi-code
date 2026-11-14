@@ -7,6 +7,15 @@ export interface PlatformState {
 	registry: Record<string, unknown> | null;
 	/** Lo que devuelve el alta una única vez: sólo para comprobar que no se filtra. */
 	pushPassword: string;
+	/**
+	 * Falla del alta. CreateRegistry persiste y recién después publica la ruta y arma la respuesta:
+	 * `after_persist` es su 500 con el registry ya creado, `connection_cut` la conexión que se corta
+	 * en ese tramo, `without_password` una respuesta 201 que no trae la credencial, y `before_persist`
+	 * un 500 anterior al guardado (bcrypt, sellado del secreto).
+	 */
+	createFault: "after_persist" | "connection_cut" | "without_password" | "before_persist" | null;
+	/** Problema con el que responde el GET del registry: para cuando ni el estado se puede consultar. */
+	registryReadProblem: Problem | null;
 	/** Resultado de publicar el hostname del registry en Cloudflare. */
 	routeOutcome: "publicada" | "error";
 	/** Estado en el que termina el bundle de visibilidad de un ambiente con versión. */
@@ -55,6 +64,12 @@ function requireOrganization(params: Record<string, string>, mock: MockOmi): voi
 	if (params.organizationID !== mock.organization.organization_id) throw new Problem(404, "organization_not_found", "la organización no existe");
 }
 
+/** `requireRole(…, RoleOwner)` de chichex/omi: el alta y el reintento de ruta son del dueño. */
+function requireOwner(params: Record<string, string>, mock: MockOmi): void {
+	requireOrganization(params, mock);
+	if (mock.organization.role !== "dueño") throw new Problem(403, "forbidden", "el rol no permite esta acción");
+}
+
 function requireRegistry(state: PlatformState): Record<string, unknown> {
 	if (state.registry === null) throw new Problem(404, "registry_not_found", "la organización todavía no tiene registry");
 	return state.registry;
@@ -70,22 +85,27 @@ function installRegistry(mock: MockOmi, state: PlatformState): void {
 	mock.route(`GET ${org}/registry`, (request, params) => {
 		requireSessionFor(request, mock);
 		requireOrganization(params, mock);
+		if (state.registryReadProblem !== null) throw state.registryReadProblem;
 		return { status: 200, body: requireRegistry(state) };
 	});
 	mock.route(`POST ${org}/registry`, (request, params) => {
 		requireSessionFor(request, mock);
-		requireOrganization(params, mock);
+		requireOwner(params, mock);
 		const body = strictBodyOf(request, ["host_id"]);
 		if (state.registry !== null) throw new Problem(409, "registry_exists", "la organización ya tiene registry");
 		const host = state.hosts.find((candidate) => candidate.id === body.host_id);
 		if (host === undefined) throw new Problem(404, "host_not_found", "el host no existe");
 		if (host.registry_eligible !== true) throw new Problem(409, "host_not_registry_eligible", "el host todavía no fue aprobado");
+		if (state.createFault === "before_persist") throw new Problem(500, "internal_error", "ocurrió un error interno");
 		state.registry = registryView(mock, host, state);
+		if (state.createFault === "after_persist") throw new Problem(500, "internal_error", "ocurrió un error interno");
+		if (state.createFault === "connection_cut") return { status: 0, stream: (response) => response.destroy() };
+		if (state.createFault === "without_password") return { status: 201, body: { registry: state.registry } };
 		return { status: 201, body: { registry: state.registry, push_password: state.pushPassword } };
 	});
 	mock.route(`POST ${org}/registry/route`, (request, params) => {
 		requireSessionFor(request, mock);
-		requireOrganization(params, mock);
+		requireOwner(params, mock);
 		strictBodyOf(request, []);
 		const registry = requireRegistry(state);
 		if (state.routeOutcome === "error") {
@@ -130,6 +150,8 @@ export function installPlatform(mock: MockOmi): PlatformState {
 		hosts: [hostView("hst_cp")],
 		registry: null,
 		pushPassword: "push-clave-de-un-solo-uso",
+		createFault: null,
+		registryReadProblem: null,
 		routeOutcome: "publicada",
 		visibilityOutcome: { state: "aplicada" },
 		visibilityProblem: null,

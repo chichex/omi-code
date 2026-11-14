@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { GUARDRAIL_CONFIRMATION_REQUIRED, type OmiError } from "../src/core/errors.ts";
 import type { Guard, GuardedAction } from "../src/guardrails/policy.ts";
-import { hostView } from "./helpers/mock-platform.ts";
+import { Problem } from "./helpers/mock-omi.ts";
+import { hostView, type PlatformState } from "./helpers/mock-platform.ts";
 import { humanless, linkedProject, type Linked } from "./helpers/project.ts";
 
 const ORG = "/api/v1/organizations/org_acme";
@@ -203,4 +204,120 @@ test("omi_registry_manage retry_route_sin registry ni humano no muta nada", asyn
 		(error: OmiError) => error.code === GUARDRAIL_CONFIRMATION_REQUIRED,
 	);
 	assert.deepEqual(linked.mutations(), []);
+});
+
+test("omi_registry_manage create_si la credencial no llega a su ruta final, queda en el temporal 0600 y el error dice dónde", async (t) => {
+	const linked = await linkedProject(t);
+	// Un directorio no vacío en el destino hace fallar el rename después de recibir la credencial.
+	await mkdir(passwordFile(linked), { recursive: true });
+	await writeFile(join(passwordFile(linked), "ocupado"), "");
+	let failure: OmiError | undefined;
+	await assert.rejects(linked.call("omi_registry_manage", { action: "create", hostId: "hst_cp" }), (error: OmiError) => {
+		failure = error;
+		return error.code === "registry_password_not_saved";
+	});
+	const directory = join(linked.home, ".omi", "registry");
+	const temporaries = (await readdir(directory)).filter((name) => name.endsWith(".tmp"));
+	assert.equal(temporaries.length, 1);
+	const kept = join(directory, temporaries[0] ?? "");
+	assert.equal(await readFile(kept, "utf8"), PASSWORD);
+	assert.equal((await stat(kept)).mode & 0o777, 0o600);
+	assert.ok(`${failure?.message}\n${failure?.hint}`.includes(kept));
+	assert.doesNotMatch(`${failure?.message}\n${failure?.hint}`, new RegExp(PASSWORD));
+});
+
+test("omi_registry_manage create_con un registry ya creado falla sin pedir confirmación ni llamar al alta", async (t) => {
+	const linked = await linkedProject(t);
+	await linked.call("omi_registry_manage", { action: "create", hostId: "hst_cp" });
+	const seen: GuardedAction[] = [];
+	await assert.rejects(
+		linked.call("omi_registry_manage", { action: "create", hostId: "hst_cp" }, { guard: asking(true, seen) }),
+		(error: OmiError) => error.code === "registry_exists" && error.exitCode === 1 && /registry-acme\.ohmyinfra\.test/.test(error.message),
+	);
+	assert.deepEqual(seen, []);
+	assert.deepEqual(linked.mutations(), [`POST ${ORG}/registry`]);
+});
+
+test("omi_registry_manage create_sin ser dueño falla sin pedir confirmación ni llamar al alta", async (t) => {
+	const linked = await linkedProject(t);
+	linked.omi.organization.role = "miembro";
+	const seen: GuardedAction[] = [];
+	await assert.rejects(
+		linked.call("omi_registry_manage", { action: "create", hostId: "hst_cp" }, { guard: asking(true, seen) }),
+		(error: OmiError) => error.code === "forbidden" && error.exitCode === 1 && /dueño/.test(error.message) && /miembro/.test(error.message),
+	);
+	assert.deepEqual(seen, []);
+	assert.deepEqual(linked.mutations(), []);
+	await assert.rejects(stat(passwordFile(linked)), { code: "ENOENT" });
+});
+
+async function registryFiles(linked: Linked): Promise<string[]> {
+	return readdir(join(linked.home, ".omi", "registry")).catch(() => []);
+}
+
+const UNCERTAIN: [NonNullable<PlatformState["createFault"]>, string][] = [
+	["after_persist", "responde 500 después de guardar"],
+	["connection_cut", "corta la conexión después de guardar"],
+	["without_password", "responde sin la credencial"],
+];
+
+for (const [fault, label] of UNCERTAIN) {
+	test(`omi_registry_manage create_si OMI ${label}, avisa que el registry quedó creado sin credencial`, async (t) => {
+		const linked = await linkedProject(t);
+		linked.platform.createFault = fault;
+		await assert.rejects(linked.call("omi_registry_manage", { action: "create", hostId: "hst_cp" }), (error: OmiError) => {
+			assert.equal(error.code, "registry_created_without_credential");
+			assert.equal(error.exitCode, 1);
+			assert.match(error.message, /el registry de acme quedó creado/);
+			assert.match(error.message, /credencial de push no se pudo obtener/);
+			assert.match(error.hint ?? "", /panel de OMI/);
+			return true;
+		});
+		assert.equal(linked.omi.requests.at(-1)?.method, "GET");
+		assert.equal(linked.omi.requests.at(-1)?.path, `${ORG}/registry`);
+		assert.deepEqual(await registryFiles(linked), []);
+	});
+}
+
+test("omi_registry_manage create_un 500 anterior al guardado sale con el error de la API y sin archivos", async (t) => {
+	const linked = await linkedProject(t);
+	linked.platform.createFault = "before_persist";
+	await assert.rejects(
+		linked.call("omi_registry_manage", { action: "create", hostId: "hst_cp" }),
+		(error: OmiError) => error.code === "internal_error" && error.exitCode === 1,
+	);
+	assert.deepEqual(await registryFiles(linked), []);
+});
+
+test("omi_registry_manage create_si tampoco se puede consultar el estado, dice que el alta quedó sin confirmar", async (t) => {
+	const linked = await linkedProject(t);
+	linked.platform.createFault = "after_persist";
+	const seen: GuardedAction[] = [];
+	const guard: Guard = {
+		...asking(true, seen),
+		// El estado deja de responder recién después de la confirmación: el chequeo previo ya pasó.
+		ask: async (action) => { seen.push(action); linked.platform.registryReadProblem = new Problem(503, "service_unavailable", "OMI no está disponible"); return true; },
+	};
+	await assert.rejects(linked.call("omi_registry_manage", { action: "create", hostId: "hst_cp" }, { guard }), (error: OmiError) => {
+		assert.equal(error.code, "registry_create_unconfirmed");
+		assert.equal(error.exitCode, 1);
+		assert.match(error.hint ?? "", /omi registry status/);
+		assert.match(error.hint ?? "", /panel de OMI/);
+		return true;
+	});
+	assert.deepEqual(await registryFiles(linked), []);
+});
+
+test("omi_registry_manage create_un rechazo 4xx del alta no consulta el estado ni deja archivos", async (t) => {
+	const linked = await linkedProject(t);
+	// Pasa el chequeo local y lo rechaza OMI: el control plane se cayó, como en queueRegistryBundle.
+	linked.omi.route(`POST ${ORG.replace("org_acme", "{organizationID}")}/registry`, () => {
+		throw new Problem(409, "control_plane_unavailable", "el control plane de la organización no está disponible");
+	});
+	await assert.rejects(
+		linked.call("omi_registry_manage", { action: "create", hostId: "hst_cp" }),
+		(error: OmiError) => error.code === "control_plane_unavailable" && error.exitCode === 1,
+	);
+	assert.equal(linked.omi.requests.at(-1)?.method, "POST");
+	assert.deepEqual(await registryFiles(linked), []);
 });

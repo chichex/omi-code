@@ -25,6 +25,8 @@ export interface OrganizationScope {
 	client: OmiClient;
 	organizationSlug: string;
 	organizationPath: string;
+	/** Rol del usuario en la organización, tal como lo informa /me. */
+	role: string;
 }
 
 /** Para lo que cuelga de la organización: vale sin repo vinculado, con la organización de la sesión. */
@@ -32,7 +34,7 @@ export async function openOrganizationScope(runtime: ToolRuntime, requestedSlug?
 	const { client, credentials } = await openSession(runtime.io, runtime.apiUrl);
 	const slug = requestedSlug ?? (await loadProjectLink(runtime.io.cwd))?.organizationSlug ?? credentials.defaultOrganizationSlug;
 	const organization = await resolveOrganization(client, slug, runtime.signal);
-	return { client, organizationSlug: organization.slug, organizationPath: `/organizations/${encodeURIComponent(organization.organization_id)}` };
+	return { client, organizationSlug: organization.slug, organizationPath: `/organizations/${encodeURIComponent(organization.organization_id)}`, role: organization.role };
 }
 
 /** Sin nombre sólo se resuelve si el repo tiene un único service. */

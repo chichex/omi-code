@@ -39,6 +39,8 @@ export interface ClientOptions {
 export interface RequestOptions {
 	body?: unknown;
 	signal?: AbortSignal;
+	/** Plazo propio para un pedido cuyo handler hace trabajo síncrono largo. Por defecto, 30 s. */
+	timeoutMs?: number;
 }
 
 export function decode<S extends TSchema>(schema: S, value: unknown, context: string): Static<S> {
@@ -146,7 +148,7 @@ export class OmiClient {
 		if (options.body !== undefined) headers["Content-Type"] = "application/json";
 		if (options.idempotencyKey !== undefined) headers["Idempotency-Key"] = options.idempotencyKey;
 		// Un stream no tiene plazo: lo corta el caller con su señal.
-		const timeout = options.stream === true ? undefined : AbortSignal.timeout(DEFAULT_TIMEOUT_MS);
+		const timeout = options.stream === true ? undefined : AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 		const signals = [timeout, options.signal].filter((signal) => signal !== undefined);
 		let response: Response;
 		try {

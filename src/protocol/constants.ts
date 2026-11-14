@@ -6,6 +6,9 @@ export const DEFAULT_API_URL = "https://app.ohmyinfra.com";
 export const API_URL_ENV = "OMI_API_URL";
 export const API_PREFIX = "/api/v1";
 
+/** Rol que omi-api exige para administrar el registry de la organización. */
+export const ROLE_OWNER = "dueño";
+
 // Variables que OMI inyecta a cada workload. Un service no puede declararlas.
 export const ENV_PORT = "PORT";
 export const ENV_OMI_ENVIRONMENT = "OMI_ENVIRONMENT";
