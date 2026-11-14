@@ -220,7 +220,7 @@ GH_TOKEN="$(gh auth token)" omi upgrade --check
 ```
 
 El token sólo se envía a la API de releases de este repo; no se imprime ni se guarda.
-`omi login` inicia la sesión de OMI, que es distinta de la autenticación de GitHub. Hasta que `chichex/omi#140` esté desplegado, `omi login` no funciona contra producción.
+`omi login` inicia la sesión de OMI, que es distinta de la autenticación de GitHub. Pide el token de la sesión con el header `X-Omi-Session-Token: body`. Si la API abre la sesión pero no entrega el token, `omi login` falla con `session_token_unavailable` e intenta cerrar esa sesión. Con este `omi` las causas son dos: una `omi-api` anterior a `chichex/omi#140`, que no conoce el header, o un intermediario que lo quita en el camino; se revisa la URL con `--api` u `OMI_API_URL`. Un `omi` anterior, que no manda el header, falla con el mismo código contra una `omi-api` que lo exige, y eso se arregla con `omi upgrade`. Tras varios intentos fallidos la API responde `429` y `omi login` muestra cuánto esperar.
 
 ## Guardrails
 

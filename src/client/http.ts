@@ -13,6 +13,9 @@ const DEFAULT_POLL_INTERVAL_MS = 2_000;
 /** Plazo de corrida de una mutación en cola más su lease, según omi-api. */
 const QUEUED_MUTATION_DEADLINE_MS = 5 * 60_000;
 
+/** Tope de la espera que se muestra tal cual; omi-api no pide más de 15 minutos. */
+const MAX_RETRY_AFTER_SECONDS = 60 * 60;
+
 const LOGIN_HINT = "corré `omi login`";
 const AUTH_CODES = ["authentication_required", "session_expired"];
 
@@ -41,6 +44,10 @@ export interface RequestOptions {
 	signal?: AbortSignal;
 	/** Plazo propio para un pedido cuyo handler hace trabajo síncrono largo. Por defecto, 30 s. */
 	timeoutMs?: number;
+	/** Headers propios de un pedido, como el que pide el token en el login. */
+	headers?: Record<string, string>;
+	/** Recibe los headers de una respuesta exitosa, como el Set-Cookie del login. */
+	onHeaders?: (headers: Headers) => void;
 }
 
 export function decode<S extends TSchema>(schema: S, value: unknown, context: string): Static<S> {
@@ -50,13 +57,28 @@ export function decode<S extends TSchema>(schema: S, value: unknown, context: st
 	});
 }
 
-function problemFrom(status: number, payload: unknown, context: string): ApiError {
+/**
+ * La espera de un 429 según Retry-After en segundos; la forma con fecha no se interpreta.
+ * El header lo escribe el servidor o un intermediario: por encima del tope no se repite su número.
+ */
+function retryHint(status: number, retryAfter: string | null): string | undefined {
+	if (status !== 429 || retryAfter === null || !/^\d+$/.test(retryAfter.trim())) return undefined;
+	const seconds = Number(retryAfter.trim());
+	if (seconds < 1) return undefined;
+	if (seconds > MAX_RETRY_AFTER_SECONDS) return "esperá más de una hora antes de volver a intentar";
+	const [count, unit] = seconds < 60 ? [seconds, "segundo"] : [Math.ceil(seconds / 60), "minuto"];
+	return `esperá ${count} ${unit}${count === 1 ? "" : "s"} antes de volver a intentar`;
+}
+
+function problemFrom(status: number, payload: unknown, context: string, retryAfter: string | null): ApiError {
+	// La espera sale del header: un 429 de un intermediario no trae el JSON de omi-api.
+	const wait = retryHint(status, retryAfter);
 	if (Value.Check(ProblemBody, payload)) {
 		const { code, message, field } = payload.error;
-		const hint = AUTH_CODES.includes(code) ? LOGIN_HINT : undefined;
+		const hint = AUTH_CODES.includes(code) ? LOGIN_HINT : wait;
 		return new ApiError(code, field === undefined ? message : `${message} (${field})`, status, hint);
 	}
-	return new ApiError("unexpected_response", `OMI respondió ${status} sin un error reconocible en ${context}`, status);
+	return new ApiError("unexpected_response", `OMI respondió ${status} sin un error reconocible en ${context}`, status, wait);
 }
 
 export class OmiClient {
@@ -143,7 +165,7 @@ export class OmiClient {
 		options: RequestOptions & { idempotencyKey?: string; stream?: boolean },
 	): Promise<Response> {
 		const url = `${this.apiUrl}${API_PREFIX}${path}`;
-		const headers: Record<string, string> = {};
+		const headers: Record<string, string> = { ...options.headers };
 		if (this.#token !== undefined) headers.Authorization = `Bearer ${this.#token}`;
 		if (options.body !== undefined) headers["Content-Type"] = "application/json";
 		if (options.idempotencyKey !== undefined) headers["Idempotency-Key"] = options.idempotencyKey;
@@ -165,7 +187,10 @@ export class OmiClient {
 				cause: error,
 			});
 		}
-		if (response.ok) return response;
+		if (response.ok) {
+			options.onHeaders?.(response.headers);
+			return response;
+		}
 		const text = await response.text();
 		let payload: unknown;
 		try {
@@ -173,6 +198,6 @@ export class OmiClient {
 		} catch {
 			payload = undefined;
 		}
-		throw problemFrom(response.status, payload, `${method} ${path}`);
+		throw problemFrom(response.status, payload, `${method} ${path}`, response.headers.get("Retry-After"));
 	}
 }

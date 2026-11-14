@@ -12,6 +12,9 @@ export interface MockRequest {
 	body: unknown;
 	authorization: string | undefined;
 	idempotencyKey: string | undefined;
+	/** Valor de X-Omi-Session-Token: con `body`, el login entrega el token en el cuerpo. */
+	sessionToken: string | undefined;
+	cookie: string | undefined;
 }
 
 export interface MockResponse {
@@ -19,7 +22,8 @@ export interface MockResponse {
 	body?: unknown;
 	/** Texto plano en vez de JSON, como los 404 y 405 de http.ServeMux. */
 	text?: string;
-	headers?: Record<string, string>;
+	/** Un header repetido, como varios Set-Cookie, va en un arreglo. */
+	headers?: Record<string, string | string[]>;
 	/** Respuesta en streaming: escribe directo sobre la conexión. */
 	stream?: (response: ServerResponse) => void;
 }
@@ -71,9 +75,20 @@ export interface MockOmi {
 const PASSWORD = "correct horse battery";
 export const MOCK_EMAIL = "ada@omi.test";
 export const MOCK_PASSWORD = PASSWORD;
+const SESSION_COOKIE = "__Host-omi_session";
 
 function principal(mock: MockOmi): Record<string, unknown> {
 	return { user_id: "usr_ada", name: "Ada", email: MOCK_EMAIL, organizations: [mock.organization] };
+}
+
+/** La cookie con que omi-api abre la sesión del panel: su valor es el token de la sesión. */
+export function sessionCookie(token: string): string {
+	return `${SESSION_COOKIE}=${token}; Path=/; Max-Age=2592000; HttpOnly; Secure; SameSite=Lax`;
+}
+
+function sessionCookieValue(header: string | undefined): string | undefined {
+	const pair = header?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${SESSION_COOKIE}=`));
+	return pair?.slice(SESSION_COOKIE.length + 1);
 }
 
 function requireSession(request: MockRequest, mock: MockOmi): void {
@@ -209,13 +224,20 @@ function baseRoutes(queue: QueueState): [string, RouteHandler][] {
 				}
 				const token = `prs_${mock.sessions.size + 1}`;
 				mock.sessions.set(token, "active");
-				return { status: 200, body: { ...principal(mock), token, expires_at: "2026-11-12T00:00:00Z" } };
+				// Como omi-api: la sesión se abre siempre, pero el token sólo viaja a quien lo pide.
+				const requested = request.sessionToken?.trim().toLowerCase() === "body";
+				return {
+					status: 200,
+					headers: { "Set-Cookie": sessionCookie(token) },
+					body: { ...principal(mock), ...(requested ? { token } : {}), expires_at: "2026-11-12T00:00:00Z" },
+				};
 			},
 		],
 		[
 			"DELETE /api/v1/sessions/current",
 			(request, _params, mock) => {
-				const token = request.authorization?.replace(/^Bearer /, "");
+				// Como omi-api: manda el Bearer y, sin Authorization, la cookie de la sesión.
+				const token = request.authorization?.replace(/^Bearer /, "") ?? sessionCookieValue(request.cookie);
 				if (token !== undefined) mock.sessions.delete(token);
 				return { status: 204 };
 			},
@@ -381,6 +403,8 @@ export async function startMockOmi(t: TestContext): Promise<MockOmi> {
 				body,
 				authorization: request.headers.authorization,
 				idempotencyKey: request.headers["idempotency-key"] as string | undefined,
+				sessionToken: request.headers["x-omi-session-token"] as string | undefined,
+				cookie: request.headers.cookie,
 			};
 			mock.requests.push(recorded);
 			let pathMatched = false;
