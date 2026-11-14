@@ -53,18 +53,95 @@ test("login_con credenciales inválidas sale con 1 y no guarda nada", async (t) 
 	assert.equal(await loadCredentials(credentialsPath(home)), null);
 });
 
-test("login_contra una API sin token en el cuerpo explica la dependencia con #140", async (t) => {
+test("login_pide el token de sesión con el header X-Omi-Session-Token", async (t) => {
+	const home = await tempDir(t);
+	const omi = await startMockOmi(t);
+	const io = testIo({ homeDir: home, stdin: MOCK_PASSWORD });
+	assert.equal(await run(["login", "--email", MOCK_EMAIL, "--password-stdin", "--api", omi.url], io), 0, io.errors());
+	assert.equal(omi.requests[0]?.path, "/api/v1/sessions");
+	assert.equal(omi.requests[0]?.sessionToken, "body");
+	assert.equal((await loadCredentials(credentialsPath(home)))?.token, "prs_1");
+});
+
+test("login_el header del token no viaja en los demás pedidos", async (t) => {
+	const { home, omi } = await loggedIn(t);
+	assert.equal(await run(["whoami"], testIo({ homeDir: home })), 0);
+	assert.equal(omi.requests.at(-1)?.path, "/api/v1/me");
+	assert.equal(omi.requests.at(-1)?.sessionToken, undefined);
+});
+
+test("login_contra una API anterior, que entrega el token sin mirar el header, sigue funcionando", async (t) => {
 	const home = await tempDir(t);
 	const omi = await startMockOmi(t);
 	omi.route("POST /api/v1/sessions", () => ({
 		status: 200,
-		body: { user_id: "usr_ada", name: "Ada", email: MOCK_EMAIL, organizations: [] },
+		body: { user_id: "usr_ada", name: "Ada", email: MOCK_EMAIL, organizations: [], token: "prs_vieja", expires_at: "2026-11-12T00:00:00Z" },
 	}));
 	const io = testIo({ homeDir: home, stdin: MOCK_PASSWORD });
-	assert.equal(await run(["login", "--email", MOCK_EMAIL, "--password-stdin", "--api", omi.url], io), 1);
-	assert.match(io.errors(), /chichex\/omi#140/);
+	assert.equal(await run(["login", "--email", MOCK_EMAIL, "--password-stdin", "--api", omi.url], io), 0, io.errors());
+	assert.equal((await loadCredentials(credentialsPath(home)))?.token, "prs_vieja");
+});
+
+test("login_contra una API que no entrega el token explica las causas posibles", async (t) => {
+	const home = await tempDir(t);
+	const omi = await startMockOmi(t);
+	omi.route("POST /api/v1/sessions", () => ({
+		status: 200,
+		body: { user_id: "usr_ada", name: "Ada", email: MOCK_EMAIL, organizations: [], expires_at: "2026-11-12T00:00:00Z" },
+	}));
+	const io = testIo({ homeDir: home, stdin: MOCK_PASSWORD });
+	assert.equal(await run(["login", "--email", MOCK_EMAIL, "--password-stdin", "--api", omi.url, "--json"], io), 1);
+	const report = JSON.parse(io.errors()) as { error: { code: string; message: string; hint: string } };
+	assert.equal(report.error.code, "session_token_unavailable");
+	assert.match(report.error.message, /no entregó el token de sesión/);
+	// Las dos causas reales: un intermediario que no reenvía el header, o una API anterior al Bearer.
+	assert.match(report.error.hint, /X-Omi-Session-Token/);
+	assert.match(report.error.hint, /chichex\/omi#140/);
 	assert.equal(await loadCredentials(credentialsPath(home)), null);
 });
+
+for (const [name, retryAfter, wait] of [
+	["segundos", "30", /esperá 30 segundos/],
+	["un segundo", "1", /esperá 1 segundo /],
+	["minutos, redondeados hacia arriba", "61", /esperá 2 minutos/],
+	["el tope de la API", "900", /esperá 15 minutos/],
+] as const) {
+	test(`login_ante un 429 muestra el mensaje de la API y la espera en ${name}`, async (t) => {
+		const home = await tempDir(t);
+		const omi = await startMockOmi(t);
+		omi.route("POST /api/v1/sessions", () => ({
+			status: 429,
+			headers: { "Retry-After": retryAfter },
+			body: { error: { code: "login_rate_limited", message: "demasiados intentos fallidos" } },
+		}));
+		const io = testIo({ homeDir: home, stdin: MOCK_PASSWORD });
+		assert.equal(await run(["login", "--email", MOCK_EMAIL, "--password-stdin", "--api", omi.url, "--json"], io), 1);
+		const report = JSON.parse(io.errors()) as { error: { code: string; message: string; hint?: string } };
+		assert.equal(report.error.code, "login_rate_limited");
+		assert.equal(report.error.message, "demasiados intentos fallidos");
+		assert.match(report.error.hint ?? "", wait);
+		assert.equal(await loadCredentials(credentialsPath(home)), null);
+	});
+}
+
+for (const [name, headers] of [
+	["sin Retry-After", {}],
+	["con un Retry-After que no es un número de segundos", { "Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT" }],
+] as const) {
+	test(`login_ante un 429 ${name} muestra el mensaje sin inventar una espera`, async (t) => {
+		const home = await tempDir(t);
+		const omi = await startMockOmi(t);
+		omi.route("POST /api/v1/sessions", () => ({
+			status: 429,
+			headers,
+			body: { error: { code: "login_rate_limited", message: "demasiados intentos fallidos" } },
+		}));
+		const io = testIo({ homeDir: home, stdin: MOCK_PASSWORD });
+		assert.equal(await run(["login", "--email", MOCK_EMAIL, "--password-stdin", "--api", omi.url], io), 1);
+		assert.match(io.errors(), /demasiados intentos fallidos/);
+		assert.doesNotMatch(io.errors(), /esperá/);
+	});
+}
 
 async function loggedIn(t: Parameters<typeof tempDir>[0]) {
 	const home = await tempDir(t);

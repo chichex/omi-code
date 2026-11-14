@@ -41,6 +41,8 @@ export interface RequestOptions {
 	signal?: AbortSignal;
 	/** Plazo propio para un pedido cuyo handler hace trabajo síncrono largo. Por defecto, 30 s. */
 	timeoutMs?: number;
+	/** Headers propios de un pedido, como el que pide el token en el login. */
+	headers?: Record<string, string>;
 }
 
 export function decode<S extends TSchema>(schema: S, value: unknown, context: string): Static<S> {
@@ -50,10 +52,19 @@ export function decode<S extends TSchema>(schema: S, value: unknown, context: st
 	});
 }
 
-function problemFrom(status: number, payload: unknown, context: string): ApiError {
+/** La espera de un 429 según Retry-After en segundos; la forma con fecha no se interpreta. */
+function retryHint(status: number, retryAfter: string | null): string | undefined {
+	if (status !== 429 || retryAfter === null || !/^\d+$/.test(retryAfter.trim())) return undefined;
+	const seconds = Number(retryAfter.trim());
+	if (seconds < 1) return undefined;
+	const [count, unit] = seconds < 60 ? [seconds, "segundo"] : [Math.ceil(seconds / 60), "minuto"];
+	return `esperá ${count} ${unit}${count === 1 ? "" : "s"} antes de volver a intentar`;
+}
+
+function problemFrom(status: number, payload: unknown, context: string, retryAfter: string | null): ApiError {
 	if (Value.Check(ProblemBody, payload)) {
 		const { code, message, field } = payload.error;
-		const hint = AUTH_CODES.includes(code) ? LOGIN_HINT : undefined;
+		const hint = AUTH_CODES.includes(code) ? LOGIN_HINT : retryHint(status, retryAfter);
 		return new ApiError(code, field === undefined ? message : `${message} (${field})`, status, hint);
 	}
 	return new ApiError("unexpected_response", `OMI respondió ${status} sin un error reconocible en ${context}`, status);
@@ -143,7 +154,7 @@ export class OmiClient {
 		options: RequestOptions & { idempotencyKey?: string; stream?: boolean },
 	): Promise<Response> {
 		const url = `${this.apiUrl}${API_PREFIX}${path}`;
-		const headers: Record<string, string> = {};
+		const headers: Record<string, string> = { ...options.headers };
 		if (this.#token !== undefined) headers.Authorization = `Bearer ${this.#token}`;
 		if (options.body !== undefined) headers["Content-Type"] = "application/json";
 		if (options.idempotencyKey !== undefined) headers["Idempotency-Key"] = options.idempotencyKey;
@@ -173,6 +184,6 @@ export class OmiClient {
 		} catch {
 			payload = undefined;
 		}
-		throw problemFrom(response.status, payload, `${method} ${path}`);
+		throw problemFrom(response.status, payload, `${method} ${path}`, response.headers.get("Retry-After"));
 	}
 }

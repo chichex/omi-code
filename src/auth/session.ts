@@ -5,6 +5,7 @@ import type { Io } from "../cli/io.ts";
 import { PrincipalSchema, anonymousClient, openSession, type Principal } from "../client/session.ts";
 import { ApiError, OmiError } from "../core/errors.ts";
 import { credentialsPath } from "../core/paths.ts";
+import { HEADER_SESSION_TOKEN, SESSION_TOKEN_IN_BODY } from "../protocol/constants.ts";
 import { deleteCredentials, loadCredentials, saveCredentials } from "./credentials.ts";
 
 const LoginResponse = Type.Intersect([
@@ -20,12 +21,14 @@ export interface LoginInput {
 
 export async function login(input: LoginInput, io: Io): Promise<Principal> {
 	const client = anonymousClient(io, input.apiUrl);
+	// omi-api sólo entrega el token en el cuerpo a quien lo pide: el panel entra con la cookie.
 	const session = await client.request("POST", "/sessions", LoginResponse, {
 		body: { email: input.email, password: input.password },
+		headers: { [HEADER_SESSION_TOKEN]: SESSION_TOKEN_IN_BODY },
 	});
 	if (session.token === undefined || session.token === "" || session.expires_at === undefined) {
-		throw new OmiError("session_token_unavailable", "esta versión de omi-api no entrega un token de sesión", {
-			hint: "hace falta chichex/omi#140 desplegado en esa API",
+		throw new OmiError("session_token_unavailable", "omi-api abrió la sesión pero no entregó el token de sesión", {
+			hint: `un proxy intermedio puede estar quitando el header ${HEADER_SESSION_TOKEN}, o esa API es anterior a chichex/omi#140: revisá la URL con --api u OMI_API_URL`,
 		});
 	}
 	await saveCredentials(credentialsPath(io.homeDir), {

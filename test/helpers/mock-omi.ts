@@ -12,6 +12,8 @@ export interface MockRequest {
 	body: unknown;
 	authorization: string | undefined;
 	idempotencyKey: string | undefined;
+	/** Valor de X-Omi-Session-Token: con `body`, el login entrega el token en el cuerpo. */
+	sessionToken: string | undefined;
 }
 
 export interface MockResponse {
@@ -209,7 +211,9 @@ function baseRoutes(queue: QueueState): [string, RouteHandler][] {
 				}
 				const token = `prs_${mock.sessions.size + 1}`;
 				mock.sessions.set(token, "active");
-				return { status: 200, body: { ...principal(mock), token, expires_at: "2026-11-12T00:00:00Z" } };
+				// Como omi-api: la sesión se abre siempre, pero el token sólo viaja a quien lo pide.
+				const requested = request.sessionToken?.trim().toLowerCase() === "body";
+				return { status: 200, body: { ...principal(mock), ...(requested ? { token } : {}), expires_at: "2026-11-12T00:00:00Z" } };
 			},
 		],
 		[
@@ -381,6 +385,7 @@ export async function startMockOmi(t: TestContext): Promise<MockOmi> {
 				body,
 				authorization: request.headers.authorization,
 				idempotencyKey: request.headers["idempotency-key"] as string | undefined,
+				sessionToken: request.headers["x-omi-session-token"] as string | undefined,
 			};
 			mock.requests.push(recorded);
 			let pathMatched = false;

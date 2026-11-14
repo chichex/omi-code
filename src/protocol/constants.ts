@@ -27,6 +27,10 @@ export const HEADER_ATTEMPT = "X-Omi-Attempt";
 export const HEADER_TIMESTAMP = "X-Omi-Timestamp";
 export const HEADER_SIGNATURE = "X-Omi-Signature";
 
+// Login: un cliente sin cookies pide el token de la sesión en el cuerpo con este header.
+export const HEADER_SESSION_TOKEN = "X-Omi-Session-Token";
+export const SESSION_TOKEN_IN_BODY = "body";
+
 // Labels OCI que el barrido de versiones de OMI exige en cada imagen.
 export const LABEL_VERSION = "org.opencontainers.image.version";
 export const LABEL_REVISION = "org.opencontainers.image.revision";
