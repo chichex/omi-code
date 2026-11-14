@@ -7,7 +7,7 @@ import { run } from "../src/cli/main.ts";
 import { credentialsPath } from "../src/core/paths.ts";
 import { linkProject } from "../src/project/init.ts";
 import { parseProjectLink } from "../src/project/link.ts";
-import { tempDir, testIo } from "./helpers/io.ts";
+import { tempDir, testIo, type TestIo } from "./helpers/io.ts";
 import { startMockOmi } from "./helpers/mock-omi.ts";
 import { humanless } from "./helpers/project.ts";
 import { fakeRunner } from "./helpers/runner.ts";
@@ -25,6 +25,11 @@ async function setup(t: TestContext) {
 	return { repo, omi, io: testIo({ homeDir: home, cwd: repo, env: { OMI_POLL_INTERVAL_MS: "1" } }) };
 }
 
+/** La misma sesión con un humano en la terminal que aprueba cada creación: `--create` solo no alcanza. */
+function approving(io: TestIo, confirmations = 1): TestIo {
+	return testIo({ homeDir: io.homeDir, cwd: io.cwd, env: { OMI_POLL_INTERVAL_MS: "1" }, interactive: true, answers: Array.from({ length: confirmations }, () => "s") });
+}
+
 for (const extra of [
 	["--service", "api:../outside"],
 	["--service", "api:.:8080:../outside"],
@@ -35,7 +40,10 @@ for (const extra of [
 ]) {
 	test(`init valida ${extra.join(" ")} antes de crear o escribir`, async (t) => {
 		const { repo, omi, io } = await setup(t);
-		assert.notEqual(await run(["init", "--project", "x", "--create", ...extra], io), 0);
+		// Con un humano dispuesto a aprobar, lo único que frena la creación es la validación.
+		const human = approving(io);
+		assert.notEqual(await run(["init", "--project", "x", "--create", ...extra], human), 0);
+		assert.deepEqual(human.prompts, []);
 		assert.equal(omi.requests.filter((r) => r.method === "POST").length, 0);
 		await assert.rejects(stat(join(repo, "../outside")));
 		await assert.rejects(stat(join(repo, ".omi/project.json")));
@@ -61,7 +69,9 @@ test("init no sigue symlinks fuera del repo antes de mutar", async (t) => {
 	const { repo, omi, io } = await setup(t);
 	const outside = await tempDir(t);
 	await symlink(outside, join(repo, "api"));
-	assert.notEqual(await run(["init", "--project", "x", "--service", "api:api", "--create"], io), 0);
+	const human = approving(io);
+	assert.notEqual(await run(["init", "--project", "x", "--service", "api:api", "--create"], human), 0);
+	assert.deepEqual(human.prompts, []);
 	assert.equal(omi.requests.filter((r) => r.method === "POST").length, 0);
 	await assert.rejects(stat(join(outside, "Dockerfile")));
 });
@@ -69,7 +79,8 @@ test("init no sigue symlinks fuera del repo antes de mutar", async (t) => {
 test("init incremental conserva los services y sólo acepta tags específicos de cada service", async (t) => {
 	const { repo, io } = await setup(t);
 	for (const name of ["api", "web", "worker"]) {
-		assert.equal(await run(["init", "--project", "x", "--service", `${name}:services/${name}`, "--create"], io), 0, io.errors());
+		const human = approving(io);
+		assert.equal(await run(["init", "--project", "x", "--service", `${name}:services/${name}`, "--create"], human), 0, human.errors());
 	}
 	const link = parseProjectLink(await readFile(join(repo, ".omi/project.json"), "utf8"));
 	assert.deepEqual(link.services.map((s) => s.name), ["api", "web", "worker"]);
@@ -84,8 +95,9 @@ test("init incremental conserva los services y sólo acepta tags específicos de
 
 test("init agrega los ambientes pedidos a un service existente", async (t) => {
 	const { omi, io } = await setup(t);
-	assert.equal(await run(["init", "--project", "x", "--service", "api", "--create"], io), 0);
-	assert.equal(await run(["init", "--project", "x", "--service", "api", "--create", "--env", "stage,prod"], io), 0, io.errors());
+	assert.equal(await run(["init", "--project", "x", "--service", "api", "--create"], approving(io)), 0);
+	const human = approving(io);
+	assert.equal(await run(["init", "--project", "x", "--service", "api", "--create", "--env", "stage,prod"], human), 0, human.errors());
 	assert.deepEqual(omi.projects.get("x")?.services.get("api")?.view.environments.map((e) => e.name), ["stage", "prod"]);
 });
 

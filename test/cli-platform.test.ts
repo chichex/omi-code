@@ -37,10 +37,10 @@ test("omi registry create_sin terminal ni --yes sale con 2 y no crea nada", asyn
 	assert.deepEqual(linked.mutations(), []);
 });
 
-test("omi registry create --yes_crea el registry y no imprime la credencial", async (t) => {
+test("omi registry create_con el sí del humano crea el registry y no imprime la credencial", async (t) => {
 	const linked = await linkedProject(t);
-	const io = linked.io();
-	assert.equal(await run(["registry", "create", "--host", "hst_cp", "--yes"], io), 0, io.errors());
+	const io = linked.io({ interactive: true, answers: ["s"] });
+	assert.equal(await run(["registry", "create", "--host", "hst_cp"], io), 0, io.errors());
 	assert.deepEqual(linked.mutations(), [`POST ${ORG}/registry`]);
 	assert.doesNotMatch(io.output() + io.errors(), new RegExp(PASSWORD));
 	assert.equal(await readFile(join(linked.home, ".omi", "registry", "acme.push-password"), "utf8"), PASSWORD);
@@ -62,13 +62,13 @@ test("omi registry create --yes_no vale desde una sesión agéntica", async (t) 
 	assert.deepEqual(linked.mutations(), []);
 });
 
-test("omi registry retry-route --yes_reintenta la ruta pública", async (t) => {
+test("omi registry retry-route_con el sí del humano reintenta la ruta pública", async (t) => {
 	const linked = await linkedProject(t);
 	linked.platform.routeOutcome = "error";
-	assert.equal(await run(["registry", "create", "--yes"], linked.io()), 0);
+	assert.equal(await run(["registry", "create"], linked.io({ interactive: true, answers: ["s"] })), 0);
 	linked.platform.routeOutcome = "publicada";
-	const io = linked.io();
-	assert.equal(await run(["registry", "retry-route", "--yes"], io), 0, io.errors());
+	const io = linked.io({ interactive: true, answers: ["s"] });
+	assert.equal(await run(["registry", "retry-route"], io), 0, io.errors());
 	assert.equal(linked.mutations().at(-1), `POST ${ORG}/registry/route`);
 	assert.match(io.output(), /ruta pública: publicada/);
 });
@@ -84,8 +84,8 @@ test("omi registry_sin acción o con una acción desconocida es error de uso", a
 
 test("omi registry_un error de la API sale con 1 y su código", async (t) => {
 	const linked = await linkedProject(t);
-	const io = linked.io();
-	assert.equal(await run(["registry", "retry-route", "--yes", "--json"], io), 1);
+	const io = linked.io({ interactive: true });
+	assert.equal(await run(["registry", "retry-route", "--json"], io), 1);
 	assert.equal((JSON.parse(io.errors()) as { error: { code: string } }).error.code, "registry_not_found");
 });
 
@@ -106,10 +106,19 @@ test("omi visibility set_interactivo muestra el cambio y respeta un no", async (
 	assert.equal(visibilityOf(linked, "stage"), "privado");
 });
 
-test("omi visibility set --yes_aprueba sin terminal y --json devuelve el resultado", async (t) => {
+test("omi visibility set --yes_sin terminal no aprueba: sale con 2 y no cambia nada", async (t) => {
 	const linked = await linkedProject(t);
 	const io = linked.io();
-	assert.equal(await run(["visibility", "set", "publico", "--env", "prod", "--service", "api", "--yes", "--json"], io), 0, io.errors());
+	assert.equal(await run(["visibility", "set", "publico", "--env", "prod", "--service", "api", "--yes", "--json"], io), 2);
+	assert.equal((JSON.parse(io.errors()) as { error: { code: string } }).error.code, "guardrail_confirmation_required");
+	assert.equal(visibilityOf(linked, "prod"), "privado");
+	assert.deepEqual(linked.mutations(), []);
+});
+
+test("omi visibility set_con el sí del humano cambia la visibilidad y --json devuelve el resultado", async (t) => {
+	const linked = await linkedProject(t);
+	const io = linked.io({ interactive: true, answers: ["s"] });
+	assert.equal(await run(["visibility", "set", "publico", "--env", "prod", "--service", "api", "--json"], io), 0, io.errors());
 	assert.equal(visibilityOf(linked, "prod"), "publico");
 	assert.equal((JSON.parse(io.output()) as { visibility: string; previous: string }).previous, "privado");
 });

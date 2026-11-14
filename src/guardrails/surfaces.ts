@@ -23,8 +23,16 @@ function sessionGuard(fields: Pick<Guard, "surface" | "canAsk" | "preApproved" |
 	};
 }
 
-export function cliGuard(io: Io, options: { yes: boolean }): Guard {
+export interface CliGuardOptions {
+	/** `--yes`: aprueba de antemano lo autónomo de stage, nunca lo que exige un humano. */
+	yes: boolean;
+	/** Flag que pide la operación sin aprobarla, como `--create`. */
+	requestFlag?: string;
+}
+
+export function cliGuard(io: Io, options: CliGuardOptions): Guard {
 	const agent = isAgentSession(io);
+	const ignoredFlag = options.yes ? "--yes" : options.requestFlag;
 	return sessionGuard(
 		{
 			surface: "cli",
@@ -32,6 +40,8 @@ export function cliGuard(io: Io, options: { yes: boolean }): Guard {
 			preApproved: options.yes && !agent,
 			ask: async (action: GuardedAction) => {
 				io.err(`\n${action.summary}\n${action.diff}\n`);
+				// Fuera de una sesión agéntica stage ya está autorizado: acá sólo llega lo que exige un humano.
+				if (ignoredFlag !== undefined) io.err(`${ignoredFlag} no aprueba esta operación: exige tu confirmación.`);
 				return /^s/i.test((await io.prompt("¿Confirmás? [s/N] ")).trim());
 			},
 		},

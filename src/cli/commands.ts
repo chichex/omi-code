@@ -39,21 +39,24 @@ export const HELP_ROWS: ReadonlyArray<readonly [string, string]> = [
 	["mcp", "servidor MCP por stdio"],
 ];
 
+/** Cierra la nota de uso de lo que exige un humano. */
+const CONFIRM = "pide confirmación en una terminal interactiva; --yes no la reemplaza.";
+
 /** Uso de cada subcomando. `--json` y `--api <url>` valen en todos. */
 export const USAGE: Readonly<Record<string, string>> = {
 	login: "omi login [--email <email>] [--password-stdin]",
 	logout: "omi logout",
 	whoami: "omi whoami",
-	init: "omi init --project <slug> --service <nombre[:ruta[:puerto[:dockerfile]]]> [--org <slug>] [--name <nombre>] [--port <n>] [--env stage,prod] [--create]",
+	init: `omi init --project <slug> --service <nombre[:ruta[:puerto[:dockerfile]]]> [--org <slug>] [--name <nombre>] [--port <n>] [--env stage,prod] [--create]\n--create pide crear el proyecto o los services que falten, no lo aprueba: crear pide confirmación en una terminal interactiva.`,
 	status: "omi status [--service <nombre>]",
-	env: "omi env list --env <stage|prod> [--service <nombre>]\nomi env set --env <stage|prod> [NOMBRE=valor...] [--unset NOMBRE] [--secret NOMBRE[=VARIABLE_LOCAL]] [--yes]",
-	resources: "omi resources list [--env <stage|prod>]\nomi resources postgres <create|replace|delete|retry|recover> [--env <e>] [--slug <s>] [--mode <externa|local>] [--resource-id <id>] [--connection-env <VARIABLE>] [--pg-version <v>] [--size <S|M|L>] [--yes]",
-	registry: "omi registry <status|hosts|create|retry-route> [--host <id>] [--org <slug>] [--yes]",
-	visibility: "omi visibility set <privado|organizacion|publico> --env <stage|prod> [--service <nombre>] [--yes]",
-	jobs: "omi jobs <list|get|runs|create|update|delete|run|pause|resume> [nombre] [--service <s>] [--path </ruta>] [--schedule <cron>] [--timezone <iana>] [--timeout <s>] [--env <e>] [--yes]\nomi jobs template --language <go|ts|python> [--path </ruta>]\nomi jobs check <archivo>",
+	env: `omi env list --env <stage|prod> [--service <nombre>]\nomi env set --env <stage|prod> [NOMBRE=valor...] [--unset NOMBRE] [--secret NOMBRE[=VARIABLE_LOCAL]] [--yes]\nTocar prod o un secreto ${CONFIRM}`,
+	resources: `omi resources list [--env <stage|prod>]\nomi resources postgres <create|replace|delete|retry|recover> [--env <e>] [--slug <s>] [--mode <externa|local>] [--resource-id <id>] [--connection-env <VARIABLE>] [--pg-version <v>] [--size <S|M|L>] [--yes]\nGestionar un Postgres siempre ${CONFIRM}`,
+	registry: `omi registry <status|hosts|create|retry-route> [--host <id>] [--org <slug>] [--yes]\nCrear el registry o reintentar su ruta siempre ${CONFIRM}`,
+	visibility: `omi visibility set <privado|organizacion|publico> --env <stage|prod> [--service <nombre>] [--yes]\nCambiar la visibilidad siempre ${CONFIRM}`,
+	jobs: `omi jobs <list|get|runs|create|update|delete|run|pause|resume> [nombre] [--service <s>] [--path </ruta>] [--schedule <cron>] [--timezone <iana>] [--timeout <s>] [--env <e>] [--yes]\nomi jobs template --language <go|ts|python> [--path </ruta>]\nomi jobs check <archivo>\nUn job que alcanza prod ${CONFIRM}`,
 	publish: "omi publish --version <X.Y.Z> [--service <nombre>] [--via <tag|direct>] [--timeout <s>] [--wait-only] [--yes]",
-	deploy: "omi deploy --env <stage|prod> --version <X.Y.Z> [--service <nombre>] [--yes]",
-	promote: "omi promote [--service <nombre>] [--yes]",
+	deploy: `omi deploy --env <stage|prod> --version <X.Y.Z> [--service <nombre>] [--yes]\nEl deploy a prod ${CONFIRM}`,
+	promote: `omi promote [--service <nombre>] [--yes]\nPromover siempre ${CONFIRM}`,
 	logs: "omi logs --env <stage|prod> [--service <nombre>] [--lines <n>] [--duration <s>]\nomi logs --env <stage|prod> --crash [--id <ilog>] [--deployment <dep>]",
 	upgrade: "omi upgrade [--check]",
 	import: "omi import pi",
