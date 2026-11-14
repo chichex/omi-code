@@ -1,10 +1,9 @@
 // omi_visibility_set: quién alcanza un ambiente. Publicarlo en internet siempre lo decide un humano.
 
-import { Type } from "typebox";
-import { EnvironmentSchema, type EnvironmentView } from "../client/views.ts";
+import { Type, type Static } from "typebox";
 import { OmiError } from "../core/errors.ts";
 import { enforce } from "../guardrails/policy.ts";
-import { environmentOf, environmentPath, linkedService, openScope, readService, type Scope } from "./scope.ts";
+import { environmentPath, linkedService, openScope, servicePath, type Scope } from "./scope.ts";
 import { defineTool, type ToolRuntime } from "./types.ts";
 
 /** Lease del job que reaplica el bundle del ambiente, con margen. */
@@ -21,6 +20,26 @@ const Parameters = Type.Object({
 	environment: Type.Union([Type.Literal("stage"), Type.Literal("prod")]),
 	visibility: Type.Union([Type.Literal("privado"), Type.Literal("organizacion"), Type.Literal(PUBLIC)]),
 });
+
+// Lo que esta tool lee de un ambiente. `visibility_apply` no está en la vista compartida:
+// exigirlo ahí rompería las demás tools contra una omi-api que todavía no lo mande.
+const EnvironmentSchema = Type.Object({
+	name: Type.String(),
+	visibility: Type.String(),
+	hostname: Type.String(),
+	visibility_apply: Type.Object({ state: Type.String(), last_error: Type.Optional(Type.String()) }),
+	access: Type.Object({ state: Type.String() }),
+});
+const ServiceSchema = Type.Object({ environments: Type.Array(EnvironmentSchema) });
+
+type EnvironmentView = Static<typeof EnvironmentSchema>;
+
+async function readEnvironment(scope: Scope, service: string, name: string): Promise<EnvironmentView> {
+	const { environments } = await scope.client.request("GET", servicePath(scope, service), ServiceSchema);
+	const environment = environments.find((candidate) => candidate.name === name);
+	if (environment === undefined) throw new OmiError("environment_not_found", `el service ${service} no tiene el ambiente ${name}`);
+	return environment;
+}
 
 /** OMI trata como pedido nuevo la misma visibilidad cuando el intento anterior quedó fallido. */
 function needsRetry(environment: EnvironmentView): boolean {
@@ -55,7 +74,7 @@ async function awaitApply(scope: Scope, service: string, updated: EnvironmentVie
 		}
 		runtime.progress?.("visibilidad aplicando");
 		await scope.client.wait(runtime.signal);
-		current = environmentOf(await readService(scope, service), updated.name);
+		current = await readEnvironment(scope, service, updated.name);
 	}
 	if (current.visibility_apply.state === "fallida") {
 		throw new OmiError("visibility_apply_failed", `la visibilidad de ${service} en ${updated.name} no se aplicó: ${current.visibility_apply.last_error ?? "sin detalle"}`, {
@@ -74,7 +93,7 @@ export const visibilitySetTool = defineTool({
 	run: async (params, runtime) => {
 		const scope = await openScope(runtime);
 		const service = linkedService(scope.link, params.service);
-		const current = environmentOf(await readService(scope, service.name), params.environment);
+		const current = await readEnvironment(scope, service.name, params.environment);
 		if (current.visibility === params.visibility && !needsRetry(current)) {
 			return { text: `${service.name} en ${params.environment} ya es ${params.visibility}`, data: summarize(service.name, current, current.visibility) };
 		}

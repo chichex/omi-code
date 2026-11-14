@@ -104,8 +104,8 @@ function installVisibility(mock: MockOmi, state: PlatformState): void {
 		requireSessionFor(request, mock);
 		const view = requireServiceFor(params, mock).view;
 		for (const environment of view.environments) {
-			const apply = environment.visibility_apply as { state: string };
-			if (apply.state === "aplicando") environment.visibility_apply = { ...state.visibilityOutcome };
+			const apply = environment.visibility_apply as { state: string } | undefined;
+			if (apply?.state === "aplicando") environment.visibility_apply = { ...state.visibilityOutcome };
 		}
 		return { status: 200, body: view };
 	});

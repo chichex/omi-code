@@ -135,3 +135,16 @@ test("omi_visibility_set_sigue una mutación en cola hasta su resultado", async 
 	assert.equal((result.data as { visibility: string }).visibility, "publico");
 	assert.ok(linked.omi.requests.some((request) => request.path.includes("/queued-mutations/")));
 });
+
+test("omi_visibility_set_una omi-api sin visibility_apply falla antes de mutar y no rompe las demás tools", async (t) => {
+	const linked = await linkedProject(t);
+	delete environment(linked, "stage").visibility_apply;
+	delete environment(linked, "prod").visibility_apply;
+	await assert.rejects(
+		linked.call("omi_visibility_set", { environment: "stage", visibility: "publico" }),
+		(error: OmiError) => error.code === "unexpected_response" && /respuesta inesperada de OMI/.test(error.message),
+	);
+	assert.deepEqual(linked.mutations(), []);
+	const status = await linked.call("omi_project_status", {});
+	assert.match(status.text, /stage: sin_version/);
+});
