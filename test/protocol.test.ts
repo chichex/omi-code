@@ -48,6 +48,7 @@ test("protocolo_coincide con el código de chichex/omi", { skip: omiRepo === und
 		assert.ok(variables.includes(`"${name}"`), `${name} en internal/api/variables.go`);
 	}
 	assert.ok(variables.includes(`"${protocol.RESERVED_ENV_PREFIX}"`), "prefijo reservado en internal/api/variables.go");
+	assert.ok(read("internal/api/api.go").includes(`"${protocol.ROLE_OWNER}"`), "rol de dueño en internal/api/api.go");
 	const kit = read("internal/api/kit.go");
 	assert.ok(kit.includes(protocol.CI_REGISTRY_SECRET));
 	assert.ok(kit.includes("50 << 20"));

@@ -17,6 +17,7 @@ function summarize(service: ServiceView) {
 			state: environment.state,
 			hostname: environment.hostname,
 			visibility: environment.visibility,
+			...(environment.visibility_apply === undefined ? {} : { visibility_apply: environment.visibility_apply }),
 			...(environment.current_version === undefined ? {} : { current_version: environment.current_version }),
 			...(environment.last_error === undefined ? {} : { last_error: environment.last_error }),
 			...(environment.last_deployment === undefined ? {} : { last_deployment: environment.last_deployment }),
@@ -26,11 +27,26 @@ function summarize(service: ServiceView) {
 	};
 }
 
+type EnvironmentSummary = ReturnType<typeof summarize>["environments"][number];
+
+/** El bundle de visibilidad sólo se nombra mientras no terminó bien: es lo que hay que diagnosticar. */
+function describeVisibility(environment: EnvironmentSummary): string {
+	const apply = environment.visibility_apply;
+	if (apply === undefined || apply.state === "aplicada") return `visibilidad ${environment.visibility}`;
+	const detail = apply.last_error === undefined ? apply.state : `${apply.state}: ${apply.last_error}`;
+	return `visibilidad ${environment.visibility} (${detail})`;
+}
+
+function describeAccess(environment: EnvironmentSummary): string {
+	const { state, last_error: lastError } = environment.access;
+	return lastError === undefined ? `acceso ${state}` : `acceso ${state} (${lastError})`;
+}
+
 function describe(service: ReturnType<typeof summarize>): string {
 	const lines = [`${service.name} · versiones: ${service.versions.join(", ") || "ninguna"} · barrido: ${service.version_scan.state}`];
 	for (const environment of service.environments) {
 		const deploy = environment.last_deployment === undefined ? "" : ` · último deploy ${environment.last_deployment.to_version} ${environment.last_deployment.status}`;
-		lines.push(`  ${environment.name}: ${environment.state} ${environment.current_version ?? "sin versión"} · acceso ${environment.access.state}${deploy}`);
+		lines.push(`  ${environment.name}: ${environment.state} ${environment.current_version ?? "sin versión"} · ${describeVisibility(environment)} · ${describeAccess(environment)}${deploy}`);
 	}
 	return lines.join("\n");
 }

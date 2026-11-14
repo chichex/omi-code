@@ -25,9 +25,24 @@ export async function isDirectory(path: string): Promise<boolean> {
 }
 
 export interface PrivateFileReservation {
-	/** Escribe el contenido y lo deja en su ruta final con un rename atómico. */
+	/**
+	 * Escribe el contenido y lo deja en su ruta final con un rename atómico. Si el contenido
+	 * quedó escrito pero no llegó a la ruta final, lanza `PrivateFileStrandedError`.
+	 */
 	commit(content: string): Promise<void>;
+	/** Para cuando el secreto no llegó: borra el temporal vacío. */
 	discard(): Promise<void>;
+}
+
+/** El contenido quedó completo en el temporal 0600, que se conserva: es su única copia. */
+export class PrivateFileStrandedError extends Error {
+	readonly temporaryPath: string;
+
+	constructor(temporaryPath: string, cause: unknown) {
+		super(`el archivo quedó en ${temporaryPath}`, { cause });
+		this.name = "PrivateFileStrandedError";
+		this.temporaryPath = temporaryPath;
+	}
 }
 
 /**
@@ -48,11 +63,17 @@ export async function reservePrivateFile(path: string): Promise<PrivateFileReser
 			try {
 				await handle.writeFile(content);
 				await handle.sync();
+			} catch (error) {
+				// Un temporal a medio escribir no sirve como copia: no se deja un secreto parcial suelto.
+				await discard();
+				throw error;
+			}
+			try {
 				await handle.close();
 				await rename(temporary, path);
 			} catch (error) {
-				await discard();
-				throw error;
+				await handle.close().catch(() => undefined);
+				throw new PrivateFileStrandedError(temporary, error);
 			}
 		},
 	};

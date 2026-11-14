@@ -4,13 +4,21 @@
 import { Type, type Static } from "typebox";
 import { HostsSchema, RegistryCredentialsSchema, RegistrySchema, type HostView, type RegistryView } from "../client/views.ts";
 import { ApiError, OmiError, UsageError } from "../core/errors.ts";
-import { reservePrivateFile } from "../core/files.ts";
+import { PrivateFileStrandedError, reservePrivateFile } from "../core/files.ts";
 import { registryPasswordPath } from "../core/paths.ts";
 import { assertCanProceed, enforce, type GuardedAction } from "../guardrails/policy.ts";
-import { CI_REGISTRY_SECRET } from "../protocol/constants.ts";
+import { CI_REGISTRY_SECRET, ROLE_OWNER } from "../protocol/constants.ts";
 import { openOrganizationScope, type OrganizationScope } from "./scope.ts";
 import { defineTool, type ToolResult, type ToolRuntime } from "./types.ts";
 
+/** La rotación existe en OMI pero todavía no en el CLI. */
+const ROTATE_HINT = "OMI no la vuelve a mostrar: rotá la credencial desde el panel de OMI (el CLI todavía no la rota)";
+/**
+ * El alta genera dos hashes bcrypt y publica la ruta en Cloudflare dentro del mismo pedido: crear el
+ * túnel, configurarlo y el CNAME, cada llamada con hasta 30 s. El plazo general de 30 s cortaba
+ * altas que OMI sí terminaba.
+ */
+const CREATE_TIMEOUT_MS = 2 * 60_000;
 const ORGANIZATION_SLUG = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
 const Parameters = Type.Object({
@@ -82,7 +90,66 @@ function passwordPath(scope: OrganizationScope, runtime: ToolRuntime): string {
 	return registryPasswordPath(runtime.io.homeDir, scope.organizationSlug);
 }
 
+/** La credencial ya llegó y OMI no la repite: si quedó en el temporal, el error dice dónde. */
+function passwordNotSaved(path: string, cause: unknown): OmiError {
+	if (cause instanceof PrivateFileStrandedError) {
+		return new OmiError("registry_password_not_saved", `el registry se creó pero su credencial de push no se pudo dejar en ${path}: quedó en ${cause.temporaryPath}`, {
+			hint: `es la única copia (OMI no la vuelve a mostrar): movela a ${path}`,
+			cause,
+		});
+	}
+	return new OmiError("registry_password_not_saved", `el registry se creó pero su credencial de push no se pudo guardar en ${path}`, {
+		hint: ROTATE_HINT,
+		cause,
+	});
+}
+
+function reasonOf(cause: unknown): string {
+	if (cause instanceof OmiError) return `${cause.code}: ${cause.message}`;
+	return cause instanceof Error ? cause.message : String(cause);
+}
+
+/** Un 4xx con código de omi-api es un rechazo: el alta valida todo antes de guardar. */
+function isRejection(error: unknown): boolean {
+	return error instanceof ApiError && error.status >= 400 && error.status < 500 && error.code !== "unexpected_response";
+}
+
+/**
+ * Timeout, red caída, 5xx o respuesta inválida no dicen si el registry se creó: omi-api lo guarda
+ * antes de publicar su ruta y de responder, y no repite la credencial (el alta no es idempotente:
+ * reintentarla da `registry_exists`). Se consulta el estado para decir qué pasó.
+ */
+async function uncertainCreation(scope: OrganizationScope, cause: unknown): Promise<unknown> {
+	let registry: RegistryView | null;
+	try {
+		registry = await readRegistry(scope);
+	} catch {
+		return new OmiError("registry_create_unconfirmed", `no se pudo confirmar si el registry de ${scope.organizationSlug} quedó creado: ${reasonOf(cause)}`, {
+			hint: `\`omi registry status\` lo muestra. Si existe, su credencial de push no llegó: ${ROTATE_HINT}`,
+			cause,
+		});
+	}
+	if (registry === null) return cause;
+	return new OmiError(
+		"registry_created_without_credential",
+		`el registry de ${scope.organizationSlug} quedó creado (${registry.hostname}) pero su credencial de push no se pudo obtener: ${reasonOf(cause)}`,
+		{ hint: ROTATE_HINT, cause },
+	);
+}
+
+/** Lo que omi-api va a rechazar seguro se dice antes de pedirle una confirmación al humano. */
+async function assertCanCreate(scope: OrganizationScope): Promise<void> {
+	if (scope.role !== ROLE_OWNER) {
+		throw new OmiError("forbidden", `crear el registry de ${scope.organizationSlug} exige ser ${ROLE_OWNER} de la organización (tu rol: ${scope.role})`);
+	}
+	const existing = await readRegistry(scope);
+	if (existing !== null) {
+		throw new OmiError("registry_exists", `${scope.organizationSlug} ya tiene registry: ${existing.hostname} (${existing.state})`, { hint: "`omi registry status` lo muestra" });
+	}
+}
+
 async function create(scope: OrganizationScope, params: Params, runtime: ToolRuntime, action: GuardedAction): Promise<ToolResult> {
+	await assertCanCreate(scope);
 	const host = chooseHost(await readHosts(scope), params.hostId);
 	const path = passwordPath(scope, runtime);
 	await enforce(
@@ -92,18 +159,19 @@ async function create(scope: OrganizationScope, params: Params, runtime: ToolRun
 	const file = await reservePrivateFile(path);
 	let created: Static<typeof RegistryCredentialsSchema>;
 	try {
-		created = await scope.client.request("POST", `${scope.organizationPath}/registry`, RegistryCredentialsSchema, { body: { host_id: host.id } });
+		created = await scope.client.request("POST", `${scope.organizationPath}/registry`, RegistryCredentialsSchema, {
+			body: { host_id: host.id },
+			timeoutMs: CREATE_TIMEOUT_MS,
+		});
 	} catch (error) {
+		// En ningún camino de falla llegó la credencial: el temporal está vacío.
 		await file.discard();
-		throw error;
+		throw isRejection(error) ? error : await uncertainCreation(scope, error);
 	}
 	try {
 		await file.commit(created.push_password);
 	} catch (error) {
-		throw new OmiError("registry_password_not_saved", `el registry se creó pero su credencial de push no se pudo guardar en ${path}`, {
-			hint: "OMI no la vuelve a mostrar: rotala desde el panel de OMI",
-			cause: error,
-		});
+		throw passwordNotSaved(path, error);
 	}
 	return {
 		text: [
