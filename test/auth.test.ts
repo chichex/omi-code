@@ -143,6 +143,42 @@ for (const [name, headers] of [
 	});
 }
 
+test("login_ante un 429 de un intermediario, con cuerpo que no es JSON, igual muestra la espera", async (t) => {
+	const home = await tempDir(t);
+	const omi = await startMockOmi(t);
+	omi.route("POST /api/v1/sessions", () => ({
+		status: 429,
+		headers: { "Retry-After": "30", "Content-Type": "text/html" },
+		text: "<html><body><h1>429 Too Many Requests</h1></body></html>",
+	}));
+	const io = testIo({ homeDir: home, stdin: MOCK_PASSWORD });
+	assert.equal(await run(["login", "--email", MOCK_EMAIL, "--password-stdin", "--api", omi.url, "--json"], io), 1);
+	const report = JSON.parse(io.errors()) as { error: { code: string; message: string; hint?: string } };
+	assert.equal(report.error.code, "unexpected_response");
+	assert.match(report.error.message, /429/);
+	assert.equal(report.error.hint, "esperá 30 segundos antes de volver a intentar");
+});
+
+for (const [name, retryAfter, hint] of [
+	["de una hora justa se muestra en minutos", "3600", "esperá 60 minutos antes de volver a intentar"],
+	["de más de una hora no se convierte a minutos", "3601", "esperá más de una hora antes de volver a intentar"],
+	["absurdo no se muestra como número", "100000000000000000000", "esperá más de una hora antes de volver a intentar"],
+] as const) {
+	test(`login_ante un 429 un Retry-After ${name}`, async (t) => {
+		const home = await tempDir(t);
+		const omi = await startMockOmi(t);
+		omi.route("POST /api/v1/sessions", () => ({
+			status: 429,
+			headers: { "Retry-After": retryAfter },
+			body: { error: { code: "login_rate_limited", message: "demasiados intentos fallidos" } },
+		}));
+		const io = testIo({ homeDir: home, stdin: MOCK_PASSWORD });
+		assert.equal(await run(["login", "--email", MOCK_EMAIL, "--password-stdin", "--api", omi.url, "--json"], io), 1);
+		const report = JSON.parse(io.errors()) as { error: { hint?: string } };
+		assert.equal(report.error.hint, hint);
+	});
+}
+
 async function loggedIn(t: Parameters<typeof tempDir>[0]) {
 	const home = await tempDir(t);
 	const omi = await startMockOmi(t);
