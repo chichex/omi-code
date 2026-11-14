@@ -37,6 +37,7 @@ export const EnvironmentSchema = Type.Object({
 	last_error: OptionalString,
 	variables: Type.Array(VariableSchema),
 	managed_variables: Type.Array(Type.Object({ name: Type.String(), resource_slug: Type.String() })),
+	visibility_apply: Type.Object({ state: Type.String(), last_error: OptionalString }),
 	access: Type.Object({ state: Type.String(), url: OptionalString }),
 	last_deployment: Type.Optional(DeploymentSchema),
 	promotion: Type.Optional(Type.Object({ version: OptionalString, blocked_reason: OptionalString })),

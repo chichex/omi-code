@@ -103,12 +103,11 @@ function installVisibility(mock: MockOmi, state: PlatformState): void {
 	mock.route(`GET ${service}`, (request, params) => {
 		requireSessionFor(request, mock);
 		const view = requireServiceFor(params, mock).view;
-		const body = structuredClone(view);
 		for (const environment of view.environments) {
 			const apply = environment.visibility_apply as { state: string };
 			if (apply.state === "aplicando") environment.visibility_apply = { ...state.visibilityOutcome };
 		}
-		return { status: 200, body };
+		return { status: 200, body: view };
 	});
 	mock.route(`PUT ${service}/environments/{environmentName}/visibility`, (request, params) => {
 		requireSessionFor(request, mock);

@@ -10,6 +10,7 @@ import { registryManageTool } from "./registry.ts";
 import { postgresManageTool, resourcesListTool } from "./resources.ts";
 import { projectStatusTool } from "./status.ts";
 import type { OmiTool } from "./types.ts";
+import { visibilitySetTool } from "./visibility.ts";
 
 export const CATALOG: readonly OmiTool[] = [
 	linkProjectTool,
@@ -19,6 +20,7 @@ export const CATALOG: readonly OmiTool[] = [
 	resourcesListTool,
 	postgresManageTool,
 	registryManageTool,
+	visibilitySetTool,
 	jobsManageTool,
 	publishVersionTool,
 	deployTool,
