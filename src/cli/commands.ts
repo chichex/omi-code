@@ -3,6 +3,7 @@
 import { loginCommand, logoutCommand, whoamiCommand } from "./commands/auth.ts";
 import { importCommand } from "./commands/import.ts";
 import { initCommand } from "./commands/init.ts";
+import { registryCommand, visibilityCommand } from "./commands/platform.ts";
 import { upgradeCommand } from "./commands/upgrade.ts";
 import {
 	deployCommand,
@@ -26,6 +27,8 @@ export const HELP_ROWS: ReadonlyArray<readonly [string, string]> = [
 	["status", "estado del proyecto, services y ambientes"],
 	["env", "variables y secretos de un ambiente"],
 	["resources", "recursos Postgres"],
+	["registry", "registry de la organización"],
+	["visibility", "visibilidad de un ambiente"],
 	["jobs", "jobs cron"],
 	["publish", "publica una versión"],
 	["deploy", "despliega una versión"],
@@ -45,6 +48,8 @@ export const USAGE: Readonly<Record<string, string>> = {
 	status: "omi status [--service <nombre>]",
 	env: "omi env list --env <stage|prod> [--service <nombre>]\nomi env set --env <stage|prod> [NOMBRE=valor...] [--unset NOMBRE] [--secret NOMBRE[=VARIABLE_LOCAL]] [--yes]",
 	resources: "omi resources list [--env <stage|prod>]\nomi resources postgres <create|replace|delete|retry|recover> [--env <e>] [--slug <s>] [--mode <externa|local>] [--resource-id <id>] [--connection-env <VARIABLE>] [--pg-version <v>] [--size <S|M|L>] [--yes]",
+	registry: "omi registry <status|hosts|create|retry-route> [--host <id>] [--org <slug>] [--yes]",
+	visibility: "omi visibility set <privado|organizacion|publico> --env <stage|prod> [--service <nombre>] [--yes]",
 	jobs: "omi jobs <list|get|runs|create|update|delete|run|pause|resume> [nombre] [--service <s>] [--path </ruta>] [--schedule <cron>] [--timezone <iana>] [--timeout <s>] [--env <e>] [--yes]\nomi jobs template --language <go|ts|python> [--path </ruta>]\nomi jobs check <archivo>",
 	publish: "omi publish --version <X.Y.Z> [--service <nombre>] [--via <tag|direct>] [--timeout <s>] [--wait-only] [--yes]",
 	deploy: "omi deploy --env <stage|prod> --version <X.Y.Z> [--service <nombre>] [--yes]",
@@ -63,6 +68,8 @@ export const COMMANDS: Readonly<Record<string, Command | undefined>> = {
 	status: statusCommand,
 	env: envCommand,
 	resources: resourcesCommand,
+	registry: registryCommand,
+	visibility: visibilityCommand,
 	jobs: jobsCommand,
 	publish: publishCommand,
 	deploy: deployCommand,

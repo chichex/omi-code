@@ -69,7 +69,7 @@ test("omi --help_lista todos los subcomandos del corte", async (t) => {
 	const home = await tempDir(t);
 	const io = testIo({ homeDir: home });
 	assert.equal(await run(["--help"], io, recordingDeps()), 0);
-	for (const name of ["login", "logout", "whoami", "init", "status", "env", "resources", "jobs", "publish", "deploy", "promote", "logs", "upgrade", "import", "mcp"]) {
+	for (const name of ["login", "logout", "whoami", "init", "status", "env", "resources", "registry", "visibility", "jobs", "publish", "deploy", "promote", "logs", "upgrade", "import", "mcp"]) {
 		assert.match(io.output(), new RegExp(`^  ${name}\\b`, "m"), name);
 	}
 });
