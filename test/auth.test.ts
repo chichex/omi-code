@@ -5,7 +5,7 @@ import { loadCredentials, saveCredentials } from "../src/auth/credentials.ts";
 import { run } from "../src/cli/main.ts";
 import { credentialsPath } from "../src/core/paths.ts";
 import { tempDir, testIo } from "./helpers/io.ts";
-import { MOCK_EMAIL, MOCK_PASSWORD, startMockOmi } from "./helpers/mock-omi.ts";
+import { MOCK_EMAIL, MOCK_PASSWORD, sessionCookie, startMockOmi, type MockOmi } from "./helpers/mock-omi.ts";
 
 test("login_con --password-stdin guarda la sesión con modo 0600", async (t) => {
 	const home = await tempDir(t);
@@ -98,6 +98,48 @@ test("login_contra una API que no entrega el token explica las causas posibles",
 	assert.match(report.error.hint, /X-Omi-Session-Token/);
 	assert.match(report.error.hint, /chichex\/omi#140/);
 	assert.equal(await loadCredentials(credentialsPath(home)), null);
+	// Sin cookie en la respuesta no hay sesión que cerrar.
+	assert.equal(omi.requests.length, 1);
+});
+
+/** La API abre la sesión y manda su cookie, pero el token no llega en el cuerpo. */
+function openSessionWithoutToken(omi: MockOmi): void {
+	omi.route("POST /api/v1/sessions", () => {
+		omi.sessions.set("prs_huerfana", "active");
+		return {
+			status: 200,
+			headers: { "Set-Cookie": sessionCookie("prs_huerfana") },
+			body: { user_id: "usr_ada", name: "Ada", email: MOCK_EMAIL, organizations: [], expires_at: "2026-11-12T00:00:00Z" },
+		};
+	});
+}
+
+test("login_si la API abrió la sesión pero no entregó el token, la cierra con la cookie recibida", async (t) => {
+	const home = await tempDir(t);
+	const omi = await startMockOmi(t);
+	openSessionWithoutToken(omi);
+	const io = testIo({ homeDir: home, stdin: MOCK_PASSWORD });
+	assert.equal(await run(["login", "--email", MOCK_EMAIL, "--password-stdin", "--api", omi.url, "--json"], io), 1);
+	assert.equal((JSON.parse(io.errors()) as { error: { code: string } }).error.code, "session_token_unavailable");
+	assert.equal(omi.sessions.size, 0);
+	const last = omi.requests.at(-1);
+	assert.equal(`${last?.method} ${last?.path}`, "DELETE /api/v1/sessions/current");
+	assert.equal(last?.authorization, undefined);
+	assert.doesNotMatch(io.output() + io.errors(), /prs_huerfana/);
+	assert.equal(await loadCredentials(credentialsPath(home)), null);
+});
+
+test("login_si no puede cerrar la sesión sin token, reporta igual el error del login", async (t) => {
+	const home = await tempDir(t);
+	const omi = await startMockOmi(t);
+	openSessionWithoutToken(omi);
+	omi.route("DELETE /api/v1/sessions/current", () => ({ status: 500, body: { error: { code: "internal_error", message: "falló el cierre" } } }));
+	const io = testIo({ homeDir: home, stdin: MOCK_PASSWORD });
+	assert.equal(await run(["login", "--email", MOCK_EMAIL, "--password-stdin", "--api", omi.url, "--json"], io), 1);
+	const report = JSON.parse(io.errors()) as { error: { code: string } };
+	assert.equal(report.error.code, "session_token_unavailable");
+	assert.equal(`${omi.requests.at(-1)?.method} ${omi.requests.at(-1)?.path}`, "DELETE /api/v1/sessions/current");
+	assert.doesNotMatch(io.errors(), /falló el cierre|internal_error/);
 });
 
 for (const [name, retryAfter, wait] of [

@@ -46,6 +46,8 @@ export interface RequestOptions {
 	timeoutMs?: number;
 	/** Headers propios de un pedido, como el que pide el token en el login. */
 	headers?: Record<string, string>;
+	/** Recibe los headers de una respuesta exitosa, como el Set-Cookie del login. */
+	onHeaders?: (headers: Headers) => void;
 }
 
 export function decode<S extends TSchema>(schema: S, value: unknown, context: string): Static<S> {
@@ -185,7 +187,10 @@ export class OmiClient {
 				cause: error,
 			});
 		}
-		if (response.ok) return response;
+		if (response.ok) {
+			options.onHeaders?.(response.headers);
+			return response;
+		}
 		const text = await response.text();
 		let payload: unknown;
 		try {
