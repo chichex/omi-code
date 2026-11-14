@@ -14,6 +14,8 @@ export type GuardedOperation =
 	| "promote"
 	| "secrets"
 	| "resource"
+	| "registry"
+	| "visibility"
 	| "decommission"
 	| "link_create";
 

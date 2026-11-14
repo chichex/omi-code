@@ -6,6 +6,7 @@ import { jobsManageTool } from "./jobs.ts";
 import { linkProjectTool } from "./link.ts";
 import { crashLogsTool, logsTailTool } from "./logs.ts";
 import { publishVersionTool } from "./publish.ts";
+import { registryManageTool } from "./registry.ts";
 import { postgresManageTool, resourcesListTool } from "./resources.ts";
 import { projectStatusTool } from "./status.ts";
 import type { OmiTool } from "./types.ts";
@@ -17,6 +18,7 @@ export const CATALOG: readonly OmiTool[] = [
 	envSetTool,
 	resourcesListTool,
 	postgresManageTool,
+	registryManageTool,
 	jobsManageTool,
 	publishVersionTool,
 	deployTool,

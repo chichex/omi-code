@@ -4,7 +4,7 @@ import type { OmiClient } from "../client/http.ts";
 import { openSession, resolveOrganization } from "../client/session.ts";
 import { ServiceSchema, type EnvironmentView, type ServiceView } from "../client/views.ts";
 import { OmiError, UsageError } from "../core/errors.ts";
-import { readProjectLink, type ProjectLink, type ServiceLink } from "../project/link.ts";
+import { loadProjectLink, readProjectLink, type ProjectLink, type ServiceLink } from "../project/link.ts";
 import type { ToolRuntime } from "./types.ts";
 
 export interface Scope {
@@ -19,6 +19,20 @@ export async function openScope(runtime: ToolRuntime): Promise<Scope> {
 	const organization = await resolveOrganization(client, link.organizationSlug);
 	const projectPath = `/organizations/${encodeURIComponent(organization.organization_id)}/projects/${encodeURIComponent(link.projectSlug)}`;
 	return { client, link, projectPath };
+}
+
+export interface OrganizationScope {
+	client: OmiClient;
+	organizationSlug: string;
+	organizationPath: string;
+}
+
+/** Para lo que cuelga de la organización: vale sin repo vinculado, con la organización de la sesión. */
+export async function openOrganizationScope(runtime: ToolRuntime, requestedSlug?: string): Promise<OrganizationScope> {
+	const { client, credentials } = await openSession(runtime.io, runtime.apiUrl);
+	const slug = requestedSlug ?? (await loadProjectLink(runtime.io.cwd))?.organizationSlug ?? credentials.defaultOrganizationSlug;
+	const organization = await resolveOrganization(client, slug, runtime.signal);
+	return { client, organizationSlug: organization.slug, organizationPath: `/organizations/${encodeURIComponent(organization.organization_id)}` };
 }
 
 /** Sin nombre sólo se resuelve si el repo tiene un único service. */

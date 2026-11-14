@@ -11,6 +11,7 @@ import { CATALOG } from "../../src/tools/catalog.ts";
 import type { ToolResult, ToolRuntime } from "../../src/tools/types.ts";
 import { tempDir, testIo, type TestIo, type TestIoOptions } from "./io.ts";
 import { environmentView, serviceView, startMockOmi, type MockOmi, type MockProject } from "./mock-omi.ts";
+import { installPlatform, type PlatformState } from "./mock-platform.ts";
 import { installWorkloads, type WorkloadState } from "./mock-workloads.ts";
 
 export interface Linked {
@@ -18,6 +19,7 @@ export interface Linked {
 	repo: string;
 	omi: MockOmi;
 	workloads: WorkloadState;
+	platform: PlatformState;
 	project: MockProject;
 	io(overrides?: Partial<TestIoOptions>): TestIo;
 	runtime(overrides?: Partial<ToolRuntime>, io?: TestIo): ToolRuntime;
@@ -52,6 +54,7 @@ export async function linkedProject(t: TestContext, services: [string, number][]
 	const repo = await tempDir(t);
 	const omi = await startMockOmi(t);
 	const workloads = installWorkloads(omi);
+	const platform = installPlatform(omi);
 	omi.sessions.set("prs_test", "active");
 	await saveCredentials(credentialsPath(home), {
 		apiUrl: omi.url,
@@ -89,6 +92,7 @@ export async function linkedProject(t: TestContext, services: [string, number][]
 		repo,
 		omi,
 		workloads,
+		platform,
 		project,
 		io,
 		runtime,

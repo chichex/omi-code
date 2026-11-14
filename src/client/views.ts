@@ -143,7 +143,34 @@ export const ResourceOperationSchema = Type.Object({
 	error: OptionalString,
 });
 
+export const HostSchema = Type.Object({
+	id: Type.String(),
+	name: Type.String(),
+	state: Type.String(),
+	is_control_plane: Type.Boolean(),
+	approved: Type.Boolean(),
+	registry_eligible: Type.Boolean(),
+});
+
+export const HostsSchema = Type.Object({ hosts: Type.Array(HostSchema) });
+
+export const RegistrySchema = Type.Object({
+	state: Type.String(),
+	host_id: Type.String(),
+	host_name: Type.String(),
+	hostname: Type.String(),
+	push_username: Type.String(),
+	last_error: OptionalString,
+	public_route: Type.String(),
+	route_error: OptionalString,
+});
+
+/** Única respuesta que trae la contraseña de push: OMI guarda sólo su hash. */
+export const RegistryCredentialsSchema = Type.Object({ registry: RegistrySchema, push_password: Type.String({ minLength: 1 }) });
+
 export type ServiceView = Static<typeof ServiceSchema>;
 export type EnvironmentView = Static<typeof EnvironmentSchema>;
 export type Variable = Static<typeof VariableSchema>;
 export type Deployment = Static<typeof DeploymentSchema>;
+export type HostView = Static<typeof HostSchema>;
+export type RegistryView = Static<typeof RegistrySchema>;
