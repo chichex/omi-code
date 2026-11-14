@@ -69,7 +69,7 @@ async function mayCreate(request: LinkRequest, context: LinkContext, what: strin
 }
 
 function missing(what: string): OmiError {
-	return new OmiError("link_target_missing", `${what} no existe en OMI`, { hint: "volvé a correr con --create para crearlo" });
+	return new OmiError("link_target_missing", `${what} no existe en OMI`, { hint: "volvé a correr con --create en una terminal interactiva: crear pide confirmación humana" });
 }
 
 async function ensureProject(client: OmiClient, base: string, request: LinkRequest, context: LinkContext): Promise<boolean> {

@@ -57,7 +57,8 @@ export async function initCommand(args: string[], io: Io): Promise<number> {
 		...(values.env === undefined ? {} : { environments: values.env.split(",").map((name) => name.trim()) }),
 	};
 	let approved = false;
-	const guard = cliGuard(io, { yes: values.create === true });
+	// `--create` pide crear lo que falte: habilita la pregunta, no la responde.
+	const guard = cliGuard(io, { yes: false, ...(values.create === true ? { requestFlag: "--create" } : {}) });
 	const context: LinkContext = {
 		io,
 		...(values.api === undefined ? {} : { apiUrl: values.api }),

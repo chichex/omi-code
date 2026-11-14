@@ -99,9 +99,9 @@ test("init_soporta monorepo con varios services y adapta el workflow a cada ruta
 	assert.match(workflow, /-t web:"\$VERSION" -f apps\/web\/Dockerfile\.web apps\/web/);
 });
 
-test("init --create_crea proyecto y service que faltan", async (t) => {
+test("init --create_con el sí del humano crea proyecto y service que faltan", async (t) => {
 	const { home, repo, omi } = await setup(t);
-	const io = testIo({ homeDir: home, cwd: repo });
+	const io = testIo({ homeDir: home, cwd: repo, interactive: true, answers: ["s"] });
 	const code = await run(["init", "--project", "nueva", "--name", "Nueva", "--service", "api", "--port", "9000", "--create", "--json"], io);
 	assert.equal(code, 0, io.errors());
 	const posts = omi.requests.filter((request) => request.method === "POST");
@@ -115,9 +115,9 @@ test("init --create_crea proyecto y service que faltan", async (t) => {
 	assert.deepEqual(report.created, { project: true, services: ["api"] });
 });
 
-test("init --create_agrega también prod si se pide con --env", async (t) => {
+test("init --create_con el sí del humano agrega también prod si se pide con --env", async (t) => {
 	const { home, repo, omi } = await setup(t);
-	const io = testIo({ homeDir: home, cwd: repo });
+	const io = testIo({ homeDir: home, cwd: repo, interactive: true, answers: ["s"] });
 	const code = await run(["init", "--project", "nueva", "--service", "api", "--create", "--env", "stage,prod"], io);
 	assert.equal(code, 0, io.errors());
 	const environments = omi.projects.get("nueva")?.services.get("api")?.view.environments ?? [];
@@ -128,7 +128,7 @@ test("init_espera el recibo si la creación del service queda en cola", async (t
 	const { home, repo, omi } = await setup(t);
 	seedProject(omi, "tienda", []);
 	omi.queueNext(1);
-	const io = testIo({ homeDir: home, cwd: repo, env: { OMI_POLL_INTERVAL_MS: "1" } });
+	const io = testIo({ homeDir: home, cwd: repo, env: { OMI_POLL_INTERVAL_MS: "1" }, interactive: true, answers: ["s"] });
 	const code = await run(["init", "--project", "tienda", "--service", "api", "--create", "--json"], io);
 	assert.equal(code, 0, io.errors());
 	assert.ok(omi.requests.some((request) => request.path.includes("/queued-mutations/mutation_1")));

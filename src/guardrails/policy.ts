@@ -36,7 +36,7 @@ export interface Guard {
 	readonly canAsk: boolean;
 	/** La sesión ya autorizó operar stage: un flag o un sí previo. */
 	readonly stageAuthorized: boolean;
-	/** Aprobación explícita previa a la operación, como `--yes`. */
+	/** Aprobación previa a la operación, como `--yes`. Sólo alcanza para lo autónomo de stage. */
 	readonly preApproved: boolean;
 	ask(action: GuardedAction): Promise<boolean>;
 	grantStage(): void;
@@ -52,16 +52,20 @@ export function classify(action: GuardedAction): Tier {
 	return "human_required";
 }
 
+/**
+ * Única puerta de las tres caras. Una operación `human_required` sólo sale por `ask`:
+ * ni `preApproved` ni `stageAuthorized` la convierten en `allow`.
+ */
 export function decide(action: GuardedAction, guard: Guard): "allow" | "ask" | "reject" {
 	const tier = classify(action);
 	if (tier === "free") return "allow";
-	if (tier === "stage_autonomous" && guard.stageAuthorized) return "allow";
-	if (guard.preApproved) return "allow";
+	if (tier === "stage_autonomous" && (guard.stageAuthorized || guard.preApproved)) return "allow";
 	return guard.canAsk ? "ask" : "reject";
 }
 
 function rejected(action: GuardedAction): GuardrailError {
-	return new GuardrailError(`${action.summary}: requiere confirmación humana`, action.diff);
+	const noShortcut = classify(action) === "human_required" ? "; ni --yes ni ningún otro flag la reemplaza" : "";
+	return new GuardrailError(`${action.summary}: requiere confirmación humana${noShortcut}`, action.diff);
 }
 
 /** Frena antes de mandar nada a la API si ya se sabe que no habrá quien confirme. */

@@ -51,8 +51,9 @@ test("omi env set --secret_pide el valor oculto y no lo imprime", async (t) => {
 
 test("omi env set --secret NOMBRE=VARIABLE_toma el valor de esa variable local", async (t) => {
 	const linked = await linkedProject(t);
-	const io = linked.io({ env: { OMI_POLL_INTERVAL_MS: "1", LOCAL: "de-entorno" } });
-	assert.equal(await run(["env", "set", "--env", "stage", "--secret", "API_KEY=LOCAL", "--yes"], io), 0, io.errors());
+	const io = linked.io({ env: { OMI_POLL_INTERVAL_MS: "1", LOCAL: "de-entorno" }, interactive: true, answers: ["s"] });
+	assert.equal(await run(["env", "set", "--env", "stage", "--secret", "API_KEY=LOCAL"], io), 0, io.errors());
+	assert.equal(io.prompts.length, 1);
 	assert.equal(linked.workloads.secrets.get("stage/API_KEY"), "de-entorno");
 });
 
@@ -74,11 +75,21 @@ test("omi deploy a prod_interactivo muestra el diff y respeta un no", async (t) 
 	assert.deepEqual(linked.mutations(), []);
 });
 
-test("omi deploy a prod --yes_aprueba sin terminal", async (t) => {
+test("omi deploy a prod --yes_sin terminal no aprueba: sale con 2 y no despliega", async (t) => {
 	const linked = await linkedProject(t);
 	withVersions(linked, "1.1.0");
 	const io = linked.io();
-	assert.equal(await run(["deploy", "--env", "prod", "--version", "1.1.0", "--yes"], io), 0, io.errors());
+	assert.equal(await run(["deploy", "--env", "prod", "--version", "1.1.0", "--yes", "--json"], io), 2);
+	assert.equal((JSON.parse(io.errors()) as { error: { code: string } }).error.code, "guardrail_confirmation_required");
+	assert.equal(environment(linked, "prod").current_version, undefined);
+	assert.deepEqual(linked.mutations(), []);
+});
+
+test("omi deploy a prod_con el sí del humano despliega", async (t) => {
+	const linked = await linkedProject(t);
+	withVersions(linked, "1.1.0");
+	const io = linked.io({ interactive: true, answers: ["s"] });
+	assert.equal(await run(["deploy", "--env", "prod", "--version", "1.1.0"], io), 0, io.errors());
 	assert.equal(environment(linked, "prod").current_version, "1.1.0");
 });
 
@@ -118,12 +129,12 @@ test("omi deploy_con un ambiente inválido es error de uso", async (t) => {
 	assert.equal(await run(["deploy", "--env", "qa", "--version", "1.1.0"], linked.io()), 2);
 });
 
-test("omi promote --yes_promueve la versión de stage", async (t) => {
+test("omi promote_con el sí del humano promueve la versión de stage", async (t) => {
 	const linked = await linkedProject(t);
 	withVersions(linked, "1.1.0");
 	environment(linked, "prod").promotion = { version: "1.1.0" };
-	const io = linked.io();
-	assert.equal(await run(["promote", "--yes"], io), 0, io.errors());
+	const io = linked.io({ interactive: true, answers: ["s"] });
+	assert.equal(await run(["promote"], io), 0, io.errors());
 	assert.equal(environment(linked, "prod").current_version, "1.1.0");
 });
 
@@ -165,8 +176,8 @@ test("omi jobs_crea, lista y genera la plantilla", async (t) => {
 
 test("omi resources_lista y gestiona Postgres", async (t) => {
 	const linked = await linkedProject(t);
-	const create = linked.io();
-	assert.equal(await run(["resources", "postgres", "create", "--env", "stage", "--slug", "app", "--mode", "local", "--yes"], create), 0, create.errors());
+	const create = linked.io({ interactive: true, answers: ["s"] });
+	assert.equal(await run(["resources", "postgres", "create", "--env", "stage", "--slug", "app", "--mode", "local"], create), 0, create.errors());
 	const list = linked.io();
 	assert.equal(await run(["resources", "list", "--env", "stage"], list), 0, list.errors());
 	assert.match(list.output(), /POSTGRES_URL_APP/);

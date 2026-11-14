@@ -230,9 +230,25 @@ Son controles locales para las superficies soportadas, no aislamiento de un proc
 |---|---|
 | Lecturas | libre |
 | Variables no secretas, jobs y deploy en stage, publicar | autónomo en una sesión autorizada |
-| Cualquier cosa en prod, secretos, Postgres, registry, visibilidad, bajas | humano, siempre |
+| Cualquier cosa en prod, secretos, Postgres, registry, visibilidad, bajas, crear un proyecto o un service | humano, siempre, con una confirmación interactiva |
 
-En la TUI, el primer sí a una operación de stage vale para toda la sesión. En `omi mcp`, lo hace el flag `--authorize-stage` y la aprobación humana llega por elicitación del cliente MCP. En la CLI sin terminal, `--yes` aprueba; dentro de una sesión agéntica, no vale.
+«Humano, siempre» sólo se aprueba respondiendo una pregunta en el momento: en una terminal (la CLI), en el diálogo de la TUI o por elicitación del cliente MCP.
+Ningún flag la reemplaza. Si no hay cómo preguntar, la operación sale con `2` y `guardrail_confirmation_required` sin mandar nada a OMI.
+
+| Aprobación previa | Lo autónomo de stage | Lo que exige un humano |
+|---|---|---|
+| `--yes` en la CLI | pasa sin preguntar | no aprueba: con terminal pregunta igual, sin terminal rechaza |
+| `omi init --create` | no aplica | pide crear lo que falte, no lo aprueba: con terminal pregunta, sin terminal rechaza |
+| El primer sí de la sesión en la TUI | vale para toda la sesión | no aprueba: cada operación vuelve a preguntar |
+| `omi mcp --authorize-stage` | pasa sin preguntar | no aprueba: pregunta por elicitación, y sin ella rechaza |
+
+En la CLI, fuera de una sesión agéntica, lo autónomo de stage corre sin preguntar con o sin `--yes`: el flag se sigue aceptando para no romper scripts.
+Dentro de una sesión agéntica `--yes` no vale para nada y la terminal no cuenta como humano.
+
+**Cambio incompatible.** Hasta ahora `--yes` aprobaba cualquier operación en la CLI sin terminal, y `omi init --create` creaba el proyecto y los services sin preguntar.
+Un script o un CI que hacía `omi deploy --env prod --yes`, `omi promote --yes`, `omi env set --secret … --yes`, `omi resources postgres … --yes`,
+`omi registry create --yes`, `omi visibility set … --yes` u `omi init --create` ahora sale con `2` y `guardrail_confirmation_required`.
+No hay un reemplazo desatendido: esas operaciones se corren desde una terminal y se confirman a mano. Publicar y operar stage siguen funcionando igual.
 
 El bump semanal de Pi abre un PR sólo tras typecheck, tests y empaquetado en el mismo workflow. La revisión y el merge son humanos, y mergearlo publica una release. Ese PR muestra una CI esperando aprobación: se puede mergear sin aprobarla, porque el workflow ya publicó `cierre`.
 
@@ -330,6 +346,9 @@ No confíes en estos checks como barrera frente a código hostil con acceso a cr
 El aislamiento y la autorización fuera del control del agente quedan pendientes en [CLI #5](https://github.com/chichex/omi-code/issues/5)
 y [MCP #6](https://github.com/chichex/omi-code/issues/6). Las sesiones identificadas como agénticas no aceptan `--yes`,
 `--create`, pseudo-terminales ni `--authorize-stage` como aprobación; ocultar esa identidad sigue fuera de la garantía actual.
+
+Que `--yes` y `--create` ya no aprueben lo que exige un humano cierra el camino directo: un agente externo o un script sin terminal no puede crear,
+promover ni tocar prod. No cierra el indirecto: la CLI toma como humano a quien responde en un TTY, y un agente con bash puede fabricar uno y contestar «s».
 
 ## Licencia
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { classify, decide, enforce, type Guard, type GuardedAction, type Tier } from "../src/guardrails/policy.ts";
-import { cliGuard, isAgentSession } from "../src/guardrails/surfaces.ts";
+import { classify, decide, enforce, type EnvironmentName, type Guard, type GuardedAction, type GuardedOperation, type Tier } from "../src/guardrails/policy.ts";
+import { cliGuard, isAgentSession, mcpGuard, tuiGuard } from "../src/guardrails/surfaces.ts";
 import { GUARDRAIL_CONFIRMATION_REQUIRED, GuardrailError } from "../src/core/errors.ts";
 import { testIo } from "./helpers/io.ts";
 
@@ -64,7 +64,9 @@ const decisions: [string, GuardedAction, Partial<Guard>, "allow" | "ask" | "reje
 	["stage sin autorizar ni humano", action("deploy", "stage"), {}, "reject"],
 	["prod con sesión autorizada y humano", action("deploy", "prod"), { stageAuthorized: true, canAsk: true }, "ask"],
 	["prod con sesión autorizada sin humano", action("deploy", "prod"), { stageAuthorized: true }, "reject"],
-	["prod con aprobación explícita", action("deploy", "prod"), { preApproved: true }, "allow"],
+	["prod con aprobación previa y sin humano", action("deploy", "prod"), { preApproved: true }, "reject"],
+	["prod con aprobación previa y con humano", action("deploy", "prod"), { preApproved: true, canAsk: true }, "ask"],
+	["stage con aprobación previa y sin sesión autorizada", action("deploy", "stage"), { preApproved: true }, "allow"],
 	["secreto en stage autorizado sin humano", action("secrets", "stage"), { stageAuthorized: true }, "reject"],
 	["secreto con humano", action("secrets", "stage"), { canAsk: true }, "ask"],
 ];
@@ -134,7 +136,7 @@ test("cliGuard_un humano en la CLI tiene stage autorizado", () => {
 	assert.equal(cli.preApproved, false);
 });
 
-test("cliGuard_--yes aprueba en modo no interactivo", () => {
+test("cliGuard_--yes sin terminal queda como aprobación previa, que sólo alcanza para lo autónomo de stage", () => {
 	assert.equal(cliGuard(testIo({ homeDir: "/h" }), { yes: true }).preApproved, true);
 });
 
@@ -157,4 +159,178 @@ test("cliGuard_interactivo muestra el diff por stderr y pregunta", async () => {
 	const cli = cliGuard(io, { yes: false });
 	assert.equal(await cli.ask(action("deploy", "prod")), true);
 	assert.match(io.errors(), /diff exacto/);
+});
+
+// Matriz completa. Los niveles y las decisiones están escritos a mano: no se derivan de classify() ni de decide().
+type Decision = "allow" | "ask" | "reject";
+const H: Tier = "human_required";
+const S: Tier = "stage_autonomous";
+const F: Tier = "free";
+
+/** Nivel de cada operación sin ambiente, en stage y en prod. */
+const TIERS = {
+	read: [F, F, F],
+	variables: [H, S, H],
+	jobs: [H, S, H],
+	publish: [S, S, S],
+	deploy: [H, S, H],
+	promote: [H, H, H],
+	secrets: [H, H, H],
+	resource: [H, H, H],
+	registry: [H, H, H],
+	visibility: [H, H, H],
+	decommission: [H, H, H],
+	link_create: [H, H, H],
+} as const satisfies Record<GuardedOperation, readonly [Tier, Tier, Tier]>;
+
+const ENVIRONMENTS: readonly (EnvironmentName | undefined)[] = [undefined, "stage", "prod"];
+
+/** Decisión por nivel para cada combinación de preApproved, stageAuthorized y canAsk. */
+const DECISIONS: Record<Tier, readonly [preApproved: boolean, stageAuthorized: boolean, canAsk: boolean, decision: Decision][]> = {
+	free: [
+		[false, false, false, "allow"],
+		[false, false, true, "allow"],
+		[false, true, false, "allow"],
+		[false, true, true, "allow"],
+		[true, false, false, "allow"],
+		[true, false, true, "allow"],
+		[true, true, false, "allow"],
+		[true, true, true, "allow"],
+	],
+	stage_autonomous: [
+		[false, false, false, "reject"],
+		[false, false, true, "ask"],
+		[false, true, false, "allow"],
+		[false, true, true, "allow"],
+		[true, false, false, "allow"],
+		[true, false, true, "allow"],
+		[true, true, false, "allow"],
+		[true, true, true, "allow"],
+	],
+	human_required: [
+		[false, false, false, "reject"],
+		[false, false, true, "ask"],
+		[false, true, false, "reject"],
+		[false, true, true, "ask"],
+		[true, false, false, "reject"],
+		[true, false, true, "ask"],
+		[true, true, false, "reject"],
+		[true, true, true, "ask"],
+	],
+};
+
+const OPERATIONS = Object.keys(TIERS) as GuardedOperation[];
+
+function humanRequiredActions(): GuardedAction[] {
+	return OPERATIONS.flatMap((operation) => ENVIRONMENTS.filter((_, index) => TIERS[operation][index] === H).map((environment) => action(operation, environment)));
+}
+
+function stageAutonomousActions(): GuardedAction[] {
+	return OPERATIONS.flatMap((operation) => ENVIRONMENTS.filter((_, index) => TIERS[operation][index] === S).map((environment) => action(operation, environment)));
+}
+
+for (const operation of OPERATIONS) {
+	ENVIRONMENTS.forEach((environment, index) => {
+		const tier = TIERS[operation][index] as Tier;
+		test(`matriz_${operation} en ${environment ?? "ningún ambiente"} es ${tier} y decide según la tabla`, () => {
+			const target = action(operation, environment);
+			assert.equal(classify(target), tier);
+			for (const [preApproved, stageAuthorized, canAsk, expected] of DECISIONS[tier]) {
+				assert.equal(decide(target, guard({ preApproved, stageAuthorized, canAsk })), expected, `preApproved=${preApproved} stageAuthorized=${stageAuthorized} canAsk=${canAsk}`);
+			}
+		});
+	});
+}
+
+test("matriz_cubre 36 casos, 27 de ellos con humano obligatorio", () => {
+	assert.equal(OPERATIONS.length * ENVIRONMENTS.length, 36);
+	assert.equal(humanRequiredActions().length, 27);
+	assert.equal(stageAutonomousActions().length, 6);
+});
+
+test("enforce_una aprobación previa no evita la pregunta de una operación con humano obligatorio", async () => {
+	for (const target of humanRequiredActions()) {
+		let asked = 0;
+		const approving = guard({ preApproved: true, stageAuthorized: true, canAsk: true, ask: async () => { asked += 1; return true; } });
+		await enforce(target, approving);
+		assert.equal(asked, 1, `${target.operation} ${target.environment}`);
+	}
+});
+
+test("enforce_sin humano el rechazo avisa que ningún flag reemplaza la confirmación", async () => {
+	await assert.rejects(enforce(action("deploy", "prod"), guard({ preApproved: true })), (error: GuardrailError) => {
+		assert.equal(error.code, GUARDRAIL_CONFIRMATION_REQUIRED);
+		assert.match(error.message, /confirmación humana/);
+		assert.match(error.message, /--yes/);
+		return true;
+	});
+});
+
+test("cliGuard_--yes sin terminal no aprueba ninguna operación con humano obligatorio", async () => {
+	for (const target of humanRequiredActions()) {
+		const io = testIo({ homeDir: "/h" });
+		await assert.rejects(enforce(target, cliGuard(io, { yes: true })), (error: GuardrailError) => error.code === GUARDRAIL_CONFIRMATION_REQUIRED, `${target.operation} ${target.environment}`);
+		assert.deepEqual(io.prompts, []);
+	}
+});
+
+test("cliGuard_--yes con terminal pregunta igual y avisa por qué", async () => {
+	for (const target of humanRequiredActions()) {
+		const io = testIo({ homeDir: "/h", interactive: true, answers: ["s"] });
+		await enforce(target, cliGuard(io, { yes: true }));
+		assert.equal(io.prompts.length, 1, `${target.operation} ${target.environment}`);
+		assert.match(io.errors(), /--yes no aprueba/);
+	}
+});
+
+test("cliGuard_--yes con terminal respeta un no", async () => {
+	const io = testIo({ homeDir: "/h", interactive: true, answers: ["n"] });
+	await assert.rejects(enforce(action("promote", "prod"), cliGuard(io, { yes: true })), (error: GuardrailError) => error.code === "guardrail_declined");
+});
+
+test("cliGuard_sin --yes la pregunta no menciona el flag", async () => {
+	const io = testIo({ homeDir: "/h", interactive: true, answers: ["s"] });
+	await enforce(action("promote", "prod"), cliGuard(io, { yes: false }));
+	assert.doesNotMatch(io.errors(), /--yes/);
+});
+
+test("cliGuard_lo autónomo de stage sigue pasando sin preguntar, con y sin --yes", async () => {
+	for (const yes of [true, false]) {
+		for (const target of stageAutonomousActions()) {
+			const io = testIo({ homeDir: "/h", interactive: true });
+			await enforce(target, cliGuard(io, { yes }));
+			assert.deepEqual(io.prompts, []);
+		}
+	}
+});
+
+test("tuiGuard_el primer sí de stage no abre operaciones con humano obligatorio", async () => {
+	const titles: string[] = [];
+	const session = { stageAuthorized: false };
+	const ui = { confirm: async (title: string) => { titles.push(title); return true; } };
+	await enforce(action("deploy", "stage"), tuiGuard(session, ui));
+	assert.equal(session.stageAuthorized, true);
+	assert.equal(titles.length, 1);
+	for (const target of humanRequiredActions()) {
+		const before: number = titles.length;
+		await enforce(target, tuiGuard(session, ui));
+		assert.equal(titles.length, before + 1, `${target.operation} ${target.environment}`);
+		await assert.rejects(enforce(target, tuiGuard(session, undefined)), (error: GuardrailError) => error.code === GUARDRAIL_CONFIRMATION_REQUIRED);
+	}
+	await enforce(action("variables", "stage"), tuiGuard(session, ui));
+	assert.equal(titles.length, 1 + humanRequiredActions().length);
+});
+
+test("mcpGuard_--authorize-stage no abre operaciones con humano obligatorio", async () => {
+	for (const target of humanRequiredActions()) {
+		let elicited = 0;
+		const options = { stageAuthorized: true, elicit: async () => { elicited += 1; return true; } };
+		await assert.rejects(enforce(target, mcpGuard({ ...options, canElicit: () => false })), (error: GuardrailError) => error.code === GUARDRAIL_CONFIRMATION_REQUIRED);
+		assert.equal(elicited, 0);
+		await enforce(target, mcpGuard({ ...options, canElicit: () => true }));
+		assert.equal(elicited, 1, `${target.operation} ${target.environment}`);
+	}
+	for (const target of stageAutonomousActions()) {
+		await enforce(target, mcpGuard({ stageAuthorized: true, canElicit: () => false, elicit: async () => { throw new Error("no debería preguntar"); } }));
+	}
 });

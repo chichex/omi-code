@@ -27,10 +27,11 @@ export interface Linked {
 	mutations(): string[];
 }
 
+/** Deja pasar todo: lo que exige un humano lo aprueba un humano que siempre dice que sí. */
 export function allowAll(): Guard {
 	return {
 		surface: "cli",
-		canAsk: false,
+		canAsk: true,
 		preApproved: true,
 		stageAuthorized: true,
 		ask: async () => true,

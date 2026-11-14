@@ -31,6 +31,7 @@ function helpText(): string {
 		...rows,
 		"",
 		"Salida: 0 ok · 1 error de ejecución o API · 2 error de uso o guardrail bloqueado.",
+		"Prod, secretos, Postgres, registry, visibilidad y crear un proyecto o un service se confirman en una terminal interactiva: ni --yes ni --create lo aprueban.",
 	].join("\n");
 }
 
