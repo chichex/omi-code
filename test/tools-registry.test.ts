@@ -321,3 +321,10 @@ test("omi_registry_manage create_un rechazo 4xx del alta no consulta el estado n
 	assert.equal(linked.omi.requests.at(-1)?.method, "POST");
 	assert.deepEqual(await registryFiles(linked), []);
 });
+
+test("omi_registry_manage hosts_sólo exige de un host los campos que lee", async (t) => {
+	const linked = await linkedProject(t);
+	linked.platform.hosts = [{ id: "hst_cp", name: "cp", state: "disponible", registry_eligible: true }];
+	const result = await linked.call("omi_registry_manage", { action: "hosts" });
+	assert.match(result.text, /hst_cp cp: disponible · puede alojar el registry/);
+});
