@@ -24,7 +24,7 @@ test("protocolo_define variables, headers y archivos", () => {
 			trigger: protocol.ENV_TRIGGER_SECRET,
 			headers: [protocol.HEADER_JOB, protocol.HEADER_SCHEDULED_AT, protocol.HEADER_ATTEMPT, protocol.HEADER_TIMESTAMP, protocol.HEADER_SIGNATURE],
 			files: [protocol.PROJECT_LINK_FILE, protocol.OMI_HOME_DIR, protocol.CREDENTIALS_FILE],
-			login: [protocol.HEADER_SESSION_TOKEN, protocol.SESSION_TOKEN_IN_BODY],
+			login: [protocol.HEADER_SESSION_TOKEN, protocol.SESSION_TOKEN_IN_BODY, protocol.SESSION_COOKIE],
 		},
 		{
 			env: ["PORT", "OMI_ENVIRONMENT", "OMI_VERSION", "OMI_"],
@@ -32,7 +32,7 @@ test("protocolo_define variables, headers y archivos", () => {
 			trigger: "OMI_TRIGGER_SECRET",
 			headers: ["X-Omi-Job", "X-Omi-Scheduled-At", "X-Omi-Attempt", "X-Omi-Timestamp", "X-Omi-Signature"],
 			files: [".omi/project.json", ".omi", "credentials.json"],
-			login: ["X-Omi-Session-Token", "body"],
+			login: ["X-Omi-Session-Token", "body", "__Host-omi_session"],
 		},
 	);
 });
@@ -48,6 +48,7 @@ test("protocolo_coincide con el código de chichex/omi", { skip: omiRepo === und
 	const login = read("internal/api/login_http.go");
 	assert.ok(login.includes(`"${protocol.HEADER_SESSION_TOKEN}"`), `${protocol.HEADER_SESSION_TOKEN} en internal/api/login_http.go`);
 	assert.ok(login.includes(`"${protocol.SESSION_TOKEN_IN_BODY}"`), "valor del header en internal/api/login_http.go");
+	assert.ok(read("internal/api/http.go").includes(`sessionCookieName = "${protocol.SESSION_COOKIE}"`), "cookie de sesión en internal/api/http.go");
 	const variables = read("internal/api/variables.go");
 	for (const name of [protocol.ENV_PORT, protocol.ENV_OMI_ENVIRONMENT, protocol.ENV_OMI_VERSION]) {
 		assert.ok(variables.includes(`"${name}"`), `${name} en internal/api/variables.go`);

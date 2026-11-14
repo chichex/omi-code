@@ -30,6 +30,8 @@ export const HEADER_SIGNATURE = "X-Omi-Signature";
 // Login: un cliente sin cookies pide el token de la sesión en el cuerpo con este header.
 export const HEADER_SESSION_TOKEN = "X-Omi-Session-Token";
 export const SESSION_TOKEN_IN_BODY = "body";
+/** Cookie con que omi-api abre la sesión del panel: su valor es el token de la sesión. */
+export const SESSION_COOKIE = "__Host-omi_session";
 
 // Labels OCI que el barrido de versiones de OMI exige en cada imagen.
 export const LABEL_VERSION = "org.opencontainers.image.version";

@@ -6,7 +6,7 @@ import type { OmiClient } from "../client/http.ts";
 import { PrincipalSchema, anonymousClient, openSession, type Principal } from "../client/session.ts";
 import { ApiError, OmiError } from "../core/errors.ts";
 import { credentialsPath } from "../core/paths.ts";
-import { HEADER_SESSION_TOKEN, SESSION_TOKEN_IN_BODY } from "../protocol/constants.ts";
+import { HEADER_SESSION_TOKEN, SESSION_COOKIE, SESSION_TOKEN_IN_BODY } from "../protocol/constants.ts";
 import { deleteCredentials, loadCredentials, saveCredentials } from "./credentials.ts";
 
 const LoginResponse = Type.Intersect([
@@ -51,20 +51,42 @@ export async function login(input: LoginInput, io: Io): Promise<Principal> {
 }
 
 /**
- * La API ya abrió una sesión que omi no puede usar: se cierra con la cookie que vino en la
- * respuesta, que sólo vuelve a esa misma API. Es un intento: si falla, manda el error del login.
+ * La API ya abrió una sesión que omi no puede usar: se cierra con su cookie de sesión, que sólo
+ * vuelve a esa misma API. Es un intento: si falla, manda el error del login.
  */
 async function closeUnusableSession(client: OmiClient, setCookies: string[]): Promise<void> {
-	const cookie = setCookies
-		.map((setCookie) => setCookie.split(";", 1)[0]!.trim())
-		.filter((pair) => !pair.endsWith("="))
-		.join("; ");
-	if (cookie === "") return;
+	const cookie = sessionCookieFrom(setCookies);
+	if (cookie === undefined) return;
 	try {
 		await client.requestEmpty("DELETE", "/sessions/current", { headers: { Cookie: cookie }, timeoutMs: CLOSE_TIMEOUT_MS });
 	} catch {
 		// La sesión queda abierta hasta vencer; el error que se reporta es el del login.
 	}
+}
+
+/**
+ * El par `nombre=valor` de la cookie de sesión de OMI entre los Set-Cookie de una respuesta.
+ * Las de otro nombre son de un intermediario y no se reenvían; una vacía o vencida es un borrado.
+ */
+function sessionCookieFrom(setCookies: string[]): string | undefined {
+	for (const setCookie of setCookies) {
+		const [pair = "", ...attributes] = setCookie.split(";").map((part) => part.trim());
+		const separator = pair.indexOf("=");
+		if (separator < 0 || pair.slice(0, separator) !== SESSION_COOKIE) continue;
+		if (pair.length === separator + 1 || isCookieDeletion(attributes)) continue;
+		return pair;
+	}
+	return undefined;
+}
+
+/** Max-Age manda sobre Expires, como en un navegador. */
+function isCookieDeletion(attributes: string[]): boolean {
+	const attribute = (name: string): string | undefined =>
+		attributes.find((part) => part.toLowerCase().startsWith(`${name}=`))?.slice(name.length + 1);
+	const maxAge = attribute("max-age");
+	if (maxAge !== undefined && /^-?\d+$/.test(maxAge)) return Number(maxAge) <= 0;
+	const expires = Date.parse(attribute("expires") ?? "");
+	return !Number.isNaN(expires) && expires <= Date.now();
 }
 
 export async function whoami(io: Io, apiUrl?: string): Promise<Principal> {

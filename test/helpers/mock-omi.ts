@@ -22,7 +22,8 @@ export interface MockResponse {
 	body?: unknown;
 	/** Texto plano en vez de JSON, como los 404 y 405 de http.ServeMux. */
 	text?: string;
-	headers?: Record<string, string>;
+	/** Un header repetido, como varios Set-Cookie, va en un arreglo. */
+	headers?: Record<string, string | string[]>;
 	/** Respuesta en streaming: escribe directo sobre la conexión. */
 	stream?: (response: ServerResponse) => void;
 }
