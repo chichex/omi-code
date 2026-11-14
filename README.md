@@ -82,7 +82,7 @@ el historial y la edición siguen usando el renderer de Pi; no hay un segundo pr
   Esta vista no edita, agrega al stage, comitea ni cambia de branch.
 - **5 · OMI:** proyecto vinculado, servicios y ambientes con versión y estado informados por OMI.
   Usa el vínculo local y la sesión de `omi login`; **r** actualiza. Sin vínculo se indica `omi init`, sin inventar servicios.
-  Es el punto de consulta de infraestructura, separado de GitHub. Las operaciones de variables, recursos, jobs, versiones, logs y deploys
+  Es el punto de consulta de infraestructura, separado de GitHub. Las operaciones de variables, recursos, registry, visibilidad, jobs, versiones, logs y deploys
   siguen disponibles mediante las herramientas en Chat, con sus confirmaciones habituales; el panel no las ejecuta automáticamente.
 - **Ubicación del repo:** la lateral y `/omi-workspace` muestran branch, cambios locales, divergencia cuando existe upstream, tipo de checkout y ruta activa.
   Distingue `Repo principal`, `Worktree · nombre`, HEAD separado y carpetas sin Git. Un worktree no es un sandbox.
@@ -230,7 +230,7 @@ Son controles locales para las superficies soportadas, no aislamiento de un proc
 |---|---|
 | Lecturas | libre |
 | Variables no secretas, jobs y deploy en stage, publicar | autónomo en una sesión autorizada |
-| Cualquier cosa en prod, secretos, Postgres, bajas | humano, siempre |
+| Cualquier cosa en prod, secretos, Postgres, registry, visibilidad, bajas | humano, siempre |
 
 En la TUI, el primer sí a una operación de stage vale para toda la sesión. En `omi mcp`, lo hace el flag `--authorize-stage` y la aprobación humana llega por elicitación del cliente MCP. En la CLI sin terminal, `--yes` aprueba; dentro de una sesión agéntica, no vale.
 
@@ -270,6 +270,33 @@ Para volver atrás, mergeá un `revert:`: `omi upgrade` sólo sube de versión.
 gh workflow run release.yml --ref <rama> -f dry_run=true    # corre todo sin publicar
 gh workflow run release.yml --ref main -f dry_run=false     # reintenta una publicación
 ```
+
+## Registry y visibilidad
+
+Lo que hace falta para llegar a un service público sin pasar por el panel de OMI.
+Son las tools `omi_registry_manage` y `omi_visibility_set`, con los mismos subcomandos en la CLI:
+
+| Subcomando | Qué hace | Quién decide |
+|---|---|---|
+| `omi registry status` | estado del registry de la organización, host y ruta pública | libre |
+| `omi registry hosts` | hosts de la organización y cuáles pueden alojar el registry | libre |
+| `omi registry create [--host <id>]` | aloja el registry en un host; sin `--host` usa el único que puede alojarlo | humano, siempre |
+| `omi registry retry-route` | reintenta publicar el hostname del registry en Cloudflare | humano, siempre |
+| `omi visibility set <privado\|organizacion\|publico> --env <stage\|prod>` | cambia quién alcanza un ambiente y espera a que se aplique | humano, siempre, también en stage |
+
+`--org <slug>` elige la organización del registry; por defecto es la del repo vinculado o la de la sesión. Crear el registry exige el rol de dueño.
+
+OMI entrega la credencial de push del registry una sola vez, al crearlo. omi no la imprime ni la devuelve por MCP:
+la guarda en `~/.omi/registry/<organización>.push-password` con permisos `0600`. Por ejemplo, para cargarla en el CI:
+
+```sh
+gh secret set OMI_REGISTRY_PASSWORD < ~/.omi/registry/acme.push-password
+```
+
+Si ese archivo se pierde hay que rotar la credencial desde el panel: omi todavía no rota ni da de baja el registry.
+
+`publico` deja el hostname del ambiente en internet; `organizacion` lo limita a los services de la organización en el mismo ambiente.
+Repetir `omi visibility set` con el mismo valor reintenta un cambio que quedó fallido; si ya está aplicado, no hace nada.
 
 ## Publicación y reintentos
 
