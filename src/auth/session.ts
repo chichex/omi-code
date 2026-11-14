@@ -25,20 +25,16 @@ export interface LoginInput {
 
 export async function login(input: LoginInput, io: Io): Promise<Principal> {
 	const client = anonymousClient(io, input.apiUrl);
-	// omi-api sólo entrega el token en el cuerpo a quien lo pide: el panel entra con la cookie.
 	let setCookies: string[] = [];
-	const session = await client.request("POST", "/sessions", LoginResponse, {
-		body: { email: input.email, password: input.password },
-		headers: { [HEADER_SESSION_TOKEN]: SESSION_TOKEN_IN_BODY },
-		onHeaders: (headers) => {
+	let session: UsableSession;
+	try {
+		session = await requestSession(client, input, (headers) => {
 			setCookies = headers.getSetCookie();
-		},
-	});
-	if (session.token === undefined || session.token === "" || session.expires_at === undefined) {
-		await closeUnusableSession(client, setCookies);
-		throw new OmiError("session_token_unavailable", "omi-api abrió la sesión pero no entregó el token de sesión", {
-			hint: `esa API puede ser anterior a chichex/omi#140 y no conocer el header ${HEADER_SESSION_TOKEN}, o un intermediario puede estar quitándolo en el camino: revisá la URL con --api u OMI_API_URL`,
 		});
+	} catch (error) {
+		// Un 200 con Set-Cookie ya abrió la sesión, aunque el cuerpo no sirva: sin cookie no hay nada que cerrar.
+		await closeUnusableSession(client, setCookies);
+		throw error;
 	}
 	await saveCredentials(credentialsPath(io.homeDir), {
 		apiUrl: client.apiUrl,
@@ -48,6 +44,24 @@ export async function login(input: LoginInput, io: Io): Promise<Principal> {
 		defaultOrganizationSlug: session.organizations.length === 1 ? session.organizations[0]!.slug : "",
 	});
 	return session;
+}
+
+type UsableSession = Principal & { token: string; expires_at: string };
+
+/** omi-api sólo entrega el token en el cuerpo a quien lo pide: el panel entra con la cookie. */
+async function requestSession(client: OmiClient, input: LoginInput, onHeaders: (headers: Headers) => void): Promise<UsableSession> {
+	const session = await client.request("POST", "/sessions", LoginResponse, {
+		body: { email: input.email, password: input.password },
+		headers: { [HEADER_SESSION_TOKEN]: SESSION_TOKEN_IN_BODY },
+		onHeaders,
+	});
+	const { token, expires_at } = session;
+	if (token === undefined || token === "" || expires_at === undefined) {
+		throw new OmiError("session_token_unavailable", "omi-api abrió la sesión pero no entregó el token de sesión", {
+			hint: `esa API puede ser anterior a chichex/omi#140 y no conocer el header ${HEADER_SESSION_TOKEN}, o un intermediario puede estar quitándolo en el camino: revisá la URL con --api u OMI_API_URL`,
+		});
+	}
+	return { ...session, token, expires_at };
 }
 
 /**

@@ -174,6 +174,31 @@ for (const [name, setCookies] of [
 	});
 }
 
+for (const [name, reply, message] of [
+	["no es JSON", { text: "<html>bienvenido</html>" }, /no es JSON/],
+	["no tiene la forma esperada", { body: { token: "prs_huerfana", expires_at: "2026-11-12T00:00:00Z" } }, /respuesta inesperada/],
+] as const) {
+	test(`login_si la API abrió la sesión pero su respuesta ${name}, la cierra y reporta el error original`, async (t) => {
+		const home = await tempDir(t);
+		const omi = await startMockOmi(t);
+		omi.route("POST /api/v1/sessions", () => {
+			omi.sessions.set("prs_huerfana", "active");
+			return { status: 200, headers: { "Set-Cookie": sessionCookie("prs_huerfana") }, ...reply };
+		});
+		const io = testIo({ homeDir: home, stdin: MOCK_PASSWORD });
+		assert.equal(await run(["login", "--email", MOCK_EMAIL, "--password-stdin", "--api", omi.url, "--json"], io), 1);
+		const report = JSON.parse(io.errors()) as { error: { code: string; message: string } };
+		assert.equal(report.error.code, "unexpected_response");
+		assert.match(report.error.message, message);
+		const last = omi.requests.at(-1);
+		assert.equal(`${last?.method} ${last?.path}`, "DELETE /api/v1/sessions/current");
+		assert.equal(last?.cookie, "__Host-omi_session=prs_huerfana");
+		assert.equal(omi.sessions.size, 0);
+		assert.doesNotMatch(io.output() + io.errors(), /prs_huerfana/);
+		assert.equal(await loadCredentials(credentialsPath(home)), null);
+	});
+}
+
 for (const [name, retryAfter, wait] of [
 	["segundos", "30", /esperá 30 segundos/],
 	["un segundo", "1", /esperá 1 segundo /],
