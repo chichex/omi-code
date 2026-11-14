@@ -26,6 +26,11 @@ export function credentialsPath(homeDir: string): string {
 	return join(omiHome(homeDir), CREDENTIALS_FILE);
 }
 
+/** Credencial de push del registry: OMI la entrega una sola vez y nunca pasa por la salida. */
+export function registryPasswordPath(homeDir: string, organizationSlug: string): string {
+	return join(omiHome(homeDir), "registry", `${organizationSlug}.push-password`);
+}
+
 export function agentDir(homeDir: string): string {
 	return join(omiHome(homeDir), "agent");
 }

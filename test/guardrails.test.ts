@@ -27,6 +27,9 @@ const matrix: [string, GuardedAction, Tier][] = [
 	["baja en stage", action("decommission", "stage"), "human_required"],
 	["baja de proyecto", action("decommission"), "human_required"],
 	["crear proyecto o service", action("link_create"), "human_required"],
+	["registry de la organización", action("registry"), "human_required"],
+	["visibilidad en stage", action("visibility", "stage"), "human_required"],
+	["visibilidad en prod", action("visibility", "prod"), "human_required"],
 	["variables sin ambiente", action("variables"), "human_required"],
 	["deploy sin ambiente", action("deploy"), "human_required"],
 ];
