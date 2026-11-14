@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile, stat } from "node:fs/promises";
+import type { ServerResponse } from "node:http";
 import { test } from "node:test";
 import { loadCredentials, saveCredentials } from "../src/auth/credentials.ts";
 import { run } from "../src/cli/main.ts";
@@ -125,6 +126,8 @@ test("login_si la API abrió la sesión pero no entregó el token, la cierra con
 	assert.equal(await run(["login", "--email", MOCK_EMAIL, "--password-stdin", "--api", omi.url, "--json"], io), 1);
 	assert.equal((JSON.parse(io.errors()) as { error: { code: string } }).error.code, "session_token_unavailable");
 	assert.equal(omi.sessions.size, 0);
+	// Cerrada la sesión, no hay nada que avisar.
+	assert.doesNotMatch(io.errors(), /sesión abierta/);
 	const last = omi.requests.at(-1);
 	assert.equal(`${last?.method} ${last?.path}`, "DELETE /api/v1/sessions/current");
 	assert.equal(last?.authorization, undefined);
@@ -139,11 +142,37 @@ test("login_si no puede cerrar la sesión sin token, reporta igual el error del 
 	omi.route("DELETE /api/v1/sessions/current", () => ({ status: 500, body: { error: { code: "internal_error", message: "falló el cierre" } } }));
 	const io = testIo({ homeDir: home, stdin: MOCK_PASSWORD });
 	assert.equal(await run(["login", "--email", MOCK_EMAIL, "--password-stdin", "--api", omi.url, "--json"], io), 1);
-	const report = JSON.parse(io.errors()) as { error: { code: string } };
+	const report = JSON.parse(io.errors()) as { error: { code: string; message: string; hint: string } };
 	assert.equal(report.error.code, "session_token_unavailable");
+	assert.match(report.error.message, /no entregó el token de sesión/);
 	assert.equal(`${omi.requests.at(-1)?.method} ${omi.requests.at(-1)?.path}`, "DELETE /api/v1/sessions/current");
 	assert.doesNotMatch(io.errors(), /falló el cierre|internal_error/);
+	// El hint original sigue, y una línea más avisa de la sesión que pudo quedar abierta.
+	const lines = report.error.hint.split("\n");
+	assert.match(lines[0] ?? "", /anterior a chichex\/omi#140/);
+	assert.deepEqual(lines.slice(1), [OPEN_SESSION_WARNING]);
 });
+
+const OPEN_SESSION_WARNING = "pudo quedar una sesión abierta en el servidor: vence sola";
+
+for (const [name, closeReply] of [
+	["se corta la conexión", { status: 0, stream: (response: ServerResponse) => void response.destroy() }],
+	["vence su plazo", { status: 0, stream: () => {} }],
+] as const) {
+	test(`login_si el cierre de la sesión no completa porque ${name}, el error original avisa que pudo quedar abierta`, async (t) => {
+		const home = await tempDir(t);
+		const omi = await startMockOmi(t);
+		omi.route("POST /api/v1/sessions", () => ({ status: 200, headers: { "Set-Cookie": sessionCookie("prs_huerfana") }, text: "<html>bienvenido</html>" }));
+		omi.route("DELETE /api/v1/sessions/current", () => closeReply);
+		const io = testIo({ homeDir: home, stdin: MOCK_PASSWORD });
+		assert.equal(await run(["login", "--email", MOCK_EMAIL, "--password-stdin", "--api", omi.url, "--json"], io), 1);
+		const report = JSON.parse(io.errors()) as { error: { code: string; message: string; hint: string } };
+		assert.equal(report.error.code, "unexpected_response");
+		assert.match(report.error.message, /no es JSON/);
+		assert.equal(report.error.hint, OPEN_SESSION_WARNING);
+		assert.doesNotMatch(io.errors(), /api_unreachable|no se pudo conectar/);
+	});
+}
 
 test("login_al cerrar la sesión sin token sólo manda la cookie de sesión de OMI, no las de un intermediario", async (t) => {
 	const home = await tempDir(t);

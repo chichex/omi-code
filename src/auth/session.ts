@@ -17,6 +17,8 @@ const LoginResponse = Type.Intersect([
 /** Plazo del cierre de una sesión sin token: no demora el error del login. */
 const CLOSE_TIMEOUT_MS = 5_000;
 
+const OPEN_SESSION_WARNING = "pudo quedar una sesión abierta en el servidor: vence sola";
+
 export interface LoginInput {
 	email: string;
 	password: string;
@@ -33,8 +35,8 @@ export async function login(input: LoginInput, io: Io): Promise<Principal> {
 		});
 	} catch (error) {
 		// Un 200 con Set-Cookie ya abrió la sesión, aunque el cuerpo no sirva: sin cookie no hay nada que cerrar.
-		await closeUnusableSession(client, setCookies);
-		throw error;
+		const closed = await closeUnusableSession(client, setCookies);
+		throw closed ? error : withOpenSessionWarning(error);
 	}
 	await saveCredentials(credentialsPath(io.homeDir), {
 		apiUrl: client.apiUrl,
@@ -67,15 +69,25 @@ async function requestSession(client: OmiClient, input: LoginInput, onHeaders: (
 /**
  * La API ya abrió una sesión que omi no puede usar: se cierra con su cookie de sesión, que sólo
  * vuelve a esa misma API. Es un intento: si falla, manda el error del login.
+ * Devuelve false si había una sesión que cerrar y el cierre falló o venció su plazo.
  */
-async function closeUnusableSession(client: OmiClient, setCookies: string[]): Promise<void> {
+async function closeUnusableSession(client: OmiClient, setCookies: string[]): Promise<boolean> {
 	const cookie = sessionCookieFrom(setCookies);
-	if (cookie === undefined) return;
+	if (cookie === undefined) return true;
 	try {
 		await client.requestEmpty("DELETE", "/sessions/current", { headers: { Cookie: cookie }, timeoutMs: CLOSE_TIMEOUT_MS });
+		return true;
 	} catch {
 		// La sesión queda abierta hasta vencer; el error que se reporta es el del login.
+		return false;
 	}
+}
+
+/** El mismo error del login, con su código, más una línea que avisa de la sesión sin cerrar. */
+function withOpenSessionWarning(error: unknown): unknown {
+	if (!(error instanceof OmiError)) return error;
+	const hint = error.hint === undefined ? OPEN_SESSION_WARNING : `${error.hint}\n${OPEN_SESSION_WARNING}`;
+	return new OmiError(error.code, error.message, { exitCode: error.exitCode, hint, cause: error });
 }
 
 /**
