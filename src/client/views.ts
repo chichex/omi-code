@@ -37,7 +37,9 @@ export const EnvironmentSchema = Type.Object({
 	last_error: OptionalString,
 	variables: Type.Array(VariableSchema),
 	managed_variables: Type.Array(Type.Object({ name: Type.String(), resource_slug: Type.String() })),
-	access: Type.Object({ state: Type.String(), url: OptionalString }),
+	// Opcional: una omi-api anterior al cambio de visibilidad asíncrono no lo manda.
+	visibility_apply: Type.Optional(Type.Object({ state: Type.String(), last_error: OptionalString })),
+	access: Type.Object({ state: Type.String(), url: OptionalString, last_error: OptionalString, retry_at: OptionalString }),
 	last_deployment: Type.Optional(DeploymentSchema),
 	promotion: Type.Optional(Type.Object({ version: OptionalString, blocked_reason: OptionalString })),
 });
@@ -147,8 +149,6 @@ export const HostSchema = Type.Object({
 	id: Type.String(),
 	name: Type.String(),
 	state: Type.String(),
-	is_control_plane: Type.Boolean(),
-	approved: Type.Boolean(),
 	registry_eligible: Type.Boolean(),
 });
 

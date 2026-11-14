@@ -298,7 +298,7 @@ Son las tools `omi_registry_manage` y `omi_visibility_set`, con los mismos subco
 | `omi registry hosts` | hosts de la organización y cuáles pueden alojar el registry | libre |
 | `omi registry create [--host <id>]` | aloja el registry en un host; sin `--host` usa el único que puede alojarlo | humano, siempre |
 | `omi registry retry-route` | reintenta publicar el hostname del registry en Cloudflare | humano, siempre |
-| `omi visibility set <privado\|organizacion\|publico> --env <stage\|prod>` | cambia quién alcanza un ambiente y espera a que se aplique | humano, siempre, también en stage |
+| `omi visibility set <privado\|organizacion\|publico> --env <stage\|prod>` | cambia quién alcanza un ambiente y espera a que se aplique y a que el acceso quede listo | humano, siempre, también en stage |
 
 `--org <slug>` elige la organización del registry; por defecto es la del repo vinculado o la de la sesión. Crear el registry exige el rol de dueño.
 
@@ -311,8 +311,24 @@ gh secret set OMI_REGISTRY_PASSWORD < ~/.omi/registry/acme.push-password
 
 Si ese archivo se pierde hay que rotar la credencial desde el panel: omi todavía no rota ni da de baja el registry.
 
+El alta puede tardar hasta 2 minutos: OMI publica la ruta en Cloudflare antes de responder. Si la respuesta se pierde
+(timeout, red caída, error 5xx), omi consulta el estado y lo dice con un código propio:
+
+| Código | Qué pasó | Qué hacer |
+|---|---|---|
+| `registry_created_without_credential` | el registry quedó creado, pero la credencial no llegó | rotarla desde el panel |
+| `registry_create_unconfirmed` | no se pudo saber si quedó creado | `omi registry status`; si existe, rotar la credencial desde el panel |
+| `registry_password_not_saved` | la credencial llegó pero no se pudo dejar en su ruta | el error dice en qué archivo temporal `0600` quedó: moverlo a mano |
+
+Si el registry ya existe o tu rol no es dueño, `omi registry create` falla antes de pedir confirmación.
+
 `publico` deja el hostname del ambiente en internet; `organizacion` lo limita a los services de la organización en el mismo ambiente.
-Repetir `omi visibility set` con el mismo valor reintenta un cambio que quedó fallido; si ya está aplicado, no hace nada.
+Repetir `omi visibility set` con el mismo valor reintenta un cambio que quedó fallido; si ya está aplicado, no pide confirmación ni cambia nada.
+Si hay un cambio en curso, espera a que termine y decide sobre el estado real.
+
+El comando termina bien cuando el acceso del ambiente quedó `listo`. Sale con 1, y `access_ready: false` en `--json`, si el acceso
+falló (OMI lo reintenta solo, y el mensaje dice cuándo) o si no quedó listo en 5 minutos. Un ambiente sin versión desplegada
+no publica nada hasta su primer deploy: el comando sale con 0 y lo avisa. `omi status` muestra la visibilidad, su aplicación y el acceso.
 
 ## Publicación y reintentos
 
