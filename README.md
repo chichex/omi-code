@@ -75,7 +75,14 @@ Una extensión del usuario que ya registre `subagent` reemplaza la incluida, sin
 
 ### Configuración y aislamiento
 
-No trae skills ni modelo preconfigurados. Para usar un modelo, entrá con `/login` o importá credenciales.
+No trae skills ni modelo seleccionado de antemano. Para usar un modelo, entrá con `/login` o importá credenciales.
+
+Para **OpenAI / GPT-6.1 Sol**, omi configura por defecto una ventana de **1.050.000 tokens**
+([límite documentado de la API](https://developers.openai.com/api/docs/models/gpt-6.1-sol)).
+Al arrancar agrega únicamente el `contextWindow` faltante en `~/.omi/agent/models.json`;
+respeta un límite explícito en `modelOverrides` o en una definición `models` del usuario.
+No modifica otros modelos ni el proveedor Codex. El contexto largo puede aumentar el costo API:
+se mantienen las tarifas por tramos del catálogo. Esto no verifica permisos ni disponibilidad en tu cuenta.
 
 omi sólo lee configuración de `~/.omi/agent` y del proyecto, del directorio actual hasta la raíz del repo.
 Por ejemplo, no carga `~/.pi/agent`, `~/.agents/skills` ni `~/AGENTS.md`. Para instrucciones globales usá `~/.omi/agent/AGENTS.md`.

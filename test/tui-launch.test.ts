@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 import { agentDir, sourcePiAgentDir as piAgentDir } from "../src/core/paths.ts";
@@ -55,6 +55,81 @@ test("launchTui_usa ~/.omi/agent como configuración global de Pi", async (t) =>
 	assert.equal(calls[0]?.agentDirEnv, agentDir(home));
 	assert.equal((await stat(agentDir(home))).isDirectory(), true);
 	assert.deepEqual(calls[0]?.args.slice(-1), ["--continue"]);
+});
+
+test("launchTui configura Sol con 1.050.000 tokens antes de arrancar Pi", async (t) => {
+	const home = await tempDir(t);
+	await launchTui([], testIo({ homeDir: home }), { piMain: async () => {
+		const models = JSON.parse(await readFile(join(agentDir(home), "models.json"), "utf8"));
+		assert.equal(models.providers.openai.modelOverrides["gpt-6.1-sol"].contextWindow, 1_050_000);
+	} });
+});
+
+test("launchTui agrega el default de Sol sin reemplazar configuración de modelos existente", async (t) => {
+	const home = await tempDir(t);
+	await mkdir(agentDir(home), { recursive: true });
+	const path = join(agentDir(home), "models.json");
+	const original = { providers: { openai: { baseUrl: "https://proxy.example/v1", modelOverrides: { "gpt-6.1-sol": { maxTokens: 32_000 } } }, local: { models: [{ id: "sol", contextWindow: 8192 }] } } };
+	await writeFile(path, JSON.stringify(original));
+	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi([]) });
+	assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
+		providers: { ...original.providers, openai: { ...original.providers.openai, modelOverrides: { "gpt-6.1-sol": { maxTokens: 32_000, contextWindow: 1_050_000 } } } },
+	});
+});
+
+test("launchTui respeta el contextWindow explícito del usuario y no reescribe su archivo", async (t) => {
+	const home = await tempDir(t);
+	await mkdir(agentDir(home), { recursive: true });
+	const path = join(agentDir(home), "models.json");
+	const original = '{ "providers": { "openai": { "modelOverrides": { "gpt-6.1-sol": { "contextWindow": 400000 } } } } }\n';
+	await writeFile(path, original);
+	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi([]) });
+	assert.equal(await readFile(path, "utf8"), original);
+});
+
+test("launchTui conserva una definición completa de Sol del usuario", async (t) => {
+	const home = await tempDir(t);
+	await mkdir(agentDir(home), { recursive: true });
+	const path = join(agentDir(home), "models.json");
+	const original = JSON.stringify({ providers: { openai: { models: [{ id: "gpt-6.1-sol", contextWindow: 500_000 }] } } });
+	await writeFile(path, original);
+	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi([]) });
+	assert.equal(await readFile(path, "utf8"), original);
+});
+
+for (const original of ['{malformed', 'null', '{"providers": []}', '{"providers":{"openai":{"modelOverrides":false}}}']) {
+	test(`launchTui no modifica models.json inválido: ${original}`, async (t) => {
+		const home = await tempDir(t);
+		await mkdir(agentDir(home), { recursive: true });
+		const path = join(agentDir(home), "models.json");
+		await writeFile(path, original);
+		await launchTui([], testIo({ homeDir: home }), { piMain: fakePi([]) });
+		assert.equal(await readFile(path, "utf8"), original);
+	});
+}
+
+test("launchTui agrega el default en JSON con BOM y comentarios, conservándolos", async (t) => {
+	const home = await tempDir(t);
+	await mkdir(agentDir(home), { recursive: true });
+	const path = join(agentDir(home), "models.json");
+	await writeFile(path, '\uFEFF{\n // mis modelos\n "providers": {}\n}\n');
+	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi([]) });
+	const result = await readFile(path, "utf8");
+	assert.ok(result.startsWith('\uFEFF'));
+	assert.ok(result.includes('// mis modelos'));
+	assert.match(result, /"contextWindow": 1050000/);
+});
+
+test("launchTui conserva el symlink de models.json y actualiza su destino", async (t) => {
+	const home = await tempDir(t);
+	await mkdir(agentDir(home), { recursive: true });
+	const path = join(agentDir(home), "models.json");
+	const target = join(home, "mis-modelos.json");
+	await writeFile(target, '{}\n');
+	await symlink(target, path);
+	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi([]) });
+	assert.equal((await lstat(path)).isSymbolicLink(), true);
+	assert.equal(JSON.parse(await readFile(target, "utf8")).providers.openai.modelOverrides["gpt-6.1-sol"].contextWindow, 1_050_000);
 });
 
 test("launchTui_precarga las tools de OMI del catálogo", async (t) => {

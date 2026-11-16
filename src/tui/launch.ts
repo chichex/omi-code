@@ -12,6 +12,7 @@ import { CATALOG } from "../tools/catalog.ts";
 import { defaultExtensions } from "./defaults.ts";
 import { herdrExtension } from "./herdr.ts";
 import { isolatePi } from "./isolation.ts";
+import { ensureModelDefaults } from "./model-defaults.ts";
 import { registerCatalogTools } from "./tools.ts";
 import { runtimeShellExtension } from "./runtime-shell.ts";
 import { workspaceExtension } from "./workspace/index.ts";
@@ -32,6 +33,7 @@ export async function launchTui(args: string[], io: Io, deps: LaunchDeps = {}): 
 	await runPiImportOnboarding(io);
 	const dir = agentDir(io.homeDir);
 	await mkdir(dir, { recursive: true, mode: 0o700 });
+	await ensureModelDefaults(dir);
 	// Pi lee esta variable al resolver sus rutas: tiene que estar antes de importarlo.
 	process.env.PI_CODING_AGENT_DIR = dir;
 	// Lo heredan los comandos que corra el agente: ahí `--yes` no puede valer.
