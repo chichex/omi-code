@@ -62,6 +62,11 @@ const HUMAN_REQUIRED: Case[] = [
 	{ name: "crear un Postgres en stage", args: ["resources", "postgres", "create", "--env", "stage", "--slug", "app", "--mode", "local"] },
 	{ name: "crear un Postgres en prod", args: ["resources", "postgres", "create", "--env", "prod", "--slug", "app", "--mode", "local"] },
 	{ name: "dar de baja un Postgres", args: ["resources", "postgres", "delete", "--resource-id", "res_1"] },
+	...["stage", "prod"].map((environment) => ({
+		name: `ejecutar SQL en ${environment}`,
+		args: ["resources", "postgres", "exec", "--env", environment, "--slug", "app", "DELETE FROM pruebas"],
+		prepare: (linked: Linked) => void linked.workloads.resources.set("res_app", { id: "res_app", environment, slug: "app", mode: "local", variable: "POSTGRES_URL_APP", state: "lista" }),
+	})),
 	{ name: "un job de un service con prod desplegado", args: JOB, prepare: (linked) => void (prod(linked).current_version = "1.0.0") },
 	{ name: "correr un job en prod", args: ["jobs", "run", "facturar", "--env", "prod"] },
 	{ name: "desplegar en prod", args: ["deploy", "--env", "prod", "--version", "1.1.0"], prepare: withVersion },
