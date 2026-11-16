@@ -42,14 +42,14 @@ test("omi_arranca el Pi real usando ~/.omi/agent y sin crear ~/.pi", async (t) =
 	assert.equal(existsSync(join(home, ".pi")), false);
 });
 
-test("omi aplica la ventana larga de Sol en el runtime real de Pi sin red", async (t) => {
+for (const id of ["gpt-5.4", "gpt-5.5", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol", "gpt-6.1-terra"]) test(`omi aplica la ventana larga de ${id} en el runtime real de Pi sin red`, async (t) => {
 	const home = await tempDir(t);
-	const lines = await rpcLines(["--mode", "rpc", "--no-session", "--offline", "--no-mcp", "--model", "openai/gpt-6.1-sol"], home, [{ id: "sol", type: "get_state" }]);
-	const state = lines.find((line) => line.id === "sol");
+	const lines = await rpcLines(["--mode", "rpc", "--no-session", "--offline", "--no-mcp", "--model", `openai/${id}`], home, [{ id: "model", type: "get_state" }]);
+	const state = lines.find((line) => line.id === "model");
 	assert.equal(state?.success, true);
 	const data = state?.data as { model?: { provider: string; id: string; contextWindow: number; maxTokens: number; cost: { tiers?: unknown[] } } };
 	assert.equal(data.model?.provider, "openai");
-	assert.equal(data.model?.id, "gpt-6.1-sol");
+	assert.equal(data.model?.id, id);
 	assert.equal(data.model?.contextWindow, 1_050_000);
 	assert.equal(data.model?.maxTokens, 128_000);
 	assert.ok(data.model?.cost.tiers?.length, "conserva las tarifas de contexto largo del catálogo");

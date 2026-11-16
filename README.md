@@ -77,12 +77,22 @@ Una extensión del usuario que ya registre `subagent` reemplaza la incluida, sin
 
 No trae skills ni modelo seleccionado de antemano. Para usar un modelo, entrá con `/login` o importá credenciales.
 
-Para **OpenAI / GPT-6.1 Sol**, omi configura por defecto una ventana de **1.050.000 tokens**
-([límite documentado de la API](https://developers.openai.com/api/docs/models/gpt-6.1-sol)).
-Al arrancar agrega únicamente el `contextWindow` faltante en `~/.omi/agent/models.json`;
-respeta un límite explícito en `modelOverrides` o en una definición `models` del usuario.
-No modifica otros modelos ni el proveedor Codex. El contexto largo puede aumentar el costo API:
-se mantienen las tarifas por tramos del catálogo. Esto no verifica permisos ni disponibilidad en tu cuenta.
+Para los siguientes modelos del proveedor **OpenAI**, omi configura por defecto una ventana de
+**1.050.000 tokens**, según el límite publicado en la ficha API de cada modelo:
+
+| Familia | Modelos verificados (fuentes oficiales) |
+|---|---|
+| GPT-5.4 / 5.5 | [GPT-5.4](https://developers.openai.com/api/docs/models/gpt-5.4), [GPT-5.5](https://developers.openai.com/api/docs/models/gpt-5.5) |
+| GPT-5.6 | [Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna), [Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol), [Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra) |
+| GPT-6 | [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra), [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna), [Sol](https://developers.openai.com/api/docs/models/gpt-6-sol) |
+| GPT-6.1 | [Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol), [Terra](https://developers.openai.com/api/docs/models/gpt-6.1-terra) |
+
+Al arrancar agrega únicamente los `contextWindow` faltantes en `~/.omi/agent/models.json`;
+respeta por modelo un límite explícito en `modelOverrides` o en una definición `models` del usuario.
+También completa instalaciones que ya tenían el default de GPT-6.1 Sol. No modifica otros modelos,
+proveedores ni el catálogo cacheado: los Claude y Gemini recientes ya declaran aproximadamente 1M en Pi.
+El contexto largo puede aumentar el costo API; se mantienen las tarifas por tramos del catálogo.
+Esto no verifica permisos ni disponibilidad en tu cuenta, ni aplica el límite API al proveedor Codex.
 
 omi sólo lee configuración de `~/.omi/agent` y del proyecto, del directorio actual hasta la raíz del repo.
 Por ejemplo, no carga `~/.pi/agent`, `~/.agents/skills` ni `~/AGENTS.md`. Para instrucciones globales usá `~/.omi/agent/AGENTS.md`.
