@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
+import { Value } from "typebox/value";
+import { SqlResultSchema } from "../src/client/views.ts";
 import * as protocol from "../src/protocol/constants.ts";
 
 const source = readFileSync(new URL("../src/protocol/constants.ts", import.meta.url), "utf8");
@@ -63,4 +65,27 @@ test("protocolo_coincide con el código de chichex/omi", { skip: omiRepo === und
 	for (const label of [protocol.LABEL_VERSION, protocol.LABEL_REVISION, protocol.LABEL_CREATED]) {
 		assert.ok(versions.includes(label) || kit.includes(label), `${label} en la API`);
 	}
+});
+
+// El contrato de SQL nace en chichex/omi#157: sin esos archivos en el checkout, se saltea.
+test("protocolo_consultar y ejecutar SQL coinciden con el código de chichex/omi", { skip: omiRepo === undefined || !existsSync(join(omiRepo, "internal/api/sql_query_http.go")) }, () => {
+	const read = (path: string): string => readFileSync(join(omiRepo ?? "", path), "utf8");
+	const routes = read("internal/api/sql_query_http.go");
+	assert.ok(routes.includes('/resources/{resourceID}"'), "ruta del recurso");
+	for (const action of ["/query", "/exec"]) assert.ok(routes.includes(`base+"${action}"`), `POST …${action}`);
+	const contract = read("internal/api/sql_query.go") + read("internal/api/sql_query_wire.go");
+	// Campos que omi-code manda y los que SqlResultSchema exige o lee.
+	const fields = ["sql", "max_rows", "timeout_seconds", "columns", "rows", "row_count", "truncated", "truncated_by", "rows_affected", "command", "duration_ms", "limits", "max_response_bytes"];
+	for (const field of fields) assert.ok(new RegExp(`json:"${field}[",]`).test(contract), `campo ${field}`);
+	for (const field of ["sqlstate", "detail", "hint", "position"]) assert.ok(routes.includes(`"${field}"`), `campo de error ${field}`);
+	const codes = ["sql_error", "sql_timeout", "sql_connection_failed", "sql_agent_unavailable", "sql_outcome_unknown", "invalid_sql", "invalid_sql_limits"];
+	for (const code of codes) assert.ok(contract.includes(`"${code}"`), `código ${code}`);
+	// Los defaults que la ayuda y el README de omi-code le prometen al usuario.
+	assert.ok(contract.includes("MaxRows: 500, Timeout: 10 * time.Second, MaxResponseBytes: 1 << 20"), "topes por defecto");
+	// Las respuestas literales que los tests de la API exigen tienen que pasar el esquema con el que omi-code las lee.
+	const bodies = [...read("internal/api/sql_query_internal_test.go").matchAll(/wantBody := ((?:`[^`]*`[ \t]*\+?\s*)+)/g)].map((match) =>
+		[...(match[1] ?? "").matchAll(/`([^`]*)`/g)].map((segment) => segment[1] ?? "").join(""),
+	);
+	assert.equal(bodies.length, 2, "respuestas de lectura y de escritura en los tests de la API");
+	for (const body of bodies) assert.ok(Value.Check(SqlResultSchema, JSON.parse(body)), `SqlResultSchema acepta ${body}`);
 });
