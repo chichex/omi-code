@@ -32,10 +32,44 @@ curl -fsSL https://github.com/chichex/omi-code/releases/latest/download/install.
 
 Se instala en `~/.omi`; `OMI_HOME=/ruta/absoluta` permite otra raíz. El binario instalado la infiere de su ubicación.
 
-### Instalación limpia
+### Integraciones por defecto
 
-Una instalación nueva viene vacía: sin skills, sin extensiones ajenas y sin modelo. Sólo trae las tools y las integraciones propias de OMI.
-Para usar un modelo, entrá con `/login` o importá credenciales.
+Una instalación nueva trae estas integraciones **dentro del binario**, sin descargar paquetes ni requerir Pi, Node o npm aparte. También quedan disponibles al actualizar una instalación existente, sin reemplazar sus ajustes.
+
+| Integración | Qué trae | Autenticación |
+|---|---|---|
+| Subagentes | Tool `subagent` con `scout`, `planner`, `reviewer` y `worker`; tareas individuales, paralelas o en cadena | El modelo y razonamiento elegidos en la sesión |
+| KB de [Harness](https://github.com/chichex/harness/tree/main/kb) | MCP `harness-kb`, por Streamable HTTP en `https://kb-prod-chiche.ohmyinfra.com/mcp` | OAuth desde `/mcp login harness-kb` |
+| OMI | El mismo catálogo de `omi mcp`, integrado **nativamente** en el agente, con confirmaciones en la UI | `omi login` |
+
+OMI no levanta un segundo servidor MCP contra sí mismo: duplicaría las tools y perdería el canal de confirmación del padre. `omi mcp` sigue disponible por stdio para clientes externos.
+La KB queda registrada, no autenticada: iniciá sesión desde `/mcp`, donde también podés revisar su estado y reconectarla. Sus tools se descubren con `tool_search` para no llenar el contexto al arrancar. El login de la KB es independiente de `omi login` y del proveedor del modelo.
+
+Ejemplos para pedir en Chat:
+
+```text
+Usá scout para ubicar la autenticación y reviewer para revisar los guardrails, en paralelo.
+Usá una cadena: scout reúne contexto, planner propone el plan con {previous} y worker lo implementa.
+```
+
+Cada subagente tiene contexto propio: recibe la tarea explícita y las instrucciones del proyecto, no la conversación del padre. Usa el SDK de Pi dentro de OMI, sin procesos ni instalaciones externas.
+`scout`, `planner` y `reviewer` sólo tienen las tools disponibles de lectura (`read`, `grep`, `find`, `ls`); `worker` usa las tools invocables del padre, incluidas las de OMI y los MCP ya conectados, sin delegación recursiva ni orquestadores `codemode`/`tool_search`.
+Las llamadas pasan por el pipeline del padre: conservan cwd, hooks, validaciones y confirmaciones. **No es un sandbox:** comparten filesystem, y no hay que asignar los mismos archivos a workers en paralelo.
+Hay un máximo de 8 tareas por llamada, 4 activas en paralelo y 32 turnos por tarea; a los 10 minutos se solicita cancelar. Esc cancela los hijos; una cadena se corta ante el primer error. La cancelación es cooperativa: una operación ya enviada puede terminar. Se reportan progreso y uso, y la salida se limita a 6 KB / 200 líneas por tarea, con un archivo temporal privado para el resultado completo si se trunca.
+
+Se pueden desactivar en `~/.omi/agent/settings.json`:
+
+```json
+{
+  "extensions": ["-builtin:omi-subagents", "-builtin:omi-kb"]
+}
+```
+
+Una extensión del usuario que ya registre `subagent` reemplaza la incluida, sin duplicar la tool. `--no-extensions` omite ambas integraciones por defecto en esa corrida; `--no-mcp` omite la KB, no las tools nativas de OMI. Con `--offline` o `PI_OFFLINE=1` no se registra la KB remota por defecto. Un servidor `harness-kb` en `~/.omi/agent/mcp.json` o en `.pi/mcp.json` (proyecto de confianza) prevalece sobre el default, sin ser modificado. Los cambios de exposición/activación hechos desde `/mcp` sobre el registro por defecto duran esa sesión; para persistirlos, usá los ajustes anteriores o una entrada propia en `mcp.json`.
+
+### Configuración y aislamiento
+
+No trae skills ni modelo preconfigurados. Para usar un modelo, entrá con `/login` o importá credenciales.
 
 omi sólo lee configuración de `~/.omi/agent` y del proyecto, del directorio actual hasta la raíz del repo.
 Por ejemplo, no carga `~/.pi/agent`, `~/.agents/skills` ni `~/AGENTS.md`. Para instrucciones globales usá `~/.omi/agent/AGENTS.md`.
@@ -195,7 +229,7 @@ Al salir libera el pane; `/reload`, `/new`, `/resume` y `/fork` mantienen la int
 
 ### Importar de Pi
 
-Importar es la única forma de traer algo, y siempre duplica: después podés borrar `~/.pi` y omi sigue igual. La excepción es un paquete con `~/.pi` escrito en su código: sigue usando esa ruta.
+Importar es la única forma de traer recursos de otra instalación de Pi, y siempre duplica: después podés borrar `~/.pi` y omi sigue igual. La excepción es un paquete con `~/.pi` escrito en su código: sigue usando esa ruta.
 
 Si ya usabas Pi, el primer arranque ofrece copiar a `~/.omi/agent` con una pregunta por grupo. Pi no se modifica.
 

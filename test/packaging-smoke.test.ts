@@ -14,6 +14,7 @@ import { assetNames, currentPlatform } from "../src/upgrade/release.ts";
 import { FOREIGN, OWN, PI_MARKS, requestSeenByModel, seedConfig, seedPi } from "./helpers/foreign-config.ts";
 import { tempDir } from "./helpers/io.ts";
 import { exerciseWorkspace, plainTerminal } from "./helpers/workspace-pty.ts";
+import { exerciseSubagentRuntime } from "./helpers/subagent-runtime.ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const enabled = process.env.OMI_PACKAGING_SMOKE === "1";
@@ -89,6 +90,7 @@ test("release real_compila, instala y arranca sin Node ni repo", { skip: !enable
 	assert.ok(shellResponse?.data, JSON.stringify(shell));
 	assert.equal((shellResponse.data as { output: string }).output, "unset|del-shell|1");
 	const agent = join(installRoot, "agent");
+	await exerciseSubagentRuntime({ command: binary, cwd: home, agent, env: { HOME: home, PATH: "/usr/bin:/bin", OMI_HOME: "" } });
 	const seededCwd = await seedConfig(home, agent);
 	const body = await requestSeenByModel({ command: binary, cwd: seededCwd, agent, env: { HOME: home, PATH: "/usr/bin:/bin", OMI_HOME: "" } });
 	assert.ok(body.length > 0, "el proveedor no recibió nada");

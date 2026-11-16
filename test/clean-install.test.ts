@@ -1,4 +1,4 @@
-// Lo que promete una instalación: viene vacía, y sólo importar trae cosas, como copia.
+// La instalación trae integraciones propias, no configuración ajena; importar recursos de Pi siempre copia.
 
 import assert from "node:assert/strict";
 import { rm } from "node:fs/promises";

@@ -65,11 +65,11 @@ test("launchTui_precarga las tools de OMI del catálogo", async (t) => {
 	assert.ok(calls[0]?.tools.includes("omi_link_project"));
 });
 
-test("launchTui_una instalación nueva sólo trae lo de omi", async (t) => {
+test("launchTui_una instalación nueva trae OMI, subagentes y la KB", async (t) => {
 	const home = await tempDir(t);
 	const calls: Call[] = [];
 	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi(calls) });
-	assert.deepEqual(calls[0]?.extensions, ["omi-tools", "omi-runtime-shell", "omi-herdr", "omi-workspace", "omi-isolated-context"]);
+	assert.deepEqual(calls[0]?.extensions, ["omi-tools", "omi-runtime-shell", "omi-herdr", "omi-workspace", "omi-isolated-context", "omi-subagents", "omi-kb"]);
 	assert.deepEqual(calls[0]?.args, ["--tui-mode", "fullscreen", "--no-context-files"]);
 	assert.deepEqual(calls[0]?.hiddenExtensions, calls[0]?.extensions);
 });
