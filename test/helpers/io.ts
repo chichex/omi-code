@@ -1,6 +1,6 @@
 // Io de test: captura salida y responde prompts desde una cola.
 
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TestContext } from "node:test";
@@ -53,7 +53,7 @@ export function testIo(options: TestIoOptions): TestIo {
 }
 
 export async function tempDir(t: TestContext, prefix = "omi-test-"): Promise<string> {
-	const dir = await mkdtemp(join(tmpdir(), prefix));
+	const dir = await realpath(await mkdtemp(join(tmpdir(), prefix)));
 	t.after(() => rm(dir, { recursive: true, force: true }));
 	return dir;
 }
