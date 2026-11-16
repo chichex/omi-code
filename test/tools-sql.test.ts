@@ -8,7 +8,7 @@ import { humanless, linkedProject, type Linked } from "./helpers/project.ts";
 const PROJECT = "/api/v1/organizations/org_acme/projects/tienda";
 
 function resource(linked: Linked, id: string, environment: string, slug: string, mode = "local"): void {
-	linked.workloads.resources.set(id, { id, environment, slug, mode, variable: `POSTGRES_URL_${slug.toUpperCase()}`, state: "lista" });
+	linked.workloads.resources.set(id, { id, environment, slug, mode, variable: `POSTGRES_URL_${slug.toUpperCase()}`, state: "lista", engine: "postgres", active_revision: 1 });
 }
 
 /** Un humano que responde y deja registrado lo que le mostraron. */
@@ -84,7 +84,7 @@ test("omi_postgres_query_resuelve el recurso por id, por ambiente o pide desambi
 	assert.deepEqual(linked.sql.calls.map((call) => call.resourceID), ["res_ventas", "res_prod"]);
 	await assert.rejects(
 		linked.call("omi_postgres_query", { environment: "stage", sql: "SELECT 1" }),
-		(error: OmiError) => error.code === "usage_error" && /app, ventas/.test(`${error.message} ${error.hint}`),
+		(error: OmiError) => error.code === "usage_error" && error.hint === "app (lista), ventas (lista)",
 	);
 	await assert.rejects(linked.call("omi_postgres_query", { environment: "stage", slug: "otra", sql: "SELECT 1" }), (error: OmiError) => error.code === "resource_not_found");
 	await assert.rejects(linked.call("omi_postgres_query", { resourceId: "res_no", sql: "SELECT 1" }), (error: OmiError) => error.code === "resource_not_found");

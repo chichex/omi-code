@@ -116,6 +116,9 @@ export const ResourceSchema = Type.Object({
 	mode: Type.String(),
 	variable: Type.String(),
 	state: Type.String(),
+	engine: OptionalString,
+	/** 0 mientras el recurso no tiene una base activa: recién creado, provisionando o con el alta fallida. */
+	active_revision: Type.Optional(Type.Integer()),
 });
 
 export const ResourcesSchema = Type.Object({ resources: Type.Array(ResourceSchema) });
@@ -126,9 +129,10 @@ export const SqlResultSchema = Type.Object({
 	rows: Type.Array(Type.Array(Type.Unknown())),
 	row_count: Type.Integer(),
 	truncated: Type.Boolean(),
-	truncated_by: OptionalString,
-	rows_affected: Type.Optional(Type.Integer()),
-	command: OptionalString,
+	// omi-api omite lo que no aplica; se tolera también null.
+	truncated_by: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+	rows_affected: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
+	command: Type.Optional(Type.Union([Type.String(), Type.Null()])),
 	duration_ms: Type.Number(),
 	limits: Type.Object({ max_rows: Type.Integer(), timeout_seconds: Type.Integer(), max_response_bytes: Type.Integer() }),
 });

@@ -346,8 +346,8 @@ omi resources postgres query --env stage --file consulta.sql --json
 omi resources postgres exec --env prod --slug ventas "DELETE FROM usuarios WHERE email = 'prueba@omi.test'"
 ```
 
-- **Qué recurso.** `--slug` elige el Postgres del ambiente y se puede omitir si hay uno solo; `--resource-id <res_…>` lo nombra sin ambiente. Con varios y sin `--slug`, el comando los lista y no elige.
-- **El SQL.** Una sola sentencia: como argumento entre comillas, o con `--file <archivo>` (`--file -` lee stdin).
+- **Qué recurso.** `--slug` elige el Postgres del ambiente y se puede omitir si hay uno solo con una base activa; `--resource-id <res_…>` lo nombra sin ambiente. Con varios y sin `--slug`, el comando los lista con su estado y no elige. Uno que todavía no tiene base activa (recién creado, `provisionando`, alta fallida) da `resource_not_active` antes de pedir confirmación.
+- **El SQL.** Una sola sentencia: como argumento entre comillas, o con `--file <archivo>` (`--file -` lee stdin). Si empieza con un guion, va después de `--`: `omi resources postgres query --env stage -- "-- nota\nSELECT 1"`.
 - **Sólo lectura de verdad.** `query` no depende de que el SQL "parezca" un `SELECT`: OMI lo corre dentro de una transacción de sólo lectura, como consulta de un cursor, y Postgres rechaza cualquier otra cosa. `INSERT`, `UPDATE`, `DELETE`, DDL, `COPY`, `SET`, `EXPLAIN` o dos sentencias juntas dan `sql_error`. Para eso está `exec`.
 - **Confirmación de `exec`.** Muestra el ambiente, la base y el SQL completo, con los caracteres de control a la vista, y pregunta: en la terminal, en el diálogo de la TUI o por elicitación del cliente MCP. `--yes` no la aprueba. Sin cómo preguntar sale con `2` y `guardrail_confirmation_required` sin mandar nada a OMI.
 - **Topes.** Por defecto OMI devuelve hasta 500 filas y 1 MiB, y corta la sentencia a los 10 segundos. `--max-rows <n>` y `--timeout <s>` sólo pueden pedir menos: pedir más da `invalid_sql_limits`. Si el resultado se corta, la tabla termina con `truncado: sí` y `--json` trae `truncated: true` con `truncated_by` (`rows` o `bytes`).
@@ -359,7 +359,9 @@ omi resources postgres exec --env prod --slug ventas "DELETE FROM usuarios WHERE
 | `sql_timeout` | la sentencia superó el timeout y se canceló sin aplicar cambios | acotar la consulta |
 | `sql_connection_failed` | OMI no pudo conectar a la base | revisar el recurso con `omi resources list` |
 | `sql_agent_unavailable` | el agente del control plane no tomó el pedido: desconectado, ocupado o sin actualizar; no se ejecutó nada | reintentar; si sigue, revisar el host |
-| `sql_outcome_unknown` | sólo en `exec`: no se sabe si la sentencia se aplicó | verificar con `query` antes de repetirla |
+| `sql_outcome_unknown` | sólo en `exec`: no se sabe si la sentencia se aplicó. También sale si la respuesta se pierde después de enviar el pedido: timeout del cliente, corte de red, señal abortada o un 5xx de un intermediario. omi nunca la reintenta | verificar con `query` antes de repetirla |
+| `sql_result_unreadable` | sólo en `exec`: la sentencia se ejecutó, pero la respuesta no se pudo leer | no repetirla; mirar el estado con `query` |
+| `resource_not_active` | el Postgres todavía no tiene una base activa | esperar o revisar su estado con `omi resources list` |
 
 OMI registra cada consulta y ejecución (quién, cuándo, recurso, ambiente, el SQL, filas y resultado), nunca los valores devueltos.
 

@@ -86,6 +86,10 @@ test("protocolo_consultar y ejecutar SQL coinciden con el código de chichex/omi
 	const bodies = [...read("internal/api/sql_query_internal_test.go").matchAll(/wantBody := ((?:`[^`]*`[ \t]*\+?\s*)+)/g)].map((match) =>
 		[...(match[1] ?? "").matchAll(/`([^`]*)`/g)].map((segment) => segment[1] ?? "").join(""),
 	);
+	// omi-api omite lo que no aplica en vez de mandar null: el cliente tolera las dos formas, la API usa una.
+	const view = read("internal/api/sql_query.go");
+	for (const field of ["truncated_by", "rows_affected", "command"]) assert.ok(view.includes(`json:"${field},omitempty"`), `${field} se omite`);
+	assert.ok(/if value != "" \{\s*public\[name\] = value/.test(routes) && routes.includes("if failure.Position > 0"), "los campos vacíos de un error se omiten");
 	assert.equal(bodies.length, 2, "respuestas de lectura y de escritura en los tests de la API");
 	for (const body of bodies) assert.ok(Value.Check(SqlResultSchema, JSON.parse(body)), `SqlResultSchema acepta ${body}`);
 });

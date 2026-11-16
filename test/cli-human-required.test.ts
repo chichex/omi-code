@@ -65,7 +65,7 @@ const HUMAN_REQUIRED: Case[] = [
 	...["stage", "prod"].map((environment) => ({
 		name: `ejecutar SQL en ${environment}`,
 		args: ["resources", "postgres", "exec", "--env", environment, "--slug", "app", "DELETE FROM pruebas"],
-		prepare: (linked: Linked) => void linked.workloads.resources.set("res_app", { id: "res_app", environment, slug: "app", mode: "local", variable: "POSTGRES_URL_APP", state: "lista" }),
+		prepare: (linked: Linked) => void linked.workloads.resources.set("res_app", { id: "res_app", environment, slug: "app", mode: "local", variable: "POSTGRES_URL_APP", state: "lista", engine: "postgres", active_revision: 1 }),
 	})),
 	{ name: "un job de un service con prod desplegado", args: JOB, prepare: (linked) => void (prod(linked).current_version = "1.0.0") },
 	{ name: "correr un job en prod", args: ["jobs", "run", "facturar", "--env", "prod"] },

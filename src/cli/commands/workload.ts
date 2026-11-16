@@ -59,8 +59,19 @@ export async function envCommand(args: string[], io: Io): Promise<number> {
 	);
 }
 
+/** Un SQL que empieza con guion se lee como un flag: el error lo dice en vez de hablar de una opción desconocida. */
+function sqlFlags<T>(args: string[], parse: () => T): T {
+	try {
+		return parse();
+	} catch (error) {
+		const [kind, action] = args.filter((arg) => !arg.startsWith("-"));
+		if (!(error instanceof UsageError) || kind !== "postgres" || (action !== "query" && action !== "exec")) throw error;
+		throw new UsageError(error.message, 'si el SQL empieza con un guion, ponelo después de `--` (omi resources postgres query --env stage -- "-- nota") o pasalo con --file -');
+	}
+}
+
 export async function resourcesCommand(args: string[], io: Io): Promise<number> {
-	const { values, positionals } = parseFlags(args, {
+	const { values, positionals } = sqlFlags(args, () => parseFlags(args, {
 		...ENV,
 		...YES,
 		slug: { type: "string" },
@@ -73,7 +84,7 @@ export async function resourcesCommand(args: string[], io: Io): Promise<number> 
 		"max-rows": { type: "string" },
 		timeout: { type: "string" },
 		file: { type: "string" },
-	});
+	}));
 	const [kind, action, ...rest] = positionals;
 	if (kind === "list") return runToolCommand("omi_resources_list", { environment: values.env }, io, values);
 	if (kind !== "postgres" || action === undefined) throw new UsageError("uso: omi resources <list|postgres <create|replace|delete|retry|recover|query|exec>>");

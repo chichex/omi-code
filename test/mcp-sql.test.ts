@@ -21,7 +21,7 @@ async function waitFor<T>(find: () => T | undefined): Promise<T> {
 /** Sesión con stage autorizado: lo máximo que un agente tiene sin un humano. */
 async function server(linked: Linked, capabilities: Record<string, unknown>) {
 	for (const environment of ["stage", "prod"]) {
-		linked.workloads.resources.set(`res_${environment}`, { id: `res_${environment}`, environment, slug: "ventas", mode: "local", variable: "POSTGRES_URL_VENTAS", state: "lista" });
+		linked.workloads.resources.set(`res_${environment}`, { id: `res_${environment}`, environment, slug: "ventas", mode: "local", variable: "POSTGRES_URL_VENTAS", state: "lista", engine: "postgres", active_revision: 1 });
 	}
 	const sent: JsonRpcMessage[] = [];
 	const mcp = createMcpServer({ tools: CATALOG, io: linked.io(), stageAuthorized: true, write: (message) => sent.push(message) });

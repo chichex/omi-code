@@ -30,20 +30,41 @@ function notFound(what: string): OmiError {
 	return new OmiError("resource_not_found", `no hay ${what}`, { hint: "`omi resources list` muestra los recursos del proyecto" });
 }
 
-/** Un recurso por id, o el único que coincide con ambiente y slug. Nunca elige entre varios. */
+function label(resource: Resource): string {
+	return `${resource.slug} (${resource.state})`;
+}
+
+/** Con `active_revision` en 0 omi-api responde resource_not_active: todavía no hay una base que consultar. */
+function assertUsable(resource: Resource): Resource {
+	if ((resource.active_revision ?? 0) > 0) return resource;
+	throw new OmiError("resource_not_active", `el Postgres ${resource.slug} de ${resource.environment} está ${resource.state}: todavía no tiene una base activa`, {
+		hint: "`omi resources list` muestra su estado",
+	});
+}
+
+/** Un Postgres por id, o el único con base activa que coincide con ambiente y slug. Nunca elige entre varios. */
 async function findResource(scope: Scope, params: SqlParams): Promise<Resource> {
 	if (params.resourceId === undefined && params.environment === undefined) throw new UsageError("indicá el ambiente (y el slug) o el id del recurso");
 	const filter = params.resourceId === undefined && params.environment !== undefined ? `?environment=${params.environment}` : "";
-	const { resources } = await scope.client.request("GET", `${scope.projectPath}/resources${filter}`, ResourcesSchema);
+	const listed = await scope.client.request("GET", `${scope.projectPath}/resources${filter}`, ResourcesSchema);
+	const resources = listed.resources.filter((candidate) => candidate.engine === "postgres");
 	if (params.resourceId !== undefined) {
 		const found = resources.find((candidate) => candidate.id === params.resourceId);
-		if (found === undefined) throw notFound(`un recurso ${params.resourceId} en el proyecto`);
-		return found;
+		if (found === undefined) throw notFound(`un Postgres ${params.resourceId} en el proyecto`);
+		return assertUsable(found);
 	}
 	const matches = resources.filter((candidate) => params.slug === undefined || candidate.slug === params.slug);
-	const [only, ...others] = matches;
-	if (only === undefined) throw notFound(`un Postgres ${params.slug ?? ""} en ${params.environment}`.replace("  ", " "));
-	if (others.length > 0) throw new UsageError(`hay varios Postgres en ${params.environment}: indicá cuál con el slug`, matches.map((candidate) => candidate.slug).join(", "));
+	const usable = matches.filter((candidate) => (candidate.active_revision ?? 0) > 0);
+	const [only, ...others] = usable;
+	if (only === undefined) {
+		const [unusable] = matches;
+		if (unusable !== undefined && matches.length === 1) return assertUsable(unusable);
+		if (unusable !== undefined) {
+			throw new OmiError("resource_not_active", `ningún Postgres de ${params.environment} tiene una base activa: ${matches.map(label).join(", ")}`);
+		}
+		throw notFound(`un Postgres ${params.slug ?? ""} en ${params.environment}`.replace("  ", " "));
+	}
+	if (others.length > 0) throw new UsageError(`hay varios Postgres en ${params.environment}: indicá cuál con el slug`, usable.map(label).join(", "));
 	return only;
 }
 
@@ -64,6 +85,44 @@ async function send(scope: Scope, resource: Resource, action: "query" | "exec", 
 	const title = `${resource.slug} (${resource.mode}) en ${resource.environment}`;
 	const data = { resource: { id: resource.id, environment: resource.environment, slug: resource.slug, mode: resource.mode }, ...result };
 	return { title, result, data };
+}
+
+const VERIFY_HINT = "verificá el estado con `omi resources postgres query` antes de repetirla";
+/** Respuestas con las que omi-api ya resolvió qué pasó: no se ejecutó, o se canceló sin aplicar cambios. */
+const SETTLED_CODES = ["sql_error", "sql_timeout", "sql_connection_failed", "sql_agent_unavailable", "sql_busy"];
+/** Fallos de red que ocurren antes de que el pedido salga: no hay conexión por la que haya viajado. */
+const NEVER_SENT = ["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN"];
+
+function networkCode(error: OmiError): string | undefined {
+	for (let cause: unknown = error.cause, depth = 0; cause instanceof Error && depth < 4; cause = cause.cause, depth += 1) {
+		const code = (cause as { code?: unknown }).code;
+		if (typeof code === "string") return code;
+	}
+	return undefined;
+}
+
+/**
+ * Qué decirle a quien lanzó una ejecución que falló después de confirmarla. Una escritura no es
+ * idempotente: si el pedido pudo salir y no volvió una respuesta que diga qué pasó, queda en duda.
+ * Nunca se reintenta.
+ */
+export function execFailure(error: unknown): unknown {
+	const unknown = (details?: ApiError["details"]): ApiError =>
+		new ApiError("sql_outcome_unknown", "la ejecución se envió y no volvió una respuesta: no se sabe si la sentencia se aplicó", 504, VERIFY_HINT, details);
+	if (error instanceof ApiError) {
+		if (error.code === "sql_outcome_unknown") return new ApiError(error.code, `${error.message}: no se sabe si la sentencia se aplicó`, error.status, VERIFY_HINT, error.details);
+		return error.status < 500 || SETTLED_CODES.includes(error.code) ? error : unknown(error.details);
+	}
+	if (error instanceof OmiError && error.code === "unexpected_response") {
+		return new OmiError("sql_result_unreadable", "la sentencia se ejecutó, pero no se pudo leer el resultado que devolvió OMI", {
+			hint: "no la repitas: mirá cómo quedó con `omi resources postgres query`; si persiste, corré `omi upgrade`",
+			cause: error,
+		});
+	}
+	if (error instanceof OmiError && error.code === "api_unreachable" && NEVER_SENT.includes(networkCode(error) ?? "")) {
+		return new OmiError(error.code, error.message, { hint: "el pedido no llegó a salir: no se ejecutó nada. Revisá la URL con --api u OMI_API_URL", cause: error.cause });
+	}
+	return unknown();
 }
 
 export const postgresQueryTool = defineTool({
@@ -111,8 +170,7 @@ export const postgresExecTool = defineTool({
 			const { title, result, data } = await send(scope, resource, "exec", params, runtime.signal);
 			return { text: execText(title, result), data };
 		} catch (error) {
-			if (!(error instanceof ApiError) || error.code !== "sql_outcome_unknown") throw error;
-			throw new ApiError(error.code, error.message, error.status, "verificá el estado con `omi resources postgres query` antes de repetirla");
+			throw execFailure(error);
 		}
 	},
 });

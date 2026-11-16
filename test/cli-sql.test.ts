@@ -9,7 +9,7 @@ import { sqlProblem } from "./helpers/mock-sql.ts";
 import { linkedProject, type Linked } from "./helpers/project.ts";
 
 function resource(linked: Linked, id: string, environment: string, slug: string): void {
-	linked.workloads.resources.set(id, { id, environment, slug, mode: "local", variable: `POSTGRES_URL_${slug.toUpperCase()}`, state: "lista" });
+	linked.workloads.resources.set(id, { id, environment, slug, mode: "local", variable: `POSTGRES_URL_${slug.toUpperCase()}`, state: "lista", engine: "postgres", active_revision: 1 });
 }
 
 test("omi resources postgres query_muestra una tabla sin pedir nada, también en prod y sin terminal", async (t) => {

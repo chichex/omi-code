@@ -8,23 +8,28 @@ type SqlResult = Static<typeof SqlResultSchema>;
 /** Ancho máximo de una celda en la tabla; el valor completo queda en --json. */
 const MAX_CELL_WIDTH = 80;
 
-// Controles C0 y C1, DEL y los caracteres que reordenan o esconden texto (bidi, ancho cero).
-const HIDDEN = /[\u0000-\u001f\u007f-\u009f​-‏‪-‮⁠-⁩﻿]/g;
+// Todo lo que una terminal no dibuja como un carácter propio: controles, caracteres de formato (bidi,
+// ancho cero, guion blando, tags), separadores de línea y de párrafo, espacios que no son el ASCII,
+// uso privado, sin asignar y sustitutos sueltos. Por categoría Unicode, no por lista.
+const HIDDEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Co}\p{Cn}\p{Cs}]|(?! )\p{Zs}/gu;
 
 function escaped(character: string): string {
-	return `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`;
+	const code = character.codePointAt(0) ?? 0;
+	return code > 0xffff ? `\\u{${code.toString(16)}}` : `\\u${code.toString(16).padStart(4, "0")}`;
 }
 
 /**
- * Deja a la vista lo que una terminal interpretaría: quien confirma tiene que ver el SQL que va a
- * correr, no lo que una secuencia de escape quiera mostrarle. Conserva saltos de línea y tabs.
+ * Deja a la vista lo que una terminal interpretaría o no mostraría: quien confirma tiene que ver el
+ * SQL que va a correr, no algo que se vea igual a otro. Sólo conserva saltos de línea y tabs.
  */
 export function visible(text: string): string {
 	return text.replace(HIDDEN, (character) => (character === "\n" || character === "\t" ? character : escaped(character)));
 }
 
+/** NULL va sin comillas. Una cadena vacía, o una que dice NULL, va entre comillas para no confundirse con él. */
 function cellText(value: unknown): string {
 	if (value === null) return "NULL";
+	if (value === "" || value === "NULL") return `'${value}'`;
 	const text = typeof value === "string" ? value : JSON.stringify(value);
 	const oneLine = text.replace(HIDDEN, escaped);
 	return oneLine.length > MAX_CELL_WIDTH ? `${oneLine.slice(0, MAX_CELL_WIDTH - 1)}…` : oneLine;
