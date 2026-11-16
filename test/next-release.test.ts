@@ -14,13 +14,13 @@ test("isPackaged_distingue lo que entra en el binario", () => {
 	for (const path of ["src/cli/main.ts", "bin/omi.ts", "package.json", "package-lock.json", "tsconfig.json", "install.sh", "scripts/build-release.ts"]) {
 		assert.equal(isPackaged(path), true, path);
 	}
-	for (const path of [".chiche/project.md", "docs/x.md", "README.md", "test/x.test.ts", "src/x.test.ts", ".github/workflows/ci.yml", "scripts/next-release.ts", "LICENSE", "srcs/x.ts"]) {
+	for (const path of ["AGENTS.md", "docs/x.md", "README.md", "test/x.test.ts", "src/x.test.ts", ".github/workflows/ci.yml", "scripts/next-release.ts", "LICENSE", "srcs/x.ts"]) {
 		assert.equal(isPackaged(path), false, path);
 	}
 });
 
 test("nextVersion_sin cambios empaquetados no publica", () => {
-	assert.equal(nextVersion("0.1.0", [commit("docs(review): evidencia", ".chiche/evidence/x.md")]), null);
+	assert.equal(nextVersion("0.1.0", [commit("docs(review): evidencia", "docs/review/x.md")]), null);
 	assert.equal(nextVersion("0.1.0", [commit("test(cli): cubre x", "test/x.test.ts")]), null);
 	assert.equal(nextVersion("0.1.0", []), null);
 });
@@ -103,7 +103,7 @@ test("next-release_sin commits después del tag no publica", async (t) => {
 
 test("next-release_con sólo docs no publica", async (t) => {
 	const repo = await repoWithTag(t);
-	await commitFile(repo, ".chiche/evidence/x.md", "docs(review): evidencia");
+	await commitFile(repo, "docs/review/x.md", "docs(review): evidencia");
 	assert.equal(plan(repo), "version=\n");
 });
 
