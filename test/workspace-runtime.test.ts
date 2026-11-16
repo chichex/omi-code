@@ -28,6 +28,7 @@ test("workspace_TUI real: layout, selector propio, vistas, métricas, settings, 
 	const plain = plainTerminal(result.output);
 	assert.match(plain, /omi code/);
 	assert.match(plain, /¿Qué hacemos en/);
+	assert.match(plain, /SUBAGENTS/); assert.match(plain, /Sin subagentes activos/);
 	assert.match(plain, /CONTEXTO/);
 	assert.match(plain, /Modelo:/);
 	assert.match(plain, /█{30}/);

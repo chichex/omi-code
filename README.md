@@ -38,7 +38,7 @@ Una instalación nueva trae estas integraciones **dentro del binario**, sin desc
 
 | Integración | Qué trae | Autenticación |
 |---|---|---|
-| Subagentes | Tool `subagent` con `scout`, `planner`, `reviewer` y `worker`; tareas individuales, paralelas o en cadena | El modelo y razonamiento elegidos en la sesión |
+| Subagentes | Tool `subagent` con `scout`, `planner`, `reviewer` y `worker`; background, espera explícita y panel `SUBAGENTS` | El modelo y razonamiento elegidos en la sesión |
 | KB de [Harness](https://github.com/chichex/harness/tree/main/kb) | MCP `harness-kb`, por Streamable HTTP en `https://kb-prod-chiche.ohmyinfra.com/mcp` | OAuth desde `/mcp login harness-kb` |
 | OMI | El mismo catálogo de `omi mcp`, integrado **nativamente** en el agente, con confirmaciones en la UI | `omi login` |
 
@@ -55,7 +55,13 @@ Usá una cadena: scout reúne contexto, planner propone el plan con {previous} y
 Cada subagente tiene contexto propio: recibe la tarea explícita y las instrucciones del proyecto, no la conversación del padre. Usa el SDK de Pi dentro de OMI, sin procesos ni instalaciones externas.
 `scout`, `planner` y `reviewer` sólo tienen las tools disponibles de lectura (`read`, `grep`, `find`, `ls`); `worker` usa las tools invocables del padre, incluidas las de OMI y los MCP ya conectados, sin delegación recursiva ni orquestadores `codemode`/`tool_search`.
 Las llamadas pasan por el pipeline del padre: conservan cwd, hooks, validaciones y confirmaciones. **No es un sandbox:** comparten filesystem, y no hay que asignar los mismos archivos a workers en paralelo.
-Hay un máximo de 8 tareas por llamada, 4 activas en paralelo y 32 turnos por tarea; a los 10 minutos se solicita cancelar. Esc cancela los hijos; una cadena se corta ante el primer error. La cancelación es cooperativa: una operación ya enviada puede terminar. Se reportan progreso y uso, y la salida se limita a 6 KB / 200 líneas por tarea, con un archivo temporal privado para el resultado completo si se trunca.
+**En TUI y RPC trabajan en segundo plano por defecto:** la llamada devuelve un ID y libera al principal para que puedas seguir conversando y haciendo otras tareas. Al terminar llega un aviso; el agente incorpora el resultado con `subagent` usando `action: "result"` e `id`. Leer un resultado todavía pendiente no espera, y consultar varias veces uno terminado no duplica su uso/costo. El uso se agrega a los totales de la sesión al recoger el resultado, no al lanzar el trabajo; además queda una entrada local de auditoría del uso al finalizar.
+
+El lateral muestra **`SUBAGENTS`**, con roles, estado, tools, duración, tareas activas/en cola y un resumen si no entran todas. Un clic o `/omi-subagents` abre el detalle; `/omi-subagents cancel <ID de tarea o lote>` solicita cancelar ese lote, con confirmación. La tool también acepta `action: "status"` para consultar y `action: "cancel"` con un ID o `"all"` para cancelar. No hay polling automático continuo.
+
+Si el principal necesita el resultado antes de seguir, puede delegar con **`background: false`**. Ése es el comportamiento por defecto en print/JSON, donde el proceso no queda abierto para alojar trabajos. Esc cancela una delegación que está esperando; no cancela los trabajos ya desacoplados. Salir, recargar, cambiar de sesión o navegar el árbol sí solicita cancelar los trabajos: **no son jobs persistentes ni sobreviven al proceso**.
+
+Hay un máximo de 4 lotes de background, 8 tareas por lote y **4 tareas activas globales**, compartidas con foreground; 32 turnos por tarea, 256 llamadas delegadas por lote background y cancelación solicitada a los 10 minutos de cada tarea activa. Una cadena se corta ante el primer error. La cancelación es cooperativa: no revierte archivos ni operaciones ya enviadas. La salida se limita a 6 KB / 200 líneas por tarea, con un archivo temporal privado para el resultado completo si se trunca. Las llamadas en background adquieren un contexto de tool nuevo por ejecución, con IDs propios, en vez de retener el scope de la llamada original ya finalizada; siguen pasando por validación, hooks y confirmaciones del padre.
 
 Se pueden desactivar en `~/.omi/agent/settings.json`:
 

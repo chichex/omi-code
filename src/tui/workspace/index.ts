@@ -8,12 +8,14 @@ import type { Io } from "../../cli/io.ts";
 import { agentDir } from "../../core/paths.ts";
 import { readEnvironments, readFileDiff, readGit, readGithub, readGithubDetail, readUntrackedPreview, resourceReader, sensitivePreviewPath, workspaceName, type EnvironmentStatus, type GitSnapshot, type GithubItem, type Resources } from "./data.ts";
 import { OmiModelPicker, type PickerResult } from "./model-picker.ts";
-import { align, bar, changedFileLine, fit, gib, gitSyncSummary, percentage, sidebarSection, surface, text, tokens, type ModalOptions } from "./presentation.ts";
+import { align, changedFileLine, fit, gib, surface, text, tokens, type ModalOptions } from "./presentation.ts";
 import { field, notice, OmiCommandPalette, OmiInfoModal, section, type ModalEntry } from "./modals.ts";
 
 import { WORKSPACE_VIEWS, workspaceTabs, type WorkspaceView } from "./navigation.ts";
 
-import { ACTION_GROUPS, actionsPanel, readActionRuns, type ActionGroup, type ActionState } from "./github-actions.ts";
+import { ACTION_GROUPS, readActionRuns, type ActionGroup, type ActionState } from "./github-actions.ts";
+import { workspaceSidebar } from "./sidebar.ts";
+import { consumeSubagentEvent, subagentDuration, SubagentMonitor } from "./subagents.ts";
 import { footerStatus, readBranchPullRequest, type BranchPullRequest } from "./pull-request.ts";
 import { ISSUE_TYPES } from "./issue-worktree.ts";
 import { classifyIssue, restoreIssueTriage, type IssueTriageState } from "./issue-triage.ts";
@@ -93,6 +95,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		let prefs: WorkspacePreferences = { favorites: [], sidebar: true };
 		let view: View = "chat"; let working = false; let blocked = false; let activity = "Listo";
 		const runningTools = new Map<string, string>();
+		const subagents = new SubagentMonitor(); let unsubscribeSubagents: (() => void) | undefined;
 		let git: GitSnapshot | undefined; let gitError = false; let resources: Resources | undefined;
 		const github: Record<GithubView, GithubList> = { issues: emptyGithubList(), prs: emptyGithubList() };
 		let actions: Record<ActionGroup, ActionState> = { reviews: {}, releases: {} };
@@ -110,8 +113,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		let baseRoot: Component | undefined; let root: Component | undefined; let projectRoot: Component | undefined; let layoutCompatible = false;
 		let document: Component; let pending: Component; let status: Component; let above: Component; let editor: Container; let below: Component; let footer: Component;
 		let workspaceDocument: Component; let modelShortcut = "Ctrl L";
-		let sidebarProjectEnd = 4; let sidebarContextStart = 0; let sidebarResourceStart = 0; let sidebarResourceEnd = 0; let welcomeCommandStart = 8;
-		let sidebarLinks = new Map<number, View | "actions">();
+		let welcomeCommandStart = 8;
 		let unsubscribeInput: (() => void) | undefined; let finishModal: (() => void) | undefined;
 		const controller = new AbortController(); const sampleResources = resourceReader();
 		const theme = (): Theme => ctx.ui.theme;
@@ -259,6 +261,20 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 				notice("RAM OMI es RSS de este proceso; no suma herramientas ni otros subprocesos."), notice("CPU de OMI normalizada a la capacidad total del equipo."), "",
 				notice("Estas métricas son del host de OMI, no de tu Mac si te conectaste por SSH.")] : [notice("Recolectando datos…")], { color: "syntaxVariable", subtitle: "Equipo · métricas del host, no de la infraestructura desplegada" });
 		}
+		async function showSubagents(args = ""): Promise<void> {
+			if (!active) return;
+			const tasks = subagents.tasks; const cancel = /^cancel\s+(.+)$/.exec(args.trim());
+			if (args.trim() && !cancel) { ctx.ui.notify("Uso: /omi-subagents [cancel <ID de tarea o lote>]", "warning"); return; }
+			if (cancel) {
+				const task = tasks.find((task) => task.id === cancel[1] || task.id.slice(0, task.id.lastIndexOf("/")) === cancel[1]);
+				const id = task?.id.slice(0, task.id.lastIndexOf("/"));
+				if (!id || !tasks.some((task) => task.id.slice(0, task.id.lastIndexOf("/")) === id && ["pending", "running"].includes(task.status))) { ctx.ui.notify("Ese lote no tiene subagentes activos o en cola", "warning"); return; }
+				if (await info("Cancelar subagentes", [field("Lote", text(id)), notice("Se solicita detener todas las tareas de este lote, incluidas las que están en cola. No revierte cambios ni herramientas ya ejecutadas.", "warning")], { color: "syntaxVariable", confirmLabel: "solicitar cancelación" }) && active) pi.events.emit("omi:subagents:cancel", { id });
+				return;
+			}
+			await info("Subagentes", tasks.length ? tasks.flatMap((task): ModalEntry[] => [section(`${task.agent} · ${task.status}`), field("ID", text(task.id)), field("Tarea", task.title), field("Estado", task.status, task.status === "error" ? "error" : task.status === "done" ? "success" : "accent"), field("Tool actual", task.activity || "—"), field("Tiempo observado", subagentDuration(task)), field("Turnos", String(task.turns)), ""])
+				.concat([notice("Cancelar un lote: /omi-subagents cancel <ID de tarea o lote>. No se guardan outputs ni historiales privados.")]) : [notice("Sin subagentes activos")], { color: "syntaxVariable", subtitle: "Delegación · roles, tareas y actividad" });
+		}
 		async function showContext(): Promise<void> {
 			const usage = ctx.getContextUsage();
 			await info("Ventana de contexto", [field("Modelo", ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "sin modelo", "accent"), "",
@@ -301,7 +317,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		async function palette(): Promise<void> {
 			if (!active || finishModal) return;
 			const actions: [string, () => void | Promise<void>][] = [...WORKSPACE_VIEWS.map((item): [string, () => void] => [item.label, () => switchView(item.id)]),
-				["PR de la rama actual", showBranchPr], ["GitHub Actions", showActions], ["Elegir modelo", showModel], ["Ventana de contexto", showContext], ["Ubicación / worktree", showWorkspace], ["Recursos del equipo", showResources], ["Mostrar / ocultar lateral", toggleSidebar], ["Actualizar datos", () => { void refreshLocal(); void refreshRemote(); }],
+				["PR de la rama actual", showBranchPr], ["GitHub Actions", showActions], ["Subagentes", showSubagents], ["Elegir modelo", showModel], ["Ventana de contexto", showContext], ["Ubicación / worktree", showWorkspace], ["Recursos del equipo", showResources], ["Mostrar / ocultar lateral", toggleSidebar], ["Actualizar datos", () => { void refreshLocal(); void refreshRemote(); }],
 				["Preparar / retomar el issue seleccionado", () => pi.sendUserMessage("/omi-triage", { expandPromptTemplates: true })]];
 			if (git?.linked) actions.splice(WORKSPACE_VIEWS.length, 0, ["Volver al repo principal", () => pi.sendUserMessage("/omi-main", { expandPromptTemplates: true })]);
 			let selected: string | undefined;
@@ -319,57 +335,15 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 				surface(t, workspaceTabs(width, view).map((tab) => tab.view === view ? t.fg("accent", t.bold(tab.label)) : t.fg("muted", tab.label)).join(""), width, true),
 				t.fg("border", "─".repeat(Math.max(0, width)))];
 		}, (event) => { if (event.type !== "click") return; if (event.y === 0 && event.x > event.width - 22) { void palette(); return { handled: true }; } if (event.y === 1) { const tab = workspaceTabs(event.width, view).find((item) => event.x >= item.start && event.x < item.end); if (tab) { switchView(tab.view); return { handled: true }; } } return undefined; });
-		function sidebarLines(width: number): string[] {
-			const t = theme(); const label = (value: string) => t.fg("muted", value);
-			const inner = Math.max(1, width - 3); const height = Math.max(1, rows() - 6);
-			const section = (title: string, color: Parameters<typeof sidebarSection>[3]) => sidebarSection(t, title, inner, color);
-			const lines = [section("PROYECTO", "syntaxType"), t.bold(text(basename(git?.root ?? ctx.cwd))), t.fg("accent", text(git ? `${git.detached ? "HEAD · " : ""}${git.branch} · ${workspaceName(git)}` : "Sin repositorio Git")), git ? label(`${git.changeCount} archivos · `) + gitSyncSummary(t, git) : label("Git no disponible")];
-			if (gitError) lines[3] = t.fg("warning", "Git desactualizado");
-			const targets = new Map<number, View | "actions">();
-			const nav = (line: string, target: View | "actions"): void => { targets.set(lines.length, target); lines.push(line); };
-			const r = resources; const ram = r ? percentage(r.totalRam - r.availableRam, r.totalRam) : undefined;
-			const disk = r?.disk ? percentage(r.disk.used, r.disk.total) : undefined;
-			const resourceLines = [section(`EQUIPO · ${text(r?.host ?? "…")}`, "syntaxVariable")];
-			const metric = (name: string, value: string, percent?: number): void => {
-				if (height >= 24) resourceLines.push(align(name, value, inner), bar(t, percent, inner));
-				else resourceLines.push(`${name.padEnd(5)} ${bar(t, percent, 8)} ${value}`);
-			};
-			metric("CPU", r?.cpu === undefined ? "—" : `${r.cpu.toFixed(0)}%`, r?.cpu);
-			metric(`RAM${r?.memoryEstimated ? "≈" : ""}`, r ? `${((r.totalRam - r.availableRam) / 2 ** 30).toFixed(1)} / ${(r.totalRam / 2 ** 30).toFixed(1)} GiB` : "—", ram);
-			metric("Disco", disk === undefined ? "—" : `${disk.toFixed(0)}% ocupado`, disk);
-			resourceLines.push(label(r ? `OMI ${r.processCpu?.toFixed(1) ?? "—"}% · ${(r.rss / 2 ** 20).toFixed(0)} MiB` : "Recolectando métricas…"));
-			if ((ram ?? 0) >= 90 || (disk ?? 0) >= 90) resourceLines.push(t.fg("warning", "! Revisá RAM y disco"));
-			resourceLines.push(label("Detalles del host >"));
-			const context = contextState();
-			const contextLines = [section("CONTEXTO", "warning"), align(`${context.label}${context.limit === undefined ? "" : " tokens"}`, context.percent === undefined ? "—" : `${context.percent.toFixed(0)}%`, inner), bar(t, context.percent, inner), ""];
-			const triage = issueTriage && (!git || git.root === issueTriage.worktree && git.branch === issueTriage.branch) ? issueTriage : undefined;
-			const issueLines = triage ? [...(height >= 24 ? [""] : []), section("ISSUE ACTIVO", "accent"), t.fg("accent", `#${triage.issue.number} · ${ISSUE_TYPES[triage.triage.type].label}`), label(text(triage.issue.title))] : [];
-			// En panes bajos ceder espacio de métricas/Actions, nunca ocultar el tipo del issue.
-			if (issueLines.length && height < 28) resourceLines.splice(4);
-			const space = Math.max(0, height - contextLines.length - resourceLines.length - 1 - issueLines.length);
-			if (space < lines.length + 5) lines.splice(1, 1); // Priorizar Actions y OMI aun con alertas en un pane bajo.
-			sidebarProjectEnd = lines.length;
-			const actionSpace = Math.max(3, space - lines.length - 2); const now = Date.now();
-			let panel = actionsPanel(t, actions, inner, 3, now);
-			for (let count = 2; panel.length > actionSpace && count >= 0; count--) panel = actionsPanel(t, actions, inner, count, now);
-			lines.push(""); for (const line of panel) nav(line, "actions");
-			lines.push(""); nav(section("OMI", "success"), "omi");
-			nav(envError ? t.fg("warning", project ? "Datos desactualizados" : envError === "Offline" ? "Offline" : "No disponible") : label(text(project ?? (envAt ? "Sin proyecto vinculado" : "Consultando…"))), "omi");
-			let blanks = Math.max(0, lines.length - space);
-			const compact: string[] = []; sidebarLinks = new Map();
-			for (const [index, line] of lines.entries()) {
-				if (!line && blanks-- > 0) continue;
-				if (compact.length >= space) break;
-				const target = targets.get(index); if (target) sidebarLinks.set(compact.length, target);
-				compact.push(line);
-			}
-			compact.push(""); // Agrupar la información, sin un hueco creciente antes de Contexto.
-			sidebarContextStart = compact.length; sidebarResourceStart = compact.length + contextLines.length; sidebarResourceEnd = sidebarResourceStart + resourceLines.length;
-			const result = [...compact, ...contextLines, ...resourceLines, ...issueLines];
-			while (result.length < height) result.push("");
-			return result.slice(0, height).map((line) => surface(t, `│ ${fit(line, inner)} `, width, true));
-		}
-		const sidebar = new Lines(sidebarLines, (event) => { if (event.type !== "click") return; if (event.y >= sidebarResourceStart && event.y < sidebarResourceEnd) void showResources(); else if (event.y >= sidebarContextStart && event.y < sidebarResourceStart) void showContext(); else if (event.y < sidebarProjectEnd) void showWorkspace(); else { const target = sidebarLinks.get(event.y); if (target === "actions") void showActions(); else if (target) switchView(target); } return { handled: true }; });
+		const sidebarFrame = (width: number) => workspaceSidebar({ theme: theme(), cwd: ctx.cwd, height: Math.max(1, rows() - 6), git, gitError, resources, actions, project, envAt, envError, context: contextState(), issueTriage, subagents }, width);
+		const sidebar = new Lines((width) => sidebarFrame(width).lines, (event) => {
+			if (event.type !== "click") return;
+			const target = sidebarFrame(event.width).targets.get(event.y);
+			if (target === "resources") void showResources(); else if (target === "context") void showContext();
+			else if (target === "workspace") void showWorkspace(); else if (target === "actions") void showActions();
+			else if (target === "subagents") void showSubagents(); else if (target) switchView(target);
+			return { handled: true };
+		});
 		async function openChange(): Promise<void> {
 			const snapshot = git; const file = snapshot?.changes[selectedFile]; if (!snapshot || !file) return;
 			const request = ++diffRequest; diffLoading = true; changed();
@@ -622,10 +596,13 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			...WORKSPACE_VIEWS.map((item): [string, string, () => void] => [item.command, `Vista ${item.label}`, () => switchView(item.id)]),
 		];
 		for (const [name, description, handler] of commands) pi.registerCommand(name, { description, handler: async () => { if (active) await handler(); } });
+		pi.registerCommand("omi-subagents", { description: "Detalle de subagentes y cancelación por ID de lote", handler: async (args) => { if (active) await showSubagents(args); } });
 
 		pi.on("session_start", async (_event, context) => {
 			if (context.mode !== "tui") return;
 			ctx = context; prefs = await loadWorkspacePreferences(io.homeDir); active = true;
+			unsubscribeSubagents?.(); subagents.clear();
+			unsubscribeSubagents = pi.events.on("omi:subagents", (event) => { if (active && consumeSubagentEvent(subagents, event)) changed(); });
 			issueTriage = restoreIssueTriage(ctx.sessionManager.getBranch(), ctx.cwd);
 			if (!parsed.useTheme && !pi.getSettings().theme) {
 				const base = ctx.ui.getTheme("dark");
@@ -699,7 +676,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			working = !ctx.isIdle();
 			timer = setInterval(() => { void refreshLocal(); }, 3000); timer.unref(); void refreshLocal(); changed();
 		});
-		pi.on("session_shutdown", async () => { active = false; controller.abort(); if (timer) clearInterval(timer); unsubscribeInput?.(); finishModal?.(); finishModal = undefined; if (tui && baseRoot && isViewportTUI(tui)) tui.setLayoutRoot(baseRoot); await Promise.all([saveQueue, issuePreparationTask?.catch(() => {}), issueSessionTask?.catch(() => {}), mainSessionTask?.catch(() => {})]); });
+		pi.on("session_shutdown", async () => { active = false; unsubscribeSubagents?.(); unsubscribeSubagents = undefined; subagents.clear(); controller.abort(); if (timer) clearInterval(timer); unsubscribeInput?.(); finishModal?.(); finishModal = undefined; if (tui && baseRoot && isViewportTUI(tui)) tui.setLayoutRoot(baseRoot); await Promise.all([saveQueue, issuePreparationTask?.catch(() => {}), issueSessionTask?.catch(() => {}), mainSessionTask?.catch(() => {})]); });
 		pi.on("before_agent_start", (_event, context) => { ctx = context; working = true; activity = "Preparando turno"; changed(); });
 		pi.on("agent_start", (_event, context) => { ctx = context; working = true; activity = "Trabajando"; changed(); });
 		pi.on("agent_settled", (_event, context) => { ctx = context; working = false; runningTools.clear(); activity = "Listo"; void refreshLocal(); changed(); });
@@ -710,6 +687,6 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		const update = (_event: unknown, context: ExtensionContext): void => { ctx = context; changed(); };
 		pi.on("message_end", update); pi.on("session_compact", update); pi.on("session_compact_failed", update);
 		pi.on("model_select", update); pi.on("thinking_level_select", update);
-		pi.on("session_tree", (_event, context) => { issueTriage = restoreIssueTriage(context.sessionManager.getBranch(), context.cwd); update(_event, context); });
+		pi.on("session_tree", (_event, context) => { subagents.clear(); issueTriage = restoreIssueTriage(context.sessionManager.getBranch(), context.cwd); update(_event, context); });
 	} };
 }

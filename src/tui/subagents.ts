@@ -1,222 +1,129 @@
-// Delegación con el Agent de Pi: contexto propio, pero tools por el pipeline de la sesión padre.
-// No crea procesos, no relee ~/.pi ni vuelve a cargar extensiones/credenciales. No es un sandbox.
+// Session-scoped delegation. Background is the default in persistent sessions; explicit
+// background:false retains dependency/chain workflows. No raw delegated tool is executed.
 import { randomUUID } from "node:crypto";
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { Agent, type AgentTool, type AgentToolResult, type AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
-import type { Usage } from "@earendil-works/pi-ai";
-import { truncateHead, type ExtensionToolContext, type InlineExtension } from "@earendil-works/pi-coding-agent";
-import { Type, type Static } from "typebox";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { truncateHead, type InlineExtension } from "@earendil-works/pi-coding-agent";
+import { addUsage, emptyUsage, executeSubagent, paramsSchema, prepare, type Details, type Params } from "./subagent-runner.ts";
+import { backgroundDispatcher, taskPool } from "./subagent-background.ts";
 
-const READ_TOOLS = new Set(["read", "grep", "find", "ls"]);
-const ROLES = {
-	scout: "Explorá el código y devolvé contexto comprimido con rutas y hallazgos verificables. No implementes cambios.",
-	planner: "Diseñá un plan de implementación con pasos, riesgos y pruebas. Inspeccioná el código; no implementes cambios.",
-	reviewer: "Revisá el código buscando bugs y regresiones. Reportá hallazgos concretos con rutas y líneas; no modifiques archivos.",
-	worker: "Implementá la tarea delegada, verificá los cambios y devolvé un resumen con archivos y pruebas. No hagas trabajo ajeno a la tarea.",
-} as const;
-type Role = keyof typeof ROLES;
-const MAX_TASKS = 8;
-const MAX_CONCURRENCY = 4;
-const MAX_TURNS = 32;
-const TIMEOUT_MS = 10 * 60_000;
-const OUTPUT_BYTES = 6000; // 8 resultados + encabezados quedan debajo de 50 KiB.
-
-const taskSchema = Type.Object({
-	agent: Type.Union([Type.Literal("scout"), Type.Literal("planner"), Type.Literal("reviewer"), Type.Literal("worker")]),
-	task: Type.String({ minLength: 1, maxLength: 16384 }),
-});
-const paramsSchema = Type.Object({
-	agent: Type.Optional(taskSchema.properties.agent),
-	task: Type.Optional(taskSchema.properties.task),
-	tasks: Type.Optional(Type.Array(taskSchema, { minItems: 1, maxItems: MAX_TASKS, description: "Tareas en paralelo; máximo 4 activas. No asignar los mismos archivos a varios workers." })),
-	chain: Type.Optional(Type.Array(taskSchema, { minItems: 1, maxItems: MAX_TASKS, description: "Pasos secuenciales; {previous} recibe la salida del paso anterior. Se detiene ante un error." })),
-});
-type Params = Static<typeof paramsSchema>;
-type Task = Static<typeof taskSchema>;
-interface TaskResult {
-	agent: Role;
-	status: "pending" | "running" | "done" | "error";
-	turns: number;
-	activity: string;
-	output: string;
-	outputFile?: string;
-	usage: Usage;
+interface Job {
+	id: string;
+	controller: AbortController;
+	details: Details;
+	result?: AgentToolResult<Details> & { isError?: boolean };
+	promise?: Promise<void>;
+	reported: boolean;
+	notify: boolean;
 }
-interface Details {
-	mode: "single" | "parallel" | "chain";
-	results: TaskResult[];
-}
-
-function emptyUsage(): Usage {
-	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
-}
-function addUsage(total: Usage, usage: Usage): void {
-	for (const key of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"] as const) total[key] += usage[key];
-	for (const key of ["input", "output", "cacheRead", "cacheWrite", "total"] as const) total.cost[key] += usage.cost[key];
-}
-function summary(results: readonly TaskResult[]): string {
-	return results.map((r) => `[${r.agent}] ${r.status} · ${r.turns} turnos${r.activity ? ` · ${r.activity}` : ""}`).join("\n");
-}
-async function boundedOutput(text: string): Promise<{ output: string; outputFile?: string }> {
-	const truncated = truncateHead(text, { maxBytes: OUTPUT_BYTES, maxLines: 200 });
-	if (!truncated.truncated) return { output: text };
-	try {
-		const dir = await mkdtemp(join(tmpdir(), "omi-subagent-"));
-		const outputFile = join(dir, "output.txt");
-		await writeFile(outputFile, text, { mode: 0o600 });
-		return { output: `${truncated.content}\n[Salida truncada. Completa en ${outputFile}]`, outputFile };
-	} catch {
-		return { output: `${truncated.content}\n[Salida truncada. No se pudo guardar el resultado completo en el directorio temporal.]` };
-	}
-}
-
-/** No ejecutar la implementación cruda: executeTool conserva validación, hooks, cwd y confirmaciones. */
-function delegatedTools(ctx: ExtensionToolContext, role: Role): AgentTool[] {
-	return ctx.tools.filter((tool) => role === "worker" ? tool.name !== "subagent" : READ_TOOLS.has(tool.name))
-		// No delegar orquestadores: podrían alcanzar tools no incluidas o crear delegación recursiva.
-		.filter((tool) => !["codemode", "tool_search"].includes(tool.name))
-		.map((tool) => ({
-			...tool,
-			async execute(_id, args, signal, onUpdate) {
-				const outcome = await ctx.executeTool(tool.name, args, { ...(signal ? { signal } : {}), ...(onUpdate ? { onUpdate } : {}) });
-				return { ...outcome.result, isError: outcome.isError };
-			},
-		}));
-}
-
-async function runTask(task: Task, result: TaskResult, ctx: ExtensionToolContext, signal: AbortSignal, update: () => void): Promise<void> {
-	if (signal.aborted) {
-		result.status = "error"; result.output = "Subagente cancelado."; update(); return;
-	}
-	result.status = "running"; update();
-	const controller = new AbortController();
-	const abort = () => controller.abort(signal.reason);
-	if (signal.aborted) abort(); else signal.addEventListener("abort", abort, { once: true });
-	const timer = setTimeout(() => controller.abort(new Error("Subagente: límite de 10 minutos.")), TIMEOUT_MS);
-	let limitReached = false;
-	let failed = false;
-	const agent = new Agent({
-		sessionId: randomUUID(),
-		initialState: {
-			model: ctx.model!, thinkingLevel: ctx.thinkingLevel ?? "off",
-			systemPrompt: `${ctx.getSystemPrompt()}\n\n<delegated_task>\nSos el subagente ${task.agent} de OMI. ${ROLES[task.agent]}\nTu contexto es independiente: sólo recibís esta tarea, no la conversación del padre.\nTrabajás en ${ctx.cwd}. Usá únicamente las tools declaradas para esta tarea. No delegues a otros agentes.\n</delegated_task>`,
-			tools: delegatedTools(ctx, task.agent),
-		},
-		// Usa el modelo, proveedor (incluso custom) y auth resueltos del padre; no API keys del shell.
-		streamFn: (model, context, options) => ctx.modelRegistry.streamSimple(model, context, options),
-		finishTurn({ message }) {
-			if (result.turns >= MAX_TURNS && message.stopReason === "toolUse") {
-				limitReached = true;
-				return { action: "end" };
-			}
-		},
-	});
-	const cancel = () => agent.abort();
-	controller.signal.addEventListener("abort", cancel, { once: true });
-	const unsubscribe = agent.subscribe((event) => {
-		if (event.type === "message_end" && event.message.role === "assistant") {
-			const message = event.message;
-			result.turns++;
-			addUsage(result.usage, message.usage);
-			if (message.stopReason === "error" || message.stopReason === "aborted") {
-				failed = true; result.status = "error";
-				result.output = message.errorMessage || `Subagente: ${message.stopReason}`;
-			} else {
-				result.output = message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
-			}
-			update();
-		} else if (event.type === "tool_execution_start") {
-			result.activity = event.toolName; update();
-		}
-	});
-	try {
-		if (!controller.signal.aborted) await agent.prompt(task.task);
-		if (controller.signal.aborted) {
-			result.status = "error";
-			result.output = signal.aborted ? "Subagente cancelado." : "Subagente: límite de 10 minutos.";
-		} else if (limitReached) {
-			result.status = "error"; result.output = `Subagente: límite de ${MAX_TURNS} turnos.`;
-		} else if (!failed) {
-			result.status = result.output.trim() ? "done" : "error";
-			if (!result.output.trim()) result.output = "El subagente terminó sin respuesta.";
-		}
-	} catch (error) {
-		result.status = "error"; result.output = error instanceof Error ? error.message : String(error);
-	} finally {
-		clearTimeout(timer);
-		signal.removeEventListener("abort", abort);
-		controller.signal.removeEventListener("abort", cancel);
-		unsubscribe();
-	}
-	Object.assign(result, await boundedOutput(result.output));
-	result.activity = ""; update();
-}
-
-async function execute(params: Params, ctx: ExtensionToolContext, signal: AbortSignal, onUpdate?: AgentToolUpdateCallback<Details>): Promise<AgentToolResult<Details>> {
-	const hasSingle = params.agent !== undefined || params.task !== undefined;
-	if (Number(hasSingle) + Number(params.tasks !== undefined) + Number(params.chain !== undefined) !== 1 || (hasSingle && (!params.agent || !params.task?.trim()))) {
-		throw new Error("Indicá exactamente un modo: agent + task, tasks o chain.");
-	}
-	const tasks = params.tasks ?? params.chain ?? [{ agent: params.agent!, task: params.task! }];
-	if (tasks.length < 1 || tasks.length > MAX_TASKS || tasks.some((t) => !Object.hasOwn(ROLES, t.agent) || !t.task.trim())) throw new Error("Se requieren entre 1 y 8 tareas con un agente válido.");
-	if (!ctx.model) throw new Error("Elegí un modelo autenticado antes de delegar.");
-	const details: Details = {
-		mode: params.tasks ? "parallel" : params.chain ? "chain" : "single",
-		results: tasks.map((task) => ({ agent: task.agent, status: "pending", turns: 0, activity: "", output: "", usage: emptyUsage() })),
-	};
-	// Actualizaciones pequeñas e inmutables: no guardar el historial privado de cada subagente en la sesión padre.
-	const update = () => onUpdate?.({ content: [{ type: "text", text: summary(details.results) }], details: {
-		mode: details.mode,
-		results: details.results.map((r) => ({ ...r, output: truncateHead(r.output, { maxBytes: OUTPUT_BYTES, maxLines: 200 }).content, usage: structuredClone(r.usage) })),
-	} });
-	if (params.tasks) {
-		let next = 0;
-		await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENCY, tasks.length) }, async () => {
-			while (next < tasks.length) {
-				const index = next++;
-				await runTask(tasks[index]!, details.results[index]!, ctx, signal, update);
-			}
-		}));
-	} else {
-		let previous = "";
-		for (const [index, task] of tasks.entries()) {
-			const result = details.results[index]!;
-			await runTask({ ...task, task: params.chain ? task.task.replaceAll("{previous}", () => previous) : task.task }, result, ctx, signal, update);
-			if (result.status === "error") break;
-			previous = result.output;
-		}
-	}
-	const usage = emptyUsage();
-	for (const result of details.results) addUsage(usage, result.usage);
-	return {
-		content: [{ type: "text", text: details.results.map((r, index) => `### ${index + 1}. ${r.agent} · ${r.status}\n${r.output || "No ejecutado."}`).join("\n\n") }],
-		details, usage, isError: details.results.some((r) => r.status !== "done"),
-	};
-}
+function textResult<T>(text: string, details: T): AgentToolResult<T>;
+function textResult(text: string): AgentToolResult<unknown>;
+function textResult(text: string, details: unknown = {}): AgentToolResult<unknown> { return { content: [{ type: "text", text }], details }; }
+const snapshot = (details: Details) => ({ mode: details.mode, results: details.results.map(({ agent, status, turns, activity }) => ({ agent, status, turns, activity })) });
+const jobState = (job: Job): string => job.result ? job.result.isError ? "error" : "done" : job.controller.signal.aborted ? "cancelando" : "running";
+const jobSummary = (job: Job): string => `${job.id} · ${jobState(job)}\n${job.details.results.map((r) => `  ${r.agent} · ${r.status}${r.activity ? ` · ${r.activity}` : ""}`).join("\n")}`;
 
 export function subagentsExtension(): InlineExtension {
-	return {
-		name: "omi-subagents", builtin: true, replaceable: true,
-		factory(pi) {
-			const active = new Set<AbortController>();
-			pi.on("session_shutdown", () => { for (const controller of active) controller.abort(); });
-			pi.registerTool({
-				name: "subagent", label: "Subagentes", exposure: "model-only", executionMode: "sequential",
-				description: "Delegá tareas con contexto independiente al mismo modelo y razonamiento de la sesión. Agentes: scout (explora), planner (planifica), reviewer (revisa), worker (implementa). Los tres primeros sólo tienen read/grep/find/ls; worker usa las tools disponibles del padre con sus guardrails. Un modo: agent+task, tasks (paralelo) o chain ({previous}). Máximo 8 tareas, 4 simultáneas y 32 turnos; solicita cancelar a los 10 minutos por tarea. Devuelve hasta 6 KB/200 líneas por tarea y ruta al resultado completo si se trunca. Mismo cwd/filesystem: no es un sandbox.",
-				promptSnippet: "Delegar exploración, planificación, revisión o implementación con contexto separado",
-				promptGuidelines: ["Usá subagent para tareas autocontenidas; pasá el contexto necesario explícitamente. No asignes los mismos archivos a workers en paralelo."],
-				parameters: paramsSchema,
-				async execute(_id, params, signal, onUpdate, ctx) {
-					const controller = new AbortController();
-					const abort = () => controller.abort();
-					if (signal?.aborted) abort(); else signal?.addEventListener("abort", abort, { once: true });
-					active.add(controller);
-					try { return await execute(params, ctx, controller.signal, onUpdate); }
-					finally { signal?.removeEventListener("abort", abort); active.delete(controller); }
-				},
-			});
-		},
-	};
+	return { name: "omi-subagents", builtin: true, replaceable: true, factory(pi) {
+		const schedule = taskPool();
+		const makeBackgroundContext = backgroundDispatcher(pi);
+		const jobs = new Map<string, Job>();
+		const foreground = new Map<string, AbortController>();
+		let alive = true; let generation = 0;
+		const emit = (phase: "start" | "update" | "end", id: string, details: Details, args?: Params, isError?: boolean) => {
+			if (alive) pi.events.emit("omi:subagents", { phase, id, details: snapshot(details), ...(args ? { args } : {}), ...(isError === undefined ? {} : { isError }) });
+		};
+		const cancel = (id: string): boolean => {
+			const job = jobs.get(id);
+			const targets = id === "all" ? [...jobs.values()].filter((job) => !job.result).map((job) => job.controller).concat([...foreground.values()]) : [job && !job.result ? job.controller : foreground.get(id)].filter((c): c is AbortController => !!c);
+			for (const controller of targets) controller.abort();
+			return targets.length > 0;
+		};
+		const unsubscribe = pi.events.on("omi:subagents:cancel", (value: unknown) => {
+			if (alive && value && typeof value === "object" && "id" in value && typeof value.id === "string") cancel(value.id);
+		});
+		const stop = () => {
+			generation++;
+			for (const job of jobs.values()) { job.notify = false; if (!job.result) job.controller.abort(); }
+			for (const controller of foreground.values()) controller.abort();
+		};
+		pi.on("session_tree", () => { stop(); jobs.clear(); });
+		pi.on("session_shutdown", async () => {
+			alive = false; stop(); unsubscribe();
+			// Give cooperative streams time to close before the extension runtime is discarded.
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			await Promise.race([Promise.allSettled([...jobs.values()].map((job) => job.promise)), new Promise<void>((resolve) => { timer = setTimeout(resolve, 1500); timer.unref(); })]);
+			if (timer) clearTimeout(timer);
+			jobs.clear();
+		});
+
+		pi.registerTool({
+			name: "subagent", label: "Subagentes", exposure: "model-only", executionMode: "sequential",
+			description: "Delegá tareas con contexto independiente. Roles: scout, planner, reviewer (sólo read/grep/find/ls), worker (tools del padre con hooks/confirmaciones). Un modo: agent+task, tasks (paralelo) o chain ({previous}). En TUI/RPC corre en BACKGROUND por defecto: devuelve ID inmediatamente, podés seguir conversando y avisa al terminar. background:false espera el resultado (por defecto en print/json). action:status lista progreso; action:result + id obtiene el resultado SIN ESPERAR y contabiliza uso una sola vez; action:cancel + id (o all) solicita cancelación. Hasta 4 lotes de background, 8 tareas/lote, 4 tareas activas globales, 32 turnos y 10 minutos/tarea. Salida 6 KB/200 líneas por tarea, resto en archivo privado. Al cerrar/cambiar sesión o navegar el árbol se cancelan los trabajos, no son jobs persistentes. Mismo filesystem: no es un sandbox.",
+			promptSnippet: "Delegar tareas en segundo plano, consultar resultados y cancelar subagentes",
+			promptGuidelines: [
+				"Usá subagent en background para trabajo independiente y seguí atendiendo al usuario; no esperes ni hagas polling continuo. Al recibir el aviso de finalización usá subagent action:result con su id para incorporar resultado y uso.",
+				"Usá subagent background:false sólo si necesitás el resultado antes de continuar. Pasá contexto explícito y no asignes los mismos archivos a workers en paralelo ni los edites mientras un worker trabaja en ellos.",
+			],
+			parameters: paramsSchema,
+			async execute(id, params, signal, onUpdate, ctx) {
+				const action = params.action ?? "run";
+				if (action !== "run") {
+					if (params.agent !== undefined || params.task !== undefined || params.tasks !== undefined || params.chain !== undefined || params.background !== undefined) throw new Error("Las acciones status/result/cancel no reciben tareas ni background.");
+					if (action === "status" && !params.id) return textResult([...jobs.values()].map(jobSummary).join("\n\n") || "Sin trabajos de background.");
+					if (!params.id) throw new Error("Indicá el id del trabajo.");
+					if (action === "cancel") return { ...textResult(cancel(params.id) ? "Cancelación solicitada. No revierte cambios ni operaciones ya ejecutadas." : "No se encontró un trabajo activo con ese id."), isError: !jobs.has(params.id) && !foreground.has(params.id) && params.id !== "all" };
+					const job = jobs.get(params.id);
+					if (!job) throw new Error("Trabajo no encontrado en esta sesión.");
+					if (action === "status" || !job.result) return textResult(jobSummary(job), { jobId: job.id, background: true, ...snapshot(job.details) });
+					const result = { ...job.result, details: { ...job.result.details, jobId: job.id, background: true } };
+					if (job.reported) delete result.usage;
+					job.reported = true;
+					return result;
+				}
+				if (params.id !== undefined) throw new Error("id sólo se usa con status/result/cancel.");
+				params = structuredClone(params); // Detached jobs must not retain mutable model-call arguments.
+				const { details } = prepare(params, ctx);
+				const background = params.background ?? (ctx.mode === "tui" || ctx.mode === "rpc");
+				if (background && ctx.mode !== "tui" && ctx.mode !== "rpc") throw new Error("Background requiere una sesión TUI/RPC persistente; usá background:false en print/json.");
+				if (signal?.aborted && background) throw new Error("Delegación cancelada antes de comenzar.");
+				if (!background) {
+					const controller = new AbortController(); const abort = () => controller.abort();
+					if (signal?.aborted) abort(); else signal?.addEventListener("abort", abort, { once: true }); foreground.set(id, controller);
+					emit("start", id, details, params);
+					try {
+						const result = await executeSubagent(params, ctx, controller.signal, (update) => { emit("update", id, update.details); onUpdate?.(update); }, schedule);
+						emit("end", id, result.details, undefined, result.isError); return result;
+					} catch (error) { emit("end", id, details, undefined, true); throw error; }
+					finally { signal?.removeEventListener("abort", abort); foreground.delete(id); }
+				}
+				if ([...jobs.values()].filter((job) => !job.result).length >= 4) throw new Error("Ya hay 4 lotes de background; esperá un aviso o cancelá uno antes de lanzar otro.");
+				// Don't discard uncollected usage/results to make room for new work.
+				for (const [key, job] of jobs) if (jobs.size >= 8 && job.result && job.reported) jobs.delete(key);
+				if (jobs.size >= 8) throw new Error("Leé los resultados terminados con action:result antes de lanzar más trabajos.");
+				const nestedUsage = emptyUsage();
+				const context = makeBackgroundContext(ctx, (result) => { if (result.usage) addUsage(nestedUsage, result.usage); });
+				const job: Job = { id: `bg-${randomUUID()}`, controller: new AbortController(), details, reported: false, notify: true };
+				jobs.set(job.id, job); const epoch = generation;
+				emit("start", job.id, details, params);
+				job.promise = Promise.resolve().then(async () => {
+					try {
+						job.result = await executeSubagent(params, context, job.controller.signal, (update) => {
+							job.details = update.details; if (generation === epoch) emit("update", job.id, update.details);
+						}, schedule);
+					} catch (error) {
+						for (const result of job.details.results) if (result.status === "pending" || result.status === "running") { result.status = "error"; result.activity = ""; result.output = "El ejecutor de background falló."; }
+						job.result = { ...textResult(truncateHead(error instanceof Error ? error.message : "Falló el subagente", { maxBytes: 6000, maxLines: 200 }).content, job.details), isError: true, usage: emptyUsage() };
+					}
+					job.details = job.result.details;
+					const usage = job.result.usage ?? emptyUsage(); addUsage(usage, nestedUsage); job.result.usage = usage;
+					if (alive && generation === epoch) {
+						emit("end", job.id, job.details, undefined, job.result.isError);
+						pi.appendEntry("omi-subagent-usage", { id: job.id, status: jobState(job), usage });
+						if (job.notify) pi.sendMessage({ customType: "omi-subagent-done", content: `Subagente ${job.id}: ${jobState(job)}. Obtené el resultado y su uso con subagent action:result id:${job.id}.`, display: true, details: { jobId: job.id } }, { triggerTurn: true, deliverAs: "followUp" });
+					}
+				}).catch(() => { /* A failed notification must not become an unhandled rejection. Result remains collectible. */ });
+				return textResult(`Trabajo ${job.id} iniciado en segundo plano. Seguí atendiendo al usuario: llegará un aviso al terminar. No esperes ni hagas polling.`, { jobId: job.id, background: true, ...snapshot(details) });
+			},
+		});
+	} };
 }

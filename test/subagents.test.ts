@@ -21,7 +21,7 @@ function setup(respond: (context: TranscriptContext, options?: SimpleStreamOptio
 	const extension = subagentsExtension();
 	assert.equal(typeof extension, "object");
 	if (typeof extension === "function") throw new Error("expected named extension");
-	extension.factory({ registerTool: (definition: ToolDefinition) => { tool = definition; }, on: (_event: string, handler: () => void) => { shutdown = handler; } } as never);
+	extension.factory({ registerTool: (definition: ToolDefinition) => { tool = definition; }, events: { emit() {}, on() { return () => {}; } }, on: (event: string, handler: () => void) => { if (event === "session_shutdown") shutdown = handler; } } as never);
 	const seen: string[] = [];
 	const ctx = {
 		cwd: "/worktree", model, thinkingLevel: "high", getSystemPrompt: () => "PROJECT_INSTRUCTIONS",
