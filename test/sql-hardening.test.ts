@@ -176,6 +176,7 @@ test("sólo se elige un Postgres con una base activa, y nunca entre varios", asy
 		});
 	}
 	assert.deepEqual(seen, [], "no se pide confirmación para un recurso inutilizable");
+	linked.workloads.resources.delete("res_nueva");
 	resource(linked, "res_app", "stage", "app");
 	resource(linked, "res_redis", "stage", "cache", { engine: "redis" });
 	await linked.call("omi_postgres_query", { environment: "stage", sql: "SELECT 1" });
@@ -241,4 +242,132 @@ test("ni la salida ni los errores de consultar y ejecutar llevan el token de la 
 	await collect(["resources", "postgres", "exec", "--env", "stage", "--json", "DELETE FROM t"], { interactive: true, answers: ["s"] });
 	assert.ok(outputs.join("\n").length > 200);
 	assert.doesNotMatch(outputs.join("\n"), /prs_test|Bearer/);
+});
+
+test("--resource-id no puede contradecir el ambiente ni el slug pedidos", async (t) => {
+	const linked = await linkedProject(t);
+	resource(linked, "res_prod", "prod", "ventas");
+	for (const tool of ["omi_postgres_query", "omi_postgres_exec"]) {
+		await assert.rejects(linked.call(tool, { environment: "stage", resourceId: "res_prod", sql: "SELECT 1" }), (error: OmiError) => {
+			assert.equal(error.code, "resource_mismatch");
+			assert.match(error.message, /res_prod.*ventas.*prod.*no.*stage/);
+			return true;
+		});
+		await assert.rejects(linked.call(tool, { slug: "otra", resourceId: "res_prod", sql: "SELECT 1" }), (error: OmiError) => error.code === "resource_mismatch" && /ventas/.test(error.message));
+	}
+	const io = linked.io();
+	assert.equal(await run(["resources", "postgres", "query", "--env", "stage", "--resource-id", "res_prod", "--json", "SELECT 1"], io), 1);
+	assert.equal((JSON.parse(io.errors()) as { error: { code: string } }).error.code, "resource_mismatch");
+	assert.deepEqual(linked.sql.calls, []);
+	// Coincidiendo, corre y la salida dice contra qué base y ambiente corrió.
+	const result = await linked.call("omi_postgres_query", { environment: "prod", slug: "ventas", resourceId: "res_prod", sql: "SELECT 1" });
+	assert.match(result.text, /^ventas \(local\) en prod\n/);
+	assert.deepEqual((result.data as { resource: unknown }).resource, { id: "res_prod", environment: "prod", slug: "ventas", mode: "local" });
+});
+
+test("omi_postgres_exec_sólo un código de OMI que garantiza que no se aplicó deja de estar en duda", async (t) => {
+	const linked = await linkedProject(t);
+	resource(linked, "res_app", "stage", "app");
+	const proxies = [
+		{ status: 408, text: "Request Timeout" },
+		{ status: 499, text: "" },
+		{ status: 429, body: { error: { code: "rate_limited", message: "demasiados pedidos" } } },
+		{ status: 400, body: { error: { code: "bad_request", message: "de un proxy" } } },
+		{ status: 404, text: "404 page not found" },
+		{ status: 500, body: { error: { code: "internal_error", message: "ocurrió un error interno" } } },
+	];
+	for (const reply of proxies) {
+		linked.sql.respond = () => reply;
+		await assert.rejects(linked.call("omi_postgres_exec", EXEC), isUnknown, `status ${reply.status}`);
+	}
+	const settled = ["invalid_sql", "invalid_sql_limits", "forbidden", "resource_not_found", "resource_not_active", "decommissioning", "control_plane_unavailable", "sql_busy", "sql_agent_unavailable", "sql_error", "sql_timeout", "sql_connection_failed"];
+	for (const code of settled) {
+		linked.sql.respond = () => sqlProblem(409, { code, message: `mensaje de ${code}` });
+		await assert.rejects(linked.call("omi_postgres_exec", EXEC), (error: OmiError) => error.code === code, code);
+	}
+	assert.equal(linked.sql.calls.length, proxies.length + settled.length);
+});
+
+test("omi resources list no se rompe si la API manda null o no manda engine ni active_revision", async (t) => {
+	const linked = await linkedProject(t);
+	linked.workloads.resources.set("res_vieja", { id: "res_vieja", environment: "stage", slug: "vieja", mode: "externa", variable: "POSTGRES_URL_VIEJA", state: "lista" });
+	linked.workloads.resources.set("res_nula", { id: "res_nula", environment: "prod", slug: "nula", mode: "local", variable: "POSTGRES_URL_NULA", state: "lista", engine: null, active_revision: null });
+	const io = linked.io();
+	assert.equal(await run(["resources", "list"], io), 0, io.errors());
+	assert.match(io.output(), /stage\/vieja \(externa\): lista/);
+	assert.match(io.output(), /prod\/nula \(local\): lista/);
+	// Sin esos campos el cliente no descarta el recurso: la API decide si se puede consultar.
+	await linked.call("omi_postgres_query", { environment: "stage", sql: "SELECT 1" });
+	await linked.call("omi_postgres_query", { environment: "prod", sql: "SELECT 1" });
+	assert.deepEqual(linked.sql.calls.map((call) => call.resourceID), ["res_vieja", "res_nula"]);
+});
+
+test("con más de un Postgres en el ambiente hay que nombrar cuál, aunque sólo uno esté activo", async (t) => {
+	const linked = await linkedProject(t);
+	resource(linked, "res_app", "stage", "app");
+	resource(linked, "res_nueva", "stage", "nueva", { state: "provisionando", active_revision: 0 });
+	await assert.rejects(linked.call("omi_postgres_query", { environment: "stage", sql: "SELECT 1" }), (error: OmiError) => {
+		assert.equal(error.code, "usage_error");
+		assert.equal(error.hint, "app (lista), nueva (provisionando)");
+		return true;
+	});
+	assert.deepEqual(linked.sql.calls, []);
+	await linked.call("omi_postgres_query", { environment: "stage", slug: "app", sql: "SELECT 1" });
+	await linked.call("omi_postgres_query", { resourceId: "res_app", sql: "SELECT 1" });
+	assert.equal(linked.sql.calls.length, 2);
+});
+
+test("la pista del guion sólo aparece cuando el SQL se leyó como un flag", async (t) => {
+	const linked = await linkedProject(t);
+	resource(linked, "res_app", "stage", "app");
+	const errors = async (args: string[]): Promise<string> => {
+		const io = linked.io();
+		assert.equal(await run(args, io), 2, args.join(" "));
+		return io.errors();
+	};
+	const hint = /empieza con un guion/;
+	assert.match(await errors(["resources", "postgres", "query", "--env", "stage", "-- nota\nSELECT 1"]), hint);
+	assert.match(await errors(["resources", "postgres", "exec", "--slug", "query", "--env", "stage", "-1 + 1"]), hint);
+	assert.doesNotMatch(await errors(["resources", "postgres", "query", "--env", "stage", "--bogus", "SELECT 1"]), hint);
+	assert.doesNotMatch(await errors(["resources", "postgres", "query", "--env", "stage"]), hint);
+	assert.doesNotMatch(await errors(["resources", "postgres", "query", "--env", "stage", "--max-rows", "x", "SELECT 1"]), hint);
+	assert.doesNotMatch(await errors(["resources", "postgres", "create", "--slug", "query", "--bogus"]), hint);
+});
+
+test("--max-rows y --timeout sólo aceptan enteros decimales desde 1", async (t) => {
+	const linked = await linkedProject(t);
+	resource(linked, "res_app", "stage", "app");
+	for (const flag of ["--max-rows", "--timeout"]) {
+		for (const value of ["", "0", "-3", "0x10", "1e3", "1.5", " 5", "5 ", "+5", "05", "cinco", "Infinity"]) {
+			const io = linked.io();
+			assert.equal(await run(["resources", "postgres", "query", "--env", "stage", `${flag}=${value}`, "SELECT 1"], io), 2, `${flag}=${value}`);
+			assert.ok(io.errors().includes(`${flag} necesita un entero mayor o igual a 1`), `${flag}=${value}: ${io.errors()}`);
+		}
+	}
+	assert.equal(linked.sql.calls.length, 0);
+	assert.equal(await run(["resources", "postgres", "query", "--env", "stage", "--max-rows", "7", "--timeout", "3", "SELECT 1"], linked.io()), 0);
+	assert.deepEqual(linked.sql.calls[0]?.body, { sql: "SELECT 1", max_rows: 7, timeout_seconds: 3 });
+});
+
+test("la tabla corta y alinea por puntos de código, sin partir un par subrogado", () => {
+	const text = queryText("app (local) en stage", {
+		columns: [{ name: "a", type: "text" }, { name: "b", type: "text" }],
+		rows: [["🙂".repeat(100), "x"], ["🙂🙂", "y"]],
+		row_count: 2,
+		truncated: false,
+		duration_ms: 1,
+		limits: { max_rows: 500, timeout_seconds: 10, max_response_bytes: 1 },
+	});
+	const lines = text.split("\n");
+	assert.equal(lines[3], `${"🙂".repeat(79)}… | x`);
+	assert.equal(lines[4], `🙂🙂${" ".repeat(78)} | y`);
+	assert.doesNotMatch(text, /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/, "ningún sustituto suelto");
+});
+
+test("la descripción de omi_postgres_query dice de qué depende que sea libre", async () => {
+	const { CATALOG } = await import("../src/tools/catalog.ts");
+	const description = CATALOG.find((tool) => tool.name === "omi_postgres_query")?.description ?? "";
+	assert.match(description, /transacción de sólo lectura/);
+	assert.match(description, /base externa.*rol de la URI/);
+	assert.match(description, /Los datos devueltos llegan al modelo/);
 });

@@ -59,15 +59,31 @@ export async function envCommand(args: string[], io: Io): Promise<number> {
 	);
 }
 
-/** Un SQL que empieza con guion se lee como un flag: el error lo dice en vez de hablar de una opción desconocida. */
+/** Forma de un flag de verdad: `--env`, `--max-rows=5`, `-h`. Lo demás que empiece con guion es SQL. */
+const FLAG_SHAPE = /^--?[A-Za-z][A-Za-z-]*(=.*)?$/;
+
+/**
+ * Un SQL que empieza con guion se lee como un flag y falla como opción desconocida. La pista sólo
+ * aparece en ese caso: `resources postgres query|exec`, con un argumento con guion que no tiene forma de flag.
+ */
 function sqlFlags<T>(args: string[], parse: () => T): T {
 	try {
 		return parse();
 	} catch (error) {
-		const [kind, action] = args.filter((arg) => !arg.startsWith("-"));
-		if (!(error instanceof UsageError) || kind !== "postgres" || (action !== "query" && action !== "exec")) throw error;
+		const end = args.indexOf("--");
+		const before = end < 0 ? args : args.slice(0, end);
+		const sqlLike = before.some((arg) => arg.startsWith("-") && !FLAG_SHAPE.test(arg));
+		const isSql = args[0] === "postgres" && (args[1] === "query" || args[1] === "exec");
+		if (!(error instanceof UsageError) || !isSql || !sqlLike) throw error;
 		throw new UsageError(error.message, 'si el SQL empieza con un guion, ponelo después de `--` (omi resources postgres query --env stage -- "-- nota") o pasalo con --file -');
 	}
+}
+
+/** Topes de SQL: sólo un entero decimal desde 1. `Number()` aceptaría "", "0x10", "1e3" y "1.5". */
+function toPositiveInteger(value: string | undefined, flag: string): number | undefined {
+	if (value === undefined) return undefined;
+	if (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value))) throw new UsageError(`${flag} necesita un entero mayor o igual a 1`);
+	return Number(value);
 }
 
 export async function resourcesCommand(args: string[], io: Io): Promise<number> {
@@ -96,8 +112,8 @@ export async function resourcesCommand(args: string[], io: Io): Promise<number> 
 				slug: values.slug,
 				resourceId: values["resource-id"],
 				sql: await sqlArgument(rest, values.file, io),
-				maxRows: toInteger(values["max-rows"], "--max-rows"),
-				timeoutSeconds: toInteger(values.timeout, "--timeout"),
+				maxRows: toPositiveInteger(values["max-rows"], "--max-rows"),
+				timeoutSeconds: toPositiveInteger(values.timeout, "--timeout"),
 			},
 			io,
 			values,

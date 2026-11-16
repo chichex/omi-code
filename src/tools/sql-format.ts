@@ -31,16 +31,21 @@ function cellText(value: unknown): string {
 	if (value === null) return "NULL";
 	if (value === "" || value === "NULL") return `'${value}'`;
 	const text = typeof value === "string" ? value : JSON.stringify(value);
-	const oneLine = text.replace(HIDDEN, escaped);
-	return oneLine.length > MAX_CELL_WIDTH ? `${oneLine.slice(0, MAX_CELL_WIDTH - 1)}…` : oneLine;
+	// Por puntos de código: cortar por unidades UTF-16 puede partir un par subrogado y dejar texto mal formado.
+	const points = Array.from(text.replace(HIDDEN, escaped));
+	return points.length > MAX_CELL_WIDTH ? `${points.slice(0, MAX_CELL_WIDTH - 1).join("")}…` : points.join("");
+}
+
+function width(text: string): number {
+	return Array.from(text).length;
 }
 
 function table(result: SqlResult): string[] {
 	if (result.columns.length === 0) return [];
 	const header = result.columns.map((column) => cellText(column.name));
 	const rows = result.rows.map((row) => result.columns.map((_, index) => cellText(row[index] ?? null)));
-	const widths = header.map((name, index) => Math.max(name.length, ...rows.map((row) => row[index]?.length ?? 0)));
-	const line = (cells: string[]): string => cells.map((cell, index) => cell.padEnd(widths[index] ?? 0)).join(" | ");
+	const widths = header.map((name, index) => Math.max(width(name), ...rows.map((row) => width(row[index] ?? ""))));
+	const line = (cells: string[]): string => cells.map((cell, index) => cell + " ".repeat(Math.max(0, (widths[index] ?? 0) - width(cell)))).join(" | ");
 	return [line(header), widths.map((width) => "-".repeat(width)).join("-+-"), ...rows.map(line)];
 }
 

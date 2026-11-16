@@ -116,9 +116,10 @@ export const ResourceSchema = Type.Object({
 	mode: Type.String(),
 	variable: Type.String(),
 	state: Type.String(),
-	engine: OptionalString,
+	// omi-api los manda siempre; este esquema también lo usa `omi resources list`, así que ausentes o en null no rompen nada.
+	engine: Type.Optional(Type.Union([Type.String(), Type.Null()])),
 	/** 0 mientras el recurso no tiene una base activa: recién creado, provisionando o con el alta fallida. */
-	active_revision: Type.Optional(Type.Integer()),
+	active_revision: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
 });
 
 export const ResourcesSchema = Type.Object({ resources: Type.Array(ResourceSchema) });

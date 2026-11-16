@@ -3,7 +3,7 @@
 
 import { Type, type Static } from "typebox";
 import { ResourcesSchema, SqlResultSchema, type ResourceSchema } from "../client/views.ts";
-import { ApiError, OmiError, UsageError } from "../core/errors.ts";
+import { ApiError, EXIT_ERROR, OmiError, UsageError } from "../core/errors.ts";
 import { assertCanProceed, enforce, type EnvironmentName, type GuardedAction } from "../guardrails/policy.ts";
 import { openScope, type Scope } from "./scope.ts";
 import { execText, queryText, visible } from "./sql-format.ts";
@@ -34,38 +34,47 @@ function label(resource: Resource): string {
 	return `${resource.slug} (${resource.state})`;
 }
 
-/** Con `active_revision` en 0 omi-api responde resource_not_active: todavía no hay una base que consultar. */
+/** Con `active_revision` en 0 omi-api responde resource_not_active: todavía no hay una base que consultar. Sin el dato, decide la API. */
 function assertUsable(resource: Resource): Resource {
-	if ((resource.active_revision ?? 0) > 0) return resource;
+	if (resource.active_revision !== 0) return resource;
 	throw new OmiError("resource_not_active", `el Postgres ${resource.slug} de ${resource.environment} está ${resource.state}: todavía no tiene una base activa`, {
 		hint: "`omi resources list` muestra su estado",
 	});
 }
 
-/** Un Postgres por id, o el único con base activa que coincide con ambiente y slug. Nunca elige entre varios. */
+/** El id manda, pero no puede contradecir lo demás: `--env stage` con el id de una base de prod no corre contra prod. */
+function assertMatches(resource: Resource, params: SqlParams): Resource {
+	const asked = [
+		...(params.environment !== undefined && params.environment !== resource.environment ? [`el ambiente ${params.environment}`] : []),
+		...(params.slug !== undefined && params.slug !== resource.slug ? [`el slug ${params.slug}`] : []),
+	];
+	if (asked.length === 0) return resource;
+	throw new OmiError("resource_mismatch", `el recurso ${resource.id} es ${resource.slug} de ${resource.environment}, no ${asked.join(" ni ")}: no se envió nada`, {
+		exitCode: EXIT_ERROR,
+		hint: "sacá el flag que no coincide o corregí el id",
+	});
+}
+
+/**
+ * Un Postgres por id, o el único del ambiente que coincide con el slug. Nunca elige entre varios, estén
+ * activos o no: el destino de un comando no puede depender del estado de otra base.
+ */
 async function findResource(scope: Scope, params: SqlParams): Promise<Resource> {
 	if (params.resourceId === undefined && params.environment === undefined) throw new UsageError("indicá el ambiente (y el slug) o el id del recurso");
 	const filter = params.resourceId === undefined && params.environment !== undefined ? `?environment=${params.environment}` : "";
 	const listed = await scope.client.request("GET", `${scope.projectPath}/resources${filter}`, ResourcesSchema);
-	const resources = listed.resources.filter((candidate) => candidate.engine === "postgres");
+	// Hoy todo recurso es un Postgres; sólo se descarta el que diga ser otra cosa.
+	const resources = listed.resources.filter((candidate) => (candidate.engine ?? "postgres") === "postgres");
 	if (params.resourceId !== undefined) {
 		const found = resources.find((candidate) => candidate.id === params.resourceId);
 		if (found === undefined) throw notFound(`un Postgres ${params.resourceId} en el proyecto`);
-		return assertUsable(found);
+		return assertUsable(assertMatches(found, params));
 	}
 	const matches = resources.filter((candidate) => params.slug === undefined || candidate.slug === params.slug);
-	const usable = matches.filter((candidate) => (candidate.active_revision ?? 0) > 0);
-	const [only, ...others] = usable;
-	if (only === undefined) {
-		const [unusable] = matches;
-		if (unusable !== undefined && matches.length === 1) return assertUsable(unusable);
-		if (unusable !== undefined) {
-			throw new OmiError("resource_not_active", `ningún Postgres de ${params.environment} tiene una base activa: ${matches.map(label).join(", ")}`);
-		}
-		throw notFound(`un Postgres ${params.slug ?? ""} en ${params.environment}`.replace("  ", " "));
-	}
-	if (others.length > 0) throw new UsageError(`hay varios Postgres en ${params.environment}: indicá cuál con el slug`, usable.map(label).join(", "));
-	return only;
+	const [only, ...others] = matches;
+	if (only === undefined) throw notFound(`un Postgres ${params.slug ?? ""} en ${params.environment}`.replace("  ", " "));
+	if (others.length > 0) throw new UsageError(`hay varios Postgres en ${params.environment}: indicá cuál con el slug o con el id`, matches.map(label).join(", "));
+	return assertUsable(only);
 }
 
 function requestBody(params: SqlParams): Record<string, unknown> {
@@ -88,8 +97,17 @@ async function send(scope: Scope, resource: Resource, action: "query" | "exec", 
 }
 
 const VERIFY_HINT = "verificá el estado con `omi resources postgres query` antes de repetirla";
-/** Respuestas con las que omi-api ya resolvió qué pasó: no se ejecutó, o se canceló sin aplicar cambios. */
-const SETTLED_CODES = ["sql_error", "sql_timeout", "sql_connection_failed", "sql_agent_unavailable", "sql_busy"];
+/**
+ * Códigos propios de omi-api que garantizan que la sentencia no se aplicó: la rechazó antes de entregarla
+ * al agente, el agente no la corrió, o Postgres la canceló con rollback. Es una lista blanca: cualquier
+ * otra respuesta después de enviar (un 4xx o un 5xx de un proxy, un código que no está acá) queda en duda.
+ */
+const SETTLED_CODES = [
+	"authentication_required", "session_expired", "forbidden", "organization_not_found", "project_not_found",
+	"invalid_json", "invalid_sql", "invalid_sql_limits",
+	"resource_not_found", "resource_not_active", "resource_secret_unavailable", "decommissioning", "control_plane_unavailable",
+	"sql_busy", "sql_agent_unavailable", "sql_error", "sql_timeout", "sql_connection_failed",
+];
 /** Fallos de red que ocurren antes de que el pedido salga: no hay conexión por la que haya viajado. */
 const NEVER_SENT = ["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN"];
 
@@ -111,7 +129,7 @@ export function execFailure(error: unknown): unknown {
 		new ApiError("sql_outcome_unknown", "la ejecución se envió y no volvió una respuesta: no se sabe si la sentencia se aplicó", 504, VERIFY_HINT, details);
 	if (error instanceof ApiError) {
 		if (error.code === "sql_outcome_unknown") return new ApiError(error.code, `${error.message}: no se sabe si la sentencia se aplicó`, error.status, VERIFY_HINT, error.details);
-		return error.status < 500 || SETTLED_CODES.includes(error.code) ? error : unknown(error.details);
+		return SETTLED_CODES.includes(error.code) ? error : unknown(error.details);
 	}
 	if (error instanceof OmiError && error.code === "unexpected_response") {
 		return new OmiError("sql_result_unreadable", "la sentencia se ejecutó, pero no se pudo leer el resultado que devolvió OMI", {
@@ -129,7 +147,7 @@ export const postgresQueryTool = defineTool({
 	name: "omi_postgres_query",
 	label: "OMI: consultar Postgres",
 	description:
-		"Corre una consulta de sólo lectura (SELECT, VALUES, TABLE, WITH) en un Postgres del proyecto, en stage o prod, sin confirmación: Postgres mismo impide que escriba. Devuelve columnas con su tipo, filas y si el resultado se cortó. Para escribir usá omi_postgres_exec.",
+		"Corre una consulta de sólo lectura (SELECT, VALUES, TABLE, WITH) en un Postgres del proyecto, en stage o prod, sin confirmación. Es libre porque OMI la corre en una transacción de sólo lectura que Postgres hace cumplir y, en una base local, con un rol sin permisos de escritura; en una base externa depende del rol de la URI con que se dio de alta. Los datos devueltos llegan al modelo: no consultes lo que no deba salir de la base. Devuelve columnas con su tipo, filas y si el resultado se cortó. Para escribir usá omi_postgres_exec.",
 	parameters: SqlParameters,
 	run: async (params, runtime) => {
 		const scope = await openScope(runtime);
