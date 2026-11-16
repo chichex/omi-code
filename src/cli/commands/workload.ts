@@ -1,5 +1,7 @@
 // Subcomandos del ciclo de proyecto: adaptadores delgados sobre el catálogo de tools.
 
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { UsageError } from "../../core/errors.ts";
 import { parseFlags } from "../flags.ts";
 import type { Io } from "../io.ts";
@@ -57,8 +59,35 @@ export async function envCommand(args: string[], io: Io): Promise<number> {
 	);
 }
 
+/** Forma de un flag de verdad: `--env`, `--max-rows=5`, `-h`. Lo demás que empiece con guion es SQL. */
+const FLAG_SHAPE = /^--?[A-Za-z][A-Za-z-]*(=.*)?$/;
+
+/**
+ * Un SQL que empieza con guion se lee como un flag y falla como opción desconocida. La pista sólo
+ * aparece en ese caso: `resources postgres query|exec`, con un argumento con guion que no tiene forma de flag.
+ */
+function sqlFlags<T>(args: string[], parse: () => T): T {
+	try {
+		return parse();
+	} catch (error) {
+		const end = args.indexOf("--");
+		const before = end < 0 ? args : args.slice(0, end);
+		const sqlLike = before.some((arg) => arg.startsWith("-") && !FLAG_SHAPE.test(arg));
+		const isSql = args[0] === "postgres" && (args[1] === "query" || args[1] === "exec");
+		if (!(error instanceof UsageError) || !isSql || !sqlLike) throw error;
+		throw new UsageError(error.message, 'si el SQL empieza con un guion, ponelo después de `--` (omi resources postgres query --env stage -- "-- nota") o pasalo con --file -');
+	}
+}
+
+/** Topes de SQL: sólo un entero decimal desde 1. `Number()` aceptaría "", "0x10", "1e3" y "1.5". */
+function toPositiveInteger(value: string | undefined, flag: string): number | undefined {
+	if (value === undefined) return undefined;
+	if (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value))) throw new UsageError(`${flag} necesita un entero mayor o igual a 1`);
+	return Number(value);
+}
+
 export async function resourcesCommand(args: string[], io: Io): Promise<number> {
-	const { values, positionals } = parseFlags(args, {
+	const { values, positionals } = sqlFlags(args, () => parseFlags(args, {
 		...ENV,
 		...YES,
 		slug: { type: "string" },
@@ -68,10 +97,28 @@ export async function resourcesCommand(args: string[], io: Io): Promise<number> 
 		"pg-version": { type: "string" },
 		size: { type: "string" },
 		disk: { type: "string" },
-	});
-	const [kind, action] = positionals;
+		"max-rows": { type: "string" },
+		timeout: { type: "string" },
+		file: { type: "string" },
+	}));
+	const [kind, action, ...rest] = positionals;
 	if (kind === "list") return runToolCommand("omi_resources_list", { environment: values.env }, io, values);
-	if (kind !== "postgres" || action === undefined) throw new UsageError("uso: omi resources <list|postgres <create|replace|delete|retry|recover>>");
+	if (kind !== "postgres" || action === undefined) throw new UsageError("uso: omi resources <list|postgres <create|replace|delete|retry|recover|query|exec>>");
+	if (action === "query" || action === "exec") {
+		return runToolCommand(
+			action === "query" ? "omi_postgres_query" : "omi_postgres_exec",
+			{
+				environment: values.env,
+				slug: values.slug,
+				resourceId: values["resource-id"],
+				sql: await sqlArgument(rest, values.file, io),
+				maxRows: toPositiveInteger(values["max-rows"], "--max-rows"),
+				timeoutSeconds: toPositiveInteger(values.timeout, "--timeout"),
+			},
+			io,
+			values,
+		);
+	}
 	return runToolCommand(
 		"omi_postgres_manage",
 		{
@@ -88,6 +135,20 @@ export async function resourcesCommand(args: string[], io: Io): Promise<number> 
 		io,
 		values,
 	);
+}
+
+/** El SQL llega una sola vez: entre comillas como argumento, o con --file (un archivo, o `-` para stdin). */
+async function sqlArgument(positionals: string[], file: string | undefined, io: Io): Promise<string> {
+	const [inline, ...extra] = positionals;
+	if (extra.length > 0) throw new UsageError("pasá el SQL como un solo argumento, entre comillas");
+	if ((inline === undefined) === (file === undefined)) throw new UsageError('indicá el SQL una vez: "<sql>" o --file <archivo|->');
+	if (inline !== undefined) return inline;
+	if (file === "-") return io.readStdin();
+	try {
+		return await readFile(resolve(io.cwd, file ?? ""), "utf8");
+	} catch {
+		throw new UsageError(`no se pudo leer ${file}`);
+	}
 }
 
 const JOB_ACTIONS: Readonly<Record<string, string>> = { template: "handler_template", check: "handler_check" };

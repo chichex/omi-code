@@ -19,8 +19,22 @@ const MAX_RETRY_AFTER_SECONDS = 60 * 60;
 const LOGIN_HINT = "corré `omi login`";
 const AUTH_CODES = ["authentication_required", "session_expired"];
 
+function Nullable<S extends TSchema>(schema: S) {
+	return Type.Optional(Type.Union([schema, Type.Null()]));
+}
+
 const ProblemBody = Type.Object({
-	error: Type.Object({ code: Type.String(), message: Type.String(), field: Type.Optional(Type.String()) }),
+	error: Type.Object({
+		code: Type.String(),
+		message: Type.String(),
+		// omi-api omite lo que no aplica; se tolera también null.
+		field: Nullable(Type.String()),
+		// Un error de SQL suma lo que informó Postgres.
+		sqlstate: Nullable(Type.String()),
+		position: Nullable(Type.Integer()),
+		detail: Nullable(Type.String()),
+		hint: Nullable(Type.String()),
+	}),
 });
 
 const QueuedReceipt = Type.Object({ mutation_id: Type.String(), state: Type.String() });
@@ -70,13 +84,24 @@ function retryHint(status: number, retryAfter: string | null): string | undefine
 	return `esperá ${count} ${unit}${count === 1 ? "" : "s"} antes de volver a intentar`;
 }
 
+/** Error de Postgres: el SQLSTATE y la posición van en el mensaje y, estructurados, en `details`. */
+function sqlProblem(status: number, error: Static<typeof ProblemBody>["error"], sqlstate: string, sessionHint: string | undefined): ApiError {
+	const position = error.position ?? undefined;
+	const where = position === undefined ? "" : `, posición ${position}`;
+	// El aviso de sesión o de espera va primero: es lo que hay que hacer antes de mirar el SQL.
+	const advice = [sessionHint, error.detail, error.hint].filter((text) => typeof text === "string" && text !== "").join(" · ");
+	const details = { sqlstate, ...(position === undefined ? {} : { position }) };
+	return new ApiError(error.code, `${error.message} (SQLSTATE ${sqlstate}${where})`, status, advice === "" ? undefined : advice, details);
+}
+
 function problemFrom(status: number, payload: unknown, context: string, retryAfter: string | null): ApiError {
 	// La espera sale del header: un 429 de un intermediario no trae el JSON de omi-api.
 	const wait = retryHint(status, retryAfter);
 	if (Value.Check(ProblemBody, payload)) {
-		const { code, message, field } = payload.error;
+		const { code, message, field, sqlstate } = payload.error;
 		const hint = AUTH_CODES.includes(code) ? LOGIN_HINT : wait;
-		return new ApiError(code, field === undefined ? message : `${message} (${field})`, status, hint);
+		if (typeof sqlstate === "string") return sqlProblem(status, payload.error, sqlstate, hint);
+		return new ApiError(code, typeof field === "string" ? `${message} (${field})` : message, status, hint);
 	}
 	return new ApiError("unexpected_response", `OMI respondió ${status} sin un error reconocible en ${context}`, status, wait);
 }

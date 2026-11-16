@@ -228,9 +228,9 @@ Son controles locales para las superficies soportadas, no aislamiento de un proc
 
 | Operación | Quién decide |
 |---|---|
-| Lecturas | libre |
+| Lecturas, incluida una consulta SQL de sólo lectura en stage o prod | libre |
 | Variables no secretas, jobs y deploy en stage, publicar | autónomo en una sesión autorizada |
-| Cualquier cosa en prod, secretos, Postgres, registry, visibilidad, bajas, crear un proyecto o un service | humano, siempre, con una confirmación interactiva |
+| Cualquier cosa en prod, secretos, Postgres (gestionarlo o ejecutar SQL que escribe), registry, visibilidad, bajas, crear un proyecto o un service | humano, siempre, con una confirmación interactiva |
 
 «Humano, siempre» sólo se aprueba respondiendo una pregunta en el momento: en una terminal (la CLI), en el diálogo de la TUI o por elicitación del cliente MCP.
 Ningún flag la reemplaza. Si no hay cómo preguntar, la operación sale con `2` y `guardrail_confirmation_required` sin mandar nada a OMI.
@@ -329,6 +329,45 @@ Si hay un cambio en curso, espera a que termine y decide sobre el estado real.
 El comando termina bien cuando el acceso del ambiente quedó `listo`. Sale con 1, y `access_ready: false` en `--json`, si el acceso
 falló (OMI lo reintenta solo, y el mensaje dice cuándo) o si no quedó listo en 5 minutos. Un ambiente sin versión desplegada
 no publica nada hasta su primer deploy: el comando sale con 0 y lo avisa. `omi status` muestra la visibilidad, su aplicación y el acceso.
+
+## SQL en un Postgres del proyecto
+
+Para mirar y corregir los datos de un Postgres que OMI administra, `local` o `externa`, sin pasar por el panel ni tener la URI.
+Son las tools `omi_postgres_query` y `omi_postgres_exec`, con los mismos subcomandos en la CLI:
+
+| Subcomando | Qué hace | Quién decide |
+|---|---|---|
+| `omi resources postgres query --env <stage\|prod> "<sql>"` | corre una consulta de sólo lectura y muestra una tabla | libre, también en prod |
+| `omi resources postgres exec --env <stage\|prod> "<sql>"` | ejecuta una sentencia que puede escribir; devuelve las filas afectadas y las de `RETURNING` | humano, siempre, también en stage |
+
+```sh
+omi resources postgres query --env prod --slug ventas "SELECT id, email FROM usuarios ORDER BY id DESC LIMIT 20"
+omi resources postgres query --env stage --file consulta.sql --json
+omi resources postgres exec --env prod --slug ventas "DELETE FROM usuarios WHERE email = 'prueba@omi.test'"
+```
+
+- **Qué recurso.** `--slug` elige el Postgres del ambiente y se puede omitir sólo si el ambiente tiene uno; `--resource-id <res_…>` lo nombra sin ambiente. Con más de uno, en cualquier estado, hay que nombrar cuál: el comando los lista con su estado y no elige. Si `--resource-id` no coincide con el `--env` o el `--slug` pedidos da `resource_mismatch` y no envía nada. Uno que todavía no tiene base activa (recién creado, `provisionando`, alta fallida) da `resource_not_active` antes de pedir confirmación. La salida, también en `--json`, dice siempre la base y el ambiente reales contra los que corrió.
+- **El SQL.** Una sola sentencia: como argumento entre comillas, o con `--file <archivo>` (`--file -` lee stdin). Si empieza con un guion, va después de `--`: `omi resources postgres query --env stage -- "-- nota\nSELECT 1"`.
+- **Por qué `query` es libre, también en prod.** Es una decisión: mirar los datos no pide confirmación. Depende de dos cosas. Una, que la API de OMI garantice la sólo-lectura: transacción `READ ONLY` y, en una base `local`, un rol sin permisos de escritura. En una base `externa` depende del rol de la URI con que se dio de alta: si ese rol es superusuario, una función con efectos puede correr desde un `SELECT`. Dos, que **los datos devueltos llegan al modelo** que llamó a la tool, y a su proveedor: una consulta sobre datos personales o secretos los saca de la base.
+- **Sólo lectura de verdad.** `query` no depende de que el SQL "parezca" un `SELECT`: OMI lo corre dentro de una transacción de sólo lectura, como consulta de un cursor, y Postgres rechaza cualquier otra cosa. `INSERT`, `UPDATE`, `DELETE`, DDL, `COPY`, `SET`, `EXPLAIN` o dos sentencias juntas dan `sql_error`. Para eso está `exec`.
+- **Quién puede.** `query` pide ser miembro de la organización; `exec` pide ser dueño (un miembro recibe `forbidden`).
+- **Confirmación de `exec`.** Muestra el ambiente, la base y el SQL completo, con los caracteres de control a la vista, y pregunta: en la terminal, en el diálogo de la TUI o por elicitación del cliente MCP. `--yes` no la aprueba. Sin cómo preguntar sale con `2` y `guardrail_confirmation_required` sin mandar nada a OMI.
+- **Topes.** Por defecto OMI devuelve hasta 500 filas y 1 MiB, y corta la sentencia a los 10 segundos. `--max-rows <n>` y `--timeout <s>` son enteros desde 1 y sólo pueden pedir menos: pedir más da `invalid_sql_limits`. Si el resultado se corta, la tabla termina con `truncado: sí` y `--json` trae `truncated: true` con `truncated_by` (`rows` o `bytes`).
+- **`--json`.** `{ resource, columns, rows, row_count, truncated, truncated_by?, rows_affected?, command?, duration_ms, limits }`. `columns` trae nombre y tipo de Postgres. Cada celda es JSON: `null`, booleanos, números para `smallint` e `integer`, el valor embebido para `json` y `jsonb`, y un string con el texto de Postgres para todo lo demás (`bigint` y `numeric` incluidos, para no perder precisión; `bytea` en hex; `timestamptz` en UTC). La tabla de la terminal recorta las celdas de más de 80 caracteres; `--json` no.
+
+| Código | Qué pasó | Qué hacer |
+|---|---|---|
+| `sql_error` | Postgres rechazó la sentencia; el mensaje trae el SQLSTATE y la posición, y `--json` los suma como `sqlstate` y `position` | corregir el SQL |
+| `sql_timeout` | la sentencia superó el timeout y se canceló sin aplicar cambios | acotar la consulta |
+| `sql_connection_failed` | OMI no pudo conectar a la base | revisar el recurso con `omi resources list` |
+| `sql_agent_unavailable` | el agente del control plane no tomó el pedido: desconectado, ocupado o sin actualizar; no se ejecutó nada | reintentar; si sigue, revisar el host |
+| `sql_outcome_unknown` | sólo en `exec`: no se sabe si la sentencia se aplicó. También sale si, después de enviar el pedido, no vuelve una respuesta de OMI que garantice que no se aplicó: timeout del cliente, corte de red, señal abortada, o un 4xx o 5xx de un intermediario. omi nunca la reintenta | verificar con `query` antes de repetirla |
+| `sql_result_unreadable` | sólo en `exec`: la sentencia se ejecutó, pero la respuesta no se pudo leer | no repetirla; mirar el estado con `query` |
+| `resource_not_active` | el Postgres todavía no tiene una base activa | esperar o revisar su estado con `omi resources list` |
+| `resource_operation_in_progress`, `resource_not_ready`, `resource_unhealthy` | el Postgres tiene una operación en curso, no está `lista` o su base local está caída; no se ejecutó nada | esperar a que termine o revisar su estado con `omi resources list` |
+| `sql_busy` | hay 8 pedidos en curso contra el control plane, o 3 tuyos; no se ejecutó nada | esperar a que termine alguno |
+
+OMI registra cada consulta y ejecución (quién, cuándo, recurso, ambiente, el SQL, filas y resultado), nunca los valores devueltos.
 
 ## Publicación y reintentos
 

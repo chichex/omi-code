@@ -1,6 +1,6 @@
 // Salida común: legible por defecto, JSON con --json. Los errores van a stderr.
 
-import { OmiError } from "../core/errors.ts";
+import { ApiError, OmiError } from "../core/errors.ts";
 import type { Io } from "./io.ts";
 
 export function printJson(value: unknown, io: Io): void {
@@ -12,7 +12,8 @@ export function reportError(error: unknown, io: Io, json: boolean): void {
 	const message = error instanceof Error ? error.message : String(error);
 	const hint = error instanceof OmiError ? error.hint : undefined;
 	if (json) {
-		io.err(JSON.stringify({ error: { code, message, ...(hint === undefined ? {} : { hint }) } }));
+		const details = error instanceof ApiError ? error.details : undefined;
+		io.err(JSON.stringify({ error: { code, message, ...(hint === undefined ? {} : { hint }), ...details } }));
 		return;
 	}
 	io.err(`omi: ${message}`);
