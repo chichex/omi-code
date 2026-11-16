@@ -313,7 +313,7 @@ No hay que empujar tags. Primero se miran las rutas y después el tipo de commit
 
 | Merge a `main` | Resultado |
 |---|---|
-| `docs(review): …` que sólo toca `.chiche/` | sin release |
+| `docs: …` que sólo toca documentación, tests o CI | sin release |
 | `fix(cli): …` o cualquier otro tipo sobre lo empaquetado | patch: `0.1.0` → `0.1.1` |
 | `feat(tools): …` | minor: `0.1.1` → `0.2.0` |
 | `feat!: …` o `BREAKING CHANGE:` | minor antes de 1.0; major después |
