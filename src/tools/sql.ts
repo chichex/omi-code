@@ -105,7 +105,8 @@ const VERIFY_HINT = "verificá el estado con `omi resources postgres query` ante
 const SETTLED_CODES = [
 	"authentication_required", "session_expired", "forbidden", "organization_not_found", "project_not_found",
 	"invalid_json", "invalid_sql", "invalid_sql_limits",
-	"resource_not_found", "resource_not_active", "resource_secret_unavailable", "decommissioning", "control_plane_unavailable",
+	"resource_not_found", "resource_not_active", "resource_operation_in_progress", "resource_not_ready", "resource_unhealthy",
+	"resource_secret_unavailable", "decommissioning", "control_plane_unavailable",
 	"sql_busy", "sql_agent_unavailable", "sql_error", "sql_timeout", "sql_connection_failed",
 ];
 /** Fallos de red que ocurren antes de que el pedido salga: no hay conexión por la que haya viajado. */

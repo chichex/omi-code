@@ -364,6 +364,8 @@ omi resources postgres exec --env prod --slug ventas "DELETE FROM usuarios WHERE
 | `sql_outcome_unknown` | sólo en `exec`: no se sabe si la sentencia se aplicó. También sale si, después de enviar el pedido, no vuelve una respuesta de OMI que garantice que no se aplicó: timeout del cliente, corte de red, señal abortada, o un 4xx o 5xx de un intermediario. omi nunca la reintenta | verificar con `query` antes de repetirla |
 | `sql_result_unreadable` | sólo en `exec`: la sentencia se ejecutó, pero la respuesta no se pudo leer | no repetirla; mirar el estado con `query` |
 | `resource_not_active` | el Postgres todavía no tiene una base activa | esperar o revisar su estado con `omi resources list` |
+| `resource_operation_in_progress`, `resource_not_ready`, `resource_unhealthy` | el Postgres tiene una operación en curso, no está `lista` o su base local está caída; no se ejecutó nada | esperar a que termine o revisar su estado con `omi resources list` |
+| `sql_busy` | hay 8 pedidos en curso contra el control plane, o 3 tuyos; no se ejecutó nada | esperar a que termine alguno |
 
 OMI registra cada consulta y ejecución (quién, cuándo, recurso, ambiente, el SQL, filas y resultado), nunca los valores devueltos.
 

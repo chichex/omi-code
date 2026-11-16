@@ -280,7 +280,7 @@ test("omi_postgres_exec_sólo un código de OMI que garantiza que no se aplicó 
 		linked.sql.respond = () => reply;
 		await assert.rejects(linked.call("omi_postgres_exec", EXEC), isUnknown, `status ${reply.status}`);
 	}
-	const settled = ["invalid_sql", "invalid_sql_limits", "forbidden", "resource_not_found", "resource_not_active", "decommissioning", "control_plane_unavailable", "sql_busy", "sql_agent_unavailable", "sql_error", "sql_timeout", "sql_connection_failed"];
+	const settled = ["invalid_sql", "invalid_sql_limits", "forbidden", "resource_not_found", "resource_not_active", "resource_operation_in_progress", "resource_not_ready", "resource_unhealthy", "decommissioning", "control_plane_unavailable", "sql_busy", "sql_agent_unavailable", "sql_error", "sql_timeout", "sql_connection_failed"];
 	for (const code of settled) {
 		linked.sql.respond = () => sqlProblem(409, { code, message: `mensaje de ${code}` });
 		await assert.rejects(linked.call("omi_postgres_exec", EXEC), (error: OmiError) => error.code === code, code);

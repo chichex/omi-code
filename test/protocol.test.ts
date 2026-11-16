@@ -78,7 +78,10 @@ test("protocolo_consultar y ejecutar SQL coinciden con el código de chichex/omi
 	const fields = ["sql", "max_rows", "timeout_seconds", "columns", "rows", "row_count", "truncated", "truncated_by", "rows_affected", "command", "duration_ms", "limits", "max_response_bytes"];
 	for (const field of fields) assert.ok(new RegExp(`json:"${field}[",]`).test(contract), `campo ${field}`);
 	for (const field of ["sqlstate", "detail", "hint", "position"]) assert.ok(routes.includes(`"${field}"`), `campo de error ${field}`);
-	const codes = ["sql_error", "sql_timeout", "sql_connection_failed", "sql_agent_unavailable", "sql_outcome_unknown", "invalid_sql", "invalid_sql_limits"];
+	const codes = [
+		"sql_error", "sql_timeout", "sql_connection_failed", "sql_agent_unavailable", "sql_outcome_unknown", "invalid_sql", "invalid_sql_limits",
+		"resource_not_active", "resource_operation_in_progress", "resource_not_ready", "resource_unhealthy",
+	];
 	for (const code of codes) assert.ok(contract.includes(`"${code}"`), `código ${code}`);
 	// Los defaults que la ayuda y el README de omi-code le prometen al usuario.
 	assert.ok(contract.includes("MaxRows: 500, Timeout: 10 * time.Second, MaxResponseBytes: 1 << 20"), "topes por defecto");
