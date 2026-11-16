@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import { setTimeout } from "node:timers/promises";
 import { test } from "node:test";
-import { SessionManager, type ExtensionCommandContext, type ExtensionContext, type SessionEntry, type SessionHeader, type Theme } from "@earendil-works/pi-coding-agent";
+import { createEventBus, SessionManager, type ExtensionCommandContext, type ExtensionContext, type SessionEntry, type SessionHeader, type Theme } from "@earendil-works/pi-coding-agent";
 import { Container, getOsc8LinkAtColumn, parseColor, sliceByColumn, stripTerminalSequences, Text, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 // Mismo contrato versionado que el adaptador de OMI, sin emular el algoritmo de layout.
 import { getLayoutBoxesAt, renderLayoutFrame } from "../node_modules/@earendil-works/pi-tui/dist/layout.js";
@@ -22,10 +22,12 @@ import { WORKSPACE_VIEWS, workspaceTabs } from "../src/tui/workspace/navigation.
 
 const theme = { fg: (_role: string, value: string) => value, bold: (value: string) => value, style: (value: string) => value, getColorMode: () => "truecolor" } as unknown as Theme;
 
-async function visualHarness(home: string, options: { cwd?: string; trusted?: boolean; online?: boolean; paletteAction?: string; browserCode?: number; theme?: Theme; entries?: SessionEntry[]; detailKey?: string; sessionFile?: string; sessionDir?: string; sessionHeader?: SessionHeader } = {}) {
+async function visualHarness(home: string, options: { cwd?: string; trusted?: boolean; online?: boolean; paletteAction?: string; browserCode?: number; theme?: Theme; entries?: SessionEntry[]; detailKey?: string; sessionFile?: string; sessionDir?: string; sessionHeader?: SessionHeader; mode?: string; classic?: boolean } = {}) {
 	const activeTheme = options.theme ?? theme;
 	const modals: { lines: string[]; width: number; dispatchedBefore: number }[] = [];
 	const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
+	const bus = createEventBus(); let subscriptions = 0; let renders = 0;
+	const events = { emit: bus.emit, on: (name: string, listener: (data: unknown) => void) => { subscriptions++; const off = bus.on(name, listener); return () => { subscriptions--; off(); }; } };
 	let root: Component | undefined; let focus: Component | undefined; let hasMessages = false; let unknownUsage = false; let approveSensitive = false;
 	const prompts: string[] = []; const confirmations: string[] = []; const paletteOptions: string[][] = []; const notices: string[] = [];
 	const browserCalls: { command: string; args: string[]; options: { cwd?: string; timeout?: number } }[] = [];
@@ -40,10 +42,10 @@ async function visualHarness(home: string, options: { cwd?: string; trusted?: bo
 	const ui = {
 		[Symbol.for("@earendil-works/pi-tui/viewport")]: true, mode: "fullscreen", terminal: { columns: 132, rows: 40 },
 		children: [document, new Container(), new Container(), new Container(), editor, new Container(), footer],
-		requestRender() {}, setLayoutRoot: (next: Component) => { root = next; }, hasOverlay: () => false, setFocus: (component: Component) => { focus = component; },
+		requestRender() { renders++; }, setLayoutRoot: (next: Component) => { root = next; }, hasOverlay: () => false, setFocus: (component: Component) => { focus = component; },
 	} as unknown as TUI;
 	const ctx = {
-		mode: "tui", cwd: options.cwd ?? home, model: { id: "real", name: "Modelo real", provider: "proveedor-real", contextWindow: 200000 }, thinkingLevel: "high",
+		mode: options.mode ?? "tui", cwd: options.cwd ?? home, model: { id: "real", name: "Modelo real", provider: "proveedor-real", contextWindow: 200000 }, thinkingLevel: "high",
 		scopedModels: [], modelRegistry: { getAvailable: () => [], hasConfiguredAuth: () => { authChecks++; return false; } }, isIdle: () => true, hasPendingMessages: () => false, isProjectTrusted: () => options.trusted ?? false,
 		switchSession: async (file: string) => { switches.push(file); return { cancelled: true }; },
 		sessionManager: { getBranch: () => entries ?? (hasMessages ? [{ type: "message" }] : []), getSessionFile: () => options.sessionFile, getHeader: () => options.sessionHeader },
@@ -75,12 +77,14 @@ async function visualHarness(home: string, options: { cwd?: string; trusted?: bo
 			},
 		},
 	} as unknown as ExtensionContext;
-	const extension = workspaceExtension(testIo({ cwd: options.cwd ?? home, homeDir: home, env: {} }), [...(options.online ? [] : ["--offline"]), ...(options.sessionDir ? ["--session-dir", options.sessionDir] : [])]);
+	const extension = workspaceExtension(testIo({ cwd: options.cwd ?? home, homeDir: home, env: options.classic ? { OMI_TUI: "classic" } : {} }), [...(options.online ? [] : ["--offline"]), ...(options.sessionDir ? ["--session-dir", options.sessionDir] : [])]);
 	if (typeof extension === "function") throw new Error("expected named extension");
-	await extension.factory({ on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => handlers.set(name, handler), registerCommand: (name: string, command: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }) => commands.set(name, command), getSettings: () => ({}), registerMarkdownTransformer() {}, sendUserMessage: (text: string, options: unknown) => dispatched.push({ text, options }), exec: async (command: string, args: string[], execOptions = {}) => { browserCalls.push({ command, args, options: execOptions }); return { code: options.browserCode ?? 0, stdout: "", stderr: "" }; } } as never);
-	await handlers.get("session_start")!({}, ctx);
+	await extension.factory({ events, on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => handlers.set(name, handler), registerCommand: (name: string, command: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }) => commands.set(name, command), getSettings: () => ({}), registerMarkdownTransformer() {}, sendUserMessage: (text: string, options: unknown) => dispatched.push({ text, options }), exec: async (command: string, args: string[], execOptions = {}) => { browserCalls.push({ command, args, options: execOptions }); return { code: options.browserCode ?? 0, stdout: "", stderr: "" }; } } as never);
+	await handlers.get("session_start")?.({}, ctx);
 	return {
 		resources, chat, prompts, confirmations, commands, paletteOptions, browserCalls, notices, modals, dispatched, switches, authChecks: () => authChecks,
+		events, subscriptions: () => subscriptions, renders: () => renders, hasLayout: () => !!root,
+		emitSession: (name: string, event: unknown = {}) => handlers.get(name)?.(event, ctx),
 		restore: (next: SessionEntry[]) => { entries = next; handlers.get("session_tree")?.({}, ctx); },
 		terminal: (data: string) => terminalInput?.(data),
 		click: (x: number, y: number, width = 132, height = 40) => {
@@ -95,7 +99,7 @@ async function visualHarness(home: string, options: { cwd?: string; trusted?: bo
 		frame: (width = 132, height = 40) => { Object.assign(ui.terminal, { columns: width, rows: height }); return renderLayoutFrame(root!, width, height, () => {}); },
 		unknown: () => { unknownUsage = true; },
 		messages: () => { hasMessages = true; chat.addChild(new Text("CONVERSACIÓN REAL", 0, 0)); },
-		stop: async () => { await handlers.get("session_shutdown")!({}, ctx); },
+		stop: async () => { await handlers.get("session_shutdown")?.({}, ctx); },
 	};
 }
 
@@ -103,7 +107,7 @@ test("workspace_todos los modales propios usan el marco común y el color de su 
 	const theme = getThemeByName("dark")!;
 	const ui = await visualHarness(await tempDir(t), { theme }); t.after(ui.stop);
 	for (const [command, color, limit] of [["omi-workspace", "syntaxType", 104], ["omi-pr", "mdLink", 104], ["omi-actions", "mdLink", 104],
-		["omi-context", "warning", 104], ["omi-resources", "syntaxVariable", 104], ["omi-model", "accent", 112], ["omi", "accent", 76]] as const) {
+		["omi-context", "warning", 104], ["omi-resources", "syntaxVariable", 104], ["omi-subagents", "syntaxVariable", 104], ["omi-model", "accent", 112], ["omi", "accent", 76]] as const) {
 		await ui.command(command);
 		const modal = ui.modals.at(-1)!;
 		assert.equal(modal.width, limit); assert.ok(modal.lines.every((line) => visibleWidth(line) === limit));
@@ -124,11 +128,13 @@ test("workspace_geometría real: Inicio, contexto justo sobre Equipo, cuatro bar
 		assert.match(lines.join("\n"), /¿Qué hacemos en/); assert.doesNotMatch(lines.join("\n"), /HEADER INTERNO/);
 		const side = lines.slice(3, -3).map((line) => Array.from(line).slice(width - 33).join(""));
 		assert.ok(side.every((line) => line.startsWith("│")), `${width}x${height}`);
-		for (const title of ["PROYECTO", "GITHUB ACTIONS", "OMI", "CONTEXTO", "EQUIPO"]) assert.ok(side.some((line) => line.includes(`▌ ${title}`)), `${width}x${height}: ${title}`);
+		for (const title of ["PROYECTO", "GITHUB ACTIONS", "OMI", "SUBAGENTS", "CONTEXTO", "EQUIPO"]) assert.ok(side.some((line) => line.includes(`▌ ${title}`)), `${width}x${height}: ${title}`);
 		assert.ok(side.some((line) => line.includes("Claude reviews"))); assert.ok(side.some((line) => line.includes("Releases")));
 		const context = side.findIndex((line) => line.includes("CONTEXTO"));
 		const omi = side.findIndex((line) => line.includes("▌ OMI"));
-		assert.equal(context - omi, 3, "no queda un hueco creciente entre OMI y Contexto");
+		const subagents = side.findIndex((line) => line.includes("SUBAGENTS"));
+		assert.ok(omi < subagents && subagents < context);
+		assert.ok(context - subagents <= 3, "SUBAGENTS queda inmediatamente antes de Contexto, sin hueco creciente");
 		assert.match(side[context + 1]!, /56k \/ 200k tokens.*28%/);
 		assert.match(side[context + 2]!, /█{30}/); assert.match(side[context + 4]!, /EQUIPO/);
 		assert.equal(side.filter((line) => line.includes("█")).length, 4);
@@ -414,12 +420,13 @@ test("workspace_triage muestra issue y categoría debajo de recursos, incluso en
 	const state = issueTriageState(issue, triage, checkout);
 	const entries: SessionEntry[] = [{ type: "custom", customType: ISSUE_TRIAGE_ENTRY, data: state, id: "triage", parentId: null, timestamp: new Date().toISOString() }];
 	const ui = await visualHarness(home, { cwd: checkout.worktree, entries }); t.after(ui.stop);
+	ui.events.emit("omi:subagents", { phase: "start", id: "triage-eight", args: { tasks: Array.from({ length: 8 }, () => ({ agent: "worker", task: "Conservar issue activo" })) } });
 	for (let i = 0; i < 100 && !ui.frame().lines.map(stripTerminalSequences).some((line) => line.includes("Worktree")); i++) await setTimeout(20);
 	for (const [width, height] of [[110, 26], [132, 28], [132, 32], [132, 34], [160, 70]] as const) {
 		const frame = ui.frame(width, height); const side = frame.lines.slice(3, -3).map((line) => stripTerminalSequences(sliceByColumn(line, width - 33, 33)));
 		assert.ok(frame.lines.every((line) => visibleWidth(line) <= width));
 		assert.match(side.join("\n"), /ISSUE ACTIVO/); assert.match(side.join("\n"), /#42 · Nuevo feature/); assert.match(side.join("\n"), /ISSUE_ACTIVO 漢字/);
-		const headings = ["PROYECTO", "GITHUB ACTIONS", "OMI", "CONTEXTO", "EQUIPO", "ISSUE ACTIVO"].map((title) => {
+		const headings = ["PROYECTO", "GITHUB ACTIONS", "OMI", "SUBAGENTS", "CONTEXTO", "EQUIPO", "ISSUE ACTIVO"].map((title) => {
 			const index = side.findIndex((line) => line.includes(`▌ ${title}`)); assert.ok(index >= 0, `${width}x${height}: ${title}`); return index;
 		});
 		assert.deepEqual(headings, [...headings].sort((a, b) => a - b), "Issue activo queda después de Equipo, no debajo de Proyecto");
@@ -551,4 +558,81 @@ test("workspace_main sólo ofrece volver en worktrees: paleta, Enter en Ubicaci�
 		await main.command("omi-workspace"); assert.doesNotMatch(main.prompts.at(-1)!, /Enter volver al repo/);
 		await main.command("omi-main"); assert.match(main.notices.at(-1)!, /Ya estás en el repo principal/); assert.equal(main.switches.length, 0); assert.equal(main.dispatched.length, 0);
 	} finally { await main.stop(); }
+});
+
+test("workspace_SUBAGENTS: bus real, render inmediato, sigue al quedar padre idle y finaliza por end", async (t) => {
+	const ui = await visualHarness(await tempDir(t)); t.after(ui.stop);
+	const screen = () => ui.frame(132, 70).lines.map(stripTerminalSequences).join("\n");
+	assert.equal(ui.subscriptions(), 1); assert.match(screen(), /SUBAGENTS/); assert.match(screen(), /Sin subagentes activos/);
+	ui.emitSession("tool_execution_start", { toolCallId: "native", toolName: "subagent", args: { agent: "worker", task: "No duplicar" } });
+	await ui.command("omi-subagents"); assert.match(ui.prompts.at(-1)!, /Sin subagentes activos/);
+	ui.events.emit("omi:subagents", { phase: "start", id: "bus-job", args: { tasks: [{ agent: "worker", task: "Implementar monitor" }, { agent: "scout", task: "Inspeccionar código" }] }, details: { results: [{ status: "pending" }, { status: "pending" }] } });
+	assert.match(screen(), /0 act\/2 cola|0 activos · 2 en cola/);
+	const before = ui.renders();
+	ui.events.emit("omi:subagents", { phase: "update", id: "bus-job", details: { results: [{ status: "running", activity: "read", turns: 2, output: "PRIVATE_OUTPUT" }, { status: "pending" }] } });
+	assert.ok(ui.renders() > before, "update pide render sin esperar al timer de recursos");
+	assert.match(screen(), /worker · running · read.*\d+s/);
+	await ui.emitSession("agent_settled");
+	assert.match(screen(), /worker · running/); assert.match(screen(), /1 act\/1 cola|1 activos · 1 en cola/);
+	await ui.command("omi-subagents");
+	assert.match(ui.prompts.at(-1)!, /ID: bus-job\/0/); assert.match(ui.prompts.at(-1)!, /Tarea: Implementar monitor/);
+	assert.match(ui.prompts.at(-1)!, /Tool actual: read/); assert.match(ui.prompts.at(-1)!, /Tiempo observado: \d+s/);
+	assert.doesNotMatch(ui.prompts.at(-1)!, /PRIVATE_OUTPUT|No duplicar/);
+	ui.events.emit("omi:subagents", { phase: "end", id: "bus-job", details: { results: [{ status: "done", turns: 3 }, { status: "error" }] }, isError: true });
+	assert.match(screen(), /worker · done/); assert.match(screen(), /scout · error/); assert.doesNotMatch(screen(), / · running| · pending/);
+	ui.events.emit("omi:subagents", { phase: "update", id: "bus-job", details: { results: [{ status: "running" }] } });
+	assert.doesNotMatch(screen(), / · running/);
+	ui.restore([]); assert.match(screen(), /Sin subagentes activos/); assert.doesNotMatch(screen(), /worker · done/);
+	ui.events.emit("omi:subagents", { phase: "update", id: "bus-job", details: { results: [{ status: "running" }] } });
+	assert.match(screen(), /Sin subagentes activos/, "session_tree limpia y no resucita lotes viejos");
+	await ui.stop(); assert.equal(ui.subscriptions(), 0);
+	const stoppedRenders = ui.renders();
+	ui.events.emit("omi:subagents", { phase: "start", id: "after-shutdown", args: { agent: "worker", task: "Ignorar" } });
+	assert.equal(ui.renders(), stoppedRenders, "shutdown quita el listener y deja de tocar UI");
+});
+
+test("workspace_SUBAGENTS: ocho tareas, overflow y clics de todas las secciones sobreviven a resize", async (t) => {
+	const ui = await visualHarness(await tempDir(t)); t.after(ui.stop);
+	ui.events.emit("omi:subagents", { phase: "start", id: "eight", args: { tasks: Array.from({ length: 8 }, (_, index) => ({ agent: ["worker", "scout", "planner", "reviewer"][index % 4], task: `Tarea ${index}` })) } });
+	ui.events.emit("omi:subagents", { phase: "update", id: "eight", details: { results: Array.from({ length: 8 }, (_, index) => ({ status: index < 4 ? "running" : "pending", activity: index < 4 ? "read" : "" })) } });
+	for (const [width, height] of [[110, 26], [132, 28], [132, 40], [160, 70]] as const) {
+		const lines = ui.frame(width, height).lines.map(stripTerminalSequences);
+		assert.equal(lines.length, height); assert.ok(lines.every((line) => visibleWidth(line) <= width));
+		const side = lines.slice(3, -3).map((line) => stripTerminalSequences(sliceByColumn(line, width - 33, 33)));
+		const headings = ["PROYECTO", "GITHUB ACTIONS", "OMI", "SUBAGENTS", "CONTEXTO", "EQUIPO"].map((title) => side.findIndex((line) => line.includes(`▌ ${title}`)));
+		assert.ok(headings.every((row) => row >= 0), `${width}x${height}: ${side.join("\n")}`); assert.deepEqual(headings, [...headings].sort((a, b) => a - b));
+		assert.match(side.join("\n"), /4 act\/4 cola/);
+		if (height === 26) assert.match(side.join("\n"), /\+8 más/);
+		for (const [title, expected] of [["PROYECTO", /Ubicación de trabajo/], ["GITHUB ACTIONS", /GitHub Actions/], ["SUBAGENTS", /Subagentes.*|Delegación/], ["CONTEXTO", /Ventana de contexto/], ["EQUIPO", /Recursos · equipo/]] as const) {
+			const y = side.findIndex((line) => line.includes(`▌ ${title}`)) + 3;
+			ui.click(width - 5, y, width, height); assert.match(ui.prompts.at(-1)!, expected); await Promise.resolve();
+			if (title === "SUBAGENTS") { assert.match(ui.prompts.at(-1)!, /ID: eight\/0/); assert.match(ui.prompts.at(-1)!, /Tarea: Tarea 0/); }
+		}
+		ui.click(width - 5, headings[2]! + 3, width, height); assert.match(ui.frame(width, height).lines.map(stripTerminalSequences)[1]!, /\[5 OMI\]/); await ui.command("omi-chat");
+	}
+});
+
+test("workspace_SUBAGENTS: cancelación confirmada emite sólo el ID del lote y no inventa estados finales", async (t) => {
+	for (const key of ["\r", "\x1b"]) {
+		const ui = await visualHarness(await tempDir(t), { detailKey: key }); t.after(ui.stop);
+		const cancellations: unknown[] = []; const off = ui.events.on("omi:subagents:cancel", (event) => { cancellations.push(event); });
+		ui.events.emit("omi:subagents", { phase: "start", id: "cancel-job", args: { tasks: [{ agent: "worker", task: "Tarea uno" }, { agent: "reviewer", task: "Tarea dos" }] } });
+		await ui.command("omi-subagents", "cancel cancel-job/1");
+		assert.match(ui.prompts.at(-1)!, /Cancelar subagentes/); assert.match(ui.prompts.at(-1)!, /No revierte[\s\S]*cambios/);
+		assert.deepEqual(cancellations, key === "\r" ? [{ id: "cancel-job" }] : []);
+		await ui.command("omi-subagents"); assert.match(ui.prompts.at(-1)!, /pending/); assert.doesNotMatch(ui.prompts.at(-1)!, / · done| · error/);
+		await ui.command("omi-subagents", "cancel unknown/0"); assert.match(ui.notices.at(-1)!, /no tiene subagentes/);
+		off(); await ui.stop(); assert.equal(ui.subscriptions(), 0);
+	}
+});
+
+test("workspace_SUBAGENTS: no instala panel ni listener en classic, RPC, JSON o print", async (t) => {
+	for (const options of [{ classic: true }, { mode: "rpc" }, { mode: "json" }, { mode: "print" }]) {
+		const ui = await visualHarness(await tempDir(t), options); t.after(ui.stop);
+		ui.events.emit("omi:subagents", { phase: "start", id: "hidden", args: { agent: "worker", task: "No tocar UI" } });
+		await ui.emitSession("agent_settled");
+		if (ui.commands.has("omi-subagents")) await ui.command("omi-subagents");
+		assert.equal(ui.hasLayout(), false); assert.equal(ui.subscriptions(), 0); assert.equal(ui.renders(), 0);
+		assert.deepEqual(ui.prompts, []); assert.deepEqual(ui.notices, []);
+	}
 });

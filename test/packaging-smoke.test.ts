@@ -15,6 +15,7 @@ import { FOREIGN, OWN, PI_MARKS, requestSeenByModel, seedConfig, seedPi } from "
 import { tempDir } from "./helpers/io.ts";
 import { exerciseWorkspace, plainTerminal } from "./helpers/workspace-pty.ts";
 import { exerciseSubagentRuntime } from "./helpers/subagent-runtime.ts";
+import { exerciseSubagentBackgroundRuntime } from "./helpers/subagent-background-runtime.ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const enabled = process.env.OMI_PACKAGING_SMOKE === "1";
@@ -70,7 +71,7 @@ test("release real_compila, instala y arranca sin Node ni repo", { skip: !enable
 	const terminal = await exerciseWorkspace(binary, ["--no-extensions", "--no-context-files", "--no-skills", "--offline"], home, { HOME: home, PATH: "/usr/bin:/bin", OMI_HOME: installRoot });
 	assert.equal(terminal.code, 0, terminal.output);
 	const terminalText = plainTerminal(terminal.output);
-	for (const label of ["omi code", "¿Qué hacemos en", "CONTEXTO", "Modelo:", "█".repeat(30), "Elegir modelo · OMI", "Cambios locales", "Ubicación de trabajo", "Recursos · equipo donde corre OMI"]) assert.ok(terminalText.includes(label), label);
+	for (const label of ["omi code", "¿Qué hacemos en", "SUBAGENTS", "CONTEXTO", "Modelo:", "█".repeat(30), "Elegir modelo · OMI", "Cambios locales", "Ubicación de trabajo", "Recursos · equipo donde corre OMI"]) assert.ok(terminalText.includes(label), label);
 	assert.doesNotMatch(terminalText, /Extension error|TypeError|no compatible|exceeds terminal width|\[Extensions\]|<inline:omi-|Update Available|pi update/);
 
 	const probe = join(home, "runtime-probe.ts");
@@ -91,6 +92,7 @@ test("release real_compila, instala y arranca sin Node ni repo", { skip: !enable
 	assert.equal((shellResponse.data as { output: string }).output, "unset|del-shell|1");
 	const agent = join(installRoot, "agent");
 	await exerciseSubagentRuntime({ command: binary, cwd: home, agent, env: { HOME: home, PATH: "/usr/bin:/bin", OMI_HOME: "" } });
+	await exerciseSubagentBackgroundRuntime({ command: binary, cwd: home, agent, env: { HOME: home, PATH: "/usr/bin:/bin", OMI_HOME: "" } });
 	const seededCwd = await seedConfig(home, agent);
 	const body = await requestSeenByModel({ command: binary, cwd: seededCwd, agent, env: { HOME: home, PATH: "/usr/bin:/bin", OMI_HOME: "" } });
 	assert.ok(body.length > 0, "el proveedor no recibió nada");

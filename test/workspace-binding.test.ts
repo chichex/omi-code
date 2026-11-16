@@ -34,6 +34,7 @@ async function harness(home: string, options: { authenticated?: boolean; busy?: 
 	const extension: InlineExtension = workspaceExtension(testIo({ homeDir: home, cwd: home, env: {} }), options.args ?? ["--offline"]);
 	if (typeof extension === "function") throw new Error("expected named extension");
 	await extension.factory({
+		events: { on: () => () => {}, emit() {} },
 		on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => { handlers.set(name, handler); },
 		registerCommand: (name: string, command: { handler: (args?: string, ctx?: ExtensionCommandContext) => Promise<void> }) => { commands.set(name, command); },
 		registerMarkdownTransformer() {},
