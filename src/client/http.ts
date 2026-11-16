@@ -20,7 +20,16 @@ const LOGIN_HINT = "corré `omi login`";
 const AUTH_CODES = ["authentication_required", "session_expired"];
 
 const ProblemBody = Type.Object({
-	error: Type.Object({ code: Type.String(), message: Type.String(), field: Type.Optional(Type.String()) }),
+	error: Type.Object({
+		code: Type.String(),
+		message: Type.String(),
+		field: Type.Optional(Type.String()),
+		// Un error de SQL suma lo que informó Postgres.
+		sqlstate: Type.Optional(Type.String()),
+		position: Type.Optional(Type.Integer()),
+		detail: Type.Optional(Type.String()),
+		hint: Type.Optional(Type.String()),
+	}),
 });
 
 const QueuedReceipt = Type.Object({ mutation_id: Type.String(), state: Type.String() });
@@ -70,11 +79,20 @@ function retryHint(status: number, retryAfter: string | null): string | undefine
 	return `esperá ${count} ${unit}${count === 1 ? "" : "s"} antes de volver a intentar`;
 }
 
+/** Error de Postgres: el SQLSTATE y la posición van en el mensaje y, estructurados, en `details`. */
+function sqlProblem(status: number, error: Static<typeof ProblemBody>["error"]): ApiError {
+	const where = error.position === undefined ? "" : `, posición ${error.position}`;
+	const advice = [error.detail, error.hint].filter((text) => text !== undefined && text !== "").join(" · ");
+	const details = { sqlstate: error.sqlstate ?? "", ...(error.position === undefined ? {} : { position: error.position }) };
+	return new ApiError(error.code, `${error.message} (SQLSTATE ${error.sqlstate}${where})`, status, advice === "" ? undefined : advice, details);
+}
+
 function problemFrom(status: number, payload: unknown, context: string, retryAfter: string | null): ApiError {
 	// La espera sale del header: un 429 de un intermediario no trae el JSON de omi-api.
 	const wait = retryHint(status, retryAfter);
 	if (Value.Check(ProblemBody, payload)) {
-		const { code, message, field } = payload.error;
+		const { code, message, field, sqlstate } = payload.error;
+		if (sqlstate !== undefined) return sqlProblem(status, payload.error);
 		const hint = AUTH_CODES.includes(code) ? LOGIN_HINT : wait;
 		return new ApiError(code, field === undefined ? message : `${message} (${field})`, status, hint);
 	}

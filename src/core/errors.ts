@@ -37,10 +37,13 @@ export class GuardrailError extends OmiError {
 
 export class ApiError extends OmiError {
 	readonly status: number;
+	/** Campos estructurados que omi-api suma al error, como el SQLSTATE y la posición de un error de SQL. */
+	readonly details: Readonly<Record<string, string | number>> | undefined;
 
-	constructor(code: string, message: string, status: number, hint?: string) {
+	constructor(code: string, message: string, status: number, hint?: string, details?: Readonly<Record<string, string | number>>) {
 		super(code, message, { exitCode: EXIT_ERROR, ...(hint === undefined ? {} : { hint }) });
 		this.status = status;
+		this.details = details;
 	}
 }
 

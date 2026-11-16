@@ -120,6 +120,19 @@ export const ResourceSchema = Type.Object({
 
 export const ResourcesSchema = Type.Object({ resources: Type.Array(ResourceSchema) });
 
+/** Resultado de consultar o ejecutar SQL. Cada celda viene serializada por omi-api: ver su README. */
+export const SqlResultSchema = Type.Object({
+	columns: Type.Array(Type.Object({ name: Type.String(), type: Type.String() })),
+	rows: Type.Array(Type.Array(Type.Unknown())),
+	row_count: Type.Integer(),
+	truncated: Type.Boolean(),
+	truncated_by: OptionalString,
+	rows_affected: Type.Optional(Type.Integer()),
+	command: OptionalString,
+	duration_ms: Type.Number(),
+	limits: Type.Object({ max_rows: Type.Integer(), timeout_seconds: Type.Integer(), max_response_bytes: Type.Integer() }),
+});
+
 export const ResourcePreviewSchema = Type.Object({
 	id: Type.String(),
 	action: Type.String(),
