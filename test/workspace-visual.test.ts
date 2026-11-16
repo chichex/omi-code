@@ -334,14 +334,15 @@ console.log(JSON.stringify(args[1] === 'view' ? {body: 'DETAIL_' + args[0] + '_'
 	// El enlace anterior desaparece al cambiar de rama, aunque la lista global conserve otros PRs.
 	data.currentBranch = null; data.failPr = false; await writeFile(dataPath, JSON.stringify(data));
 	execFileSync("git", ["symbolic-ref", "HEAD", "refs/heads/other"], { cwd: linked.repo }); await app.command("omi");
-	for (let i = 0; i < 120; i++) { await app.command("omi-pr"); if (app.prompts.at(-1)?.includes("No hay un PR asociado")) break; await setTimeout(25); }
+	for (let i = 0; i < 120; i++) { await app.command("omi-pr"); if (app.prompts.at(-1)?.includes("No hay un PR asociado") && app.prompts.at(-1)?.includes("Rama: other")) break; await setTimeout(25); }
 	assert.match(app.prompts.at(-1)!, /Rama: other/); assert.match(app.prompts.at(-1)!, /No hay un PR asociado/);
 	assert.doesNotMatch(screen(), /PR #9/);
 	const beforeBlocked = await readFile(logPath, "utf8");
 	for (const options of [{ trusted: true, online: false }, { trusted: false, online: true }]) {
 		const blocked = await visualHarness(linked.home, { cwd: linked.repo, ...options });
 		try {
-			await blocked.command("omi-issues"); await setTimeout(40);
+			await blocked.command("omi-issues");
+			await waitFor(() => blocked.frame().lines.map(stripTerminalSequences).join("\n").includes(options.online ? "Proyecto sin confianza" : "Offline"));
 			const lines = blocked.frame().lines.map(stripTerminalSequences).join("\n");
 			assert.match(lines, options.online ? /Proyecto sin confianza/ : /Offline/); assert.doesNotMatch(lines, /No hay issues abiertos/);
 			await blocked.command("omi-pr"); assert.match(blocked.prompts.at(-1)!, options.online ? /Proyecto sin confianza/ : /Offline/); assert.doesNotMatch(blocked.prompts.at(-1)!, /No hay un PR asociado/);
