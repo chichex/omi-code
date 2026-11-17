@@ -7,13 +7,13 @@ import { assertIssueIdentity, readIssuePreparation, verifyIssuePreparation, type
 import { notice } from "./modals.ts";
 import type { WorkspaceView } from "./navigation.ts";
 import { requestDevelopmentBegin } from "../development-tickets.ts";
-
-export const ISSUE_PANEL_REASON = "Elegido por la persona en Issues";
 interface GithubList { items: GithubItem[] | undefined; selected: number }
 interface InspectorOptions {
  state: () => { ctx: ExtensionContext; git: GitSnapshot | undefined; github: Record<"issues" | "prs", GithubList>; view: WorkspaceView; preparations: Map<number, IssuePreparationEntry>; preparationsError: string | undefined };
  active: () => boolean; gitIdentity: () => string; changed: () => void; modalBusy: () => boolean;
  signal: AbortSignal; offline: boolean | undefined; pi: ExtensionAPI; info: (detail: InfoDetail) => Promise<boolean>;
+ /** El trabajo sigue en el chat: ahí se ven el sí, los avisos y el agente. */
+ onBegin: () => void;
 }
 export class GithubInspector {
  busy = false;
@@ -51,7 +51,7 @@ export class GithubInspector {
    if (start && kind === "issues" && current()) {
     const sessionFile = ctx.sessionManager.getSessionFile();
     if (!sessionFile) ctx.ui.notify("El trabajo requiere una sesión persistente. Volvé a abrir OMI sin --no-session.", "warning");
-    else requestDevelopmentBegin(pi, sessionFile, { issue: item.number, reason: ISSUE_PANEL_REASON });
+    else { this.options.onBegin(); requestDevelopmentBegin(pi, sessionFile, { issue: item.number }); }
    }
   } catch { if (current()) await info({ title: "GitHub · detalle no disponible", content: [notice("Revisá gh, autenticación o red. El detalle también puede ser demasiado grande.", "warning")], options: { color: "warning", subtitle: "GitHub · no se pudo cargar el detalle" } }); }
   finally { this.busy = false; changed(); }

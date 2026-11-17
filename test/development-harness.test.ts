@@ -19,7 +19,7 @@ test("development_harness registrar no ejecuta modelo, GitHub ni cambia tools; e
 	for (const name of ["omi_workflow", "omi_workflow_check", "omi_workflow_lens", "omi_workflow_inspect", "omi_workflow_commit"]) assert.ok(tools.has(name), name);
 	assert.deepEqual(calls, []);
 	for (const [name, tool] of tools) if (name !== "omi_work_begin") assert.equal(tool.defaultActive, false, "el chat normal no declara tools del workflow antes de iniciarlo");
-	assert.notEqual(tools.get("omi_work_begin")?.defaultActive, false, "el chat normal ofrece empezar un trabajo, que siempre pide un sí humano");
+	assert.ok(tools.has("omi_work_begin")); assert.notEqual(tools.get("omi_work_begin")!.defaultActive, false, "el chat normal ofrece empezar un trabajo, que siempre pide un sí humano");
 	const ctx = { cwd: io.cwd, mode: "tui", sessionManager: { getBranch: () => [] }, ui: { setStatus: () => {}, notify: () => {} } } as unknown as ExtensionContext;
 	await events.get("session_start")!({}, ctx);
 	assert.deepEqual(calls, []);

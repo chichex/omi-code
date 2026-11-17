@@ -18,7 +18,7 @@ import { WORKSPACE_VIEWS, type WorkspaceView } from "./navigation.ts";
 import { ACTION_GROUPS, readActionRuns, type ActionGroup, type ActionState } from "./github-actions.ts";
 import { workspaceSidebar } from "./sidebar.ts";
 import { WorkflowProgressMonitor, workflowProgressDetail } from "./workflow-progress.ts";
-import { GithubInspector, ISSUE_PANEL_REASON } from "./github-inspector.ts";
+import { GithubInspector } from "./github-inspector.ts";
 import { consumeSubagentEvent, SubagentMonitor } from "./subagents.ts";
 import { readBranchPullRequest, type BranchPullRequest } from "./pull-request.ts";
 import { restoreIssueTriage, type IssueTriageState } from "./issue-triage.ts";
@@ -236,7 +236,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			const number = github.issues.items?.[github.issues.selected]?.number; const sessionFile = ctx.sessionManager.getSessionFile();
 			if (number === undefined) { ctx.ui.notify("Abrí Issues y seleccioná un issue cargado.", "warning"); return; }
 			if (!sessionFile) { ctx.ui.notify("El trabajo requiere una sesión persistente. Volvé a abrir OMI sin --no-session.", "warning"); return; }
-			requestDevelopmentBegin(pi, sessionFile, { issue: number, reason: ISSUE_PANEL_REASON });
+			switchView("chat"); requestDevelopmentBegin(pi, sessionFile, { issue: number });
 		}
 		async function palette(): Promise<void> {
 			if (!active || finishModal) return;
@@ -290,7 +290,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			return false;
 		}, changed, () => rows() - 6);
 		const githubInspector = new GithubInspector({ state: () => ({ ctx, git, github, view, preparations, preparationsError }), active: () => active,
-			gitIdentity, changed, modalBusy: () => !!finishModal, signal: controller.signal, offline: parsed.offline, pi, info });
+			gitIdentity, changed, modalBusy: () => !!finishModal, signal: controller.signal, offline: parsed.offline, pi, info, onBegin: () => switchView("chat") });
 		const showGithubDetail = (kind: GithubView): Promise<void> => githubInspector.show(kind);
 		function githubPane(kind: GithubView): ReadView {
 			const pane = new ReadView((width) => {

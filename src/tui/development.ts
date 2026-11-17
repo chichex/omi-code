@@ -13,6 +13,7 @@ import { registerDevelopmentTools } from "./development-tools.ts";
 import { beginDevelopment, borderedLoader, registerBeginTool } from "./development-begin.ts";
 import { beginCommand, BEGIN_SUBCOMMAND, takeDevelopmentTicket } from "./development-tickets.ts";
 import { restoreIssueTriage } from "./workspace/issue-triage.ts";
+import { IssuePreparationBusyError } from "./workspace/issue-registry.ts";
 
 const KICKOFF = "Continuá el harness de desarrollo activo desde su etapa persistida. Respetá sus bloqueos y pedí los permisos pendientes; no saltees etapas.";
 const USAGE = "Uso: /omi-work resume | approve | pause | refresh | pr | status | stop";
@@ -46,7 +47,7 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 		};
 		session.onChange = loadout;
 		registerDevelopmentTools(pi, session);
-		let pendingBegin: string | undefined;
+		let pendingBegin: string | undefined; let beginning = false;
 		registerBeginTool(pi, { offline: session.offline, busy: () => !!session.state || !!session.lockedReason, onRequest: (token) => { pendingBegin = token; } });
 		// Sin el sí humano no se llama al modelo: un trabajo pausado o terminado sólo informa su estado.
 		const proceed = (ctx: ExtensionContext) => {
@@ -64,11 +65,16 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 			}
 			if (session.state && session.state.source.number === ticket.request.issue) { ctx.ui.notify(`Ya estás trabajando en el issue #${ticket.request.issue}. Detalle: /omi-progress`, "info"); return; }
 			if (session.state || session.lockedReason) throw new Error("Esta sesión ya tiene un trabajo de desarrollo. Seguí con ese o salí con /omi-work stop antes de empezar otro.");
-			const { parseArgs } = await import("@earendil-works/pi-coding-agent");
-			await beginDevelopment(ctx, ticket.request, {
-				runner: session.runner, offline: session.offline, signal: session.lifecycle.signal, now: session.now, loader: deps.loader ?? borderedLoader,
-				sessionDir: parseArgs([...args]).sessionDir, confirm: (context, title, description) => session.confirm(context, title, description), startHere: () => startHere(ctx),
-			});
+			// Clasificar y preparar no son un turno del agente: sin este cerrojo, otro pedido pasaría isIdle().
+			if (beginning) { ctx.ui.notify("Ya hay un arranque en curso; esperá a que termine.", "warning"); return; }
+			beginning = true;
+			try {
+				const { parseArgs } = await import("@earendil-works/pi-coding-agent");
+				await beginDevelopment(ctx, { origin: ticket.origin, request: ticket.request }, {
+					runner: session.runner, offline: session.offline, signal: session.lifecycle.signal, now: session.now, loader: deps.loader ?? borderedLoader,
+					sessionDir: parseArgs([...args]).sessionDir, confirm: (context, title, description) => session.confirm(context, title, description), startHere: () => startHere(ctx),
+				});
+			} finally { beginning = false; }
 		}
 		// Una tool no puede cambiar de sesión: el pedido se despacha como comando cuando el turno terminó.
 		pi.on("agent_settled", () => {
@@ -98,7 +104,7 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 					loadout();
 					if (["resume", "approve", "refresh"].includes(command)) proceed(ctx);
 					else ctx.ui.notify(session.status(), "info");
-				} catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "No se pudo ejecutar el harness", "error"); }
+				} catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "No se pudo ejecutar el harness", error instanceof IssuePreparationBusyError ? "warning" : "error"); }
 			},
 		});
 		pi.on("session_start", async (_event, ctx) => { await session.restore(ctx); loadout(); });
@@ -114,6 +120,8 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 			}
 		});
 		pi.on("tool_call", async (event, ctx) => {
+			// Hasta que la persona responda, el agente no sigue: ni en este lote ni en otro.
+			if (pendingBegin) return { block: true, reason: "Hay un pedido de desarrollo esperando la confirmación de la persona. Terminá el turno sin otras tools." };
 			if (!session.state && !session.lockedReason) return;
 			if (session.lockedReason && !["read", "grep", "find", "ls", ...WORKFLOW_TOOLS].includes(event.toolName)) return { block: true, reason: session.lockedReason };
 			if (session.state && !workflowToolAllowed(session.state, event.toolName, event.input)) return { block: true, reason: `Harness: ${event.toolName} no está habilitada en esta etapa. Usá omi_workflow y omi_workflow_check; no eludas la receta, evidencia ni permisos.` };

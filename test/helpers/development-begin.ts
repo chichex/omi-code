@@ -12,17 +12,19 @@ import { tempDir, testIo } from "./io.ts";
 
 type Handler = (event: unknown, ctx: ExtensionCommandContext) => unknown;
 interface Sent { text: string; options?: { expandPromptTemplates?: boolean } }
-export interface Instance { manager: SessionManager; ctx: ExtensionCommandContext; tools: Map<string, ToolDefinition>; commands: Map<string, { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }>; events: Map<string, Handler[]>; activeTools: string[]; sent: Sent[]; notices: string[]; send: (text: string, options?: Sent["options"]) => void }
+export interface Instance { stale: boolean; manager: SessionManager; ctx: ExtensionCommandContext; tools: Map<string, ToolDefinition>; commands: Map<string, { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }>; events: Map<string, Handler[]>; activeTools: string[]; sent: Sent[]; notices: string[]; send: (text: string, options?: Sent["options"]) => void }
 const TRIAGE = JSON.stringify({ type: "fix", summary: "Corregir el valor", rationale: "Describe un bug", scope: [], acceptanceCriteria: [], questions: [] });
 
-export async function beginFixture(t: TestContext, options: { args?: readonly string[]; trusted?: boolean; authenticated?: boolean; persistent?: boolean } = {}) {
+export async function beginFixture(t: TestContext, options: { args?: readonly string[]; trusted?: boolean; authenticated?: boolean; persistent?: boolean; busy?: boolean; noMain?: boolean } = {}) {
 	const home = await realpath(await tempDir(t)); const root = join(home, "repo"); await mkdir(root); const sessions = join(home, "sessions");
 	const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-	git("init", "-b", "main"); git("config", "user.email", "test@example.test"); git("config", "user.name", "Test"); git("config", "commit.gpgsign", "false"); git("config", "core.hooksPath", "/dev/null"); git("remote", "add", "origin", "https://github.com/test/repo.git");
+	git("init", "-b", options.noMain ? "trunk" : "main"); git("config", "user.email", "test@example.test"); git("config", "user.name", "Test"); git("config", "commit.gpgsign", "false"); git("config", "core.hooksPath", "/dev/null"); git("remote", "add", "origin", "https://github.com/test/repo.git");
 	await writeFile(join(root, "value.cjs"), "module.exports = 1;\n"); git("add", "."); git("commit", "-m", "test: initial");
 	const remote = {
 		issues: new Map<number, { title: string; body: string; labels: string[] }>([[42, { title: "Corregir resultado", body: "El resultado esperado es 2.", labels: ["bug"] }]]),
-		created: [] as { title: string; body: string }[], confirm: true, failCreate: false, classify: TRIAGE,
+		created: [] as { title: string; body: string }[], confirm: true, failCreate: false, classify: TRIAGE, cancelSwitch: false,
+		// Retiene la respuesta del diálogo para probar un segundo arranque mientras el primero espera el sí.
+		hold: undefined as Promise<void> | undefined,
 	};
 	const prompts: { title: string; description: string }[] = []; const switches: string[] = []; const modelCalls: unknown[] = []; const calls: string[][] = [];
 	const runner: Runner = { async run(command, args, runOptions) {
@@ -47,9 +49,11 @@ export async function beginFixture(t: TestContext, options: { args?: readonly st
 	let current: Instance;
 	async function attach(manager: SessionManager): Promise<Instance> {
 		const tools = new Map<string, ToolDefinition>(); const commands: Instance["commands"] = new Map(); const events = new Map<string, Handler[]>();
-		const instance = { manager, tools, commands, events, activeTools: ["read", "bash", "write", "edit"], sent: [] as Sent[], notices: [] as string[] } as Instance;
+		const instance = { stale: false, manager, tools, commands, events, activeTools: ["read", "bash", "write", "edit"], sent: [] as Sent[], notices: [] as string[] } as Instance;
+		// Como Pi: después de reemplazar la sesión, usar el pi o el ctx viejos es un error.
+		const live = () => { if (instance.stale) throw new Error("Stale extension: se usó la instancia de una sesión reemplazada"); };
 		const send = instance.send = (text: string, sendOptions?: Sent["options"]) => {
-			instance.sent.push({ text, ...(sendOptions ? { options: sendOptions } : {}) });
+			live(); instance.sent.push({ text, ...(sendOptions ? { options: sendOptions } : {}) });
 			if (sendOptions?.expandPromptTemplates && text.startsWith("/")) queue.push({ instance, text });
 		};
 		const pi = {
@@ -57,19 +61,21 @@ export async function beginFixture(t: TestContext, options: { args?: readonly st
 			registerCommand: (name: string, command: Instance["commands"] extends Map<string, infer C> ? C : never) => commands.set(name, command),
 			on: (name: string, handler: Handler) => { const list = events.get(name) ?? []; list.push(handler); events.set(name, list); },
 			events: { emit: () => {} }, getActiveTools: () => instance.activeTools, setActiveTools: (names: string[]) => { instance.activeTools = names; }, getAllTools: () => [],
-			appendEntry: (name: string, data: unknown) => manager.appendCustomEntry(name, data), sendUserMessage: send,
+			appendEntry: (name: string, data: unknown) => { live(); manager.appendCustomEntry(name, data); }, sendUserMessage: send,
 		} as unknown as ExtensionAPI;
 		instance.ctx = {
 			cwd: manager.getCwd(), mode: "tui", hasUI: true, sessionManager: manager, model: { id: "mock", provider: "mock", input: ["text"] }, thinkingLevel: "off",
-			isProjectTrusted: () => options.trusted ?? true, isIdle: () => true, hasPendingMessages: () => false,
-			ui: { setStatus: () => {}, notify: (message: string) => instance.notices.push(message), confirm: async (title: string, description: string) => { prompts.push({ title, description }); return remote.confirm; } },
+			isProjectTrusted: () => options.trusted ?? true, isIdle: () => !options.busy, hasPendingMessages: () => false,
+			ui: { setStatus: () => {}, notify: (message: string) => { live(); instance.notices.push(message); }, confirm: async (title: string, description: string) => { live(); prompts.push({ title, description }); await remote.hold; return remote.confirm; } },
 			modelRegistry: {
 				hasConfiguredAuth: () => options.authenticated ?? true,
 				complete: async (_model: unknown, input: unknown) => { modelCalls.push(input); return { stopReason: "stop", provider: "mock", model: "mock", content: [{ type: "text", text: remote.classify }], usage: { input: 1, output: 1, totalTokens: 2, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }; },
 			},
 			switchSession: async (file: string, switchOptions?: { withSession?: (next: ExtensionCommandContext & { sendUserMessage: typeof send }) => Promise<void> }) => {
 				switches.push(file);
+				if (remote.cancelSwitch) return { cancelled: true };
 				for (const handler of current.events.get("session_shutdown") ?? []) await handler({}, current.ctx);
+				current.stale = true;
 				const next = await attach(SessionManager.open(file)); current = next;
 				await switchOptions?.withSession?.({ ...next.ctx, sendUserMessage: async (text: string, sendOptions?: Sent["options"]) => next.send(text, sendOptions) } as never);
 				return { cancelled: false };
@@ -101,7 +107,7 @@ export async function beginFixture(t: TestContext, options: { args?: readonly st
 	// El agente pide empezar, el turno termina y OMI despacha el comando interno.
 	const ask = async (input: unknown) => { const result = await invoke("omi_work_begin", input); await emit("agent_settled"); await flush(); return result; };
 	const command = async (input: string) => { await current.commands.get("omi-work")!.handler(input, current.ctx); await flush(); };
-	const openMain = async () => { current = await attach(SessionManager.open(main.getSessionFile()!)); };
-	const reload = async () => { for (const handler of current.events.get("session_shutdown") ?? []) await handler({}, current.ctx); current = await attach(SessionManager.open(current.manager.getSessionFile()!)); };
+	const openMain = async () => { for (const handler of current.events.get("session_shutdown") ?? []) await handler({}, current.ctx); current.stale = true; current = await attach(SessionManager.open(main.getSessionFile()!)); };
+	const reload = async () => { for (const handler of current.events.get("session_shutdown") ?? []) await handler({}, current.ctx); current.stale = true; current = await attach(SessionManager.open(current.manager.getSessionFile()!)); };
 	return { home, root, sessions, remote, prompts, switches, modelCalls, calls, main, git, ask, invoke, emit, flush, command, reload, openMain, current: () => current, kickoffs: () => current.sent.filter((message) => !message.options?.expandPromptTemplates).map((message) => message.text) };
 }

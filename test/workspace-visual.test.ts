@@ -520,10 +520,12 @@ test("workspace_Enter en el detalle de un issue pide empezar el trabajo; Esc y e
 			for (let i = 0; i < 5; i++) await Promise.resolve();
 			assert.match(ui.prompts.at(-1)!, /Enter iniciar trabajo/); assert.match(ui.prompts.at(-1)!, /main local/); assert.match(ui.prompts.at(-1)!, /confirmación/);
 			assert.equal(ui.dispatched.length, key === "\r" ? 1 : 0); assert.deepEqual(ui.switches, []);
+			// El trabajo sigue en el chat: el sí, el aviso y el agente se ven ahí, y Ctrl-D vuelve a cerrar OMI.
+			assert.match(ui.frame().lines.map(stripTerminalSequences).join("\n"), key === "\r" ? /\[1 Chat\]/ : /\[2 Issues\]/);
 			if (key === "\r") {
 				assert.deepEqual(ui.dispatched[0]!.options, { expandPromptTemplates: true });
 				const token = beginToken(ui.dispatched[0]!.text)!; assert.ok(token, ui.dispatched[0]!.text);
-				assert.deepEqual(takeDevelopmentTicket(token, sessionFile), { kind: "request", sessionFile, request: { issue: 42, reason: "Elegido por la persona en Issues" } });
+				assert.deepEqual(takeDevelopmentTicket(token, sessionFile), { kind: "request", sessionFile, origin: "panel", request: { issue: 42 } });
 				assert.equal(takeDevelopmentTicket(token, sessionFile), undefined, "el pedido se consume una sola vez");
 			}
 			const before = ui.dispatched.length; await ui.command("omi-prs"); ui.input("\r");
@@ -567,7 +569,7 @@ test("workspace_issue preparado: badges locales, Enter siempre detalle, Esc no c
 			assert.equal(ui.dispatched.length, key === "\r" ? 1 : 0); assert.equal(ui.switches.length, 0);
 			if (key === "\r") {
 				const token = beginToken(ui.dispatched[0]!.text)!; assert.ok(token, ui.dispatched[0]!.text);
-				assert.deepEqual(takeDevelopmentTicket(token, current), { kind: "request", sessionFile: current, request: { issue: 42, reason: "Elegido por la persona en Issues" } }, "retomar también pasa por el sí del harness");
+				assert.deepEqual(takeDevelopmentTicket(token, current), { kind: "request", sessionFile: current, origin: "panel", request: { issue: 42 } }, "retomar también pasa por el sí del harness");
 			}
 			assert.ok(!ui.commands.has("omi-triage"), "no queda una entrada manual de triage");
 			assert.equal(ui.authChecks(), 0); assert.equal(await readFile(sessionFile!, "utf8"), conversation);

@@ -82,7 +82,7 @@ if pid == 0:
 fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', 42, 150, 0, 0))
 os.kill(pid, signal.SIGWINCH)
 start, phase, phase_at, detail_at, output = time.monotonic(), 0, 0, 0, b''
-while time.monotonic() - start < 16:
+while time.monotonic() - start < 26:
     elapsed = time.monotonic() - start
     if phase == 0 and b'Enter enviar' in output:
         os.write(fd, b'\\x1b[50;5u'); phase, detail_at = 1, len(output)
@@ -113,7 +113,7 @@ while time.monotonic() - start < 16:
             break
         if not chunk: break
         output += chunk
-    if elapsed > 14:
+    if elapsed > 24:
         try: os.write(fd, b'\\x04')
         except OSError: break
 else:
@@ -159,8 +159,7 @@ export default function(pi) { pi.on('session_start', async (event,ctx) => {
 				const send = () => response.end(chunk({ role: "assistant", content: JSON.stringify(result) }, null) + chunk({}, "stop") + "data: [DONE]\n\n");
 				if (mode === "cancel") setTimeout(send, 1500); else send();
 			} else if (requests.length === 2) {
-				response.end(chunk({ role: "assistant", tool_calls: [{ index: 0, id: "read", type: "function", function: { name: "read", arguments: JSON.stringify({ path: "worktree-only.txt" }) } },
-					{ index: 1, id: "bash", type: "function", function: { name: "bash", arguments: JSON.stringify({ command: "pwd" }) } }] }, null) + chunk({}, "tool_calls") + "data: [DONE]\n\n");
+				response.end(chunk({ role: "assistant", tool_calls: [{ index: 0, id: "read", type: "function", function: { name: "read", arguments: JSON.stringify({ path: "worktree-only.txt" }) } }] }, null) + chunk({}, "tool_calls") + "data: [DONE]\n\n");
 			} else if (requests.length === 3) { response.end(chunk({ role: "assistant", content: "WORKTREE_PROBE_COMPLETED" }, null) + chunk({}, "stop") + "data: [DONE]\n\n"); await writeFile(reply, "done"); }
 			else { response.end(chunk({ role: "assistant", content: "RESUME_KICKOFF_DONE" }, null) + chunk({}, "stop") + "data: [DONE]\n\n"); await writeFile(resumeReply, "done"); }
 		});
@@ -179,6 +178,8 @@ export default function(pi) { pi.on('session_start', async (event,ctx) => {
 	const result = await run(driver);
 	const plain = plainTerminal(result.output);
 	assert.equal(result.code, 0, plain);
+	// Salir por tiempo también da 0: la fase final prueba que el guion recorrió todo el flujo.
+	assert.match(plain, mode === "ready" ? /TRIAGE_DRIVER_PHASE=16\b/ : /TRIAGE_DRIVER_PHASE=21\b/);
 	assert.equal(confirmedFirst, true, "no se clasifica antes del sí");
 	if (mode !== "ready") {
 		assert.equal(requests.length, 1, plain); await assert.rejects(access(worktree)); await assert.rejects(access(ready));
@@ -194,7 +195,8 @@ export default function(pi) { pi.on('session_start', async (event,ctx) => {
 	const tools = (JSON.parse(requests[1]!).tools as { function: { name: string } }[]).map((tool) => tool.function.name);
 	for (const name of ["read", "omi_workflow", "omi_workflow_check"]) assert.ok(tools.includes(name), name);
 	for (const name of ["bash", "write", "edit", "omi_work_begin"]) assert.ok(!tools.includes(name), `${name} no se ofrece en Explorar`);
-	assert.match(requests[2]!, /WORKTREE_READ_OK/); assert.match(requests[2]!, new RegExp(worktree));
+	// worktree-only.txt existe sólo en el worktree: leerlo prueba que el agente trabaja ahí y no en main.
+	assert.match(requests[2]!, /WORKTREE_READ_OK/); await assert.rejects(access(join(root, "worktree-only.txt")));
 	for (const marker of [ready, reloaded]) { const state = JSON.parse(await readFile(marker, "utf8")); assert.equal(state.cwd, worktree); assert.match(await readFile(state.session, "utf8"), /omi-issue-triage/); }
 	assert.equal(git("branch", "--show-current"), "main"); assert.equal(git("rev-parse", "main"), main); assert.equal(await readFile(join(root, "local.txt"), "utf8"), "LOCAL_UNCOMMITTED\n");
 	assert.equal(execFileSync("git", ["branch", "--show-current"], { cwd: worktree, encoding: "utf8" }).trim(), "fix/issue-42-issue-runtime-triage");
@@ -205,11 +207,13 @@ export default function(pi) { pi.on('session_start', async (event,ctx) => {
 	const sessionFile = record.sessionFile as string; const conversation = await readFile(sessionFile, "utf8");
 	await writeFile(join(worktree, "keep-uncommitted.txt"), "NO PISAR AL RETOMAR\n");
 	const resumedReady = join(home, "resumed-ready"); const resumed = await run(resumeDriver, { TRIAGE_RESUME_READY: resumedReady, TRIAGE_RESUME_ENTER: join(home, "resume-enter") });
-	const resumedPlain = plainTerminal(resumed.output); assert.equal(resumed.code, 0, resumedPlain);
+	const resumedPlain = plainTerminal(resumed.output); assert.equal(resumed.code, 0, resumedPlain); assert.match(resumedPlain, /RESUME_DRIVER_PHASE=7\b/);
 	assert.deepEqual(JSON.parse(await readFile(resumedReady, "utf8")), { cwd: worktree, session: sessionFile });
 	assert.equal(requests.length, 4, "retomar desde main no vuelve a clasificar: sólo sigue el trabajo");
 	assert.match(requests[3]!, /Continuá el harness de desarrollo/);
-	assert.ok((await readFile(sessionFile, "utf8")).startsWith(conversation), "la conversación guardada se conserva"); assert.equal(await readFile(join(worktree, "keep-uncommitted.txt"), "utf8"), "NO PISAR AL RETOMAR\n");
+	const after = await readFile(sessionFile, "utf8"); assert.ok(after.startsWith(conversation), "la conversación guardada se conserva");
+	const added = after.slice(conversation.length);
+	assert.equal(added.match(/Continuá el harness de desarrollo/g)?.length, 1, "retomar agrega sólo el kickoff"); assert.doesNotMatch(added, /omi-issue-triage|omi\.issue-triage/, "ni otro triage ni otra clasificación"); assert.equal(await readFile(join(worktree, "keep-uncommitted.txt"), "utf8"), "NO PISAR AL RETOMAR\n");
 	assert.equal((await readdir(join(sessionFile, ".."))).filter((file) => file.endsWith(".jsonl")).length, 1);
 	assert.equal(git("branch", "--show-current"), "main"); assert.equal(git("rev-parse", "main"), main); assert.equal(await readFile(join(root, "local.txt"), "utf8"), "LOCAL_UNCOMMITTED\n");
 	assert.match(resumedPlain, /Enter retomar trabajo/); assert.match(resumedPlain, /Retomar el trabajo del issue #42/); assert.match(resumedPlain, /RESUME_KICKOFF_DONE/);

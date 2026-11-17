@@ -7,8 +7,10 @@ import { resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export interface BeginRequest { issue?: number; title?: string; body?: string; reason?: string }
+/** Quién pidió empezar: se registra con el pedido, no se infiere del texto que manda el agente. */
+export type BeginOrigin = "agent" | "panel";
 export type DevelopmentTicket =
-	| { kind: "request"; sessionFile: string; request: BeginRequest }
+	| { kind: "request"; sessionFile: string; origin: BeginOrigin; request: BeginRequest }
 	| { kind: "start"; sessionFile: string; issue: number };
 export const BEGIN_SUBCOMMAND = "begin";
 const MAX_TICKETS = 20;
@@ -26,8 +28,9 @@ export function takeDevelopmentTicket(token: string, sessionFile: string | undef
 	tickets.delete(token);
 	return ticket && sessionFile && resolve(ticket.sessionFile) === resolve(sessionFile) ? ticket : undefined;
 }
+export function revokeDevelopmentTicket(token: string): void { tickets.delete(token); }
 export const beginCommand = (token: string): string => `/omi-work ${BEGIN_SUBCOMMAND} ${token}`;
 /** Entrada del panel de Issues y de la paleta: el mismo flujo y la misma confirmación que la tool. */
 export function requestDevelopmentBegin(pi: Pick<ExtensionAPI, "sendUserMessage">, sessionFile: string, request: BeginRequest): void {
-	pi.sendUserMessage(beginCommand(issueDevelopmentTicket({ kind: "request", sessionFile, request })), { expandPromptTemplates: true });
+	pi.sendUserMessage(beginCommand(issueDevelopmentTicket({ kind: "request", sessionFile, origin: "panel", request })), { expandPromptTemplates: true });
 }

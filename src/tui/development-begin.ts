@@ -1,6 +1,6 @@
 // Un pedido de desarrollo que vale la pena arranca el harness con un único sí humano: crear el issue
 // si hace falta, clasificar, preparar worktree y sesión, cambiar de sesión y seguir en Explorar.
-// Todo lo que puede fallar antes de pedir el sí (tamaño, identidad, repo) falla antes de preguntar.
+// Lo que se puede comprobar sin efectos (tamaño, identidad, repo, main local) falla antes de preguntar.
 import { resolve } from "node:path";
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -8,11 +8,12 @@ import type { Runner } from "../core/exec.ts";
 import { readIssueSource, renderWorkflowArtifact } from "../harness/github.ts";
 import { createWorkflow } from "../harness/state.ts";
 import type { Workflow } from "../harness/model.ts";
-import { beginCommand, issueDevelopmentTicket, type BeginRequest } from "./development-tickets.ts";
+import { beginCommand, issueDevelopmentTicket, revokeDevelopmentTicket, type BeginOrigin, type BeginRequest } from "./development-tickets.ts";
 import { readGit, safeText, type GitSnapshot, type GithubItem } from "./workspace/data.ts";
 import { classifyIssue, restoreIssueTriage } from "./workspace/issue-triage.ts";
 import { prepareIssue, type IssueClassification } from "./workspace/issue-preparation.ts";
-import { readIssuePreparation } from "./workspace/issue-registry.ts";
+import { assertIssueIdentity, readIssuePreparation } from "./workspace/issue-registry.ts";
+import { checkIssueWorktree, mainBaseCommit } from "./workspace/issue-worktree.ts";
 
 /** Muestra un trabajo largo con opción de cancelar; undefined si la persona canceló. */
 export type BeginLoader = <T>(ctx: ExtensionContext, title: string, work: (signal: AbortSignal) => Promise<T>) => Promise<T | undefined>;
@@ -23,6 +24,10 @@ export interface BeginOptions {
 	startHere: () => Promise<void>;
 }
 const CLASSIFY_TIMEOUT_MS = 90_000;
+// El número más largo que puede citar el artefacto: el pedido tiene que entrar también con él.
+const MAX_ISSUE = 999_999_999;
+// Bidi y ancho cero: lo publicado se leería distinto de lo que se mostró en el diálogo.
+const INVISIBLE = /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/;
 const TAIL = "Después se explora el código. No se escribe código hasta que apruebes la receta; los comandos y los cambios remotos piden permiso aparte. Termina en un PR draft, sin merge ni deploy.";
 const shown = (value: string) => value.split("\n").map(safeText).join("\n");
 
@@ -30,6 +35,7 @@ const shown = (value: string) => value.split("\n").map(safeText).join("\n");
 export function assertBeginRequest(request: BeginRequest): void {
 	const issue = request.issue !== undefined; const fresh = request.title !== undefined || request.body !== undefined;
 	if (issue === fresh || (fresh && (!request.title?.trim() || !request.body?.trim()))) throw new Error("Pasá issue con el número de un issue existente, o title y body para crear uno nuevo; no ambos.");
+	if (INVISIBLE.test(`${request.title ?? ""}${request.body ?? ""}`)) throw new Error("El título o el cuerpo traen caracteres invisibles o de dirección de texto; quitalos para que lo publicado sea lo que se muestra.");
 }
 export function assertCanBegin(ctx: ExtensionContext, offline: boolean): void {
 	if (!ctx.hasUI) throw new Error("Empezar un trabajo requiere confirmación humana interactiva");
@@ -71,38 +77,51 @@ async function createIssue(git: GitSnapshot, repo: string, title: string, body: 
 	return Number(match[2]);
 }
 
-export async function beginDevelopment(ctx: ExtensionCommandContext, request: BeginRequest, options: BeginOptions): Promise<void> {
+export interface BeginTicket { origin: BeginOrigin; request: BeginRequest }
+// Lo que va a pasar se lee primero; el texto que se publica va al final y completo.
+function dialog(actions: string, ticket: BeginTicket, details: string): string {
+	const who = ticket.origin === "panel" ? "Pedido desde el panel de Issues." : `Motivo del agente: ${shown(ticket.request.reason?.trim() || "sin motivo")}`;
+	return `${actions} ${TAIL}\n\n${who}\n\n${details}`;
+}
+export async function beginDevelopment(ctx: ExtensionCommandContext, ticket: BeginTicket, options: BeginOptions): Promise<void> {
+	const { request } = ticket;
 	assertBeginRequest(request); assertCanBegin(ctx, options.offline);
 	const git = await readGit(ctx.cwd, options.signal);
 	if (!git) throw new Error("Empezar un trabajo necesita un repositorio Git");
 	const origin = ctx.sessionManager.getSessionFile()!;
-	const reason = request.reason?.trim() ? `\n\nMotivo del agente: ${shown(request.reason.trim())}` : "";
-	let number = request.issue; let source: Workflow["source"] | undefined;
+	let number = request.issue; let source: Workflow["source"] | undefined; let created = "";
 	if (number === undefined) {
 		const title = request.title!.trim(); const body = request.body!.trim();
-		assertQuotable({ number: 1, title, body, url: "https://github.com/preview/preview/issues/1", hash: "preview" }, git, options.now());
 		const repo = await readRepository(git, options);
-		if (!(await options.confirm(ctx, "Crear issue y empezar el trabajo", `Se crea un issue en ${repo} con este pedido:\n\n${shown(title)}\n\n${shown(body)}${reason}\n\nSe clasifica y se prepara un worktree nuevo desde main local, en una sesión nueva. ${TAIL}`))) {
+		assertQuotable({ number: MAX_ISSUE, title, body, url: `https://github.com/${repo}/issues/${MAX_ISSUE}`, hash: "preview" }, git, options.now());
+		await mainBaseCommit(git, options.signal);
+		if (!(await options.confirm(ctx, "Crear issue y empezar el trabajo", dialog(`Se crea un issue en ${repo} con el pedido de abajo, se clasifica y se prepara un worktree nuevo desde main local, en una sesión nueva.`, ticket, `${shown(title)}\n\n${shown(body)}`)))) {
 			ctx.ui.notify("No se creó nada: el chat sigue igual.", "info"); return;
 		}
 		number = await createIssue(git, repo, title, body, options);
+		created = `El issue #${number} ya se creó en ${repo}: para seguir, pedí el #${number}; no lo vuelvas a crear.`;
 	} else {
 		source = await readIssueSource(placeholder(git), number, options.runner, options.signal);
 		assertQuotable(source, git, options.now());
 		const here = restoreIssueTriage(ctx.sessionManager.getBranch(), ctx.cwd)?.issue.number === number;
 		const saved = here ? undefined : await readIssuePreparation(git, number);
+		// Sin efectos: identidad guardada, main local y que la ruta del worktree no sea ajena.
+		if (saved) assertIssueIdentity(saved, { number, url: source.url });
+		else if (!here) await checkIssueWorktree(git, number, options.signal);
 		const where = here ? "Se trabaja en este worktree."
-			: saved?.phase === "ready" ? `Se abre su sesión en ${saved.state.worktree} y el trabajo sigue desde la etapa guardada.`
+			: saved?.phase === "ready" ? `Se abre su sesión en ${saved.state.worktree} y el trabajo sigue desde la etapa guardada; si estaba pausado, sigue pausado hasta /omi-work resume.`
 			: saved ? `Se completa la preparación guardada en ${saved.state.worktree}, sin reclasificar, y se abre su sesión.`
 			: "Se clasifica y se prepara un worktree nuevo desde main local, en una sesión nueva.";
-		if (!(await options.confirm(ctx, `${saved ? "Retomar" : "Empezar"} el trabajo del issue #${number}`, `Issue #${number}: ${shown(source.title)}\n${source.url}${reason}\n\n${where} ${TAIL}`))) {
+		if (!(await options.confirm(ctx, `${saved ? "Retomar" : "Empezar"} el trabajo del issue #${number}`, dialog(where, ticket, `Issue #${number}: ${shown(source.title)}\n${source.url}`)))) {
 			ctx.ui.notify("No se creó nada: el chat sigue igual.", "info"); return;
 		}
 		if (here) { await options.startHere(); return; }
 	}
-	const issueNumber = number;
-	source ??= await readIssueSource(placeholder(git), issueNumber, options.runner, options.signal);
-	const issueSource = source;
+	try { await prepareAndSwitch(ctx, git, number, source, origin, options); }
+	catch (error) { throw created ? new Error(`${created} ${error instanceof Error ? error.message : "No se pudo preparar el trabajo."}`) : error; }
+}
+async function prepareAndSwitch(ctx: ExtensionCommandContext, git: GitSnapshot, issueNumber: number, known: Workflow["source"] | undefined, origin: string, options: BeginOptions): Promise<void> {
+	const issueSource = known ?? await readIssueSource(placeholder(git), issueNumber, options.runner, options.signal);
 	const item: GithubItem = { number: issueNumber, title: issueSource.title, url: issueSource.url, labels: await readLabels(git, issueNumber, options), author: "", updatedAt: "", draft: false, head: "", base: "", review: "" };
 	const prepared = await prepareIssue(git, issueNumber, item, ctx, {
 		...(options.sessionDir ? { sessionDir: options.sessionDir } : {}), signal: options.signal,
@@ -112,13 +131,16 @@ export async function beginDevelopment(ctx: ExtensionCommandContext, request: Be
 			return result && { ...result, body: issueSource.body };
 		},
 	});
-	if (!prepared) { ctx.ui.notify(`Clasificación cancelada. El issue #${issueNumber} quedó en GitHub; no se creó worktree ni sesión.`, "warning"); return; }
+	if (!prepared) { ctx.ui.notify(`Clasificación cancelada. El issue #${issueNumber} sigue en GitHub; no se creó worktree ni sesión.`, "warning"); return; }
 	const { record } = prepared; const sessionFile = record.sessionFile!;
 	if (resolve(sessionFile) === resolve(origin)) { await options.startHere(); return; }
 	// switchSession sólo existe en comandos: el sí viaja como un token de un solo uso ligado a la sesión destino.
 	const token = issueDevelopmentTicket({ kind: "start", sessionFile, issue: issueNumber });
-	const result = await ctx.switchSession(sessionFile, { withSession: async (next) => { await next.sendUserMessage(beginCommand(token), { expandPromptTemplates: true }); } });
-	if (result.cancelled) ctx.ui.notify(`Cambio de sesión cancelado. El worktree quedó en ${record.state.worktree}; volvé a pedir el issue #${issueNumber} para seguir.`, "warning");
+	let switched = false;
+	try {
+		const result = await ctx.switchSession(sessionFile, { withSession: async (next) => { switched = true; await next.sendUserMessage(beginCommand(token), { expandPromptTemplates: true }); } });
+		if (result.cancelled) ctx.ui.notify(`Cambio de sesión cancelado. El worktree quedó en ${record.state.worktree}; volvé a pedir el issue #${issueNumber} para seguir.`, "warning");
+	} finally { if (!switched) revokeDevelopmentTicket(token); }
 }
 
 export const borderedLoader: BeginLoader = async <T>(ctx: ExtensionContext, title: string, work: (signal: AbortSignal) => Promise<T>): Promise<T | undefined> => {
@@ -154,7 +176,7 @@ export function registerBeginTool(pi: ExtensionAPI, host: BeginToolHost): void {
 		async execute(_id, input, _signal, _update, ctx) {
 			assertBeginRequest(input); assertCanBegin(ctx, host.offline);
 			if (host.busy()) throw new Error("Esta sesión ya tiene un trabajo de desarrollo activo; seguí con ese o salí con /omi-work stop.");
-			host.onRequest(issueDevelopmentTicket({ kind: "request", sessionFile: ctx.sessionManager.getSessionFile()!, request: input }));
+			host.onRequest(issueDevelopmentTicket({ kind: "request", origin: "agent", sessionFile: ctx.sessionManager.getSessionFile()!, request: input }));
 			return { content: [{ type: "text", text: "Pedido registrado. Al terminar este turno OMI le pide confirmación a la persona y, si acepta, el trabajo sigue en el worktree del issue. No edites archivos ni sigas con el pedido en este chat." }], details: { request: input }, terminate: true };
 		},
 	});
