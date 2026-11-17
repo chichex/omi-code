@@ -396,6 +396,7 @@ console.log(JSON.stringify(args[1] === 'view' ? {body: 'DETAIL_' + args[0] + '_'
 		const blocked = await visualHarness(linked.home, { cwd: linked.repo, ...options });
 		try {
 			await blocked.command("omi-issues");
+			assert.match(blocked.frame().lines.map(stripTerminalSequences).join("\n"), options.online ? /Proyecto sin confianza/ : /Offline/, "el bloqueo remoto se informa antes de esperar Git y recursos locales");
 			await waitFor(() => blocked.frame().lines.map(stripTerminalSequences).join("\n").includes(options.online ? "Proyecto sin confianza" : "Offline"));
 			const lines = blocked.frame().lines.map(stripTerminalSequences).join("\n");
 			assert.match(lines, options.online ? /Proyecto sin confianza/ : /Offline/); assert.doesNotMatch(lines, /No hay issues abiertos/);
@@ -618,7 +619,7 @@ test("workspace_main sólo ofrece volver en worktrees: paleta, Enter en Ubicaci�
 test("workspace_SUBAGENTS: bus real, render inmediato, sigue al quedar padre idle y finaliza por end", async (t) => {
 	const ui = await visualHarness(await tempDir(t)); t.after(ui.stop);
 	const screen = () => ui.frame(132, 70).lines.map(stripTerminalSequences).join("\n");
-	assert.equal(ui.subscriptions(), 1); assert.match(screen(), /SUBAGENTES/); assert.match(screen(), /Sin subagentes activos/);
+	assert.equal(ui.subscriptions(), 2, "un listener de subagentes y uno del progreso de desarrollo"); assert.match(screen(), /SUBAGENTES/); assert.match(screen(), /Sin subagentes activos/);
 	ui.emitSession("tool_execution_start", { toolCallId: "native", toolName: "subagent", args: { agent: "worker", task: "No duplicar" } });
 	await ui.command("omi-subagents"); assert.match(ui.prompts.at(-1)!, /Sin subagentes activos/);
 	ui.events.emit("omi:subagents", { phase: "start", id: "bus-job", args: { tasks: [{ agent: "worker", task: "Implementar monitor" }, { agent: "scout", task: "Inspeccionar código" }] }, details: { results: [{ status: "pending" }, { status: "pending" }] } });

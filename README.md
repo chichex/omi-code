@@ -39,6 +39,7 @@ Una instalación nueva trae estas integraciones **dentro del binario**, sin desc
 | Integración | Qué trae | Autenticación |
 |---|---|---|
 | Subagentes | Tool `subagent` con `scout`, `planner`, `reviewer` y `worker`; background, espera explícita y panel `SUBAGENTES` | El modelo y razonamiento elegidos en la sesión |
+| Desarrollo | Harness opt-in con Directa, Diagnóstico y Con spec, evidencia y progreso hasta PR draft | Modelo de la sesión y `gh` autenticado |
 | KB de [Harness](https://github.com/chichex/harness/tree/main/kb) | MCP `harness-kb`, por Streamable HTTP en `https://kb-prod-chiche.ohmyinfra.com/mcp` | OAuth desde `/mcp login harness-kb` |
 | OMI | El mismo catálogo de `omi mcp`, integrado **nativamente** en el agente, con confirmaciones en la UI | `omi login` |
 
@@ -245,6 +246,18 @@ OMI_TUI=classic npm run omi
 `--tui-mode regular` conserva el modo de scrollback del terminal, sin las vistas fullscreen ni la lateral.
 RPC, JSON, print y MCP no abren recursos de la UI. El adaptador del layout está verificado con Pi 1.5.0;
 si cambia su contrato, conserva la vista base y avisa. No parchea archivos de `node_modules`.
+
+### Harness de desarrollo hasta PR draft
+
+Después de preparar y entrar a un issue con `/omi-triage N`, **`/omi-work start`** inicia el flujo de desarrollo de manera explícita. `/omi-triage` por sí solo sigue sin implementar nada.
+
+Explora código, resuelve inferencias y deja una receta persistente. Tiene tres rutas: **Directa**, **Diagnóstico** para bugs sin causa confirmada y **Con spec** para trabajo grande. Antes de escribir pide aprobación humana de la receta completa. Registra rojo/verde reales, commits por paso, verificación por caso y lentes; sólo entonces puede pedir permiso separado para subir la rama y abrir un **PR draft**. No mergea, dispara workflows ni despliega.
+
+La lateral muestra **PROGRESO · #N** con ruta, etapa, actividad, pasos, checks y bloqueos. Clic o **`/omi-progress`** abre el detalle, también con la lateral oculta. El avance sale del estado y de resultados observados, no de frases del modelo. `/omi-work status`, `pause`, `resume`, `refresh`, `approve`, `pr` y `stop` permiten controlarlo. Cargar una sesión no reejecuta efectos automáticamente.
+
+La descripción humana del issue se conserva: receta/spec y evidencia se agregan como **comentarios administrados append-only**, con recuperación de publicaciones ambiguas. El estado local vive bajo el Git common-dir, independiente del vínculo de infraestructura OMI. Este corte es para repos existentes; quedan afuera Fundación, prototipos, perfiles avanzados de modelos, Review externa, Land y Ship.
+
+[Contrato, permisos, recuperación y límites del harness](docs/development-harness.md).
 
 ### Herdr
 

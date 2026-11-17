@@ -1,0 +1,219 @@
+// Adaptación de una sesión Pi a un trabajo durable. No se reanudan efectos al cargar la sesión.
+import { randomUUID } from "node:crypto";
+import { realpath } from "node:fs/promises";
+import { resolve } from "node:path";
+import { Type } from "typebox";
+import { Value } from "typebox/value";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Io } from "../cli/io.ts";
+import { processRunner, type Runner } from "../core/exec.ts";
+import type { Workflow } from "../harness/model.ts";
+import { artifactHash } from "../harness/model.ts";
+import type { ReadReceipt } from "../harness/references.ts";
+import { createWorkflow, transition, type WorkflowEvent } from "../harness/state.ts";
+import { readWorkflow, updateWorkflow } from "../harness/store.ts";
+import { inspectCheckout } from "../harness/git.ts";
+import { publishDraft, readIssueSource, renderWorkflowArtifact, syncIssueArtifact } from "../harness/github.ts";
+import { restoreIssueTriage } from "./workspace/issue-triage.ts";
+import { readGit } from "./workspace/data.ts";
+import { developmentProgress, PHASE_LABELS } from "./development-view.ts";
+
+export const DEVELOPMENT_ANCHOR = "omi-development-workflow";
+const AnchorSchema = Type.Object({ id: Type.String(), root: Type.String(), issue: Type.Integer({ minimum: 1 }), revision: Type.Integer({ minimum: 0 }), disabled: Type.Optional(Type.Boolean()) });
+export interface DevelopmentDeps { runner?: Runner; now?: () => string }
+// Lo que la persona aprueba. Falla antes de pedir el sí si no entra en el diálogo o en GitHub.
+// Lo que se ejecuta sin volver a preguntar va primero y legible, no enterrado en el JSON.
+export function approvalPreview(state: Workflow): string {
+	const commands = `Comandos que quedan autorizados y se ejecutan sin volver a preguntar:\n${(state.recipe?.cases ?? []).map((c) => `- ${c.id} · ${c.command}`).join("\n")}`;
+	const preview = JSON.stringify({ source: { number: state.source.number, title: state.source.title, url: state.source.url, hash: state.source.hash }, recipe: state.recipe, spec: state.spec, inferences: state.inferences }, null, 2);
+	if (preview.length > 50000) throw new Error("La receta es demasiado grande para aprobarla completa; acotá el trabajo con planned o specified");
+	renderWorkflowArtifact(state);
+	return `${commands}\n\n${preview}`;
+}
+export class DevelopmentSession {
+	state: Workflow | undefined;
+	onChange: (() => void) | undefined;
+	lockedReason = "";
+	readonly reads = new Map<string, ReadReceipt>();
+	readonly approvedCommands = new Set<string>();
+	readonly runner: Runner;
+	readonly now: () => string;
+	readonly lifecycle = new AbortController();
+	private context: ExtensionContext | undefined;
+	// Último vínculo válido de la conversación: permite salir aunque el estado no se pueda leer.
+	private lastAnchor: { id: string; root: string; issue: number; revision: number } | undefined;
+	private alive = true;
+	offline: boolean;
+	readonly pi: ExtensionAPI;
+	readonly io: Io;
+	constructor(pi: ExtensionAPI, io: Io, args: readonly string[], deps: DevelopmentDeps = {}) {
+		this.pi = pi; this.io = io;
+		this.runner = deps.runner ?? processRunner; this.now = deps.now ?? (() => new Date().toISOString());
+		this.offline = args.includes("--offline") || /^(1|true|yes)$/i.test(io.env.PI_OFFLINE ?? "");
+	}
+	private anchor(): void {
+		const s = this.state;
+		if (s && this.alive) this.pi.appendEntry(DEVELOPMENT_ANCHOR, { id: s.id, root: s.checkout.root, issue: s.source.number, revision: s.revision });
+	}
+	emit(activity?: string, waiting = false): void {
+		if (!this.alive) return;
+		const progress = this.state ? { ...developmentProgress(this.state, activity), ...(this.lockedReason || waiting ? { status: "waiting" as const, blockedReason: this.lockedReason } : {}) } : undefined;
+		this.onChange?.();
+		this.pi.events.emit("omi:workflow", { progress });
+		this.context?.ui.setStatus("omi-development", progress ? `Desarrollo · ${progress.phaseLabel}${progress.blockedReason ? " · bloqueado" : ""}` : this.lockedReason ? "Desarrollo · bloqueado · /omi-work stop para salir" : undefined);
+	}
+	private async checkout(ctx: ExtensionContext): Promise<Workflow["checkout"]> {
+		const prepared = restoreIssueTriage(ctx.sessionManager.getBranch(), ctx.cwd);
+		if (!prepared) throw new Error("Primero prepará y abrí un issue con /omi-triage. Este corte trabaja en repos existentes y worktrees de issues.");
+		const git = await readGit(ctx.cwd, this.lifecycle.signal);
+		if (!git || git.detached || git.branch !== prepared.branch || resolve(git.root) !== resolve(prepared.worktree)) throw new Error("La sesión no está en el worktree y rama del issue preparado");
+		return { root: await realpath(git.root), commonDir: await realpath(git.commonDir), branch: prepared.branch, baseCommit: prepared.baseCommit };
+	}
+	checkContext(ctx: ExtensionContext): void {
+		if (!ctx.isProjectTrusted() || !ctx.sessionManager.getSessionFile()) throw new Error("El harness requiere proyecto de confianza y sesión persistente");
+		if (this.state && resolve(ctx.cwd) !== resolve(this.state.checkout.root)) throw new Error("El trabajo pertenece a otro checkout");
+		if (this.lockedReason) throw new Error(this.lockedReason);
+	}
+	current(ctx: ExtensionContext): Workflow {
+		this.checkContext(ctx);
+		if (!this.state) throw new Error("No hay trabajo activo. Usá /omi-work start en el worktree del issue.");
+		return this.state;
+	}
+	async restore(ctx: ExtensionContext, adopt = false): Promise<void> {
+		this.context = ctx; this.state = undefined; this.lockedReason = ""; this.lastAnchor = undefined; this.reads.clear(); this.approvedCommands.clear();
+		const entry = ctx.sessionManager.getBranch().findLast((e) => e.type === "custom" && e.customType === DEVELOPMENT_ANCHOR);
+		if (!entry && !adopt) { this.emit(); return; }
+		try {
+			const anchor = entry?.type === "custom" ? entry.data : undefined;
+			if (anchor !== undefined && !Value.Check(AnchorSchema, anchor)) throw new Error("Vínculo del harness inválido; no se reinicia automáticamente");
+			if (Value.Check(AnchorSchema, anchor) && anchor.disabled && !adopt) { this.emit(); return; }
+			if (Value.Check(AnchorSchema, anchor)) this.lastAnchor = { id: anchor.id, root: anchor.root, issue: anchor.issue, revision: anchor.revision };
+			this.checkContext(ctx);
+			const checkout = await this.checkout(ctx);
+			const prepared = restoreIssueTriage(ctx.sessionManager.getBranch(), ctx.cwd)!;
+			const saved = await readWorkflow(checkout, prepared.issue.number);
+			if (!saved) throw new Error("Falta el estado guardado del harness. Recuperalo antes de continuar; no se recreó nada.");
+			if (Value.Check(AnchorSchema, anchor) && (anchor.id !== saved.id || resolve(anchor.root) !== checkout.root || anchor.issue !== saved.source.number)) throw new Error("El vínculo corresponde a otro trabajo");
+			this.state = saved;
+			if (!adopt && Value.Check(AnchorSchema, anchor) && anchor.revision !== saved.revision) throw new Error("El trabajo avanzó en otra rama de conversación o ventana. Usá /omi-work resume para adoptar el estado vigente.");
+			await inspectCheckout(checkout, this.runner, this.lifecycle.signal);
+			if (adopt) this.anchor();
+		} catch (error) {
+			this.lockedReason = error instanceof Error ? error.message : "No se pudo restaurar el harness";
+			ctx.ui.notify(this.lockedReason, "warning");
+		}
+		this.emit();
+	}
+	async start(ctx: ExtensionContext): Promise<void> {
+		this.context = ctx; this.checkContext(ctx);
+		if (this.offline) throw new Error("Iniciar requiere leer el issue vigente en GitHub; quitá --offline. Retomar lo guardado no requiere red.");
+		const checkout = await this.checkout(ctx); const prepared = restoreIssueTriage(ctx.sessionManager.getBranch(), ctx.cwd)!;
+		const existing = await readWorkflow(checkout, prepared.issue.number);
+		if (existing) { await this.restore(ctx, true); this.current(ctx); await this.fresh(ctx); return; }
+		const snapshot = await inspectCheckout(checkout, this.runner, this.lifecycle.signal);
+		if (!snapshot.clean) throw new Error("Iniciá el harness con el worktree limpio; no se adoptan cambios ajenos a la receta");
+		const source = await readIssueSource(checkout, prepared.issue.number, this.runner, this.lifecycle.signal);
+		if (source.url.replace(/\/$/, "") !== prepared.issue.url.replace(/\/$/, "")) throw new Error("GitHub devolvió otro issue/repositorio");
+		// El pedido se cita en los comentarios del issue: si no entra, nunca se podrá aprobar.
+		try { renderWorkflowArtifact(createWorkflow(source, checkout, "preview", this.now())); }
+		catch { throw new Error("El pedido es demasiado grande para citarlo en un comentario de GitHub; acotá el issue antes de iniciar"); }
+		if (!(await this.confirm(ctx, "Autorizar trabajo de desarrollo", `Issue #${source.number}: ${source.title}\n${source.url}\n\nExplorar y guardar estado local. No se habilitan escrituras de código hasta aprobar la receta. Comandos ejecutables y cambios remotos tienen autorización separada. Se termina en PR draft, sin merge ni deploy.`))) return;
+		this.state = await updateWorkflow(checkout, source.number, undefined, () => createWorkflow(source, checkout, randomUUID(), this.now()));
+		this.anchor(); this.emit();
+	}
+	async apply(event: WorkflowEvent, ctx: ExtensionContext): Promise<Workflow> {
+		const expected = this.current(ctx);
+		this.state = await updateWorkflow(expected.checkout, expected.source.number, expected.revision, (saved) => {
+			if (!saved || saved.id !== expected.id) throw new Error("El trabajo cambió o desapareció");
+			return transition(saved, event, this.now());
+		});
+		this.anchor(); this.emit(); return this.state;
+	}
+	async fresh(ctx: ExtensionContext): Promise<boolean> {
+		const state = this.current(ctx);
+		if (this.offline) throw new Error("Esta acción necesita contrastar el issue vigente con GitHub; quitá --offline");
+		const source = await readIssueSource(state.checkout, state.source.number, this.runner, this.lifecycle.signal);
+		if (source.url !== state.source.url) throw new Error("Cambió la identidad del issue; no se reutiliza el trabajo");
+		if (source.hash === state.source.hash) return true;
+		await this.apply({ type: "source_changed", source }, ctx); this.reads.clear(); this.approvedCommands.clear();
+		ctx.ui.notify("El pedido cambió. Receta, aprobaciones y verificaciones se invalidaron; vuelve a Explorar.", "warning"); return false;
+	}
+	async confirm(ctx: ExtensionContext, title: string, description: string): Promise<boolean> {
+		this.checkContext(ctx);
+		if (!ctx.hasUI) throw new Error(`${title}: requiere confirmación humana interactiva`);
+		this.emit(`Esperando confirmación · ${title}`, true);
+		try { return await ctx.ui.confirm(title, description, { signal: this.lifecycle.signal }); }
+		finally { this.emit(); }
+	}
+	// true sólo si la persona aprobó: un no no vuelve a disparar al modelo.
+	async approve(ctx: ExtensionContext): Promise<boolean> {
+		if (!(await this.fresh(ctx))) return false;
+		const state = this.current(ctx);
+		if (state.phase !== "approve") throw new Error("Todavía no hay una receta/spec lista para aprobar");
+		const assertExplored = async () => {
+			const snapshot = await inspectCheckout(state.checkout, this.runner, this.lifecycle.signal);
+			if (!state.exploration?.fingerprint || snapshot.fingerprint !== state.exploration.fingerprint) throw new Error("El código cambió desde Explorar. Usá /omi-work refresh y volvé a explorar antes de aprobar.");
+		};
+		await assertExplored();
+		const preview = approvalPreview(state);
+		if (!(await this.confirm(ctx, "Aprobar receta y sincronizar issue", `${preview}\n\nAutoriza implementar estos pasos, commits locales y comandos exactos de los casos D. Se agrega un comentario administrado con la receta al issue, sin reemplazar su descripción; no autoriza push, merge, workflows ni deploy.`))) return false;
+		await assertExplored();
+		await syncIssueArtifact(state, this.runner, this.lifecycle.signal);
+		await assertExplored();
+		await this.apply({ type: "approved" }, ctx);
+		return true;
+	}
+	// Volver a explorar descarta receta, aprobación y pruebas; también las lecturas y comandos autorizados.
+	async refresh(ctx: ExtensionContext): Promise<void> {
+		if (await this.fresh(ctx)) await this.apply({ type: "source_changed", source: this.current(ctx).source }, ctx);
+		this.reads.clear(); this.approvedCommands.clear();
+	}
+	async publish(ctx: ExtensionContext): Promise<void> {
+		if (!(await this.fresh(ctx))) return;
+		let state = this.current(ctx);
+		if (state.phase !== "pr") throw new Error("Primero completá todos los pasos y la verificación del cambio actual");
+		const snapshot = await inspectCheckout(state.checkout, this.runner, this.lifecycle.signal);
+		if (!snapshot.clean) throw new Error("El worktree cambió después de verificar. Volvé a Implementar/Verificar.");
+		// Revalidar evidencia con el fingerprint actual, también al recuperar una publicación pendiente.
+		transition({ ...state, phase: "verify", publication: { status: "none" } }, { type: "verified", fingerprint: snapshot.fingerprint }, this.now());
+		renderWorkflowArtifact(state); // Falla antes del sí si el artefacto no entra en GitHub.
+		if (!(await this.confirm(ctx, "Subir rama y abrir PR draft", `${state.checkout.branch} → main\nCommit ${snapshot.head}\nIssue #${state.source.number}\n\nAgrega evidencia en un comentario administrado del issue, hace push normal sólo de esta rama y crea o recupera su PR draft. No mergea, no fuerza pushes ni ejecuta workflows.`))) return;
+		await syncIssueArtifact(state, this.runner, this.lifecycle.signal);
+		if (state.publication.status === "none") state = await this.apply({ type: "publishing", head: snapshot.head, bodyHash: artifactHash(renderWorkflowArtifact(state)) }, ctx);
+		const receipt = await publishDraft(state, this.runner, this.lifecycle.signal);
+		await this.apply({ type: "published", ...receipt }, ctx);
+	}
+	async answer(id: string, ctx: ExtensionContext): Promise<boolean> {
+		const state = this.current(ctx); const inference = state.inferences.find((i) => i.id === id && i.resolution === "pending");
+		if (!inference) throw new Error("No existe esa pregunta pendiente");
+		if (!ctx.hasUI) throw new Error("Desambiguar requiere una respuesta humana interactiva");
+		this.emit(`Esperando respuesta · ${id} · ${inference.question}`, true);
+		let answer: string | undefined;
+		try { answer = await ctx.ui.input(`${id} · ${inference.question}`, `Recomendada: ${inference.recommended}`, { signal: this.lifecycle.signal }); }
+		finally { this.emit(); }
+		if (!answer?.trim()) return false;
+		if (answer.trim().length > 4000) throw new Error("La respuesta supera 4.000 caracteres; resumila y volvé a responder");
+		await this.apply({ type: "answered", id, answer: answer.trim() }, ctx); return true;
+	}
+	async stop(ctx: ExtensionContext): Promise<void> {
+		if (this.lockedReason) { await this.leaveLocked(ctx); return; }
+		const s = this.current(ctx);
+		if (!(await this.confirm(ctx, "Salir del harness", "Se pausa el trabajo y el chat vuelve a sus tools normales. No borra archivos ni revierte acciones. Para continuar el flujo usá /omi-work resume."))) return;
+		// Salir no depende de que el estado admita otra transición: un trabajo pausado o inválido también se deja.
+		if (s.status !== "complete" && s.status !== "paused") {
+			try { await this.apply({ type: "pause", reason: "La persona salió del harness" }, ctx); }
+			catch (error) { ctx.ui.notify(`No se pudo pausar el estado guardado (${error instanceof Error ? error.message : "error"}); se sale igual del harness.`, "warning"); }
+		}
+		this.pi.appendEntry(DEVELOPMENT_ANCHOR, { id: s.id, root: s.checkout.root, issue: s.source.number, revision: this.state!.revision, disabled: true });
+		this.state = undefined; this.lockedReason = ""; this.emit();
+	}
+	// Un harness bloqueado (estado inválido, atrasado o ajeno) no se toca: sólo se deja de usar en esta conversación.
+	private async leaveLocked(ctx: ExtensionContext): Promise<void> {
+		if (!ctx.hasUI) throw new Error("Salir del harness: requiere confirmación humana interactiva");
+		if (!(await ctx.ui.confirm("Salir del harness bloqueado", `${this.lockedReason}\n\nEl chat vuelve a sus tools normales. No se modifica el estado guardado ni se borran archivos; recuperarlo queda a tu cargo.`, { signal: this.lifecycle.signal }))) return;
+		if (this.lastAnchor && this.alive) this.pi.appendEntry(DEVELOPMENT_ANCHOR, { ...this.lastAnchor, disabled: true });
+		this.state = undefined; this.lockedReason = ""; this.emit();
+	}
+	shutdown(): void { this.alive = false; this.lifecycle.abort(); }
+	status(): string { return this.lockedReason || (this.state ? `${PHASE_LABELS[this.state.phase]} · ${this.state.status}\n${this.state.activity}\n${this.state.blockedReason}\nDetalle: /omi-progress` : "Sin harness activo. /omi-work start | resume | approve | pause | refresh | pr | stop"); }
+}
