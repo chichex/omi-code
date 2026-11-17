@@ -1,77 +1,75 @@
-# OMI Code — revisión 02: terminal, no dashboard web
+# OMI Code — revisión 03: terminal, no dashboard web
 
-`omi-code-preview.html` es la **referencia visual de la TUI**, no una captura del runtime. Ya se trasladaron al código la bienvenida, la lateral compacta, contexto encima de Equipo, la fila dedicada al modelo y las barras sólidas. La versión anterior se conserva en `omi-code-preview-v1.html` sólo como referencia.
+`omi-code-preview.html` es la **referencia visual del rediseño de la TUI**, no una captura del runtime. Esta revisión acompaña la implementación local: lateral de 41 columnas, negro uniforme, bloques rectangulares, sesión agrupada e indicadores de círculos. No certifica paridad visual con el runtime. `omi-code-preview-v1.html` se conserva sólo como referencia histórica.
 
-La primera maqueta prometía demasiado con recursos de una web: tarjetas, padding en píxeles, tipografías de distinto tamaño, sombras y botones que no tenían equivalente directo en la TUI. Esta revisión trabaja con restricciones de terminal desde el principio.
+La maqueta usa restricciones de terminal: una sola celda monospace, filas enteras y marcos de caracteres. Los controles de revisión del navegador no forman parte de OMI.
 
 ## Abrir
 
 Abrí `omi-code-preview.html` directamente en el navegador. No requiere dependencias, instalación, servidor, red, fuentes externas ni build.
 
-Opcionalmente, desde la raíz del repo:
-
-```sh
-python3 -m http.server 4173 --bind 127.0.0.1 --directory design
-```
-
-Entrá a <http://127.0.0.1:4173/omi-code-preview.html>.
-
 ## Contrato visual
 
-- **Una sola tipografía, tamaño y alto de línea en toda la TUI**, incluidos los diálogos. El selector de letra está fuera de la TUI: representa la configuración del terminal, no una capacidad de OMI para cambiar la fuente del usuario.
-- El ancho de la celda se mide con la fuente monospace del navegador. Cada fila ocupa exactamente un alto de línea. No se escala la ventana con `transform` para hacer que entre.
-- Presets **132 × 40**, **160 × 44**, **110 × 32** y **80 × 24**, más tamaño automático. Se limitan al espacio real disponible y se informan las dimensiones efectivas debajo.
-- El control **Grilla** permite inspeccionar las celdas. Los controles de revisión de arriba y las notas de abajo no forman parte del producto.
-- Cabecera: tres filas. Pie: tres filas. Editor: cuatro filas, dentro de la columna de conversación. El resto es contenido.
-- Lateral de **32 columnas más un separador**, sin tarjetas ni barras gráficas CSS. Se oculta por debajo de 110 columnas o 26 filas; los detalles siguen en la paleta. No aparece como un drawer móvil, porque eso no es el comportamiento propuesto para un pane angosto.
-- **Secciones de la lateral distinguibles de un vistazo:** Proyecto violeta, GitHub Actions azul, OMI verde, Contexto ámbar, y Subagents y Equipo celeste, con negrita, fondo tenue y un separador `▌ … ─`. En el runtime los tonos salen del tema activo, también en modo claro.
-- **Sincronización Git sin ceros ficticios:** `↑N ↓N` cuenta commits respecto al upstream local del último fetch, no cambios sin commit. `Al día (local)` sustituye al 0/0, `sin upstream` indica ausencia de configuración y `↑— ↓—` indica conteos no disponibles. El detalle muestra el upstream y explica `git fetch`; la UI no lo ejecuta automáticamente.
-- **Contexto vive en la lateral, justo arriba de Equipo:** tokens usados / límite, porcentaje y barra de caracteres. Al hacer clic abre el detalle. Cuando la lateral está oculta, queda un acceso compacto en el pie para no perder el dato.
-- **El modelo tiene una fila propia en el pie:** etiqueta `Modelo:`, nombre resaltado, proveedor, razonamiento y `Ctrl L cambiar` cuando el ancho lo permite. En panes angostos se prioriza el nombre, sin mezclarlo con la ubicación del repo.
-- **Barras más gruesas con caracteres `█`**, no líneas finitas: contexto, CPU, RAM y disco. El tramo usado tiene color y el resto un gris oscuro. Ocupan una fila de terminal, sin aumentar la fuente ni dibujar barras con altura CSS. En panes bajos, las de recursos se acortan y comparten fila con su etiqueta y valor.
-- Los colores de la maqueta son los del tema `omi-black` del runtime (`src/tui/workspace/index.ts` y `presentation.ts`): fondo `#050607`, panel `#15191c`, borde y barra vacía `#292f34`, texto `#dce1e3`, tenue `#a2acb3`, atenuado `#78858f`, acento `#97d6ba`, fondo de tools `#0b0e10`, selección `#24382e`. Advertencia, error, enlace y los tonos de sección salen del tema oscuro de Pi (`#cd9a22`, `#ea7f81`, `#69add0`, `#a798d7`, `#5db3ba`), y cada encabezado de sección mezcla su color con el panel al 10%. Si el código cambia, la maqueta se alinea al código.
-- Los paneles usan fondos planos. Los bordes, indicadores y barras son caracteres. No hay SVG, avatares, sombras, esquinas redondeadas, blur, chips ni tamaños de fuente particulares por componente.
-- La conversación conserva un único flujo vertical. Los mensajes propios tienen encabezado `▌ Vos` en negrita y color de acento, fondo verde oscuro `#182b23` y texto claro `#edf5f0`; las respuestas y herramientas no comparten ese fondo. El encabezado es sólo de presentación, no se agrega al mensaje original. La salida de la herramienta se puede desplegar, sin adornos de interfaz web.
-- Los diálogos se dibujan con caracteres y tienen el mismo tamaño de celda que el resto. No dependen de un selector de modelos del navegador para simular la TUI.
-- **Modales del workspace con un marco compartido:** fondo de panel con tinte suave, borde superior e inferior de acento, título en negrita, subtítulo y pie separado con teclas resaltadas. Ubicación e Issues usan violeta; PR y Actions, azul; Contexto, ámbar; Equipo, celeste; modelos y paleta, el acento de OMI. Etiquetas, valores, advertencias y estados tienen jerarquías distintas; los enlaces HTTP(S) válidos son subrayados y clickeables. Los colores se resuelven con el tema vigente, en claro/oscuro y truecolor/256 colores.
-- Los detalles se limitan a 104 columnas, el selector a 112 y la paleta a 76, sin superar el 90% del pane. El pie permanece visible al desplazar contenido largo con flechas, PgUp/PgDn o rueda; Home/End van al principio/final de los detalles. La ficha de modelo también se desplaza sin aplicar la elección. Este marco es del runtime y todavía no está trasladado al HTML.
+- **Una sola tipografía, tamaño y alto de línea en toda la TUI**, incluidos los diálogos. El selector de letra exterior representa la configuración del terminal; no es una capacidad de OMI para cambiar la fuente del usuario.
+- El ancho de celda se mide con la fuente monospace del navegador. Cada fila ocupa un alto de línea. No se escala la ventana con `transform` para hacerla entrar.
+- Presets **132 × 40**, **160 × 44**, **110 × 32**, **110 × 26** y **80 × 24**, más tamaño automático. Se limitan al espacio disponible y se informan las dimensiones efectivas debajo. **Grilla** permite inspeccionar las celdas.
+- Cabecera: tres filas. Pie: tres filas. Editor de Chat: cuatro filas, dentro de la columna de conversación. El resto es contenido.
+- La lateral ocupa **41 columnas, incluidos sus marcos**. Está disponible desde **110 columnas y 26 filas**; por debajo se oculta sin convertirse en un drawer móvil. F4 la oculta completa independientemente de qué bloques estén habilitados. Los comandos siguen disponibles.
+- **Proyecto, Sesión, GitHub Actions, OMI, Subagentes y Recursos** usan rectángulos de caracteres, con título y bordes laterales. Con alto suficiente, cada bloque tiene marco completo; cuando falta alto comparten bordes contiguos y compactan el contenido. No se recortan los bloques inferiores para conservar los superiores. El espacio libre queda al final.
+- La lateral usa negro uniforme **`#000000`**, sin tintes, franjas ni colores de fondo por sección. El resto conserva la paleta existente: conversación `#050607`, cabecera/pie `#15191c` y bordes `#292f34`. El color del texto conserva jerarquías, actividad, advertencias y errores. Los mensajes propios mantienen su tratamiento (`▌ Vos`, fondo verde oscuro); no se rediseñan las otras vistas. En el runtime el tema claro conserva una lateral blanca accesible.
+- Bordes e indicadores son caracteres, no barras gráficas CSS. No hay SVG, avatares, sombras, esquinas redondeadas, blur, chips ni tamaños de fuente particulares por componente.
+
+### Bloques de la lateral
+
+- **Proyecto:** repo, rama, ubicación y cambios. `↑N ↓N` cuenta commits respecto al upstream local del último fetch, no archivos sin commit. `Al día (local)` evita presentar ceros como actividad. En el runtime, ausencia de upstream y errores se informan como tales, nunca como ceros; la maqueta no simula todos esos casos. El detalle explica `git fetch`, sin ejecutarlo, y que un worktree no es un sandbox.
+- **Sesión:** modelo y proveedor, esfuerzo de razonamiento, contexto con porcentaje y tokens usados / límite. El nombre del modelo no lleva un puntaje de calidad inventado. Clic en modelo o esfuerzo abre el selector; clic en contexto abre `/omi-context`.
+- El razonamiento usa **seis círculos `●○`** y el esfuerzo configurado: **off = 0, minimal = 1, low = 2, medium = 3, high = 4, xhigh = 5, max = 6** llenos. No representa velocidad ni calidad del modelo. El selector sólo ofrece los esfuerzos del catálogo simulado para ese modelo; el indicador refleja la selección, no un rating.
+- El contexto usa **diez círculos**, valor porcentual y tokens; cada círculo aproxima un décimo de ocupación. La maqueta conoce el cero del escenario Inicio; el runtime debe mostrar `—` cuando no conoce el uso, no inventar un cero. `/compact` sigue siendo explícito. No hay desglose ficticio por sistema/chat/tools.
+- **Sólo fuera de Inicio**, Sesión incluye entrada, salida, caché y costo de ejemplo. En compacto se abrevian como **E** (entrada), **S** (salida), **C** (caché) y **$** (costo). Son datos simulados de consumo, no cuota ni saldo del proveedor, ni una promesa de medición real del HTML.
+- **GitHub Actions:** Claude reviews y Releases, con ejecución, antigüedad y hasta dos ejemplos por workflow en la maqueta. Se reduce a un resumen por workflow si falta alto, sin ocultar OMI. Un check indica ejecución exitosa, no aprobación del PR. Clic o `/omi-actions` abre el detalle. No lanza reviews ni releases.
+- **OMI:** proyecto vinculado o estado no disponible / sin vincular. Clic abre la vista de sólo lectura con servicios y ambientes de ejemplo. `running` no se presenta como health check; las operaciones siguen en Chat y conservan las confirmaciones del runtime.
+- **Subagentes:** activos y en cola, agente, estado, tool y tiempo cuando hay espacio; un resumen contiguo en compacto. Sin tareas dice `Sin subagentes activos`. Trabajando tiene tareas simuladas y otros escenarios no iniciales tienen una tarea terminada. Clic o `/omi-subagents` abre IDs, tareas, estados, tiempos, turnos y la explicación para cancelar un lote, sin almacenar outputs privados.
+- **Recursos:** CPU, RAM y disco usan **diez círculos `●○` más valores numéricos**, nunca barras de bloques sólidos. Los datos son del host `chichex-linux` de ejemplo, no del Mac que muestra el HTML. El consumo de OMI aparece por separado con espacio suficiente y siempre en el detalle; no suma herramientas ni subprocesos. Recursos exigidos eleva los valores y marca advertencias, sin inventar éxito ni salud.
+
+### Pie y personalización
+
+- El modelo mantiene una fila propia en el pie: nombre destacado y, según el ancho, proveedor, **el mismo patrón de razonamiento** y `Ctrl L cambiar`. En panes angostos se prioriza el nombre sin mezclarlo con la ubicación del repo.
+- **Ocultar Sesión también lleva el contexto al pie**, aunque los otros bloques de la lateral sigan visibles. Lo mismo sucede con F4 y en panes angostos. El acceso conserva porcentaje y tokens, con diez círculos cuando entran, y abre el detalle.
+- **`Personalizar lateral >`** queda al pie de la lateral; también se abre desde la paleta o **`/omi-sidebar-settings`**. El modal tiene un checkbox por bloque: **↑↓** navega, **Espacio / Enter** alterna, **Ctrl+S** guarda, **Esc** cancela y **r** restablece todos visibles en el borrador. Restablecer no guarda hasta confirmar con Ctrl+S. Las acciones también tienen alternativa por clic.
+- La maqueta guarda preferencias **sólo en el estado local en memoria**, sin `localStorage`: recargar restablece los bloques visibles. Cancelar no cambia lo guardado. Aun ocultando todos, queda el acceso para personalizar. Ocultar un bloque no desactiva su comando ni las verificaciones de seguridad del runtime.
 
 ## Qué revisar
 
-1. **Inicio:** bienvenida breve, sin lista técnica de extensiones ni avisos de actualizar Pi.
-2. **Conversación:** mensaje del usuario, respuesta, actividad, tool plegable, archivos y editor.
-3. **Trabajando:** actividad visible, tool desplegada y pie con estado de ejecución.
-4. **Contexto alto:** porcentaje y advertencia coherentes; cambiar a una ventana menor requiere resolver el exceso antes de aplicar.
-5. **Recursos exigidos:** CPU/RAM/disco con advertencias textuales; el detalle separa host y proceso OMI.
+1. **Inicio:** bienvenida breve y sin conversación inventada; Sesión no muestra consumo ni costo de ejemplo.
+2. **Conversación:** mensaje del usuario, respuesta, tool plegable, archivos y editor, conservando sus interacciones.
+3. **Trabajando:** actividad, herramientas resumidas en gris y subagentes simulados. No se permite cambiar modelo durante el turno de ejemplo.
+4. **Contexto alto:** círculos, porcentaje y advertencia coherentes; elegir una ventana menor impide aplicar el cambio hasta resolver el exceso.
+5. **Recursos exigidos:** CPU/RAM/disco con valores elevados y advertencias; el detalle separa host y proceso OMI.
 6. **Sin GitHub / OMI:** no se sustituyen errores por checks exitosos ni ambientes saludables.
-7. **Repo principal / Worktree:** son escenarios independientes. La ubicación se detalla en el modal, con path activo y repo principal. Un worktree no se presenta como un sandbox.
-8. **Datos sin vincular / Proyecto vinculado:** el estado inicial no inventa servicios. Los ejemplos vinculados muestran `running`, sin presentarlo como un health check.
-9. **Pane angosto:** verificar el peso del pie, del editor y del texto sin la lateral.
+7. **Repo principal / Worktree** y **sin proyecto / vinculado:** escenarios independientes con paths, PR y servicios de ejemplo, sin inferir una vinculación inexistente.
+8. **110 × 26:** bloques compactos contiguos con todos los títulos, contexto y recursos; **132 × 40 / 160 × 44:** marcos completos cuando hay espacio. El tamaño efectivo depende de la ventana del navegador.
+9. **Personalización:** guardar, cancelar, restablecer, ocultar todos, recuperar Sesión y verificar el contexto en el pie sin ella.
+10. **80 × 24 / F4:** sin lateral, conservando pie, editor, vistas y comandos.
 
-## Interacciones
+## Interacciones conservadas
 
 - Clic en **1 Chat / 2 Issues / 3 PRs / 4 Cambios / 5 OMI**, o **Control 1–5**. En panes angostos se conservan los cinco números y el nombre de la vista activa.
-- **Control K:** paleta; **Control L:** selector de modelo; **F4:** lateral.
-- **Esc:** cierra el diálogo o vuelve a Chat desde las vistas de sólo lectura.
-- En Cambios, cada archivo muestra `+líneas` en verde y `−líneas` en rojo a la derecha; sólo se acorta la ruta cuando falta ancho. Los colores de los contadores se conservan al seleccionar la fila. En el runtime son cambios netos respecto a HEAD, incluyendo stage y working tree; los binarios se indican como `binario`, los conteos desconocidos como `—` y los archivos sin seguimiento como `nuevo`, sin leerlos automáticamente. Flechas para seleccionar y Enter para abrir el extracto de diff; Backspace vuelve a la lista.
-- Issues y PRs muestran listas abiertas de todo el repo, por separado; flechas seleccionan y Enter o clic abre un detalle ilustrativo. El runtime carga la descripción sólo al abrirla. El runtime además consulta GitHub Actions para la sección de la lateral: Claude reviews y Releases, con estado de ejecución y antigüedad, sin un marco adicional y con el mismo encabezado `▌ … ─` que las demás secciones. En panes bajos se compacta sin ocultar OMI. Las secciones quedan agrupadas arriba, sin un hueco antes de Contexto. La maqueta la representa como `GITHUB ACTIONS` (azul), con los dos workflows y sus ejecuciones simuladas, y la compacta a una fila por workflow cuando falta alto. Un clic abre el detalle (`/omi-actions`).
-- El runtime muestra `[ PR #123 ↗ ]` junto a la rama en el pie, resuelto por `gh pr status`. Todo el botón es clickeable y abre el navegador; el espacio libre no abre Ubicación. `/omi-pr` ofrece la URL por teclado, también como fallback si falla el navegador. Se reserva su ancho antes de recortar la rama, se descarta al cambiar de rama y se marca con `*` si el dato queda desactualizado. La maqueta lo muestra en el escenario Worktree (`[ PR #51 ↗ ]`, subrayado y en negrita; con `*` si los datos están desactualizados). Su clic sólo avisa que es una maqueta; `/omi-pr` abre el detalle con la URL.
-- **SUBAGENTS** va debajo de OMI, con el mismo encabezado `▌ … ─` y el color de Equipo. Cuenta `N activos · M en cola` (y acorta el título si no entra), con una fila por tarea: agente, estado, tool actual, tiempo y título. Sin tareas dice `Sin subagentes activos`. En la maqueta hay tareas en el estado Trabajando y una terminada en los demás; un clic abre `/omi-subagents`, que lista ID, tarea, estado, tool, tiempo y turnos, y explica cómo cancelar un lote.
-- OMI agrupa el proyecto vinculado, servicios y ambientes. El panel es de consulta; las operaciones siguen en Chat mediante las herramientas con sus confirmaciones.
-- Clic en la línea de `bash` despliega la salida.
-- Clic en el contexto de la lateral (encima de Equipo), o su acceso de respaldo en panes angostos, abre uso, límite y explicación. **No muestra el desglose inventado de sistema/chat/tools** de la versión anterior.
-- Clic en Proyecto o Equipo abre ubicación o recursos completos.
-- El selector de modelos permite buscar por nombre/proveedor, favoritos en memoria, Ctrl F para filtrar, Ctrl S para marcar, revisar la elección, ajustar razonamiento con izquierda/derecha y Enter para aplicar. Esc cancela. `#models` lo abre directamente.
-- El editor reconoce `/omi`, `/model`, `/omi-model`, `/omi-context`, `/omi-workspace`, `/omi-resources`, `/omi-chat`, `/omi-issues`, `/omi-prs`, `/omi-changes`, `/omi-platform`, `/omi-pr`, `/omi-actions` y `/omi-subagents` **sólo dentro de la maqueta**.
+- **Control K:** paleta; **Control L:** selector de modelo; **F4:** lateral. **Esc:** cierra el diálogo o vuelve a Chat desde las vistas de sólo lectura.
+- Cambios muestra `+líneas` y `−líneas`, acortando la ruta cuando falta ancho; flechas seleccionan, Enter abre un extracto de diff y Backspace vuelve a la lista. Los conteos y el diff son inventados.
+- Issues y PRs conservan listas separadas de todo el repo; flechas seleccionan y Enter o clic abre un detalle ilustrativo. El runtime consulta la descripción sólo al abrirla.
+- En Worktree, `[ PR #51 ↗ ]` junto a la rama mantiene su ancho y el asterisco de dato desactualizado cuando corresponde. Su clic sólo avisa que es una maqueta; `/omi-pr` muestra la URL. En el runtime abre el navegador, con el comando como alternativa por teclado.
+- Las herramientas consecutivas se representan con resúmenes grises `Read 3 files`, `Edited 2 files` y `Ran 3 shell commands` (o `Running` en Trabajando). Clic, **Ctrl+O**, `/omi-output` o la paleta alternan el detalle de ejemplo. El HTML usa un único estado de expansión para todos los grupos; el runtime permite abrir cada grupo por separado y mantiene visibles errores e imágenes con sus componentes nativos. Clic en Proyecto o Recursos abre ubicación o recursos completos. Ningún clic ejecuta comandos.
+- El selector permite buscar modelo/proveedor, favoritos en memoria, Ctrl F para filtrar, Ctrl S para marcar, revisar la elección, ajustar razonamiento con izquierda/derecha y Enter para aplicar. Esc cancela. `#models` lo abre directamente.
+- El editor reconoce `/omi`, `/model`, `/omi-model`, `/omi-context`, `/omi-workspace`, `/omi-resources`, `/omi-chat`, `/omi-issues`, `/omi-prs`, `/omi-changes`, `/omi-platform`, `/omi-pr`, `/omi-actions`, `/omi-subagents`, `/omi-sidebar`, `/omi-sidebar-settings` y `/omi-output` **sólo dentro de la maqueta**.
 
-Un navegador o macOS pueden reservar atajos antes de entregarlos al HTML. Todas las acciones tienen una alternativa por clic; el prototipo no modifica las preferencias del navegador, Herdr ni el sistema.
+Un navegador o macOS pueden reservar atajos antes de entregarlos al HTML. Las acciones tienen alternativa por clic; el prototipo no modifica las preferencias del navegador, Herdr ni el sistema.
 
 ## Qué sigue siendo una aproximación
 
-Esto **no es un emulador VT ni un screenshot del runtime**. La fuente real, la representación de ciertos caracteres Unicode y los colores finales dependen del terminal. El input del HTML no pretende reproducir toda la edición multilínea, selección, pegado ni autocompletado de Pi. Tampoco prueba streaming real, accesibilidad del terminal ni el manejo de sesiones.
+Esto **no es un emulador VT ni un screenshot del runtime**. La fuente real, el ancho de ciertos caracteres Unicode y los colores finales dependen del terminal. El HTML conserva un editor de una línea y una geometría simplificada; no reproduce toda la edición multilínea, selección, pegado ni autocompletado de Pi. Tampoco prueba streaming real, accesibilidad del terminal ni manejo de sesiones. El runtime sigue usando el renderer de Pi, no este HTML.
 
-La TUI ya incorpora bienvenida, ocultación de la lista de componentes internos de OMI y del aviso de actualizar Pi por separado, lateral de 33 columnas, contexto encima de Equipo, modelo en fila propia y medidores `█`. Se conservaron el chat, las herramientas, los diagnósticos y las extensiones externas. El editor continúa siendo el de Pi: crece con texto multilínea y autocompletado. Los modales del workspace usan el marco compartido de OMI sobre el renderer de Pi (y sus componentes Input/SelectList); los diálogos nativos de settings, autenticación y confirmación de seguridad no se reemplazan. Ninguno usa el HTML.
+Los modales de detalle mantienen el marco simplificado existente, de hasta 76 columnas y desplazamiento con flechas. No se rediseñan las demás vistas ni se reproducen todos los anchos, colores por tema, scroll y componentes nativos del runtime. El HTML sólo representa el tema oscuro; una selección explícita de tema del runtime sigue controlando sus colores. La compactación de la lateral y la prioridad del pie son aproximaciones para revisar el contrato, no un renderer compartido.
 
-Se comprobaron capturas de Inicio en un PTY real a 132 × 40, 110 × 26 y 80 × 24, además de tests de geometría con el renderer real. Esto no sustituye la revisión visual en Herdr en el Mac: hay que comparar el mismo estado y número de columnas y filas. La grilla hace que las proporciones sean reproducibles; los tests funcionales no garantizan paridad visual.
+Esta revisión **no incorpora capturas nuevas ni afirma una validación visual en Herdr**. Para comprobar paridad hay que comparar el mismo estado y número efectivo de columnas y filas. La grilla y los chequeos de JavaScript no sustituyen esa revisión visual.
 
-Todos los datos de Git, issues, PRs, versiones, modelos, capacidades, contexto y recursos son **simulados**. Los diffs y descripciones son extractos inventados. Nada envía mensajes, llama a un modelo, ejecuta comandos, modifica el repo, crea worktrees, consulta servicios ni despliega.
+Todos los datos de Git, issues, PRs, Actions, subagentes, versiones, modelos, capacidades, razonamiento, contexto, consumo, costo y recursos son **simulados**. Diffs, descripciones y salidas de tools son extractos inventados. Nada envía mensajes, llama a un modelo, ejecuta comandos, modifica el repo, crea worktrees, consulta servicios ni despliega.
