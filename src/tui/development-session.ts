@@ -17,10 +17,11 @@ import { publishDraft, readIssueSource, renderWorkflowArtifact, syncIssueArtifac
 import { restoreIssueTriage } from "./workspace/issue-triage.ts";
 import { readGit } from "./workspace/data.ts";
 import { developmentProgress, PHASE_LABELS } from "./development-view.ts";
+import type { BeginLoader } from "./development-begin.ts";
 
 export const DEVELOPMENT_ANCHOR = "omi-development-workflow";
 const AnchorSchema = Type.Object({ id: Type.String(), root: Type.String(), issue: Type.Integer({ minimum: 1 }), revision: Type.Integer({ minimum: 0 }), disabled: Type.Optional(Type.Boolean()) });
-export interface DevelopmentDeps { runner?: Runner; now?: () => string }
+export interface DevelopmentDeps { runner?: Runner; now?: () => string; loader?: BeginLoader }
 // Lo que la persona aprueba. Falla antes de pedir el sí si no entra en el diálogo o en GitHub.
 // Lo que se ejecuta sin volver a preguntar va primero y legible, no enterrado en el JSON.
 export function approvalPreview(state: Workflow): string {
@@ -64,7 +65,7 @@ export class DevelopmentSession {
 	}
 	private async checkout(ctx: ExtensionContext): Promise<Workflow["checkout"]> {
 		const prepared = restoreIssueTriage(ctx.sessionManager.getBranch(), ctx.cwd);
-		if (!prepared) throw new Error("Primero prepará y abrí un issue con /omi-triage. Este corte trabaja en repos existentes y worktrees de issues.");
+		if (!prepared) throw new Error("Esta sesión no es el worktree de un issue. Pedí el cambio en el chat o elegí un issue en Issues y OMI prepara su worktree.");
 		const git = await readGit(ctx.cwd, this.lifecycle.signal);
 		if (!git || git.detached || git.branch !== prepared.branch || resolve(git.root) !== resolve(prepared.worktree)) throw new Error("La sesión no está en el worktree y rama del issue preparado");
 		return { root: await realpath(git.root), commonDir: await realpath(git.commonDir), branch: prepared.branch, baseCommit: prepared.baseCommit };
@@ -76,7 +77,7 @@ export class DevelopmentSession {
 	}
 	current(ctx: ExtensionContext): Workflow {
 		this.checkContext(ctx);
-		if (!this.state) throw new Error("No hay trabajo activo. Usá /omi-work start en el worktree del issue.");
+		if (!this.state) throw new Error("No hay trabajo activo. Pedí el cambio en el chat o elegí un issue en Issues; para uno guardado, /omi-work resume.");
 		return this.state;
 	}
 	async restore(ctx: ExtensionContext, adopt = false): Promise<void> {
@@ -104,6 +105,7 @@ export class DevelopmentSession {
 		}
 		this.emit();
 	}
+	// La persona ya dio el sí al empezar (development-begin): acá no se vuelve a preguntar.
 	async start(ctx: ExtensionContext): Promise<void> {
 		this.context = ctx; this.checkContext(ctx);
 		if (this.offline) throw new Error("Iniciar requiere leer el issue vigente en GitHub; quitá --offline. Retomar lo guardado no requiere red.");
@@ -117,7 +119,6 @@ export class DevelopmentSession {
 		// El pedido se cita en los comentarios del issue: si no entra, nunca se podrá aprobar.
 		try { renderWorkflowArtifact(createWorkflow(source, checkout, "preview", this.now())); }
 		catch { throw new Error("El pedido es demasiado grande para citarlo en un comentario de GitHub; acotá el issue antes de iniciar"); }
-		if (!(await this.confirm(ctx, "Autorizar trabajo de desarrollo", `Issue #${source.number}: ${source.title}\n${source.url}\n\nExplorar y guardar estado local. No se habilitan escrituras de código hasta aprobar la receta. Comandos ejecutables y cambios remotos tienen autorización separada. Se termina en PR draft, sin merge ni deploy.`))) return;
 		this.state = await updateWorkflow(checkout, source.number, undefined, () => createWorkflow(source, checkout, randomUUID(), this.now()));
 		this.anchor(); this.emit();
 	}
@@ -215,5 +216,5 @@ export class DevelopmentSession {
 		this.state = undefined; this.lockedReason = ""; this.emit();
 	}
 	shutdown(): void { this.alive = false; this.lifecycle.abort(); }
-	status(): string { return this.lockedReason || (this.state ? `${PHASE_LABELS[this.state.phase]} · ${this.state.status}\n${this.state.activity}\n${this.state.blockedReason}\nDetalle: /omi-progress` : "Sin harness activo. /omi-work start | resume | approve | pause | refresh | pr | stop"); }
+	status(): string { return this.lockedReason || (this.state ? `${PHASE_LABELS[this.state.phase]} · ${this.state.status}\n${this.state.activity}\n${this.state.blockedReason}\nDetalle: /omi-progress` : "Sin harness activo. Pedí un cambio en el chat o elegí un issue en Issues. /omi-work resume | approve | pause | refresh | pr | stop"); }
 }

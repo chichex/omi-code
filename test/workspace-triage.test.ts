@@ -100,7 +100,7 @@ test("issue_triage sesión persistida restaura tipo, contexto, modelo y cwd sin 
 	const persisted = await readFile(sessionFile, "utf8");
 	assert.match(persisted, /Datos del issue/); assert.match(persisted, /Triage listo/); assert.match(persisted, /omi.issue-triage/); assert.doesNotMatch(persisted, /Conversación anterior/);
 	assert.ok(!next.getBranch().some((entry) => entry.type === "message" && entry.message.role === "assistant"));
-	assert.match(triageReport(state), /Tipo: Chore/); assert.match(triageReport(state), /No se inició la implementación/);
+	assert.match(triageReport(state), /Tipo: Chore/); assert.match(triageReport(state), /no se escribe código hasta que apruebes la receta/);
 	next.resetLeaf(); next.appendCustomEntry("other", {}); assert.equal(restoreIssueTriage(next.getBranch(), worktree.worktree), undefined);
 	next.appendCustomEntry(ISSUE_TRIAGE_ENTRY, { ...state, triage: { ...triage, type: "invalid" } }); assert.equal(restoreIssueTriage(next.getBranch(), worktree.worktree), undefined);
 });

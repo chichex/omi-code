@@ -7,7 +7,7 @@ import { transition } from "../src/harness/state.ts";
 
 for (const route of ["direct", "diagnostic", "spec"] as const) test(`development_flow ${route}: permisos, evidencia, commits y PR draft recuperable`, async (t) => {
 	const f = await developmentFixture(t);
-	await f.command("start");
+	await f.start();
 	assert.equal((await f.state()).phase, "explore");
 	assert.deepEqual(await f.emit("tool_call", { toolName: "write", input: { path: "value.cjs", content: "bad" } }), { block: true, reason: "Harness: write no está habilitada en esta etapa. Usá omi_workflow y omi_workflow_check; no eludas la receta, evidencia ni permisos." });
 	await assert.rejects(f.action({ action: "planned", plan: f.plan() }), /explor|cambió|fase/);
@@ -71,7 +71,7 @@ for (const route of ["direct", "diagnostic", "spec"] as const) test(`development
 });
 
 test("development_flow no puede fingir referencias, aprobación o ejecución; un cambio del pedido invalida el plan", async (t) => {
-	const f = await developmentFixture(t); await f.command("start");
+	const f = await developmentFixture(t); await f.start();
 	await assert.rejects(f.action({ action: "explored", exploration: { references: [{ path: "value.cjs", line: 1, detail: "no leído" }], findings: [], approach: "cambiar", missingFoundation: [], dependencies: [], disposition: "continue", reason: "seguir" } }), /no se leyó/);
 	await f.explore(); await f.action({ action: "planned", plan: f.plan() });
 	f.remote.confirmations = false; await f.action({ action: "approve" });
@@ -85,7 +85,7 @@ test("development_flow no puede fingir referencias, aprobación o ejecución; un
 });
 
 test("development_flow explorar puede consultar antecedentes abiertos y cerrados sin shell ni mutaciones", async (t) => {
-	const f = await developmentFixture(t); await f.command("start");
+	const f = await developmentFixture(t); await f.start();
 	const result = await f.invoke("omi_workflow_inspect", { related: true, history: true });
 	assert.match(JSON.stringify(result.content), /Antecedente cerrado/);
 	assert.ok(f.calls.some((c) => c.command === "gh" && c.args[0] === "issue" && c.args[1] === "list" && c.args.includes("all")));
@@ -93,25 +93,25 @@ test("development_flow explorar puede consultar antecedentes abiertos y cerrados
 });
 
 test("development_flow no acredita referencias cuyo contenido cambió después de leerlo", async (t) => {
-	const f = await developmentFixture(t); await f.command("start"); await f.readReference(); await f.write("value.cjs", "module.exports = 99;\n");
+	const f = await developmentFixture(t); await f.start(); await f.readReference(); await f.write("value.cjs", "module.exports = 99;\n");
 	await assert.rejects(f.action({ action: "explored", exploration: { references: [{ path: "value.cjs", line: 1, detail: "Valor leído antes" }], findings: [], approach: "Cambiar", missingFoundation: [], dependencies: [], disposition: "continue", reason: "Existe" } }), /lectura|leyó|referencia.*cambi/i);
 });
 
 test("development_flow /omi-work approve no aprueba una exploración que cambió", async (t) => {
-	const f = await developmentFixture(t); await f.command("start"); await f.explore(); await f.action({ action: "planned", plan: f.plan() });
+	const f = await developmentFixture(t); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() });
 	await f.write("value.cjs", "module.exports = 99;\n"); await f.command("approve");
 	assert.equal((await f.state()).approval, null); assert.equal((await f.state()).phase, "approve");
 	assert.equal(f.remote.comments.length, 0);
 });
 
-test("development_flow start sobre trabajo guardado también invalida un pedido editado", async (t) => {
-	const f = await developmentFixture(t); await f.command("start"); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" });
-	f.remote.title = "Pedido cambiado"; await f.command("start");
+test("development_flow retomar un trabajo guardado también invalida un pedido editado", async (t) => {
+	const f = await developmentFixture(t); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" });
+	f.remote.title = "Pedido cambiado"; await f.command("resume");
 	assert.equal((await f.state()).approval, null); assert.equal((await f.state()).phase, "explore");
 });
 
 test("development_flow un aviso de read sin contenido no acredita una línea de 60 KB", async (t) => {
-	const f = await developmentFixture(t); await f.command("start"); await f.write("value.cjs", "x".repeat(60000));
+	const f = await developmentFixture(t); await f.start(); await f.write("value.cjs", "x".repeat(60000));
 	await f.emit("tool_execution_start", { toolName: "read", toolCallId: "long", args: { path: "value.cjs" } });
 	await f.emit("tool_call", { toolName: "read", toolCallId: "long", input: { path: "value.cjs" } });
 	const actual = await createReadToolDefinition(f.checkout.root).execute("long", { path: "value.cjs" }, new AbortController().signal, undefined, f.context as ExtensionToolContext);
@@ -120,7 +120,7 @@ test("development_flow un aviso de read sin contenido no acredita una línea de 
 });
 
 test("development_flow la aprobación muestra la receta completa, no un artefacto truncado", async (t) => {
-	const f = await developmentFixture(t); await f.command("start"); await f.explore(); const plan = f.plan();
+	const f = await developmentFixture(t); await f.start(); await f.explore(); const plan = f.plan();
 	plan.scope = ["a".repeat(3900), "b".repeat(3900), "c".repeat(3900), "d".repeat(3900), "FINAL_SCOPE_SENTINEL"];
 	await f.action({ action: "planned", plan }); await f.action({ action: "approve" });
 	const preview = f.confirmationDetails.find((p) => p.includes("FINAL_SCOPE_SENTINEL"));
@@ -128,7 +128,7 @@ test("development_flow la aprobación muestra la receta completa, no un artefact
 });
 
 test("development_flow setup fallido muestra salida y error pero nunca acredita tests", async (t) => {
-	const f = await developmentFixture(t); await f.command("start"); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" });
+	const f = await developmentFixture(t); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" });
 	const count = (await f.state()).evidence.length;
 	const result = await f.invoke("omi_workflow_check", { kind: "setup", command: "node -e 'process.stderr.write(\"setup-failed\");process.exit(2)'" });
 	assert.equal(result.isError, true); assert.match(JSON.stringify(result.content), /setup-failed/);
@@ -136,7 +136,7 @@ test("development_flow setup fallido muestra salida y error pero nunca acredita 
 });
 
 test("development_flow rojo que ya pasa no es un test rojo observado", async (t) => {
-	const f = await developmentFixture(t); await f.command("start"); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" }); await f.action({ action: "step", id: "C1" });
+	const f = await developmentFixture(t); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" }); await f.action({ action: "step", id: "C1" });
 	const result = await f.invoke("omi_workflow_check", { kind: "red", command: "node test.cjs", stepId: "C1" });
 	assert.equal(result.isError, true);
 	assert.equal((await f.state()).steps[0]?.red, null);
@@ -144,7 +144,7 @@ test("development_flow rojo que ya pasa no es un test rojo observado", async (t)
 });
 
 test("development_flow una conversación atrasada no adopta silenciosamente progreso de otra ventana", async (t) => {
-	const f = await developmentFixture(t); await f.command("start"); const s = await f.state();
+	const f = await developmentFixture(t); await f.start(); const s = await f.state();
 	await updateWorkflow(s.checkout, s.source.number, s.revision, (saved) => transition(saved!, { type: "pause", reason: "Otra ventana" }, "now"));
 	await f.attach();
 	const status = await f.invoke("omi_workflow", { action: "status" }); assert.match(JSON.stringify(status.content), /otra rama|otra ventana|vigente|otra.*ventana/i);
@@ -154,7 +154,7 @@ test("development_flow una conversación atrasada no adopta silenciosamente prog
 });
 
 test("development_flow registra un verde fallido sin poder completar el paso ni perder su salida", async (t) => {
-	const f = await developmentFixture(t); await f.command("start"); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" }); await f.action({ action: "step", id: "C1" });
+	const f = await developmentFixture(t); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" }); await f.action({ action: "step", id: "C1" });
 	await f.write("test.cjs", 'require("node:assert/strict").equal(require("./value.cjs"), 2);\n');
 	await f.invoke("omi_workflow_check", { kind: "red", command: "node test.cjs", stepId: "C1" });
 	await f.invoke("omi_workflow_check", { kind: "green", command: "node test.cjs", stepId: "C1" });
@@ -165,7 +165,7 @@ test("development_flow registra un verde fallido sin poder completar el paso ni 
 });
 
 async function implemented(t: import("node:test").TestContext) {
-	const f = await developmentFixture(t); await f.command("start"); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" });
+	const f = await developmentFixture(t); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" });
 	await f.action({ action: "step", id: "C1" });
 	await f.write("test.cjs", 'require("node:assert/strict").equal(require("./value.cjs"), 2);\n'); await f.invoke("omi_workflow_check", { kind: "red", command: "node test.cjs", stepId: "C1" });
 	await f.write("value.cjs", "module.exports = 2;\n"); await f.invoke("omi_workflow_check", { kind: "green", command: "node test.cjs", stepId: "C1" });
@@ -192,7 +192,7 @@ test("development_flow una vuelta de corrección con Git real agrega un paso con
 });
 
 test("development_flow el modelo no puede volver a explorar sin un sí humano; la persona sí con /omi-work refresh", async (t) => {
-	const f = await developmentFixture(t); await f.command("start"); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" });
+	const f = await developmentFixture(t); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" });
 	f.remote.confirmations = false; const prompts = f.prompts.length;
 	const declined = await f.action({ action: "refresh" });
 	assert.equal(f.prompts.length, prompts + 1, "refresh del modelo pide confirmación"); assert.equal(declined.terminate, true);
@@ -205,7 +205,7 @@ test("development_flow el modelo no puede volver a explorar sin un sí humano; l
 });
 
 test("development_flow declinar /omi-work approve no vuelve a disparar al modelo", async (t) => {
-	const f = await developmentFixture(t); await f.command("start"); await f.explore(); await f.action({ action: "planned", plan: f.plan() });
+	const f = await developmentFixture(t); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() });
 	f.remote.confirmations = false; const messages = f.messages.length;
 	await f.command("approve");
 	assert.equal((await f.state()).approval, null);
@@ -213,7 +213,7 @@ test("development_flow declinar /omi-work approve no vuelve a disparar al modelo
 });
 
 test("development_flow /omi-work stop sale también de un trabajo pausado y restaura las tools", async (t) => {
-	const f = await developmentFixture(t); await f.command("start"); await f.command("pause");
+	const f = await developmentFixture(t); await f.start(); await f.command("pause");
 	assert.equal((await f.state()).status, "paused");
 	await f.command("stop");
 	assert.equal(await f.emit("tool_call", { toolName: "bash", input: { command: "true" } }), undefined, "sin harness activo, bash vuelve a estar disponible");
@@ -221,7 +221,7 @@ test("development_flow /omi-work stop sale también de un trabajo pausado y rest
 });
 
 test("development_flow los paths del commit son literales: un pathspec mágico no stagea el repo", async (t) => {
-	const f = await developmentFixture(t); await f.command("start"); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" });
+	const f = await developmentFixture(t); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" });
 	await f.action({ action: "step", id: "C1" });
 	await f.write("test.cjs", 'require("node:assert/strict").equal(require("./value.cjs"), 2);\n'); await f.invoke("omi_workflow_check", { kind: "red", command: "node test.cjs", stepId: "C1" });
 	await f.write("value.cjs", "module.exports = 2;\n"); await f.write("credentials.local", "secret\n"); await f.invoke("omi_workflow_check", { kind: "green", command: "node test.cjs", stepId: "C1" });
@@ -231,7 +231,7 @@ test("development_flow los paths del commit son literales: un pathspec mágico n
 });
 
 test("development_flow /omi-work stop sale de un harness bloqueado por estado inválido y lo muestra en el status", async (t) => {
-	const f = await developmentFixture(t); await f.command("start");
+	const f = await developmentFixture(t); await f.start();
 	const { workflowPath } = await import("../src/harness/store.ts"); const { readFile, writeFile } = await import("node:fs/promises");
 	const path = workflowPath(f.checkout, 42); await writeFile(path, (await readFile(path, "utf8")).replace('"version": 1', '"version": 2'));
 	await f.attach();
@@ -245,7 +245,7 @@ test("development_flow /omi-work stop sale de un harness bloqueado por estado in
 });
 
 test("development_flow aprobar muestra primero los comandos que quedan autorizados sin volver a preguntar", async (t) => {
-	const f = await developmentFixture(t); await f.command("start"); await f.explore(); await f.action({ action: "planned", plan: f.plan("large") });
+	const f = await developmentFixture(t); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan("large") });
 	await f.action({ action: "specified", spec: { why: "Dos valores", steps: [{ id: "C1", title: "Ambos", cases: ["D1", "D2"] }], playbook: ["Probar"] } });
 	await f.action({ action: "approve" });
 	const description = f.confirmationDetails[f.prompts.lastIndexOf("Aprobar receta y sincronizar issue")] ?? "";
@@ -254,7 +254,7 @@ test("development_flow aprobar muestra primero los comandos que quedan autorizad
 });
 
 test("development_flow un directorio con un archivo protegido no deja el índice contaminado", async (t) => {
-	const f = await developmentFixture(t); await f.command("start"); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" });
+	const f = await developmentFixture(t); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" });
 	await f.action({ action: "step", id: "C1" });
 	await f.write("test.cjs", 'require("node:assert/strict").equal(require("./value.cjs"), 2);\n'); await f.invoke("omi_workflow_check", { kind: "red", command: "node test.cjs", stepId: "C1" });
 	const { mkdir } = await import("node:fs/promises"); await mkdir(`${f.checkout.root}/d`); await f.write("d/.env", "TOKEN=x\n"); await f.write("d/a.txt", "a\n");
@@ -265,7 +265,7 @@ test("development_flow un directorio con un archivo protegido no deja el índice
 });
 
 test("development_flow tras declinar la aprobación el modelo re-planifica y se vuelve a pedir el sí", async (t) => {
-	const f = await developmentFixture(t); await f.command("start"); await f.explore(); await f.action({ action: "planned", plan: f.plan() });
+	const f = await developmentFixture(t); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() });
 	f.remote.confirmations = false; await f.action({ action: "approve" }); assert.equal((await f.state()).phase, "approve");
 	await f.action({ action: "planned", plan: { ...f.plan(), objective: "Devolver 2 con el ajuste pedido" } });
 	assert.equal((await f.state()).recipe?.objective, "Devolver 2 con el ajuste pedido");
@@ -274,13 +274,13 @@ test("development_flow tras declinar la aprobación el modelo re-planifica y se 
 
 test("development_flow un pedido que no entra en un comentario de GitHub falla al iniciar, antes de autorizar", async (t) => {
 	const f = await developmentFixture(t); f.remote.body = "x".repeat(70000); const prompts = f.prompts.length;
-	await f.command("start");
+	await f.start();
 	assert.equal(f.prompts.length, prompts, "no se pide autorizar un trabajo que no se podrá aprobar"); assert.ok(f.messages.some((m) => /GitHub|grande/i.test(m)));
 	const { readWorkflow } = await import("../src/harness/store.ts"); assert.equal(await readWorkflow(f.checkout, 42), undefined);
 });
 
 test("development_flow una respuesta humana demasiado larga se rechaza con un mensaje claro", async (t) => {
-	const f = await developmentFixture(t); await f.command("start"); await f.readReference();
+	const f = await developmentFixture(t); await f.start(); await f.readReference();
 	await f.action({ action: "explored", exploration: { references: [{ path: "value.cjs", line: 1, detail: "Valor" }], findings: [], approach: "Corregir", missingFoundation: [], dependencies: [], disposition: "continue", reason: "Existe" } });
 	await f.action({ action: "inferences", inferences: [{ id: "I1", kind: "what", question: "¿Alcance?", recommended: "chico", confidence: 10, irreversible: false, references: [] }] });
 	f.remote.answer = "r".repeat(4001);

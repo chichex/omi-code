@@ -1,7 +1,8 @@
-// Harness opt-in sobre el runtime de Pi. Mantiene /omi-triage como preparación sin ejecución.
+// Harness sobre el runtime de Pi. Un pedido de desarrollo lo arranca con un único sí humano
+// (development-begin); sus tools empiezan inactivas y sólo omi_work_begin se ofrece en el chat normal.
 import { lstat, realpath } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import type { ExtensionAPI, ExtensionContext, InlineExtension } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { Io } from "../cli/io.ts";
 import { isInside } from "../core/files.ts";
 import { workflowToolAllowed, workflowWritePath, WORKFLOW_TOOLS } from "../harness/permissions.ts";
@@ -9,6 +10,12 @@ import { referenceDigest } from "../harness/references.ts";
 import { developmentInstructions } from "./development-view.ts";
 import { DevelopmentSession, type DevelopmentDeps } from "./development-session.ts";
 import { registerDevelopmentTools } from "./development-tools.ts";
+import { beginDevelopment, borderedLoader, registerBeginTool } from "./development-begin.ts";
+import { beginCommand, BEGIN_SUBCOMMAND, takeDevelopmentTicket } from "./development-tickets.ts";
+import { restoreIssueTriage } from "./workspace/issue-triage.ts";
+
+const KICKOFF = "Continuá el harness de desarrollo activo desde su etapa persistida. Respetá sus bloqueos y pedí los permisos pendientes; no saltees etapas.";
+const USAGE = "Uso: /omi-work resume | approve | pause | refresh | pr | status | stop";
 
 async function checkWriteTarget(root: string, path: string): Promise<void> {
 	const target = workflowWritePath(root, path);
@@ -39,15 +46,46 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 		};
 		session.onChange = loadout;
 		registerDevelopmentTools(pi, session);
+		let pendingBegin: string | undefined;
+		registerBeginTool(pi, { offline: session.offline, busy: () => !!session.state || !!session.lockedReason, onRequest: (token) => { pendingBegin = token; } });
+		// Sin el sí humano no se llama al modelo: un trabajo pausado o terminado sólo informa su estado.
+		const proceed = (ctx: ExtensionContext) => {
+			if (!session.state || session.state.status === "paused" || session.state.status === "complete") { ctx.ui.notify(session.status(), "info"); return; }
+			if (!ctx.model || !ctx.modelRegistry.hasConfiguredAuth(ctx.model)) { ctx.ui.notify("Trabajo guardado. Elegí un modelo autenticado para continuar.", "warning"); return; }
+			pi.sendUserMessage(KICKOFF);
+		};
+		const startHere = async (ctx: ExtensionContext) => { await session.start(ctx); loadout(); proceed(ctx); };
+		async function begin(token: string, ctx: ExtensionCommandContext): Promise<void> {
+			const ticket = takeDevelopmentTicket(token, ctx.sessionManager.getSessionFile());
+			if (!ticket) throw new Error("No hay un pedido de desarrollo pendiente. Pedí el cambio en el chat o elegí un issue en Issues.");
+			if (ticket.kind === "start") {
+				if (restoreIssueTriage(ctx.sessionManager.getBranch(), ctx.cwd)?.issue.number !== ticket.issue) throw new Error("La sesión no corresponde al issue autorizado; no se empezó nada.");
+				await startHere(ctx); return;
+			}
+			if (session.state && session.state.source.number === ticket.request.issue) { ctx.ui.notify(`Ya estás trabajando en el issue #${ticket.request.issue}. Detalle: /omi-progress`, "info"); return; }
+			if (session.state || session.lockedReason) throw new Error("Esta sesión ya tiene un trabajo de desarrollo. Seguí con ese o salí con /omi-work stop antes de empezar otro.");
+			const { parseArgs } = await import("@earendil-works/pi-coding-agent");
+			await beginDevelopment(ctx, ticket.request, {
+				runner: session.runner, offline: session.offline, signal: session.lifecycle.signal, now: session.now, loader: deps.loader ?? borderedLoader,
+				sessionDir: parseArgs([...args]).sessionDir, confirm: (context, title, description) => session.confirm(context, title, description), startHere: () => startHere(ctx),
+			});
+		}
+		// Una tool no puede cambiar de sesión: el pedido se despacha como comando cuando el turno terminó.
+		pi.on("agent_settled", () => {
+			if (!pendingBegin) return;
+			const token = pendingBegin; pendingBegin = undefined;
+			pi.sendUserMessage(beginCommand(token), { expandPromptTemplates: true });
+		});
 		pi.registerCommand("omi-work", {
-			description: "Harness de desarrollo: start, resume, approve, pause, refresh, pr, status, stop",
+			description: "Harness de desarrollo: resume, approve, pause, refresh, pr, status, stop",
 			handler: async (input, ctx) => {
 				try {
 					const command = input.trim() || "status";
 					if (command === "status") { ctx.ui.notify(session.status(), "info"); return; }
 					if (!ctx.isIdle() || ctx.hasPendingMessages()) throw new Error("Esperá a que termine el turno antes de cambiar el trabajo");
-					if (command === "start") await session.start(ctx);
-					else if (command === "resume") {
+					const [verb, ...rest] = command.split(/\s+/);
+					if (verb === BEGIN_SUBCOMMAND) { await begin(rest.join(" "), ctx); return; }
+					if (command === "resume") {
 						await session.restore(ctx, true); session.current(ctx);
 						if (!session.offline && !(await session.fresh(ctx))) { loadout(); return; }
 						if (session.state?.status === "paused") await session.apply({ type: "resume" }, ctx);
@@ -56,12 +94,10 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 					else if (command === "refresh") await session.refresh(ctx);
 					else if (command === "pr") await session.publish(ctx);
 					else if (command === "stop") await session.stop(ctx);
-					else throw new Error("Uso: /omi-work start | resume | approve | pause | refresh | pr | status | stop");
+					else throw new Error(USAGE);
 					loadout();
-					if (["start", "resume", "approve", "refresh"].includes(command) && session.state && session.state.status !== "paused" && session.state.status !== "complete") {
-						if (!ctx.model || !ctx.modelRegistry.hasConfiguredAuth(ctx.model)) { ctx.ui.notify("Trabajo guardado. Elegí un modelo autenticado para continuar.", "warning"); return; }
-						pi.sendUserMessage("Continuá el harness de desarrollo activo desde su etapa persistida. Respetá sus bloqueos y pedí los permisos pendientes; no saltees etapas.");
-					} else ctx.ui.notify(session.status(), "info");
+					if (["resume", "approve", "refresh"].includes(command)) proceed(ctx);
+					else ctx.ui.notify(session.status(), "info");
 				} catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "No se pudo ejecutar el harness", "error"); }
 			},
 		});

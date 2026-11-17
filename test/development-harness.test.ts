@@ -4,7 +4,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { developmentHarnessExtension } from "../src/tui/development.ts";
 import { testIo } from "./helpers/io.ts";
 
-test("development_harness es opt-in: registrar no ejecuta modelo, GitHub ni cambia tools de la sesión", async () => {
+test("development_harness registrar no ejecuta modelo, GitHub ni cambia tools; el chat normal sólo ofrece empezar", async () => {
 	const io = testIo({ homeDir: "/tmp/omi-development-test" }); const tools = new Map<string, { defaultActive?: boolean }>(); const commands = new Map<string, unknown>(); const events = new Map<string, Function>();
 	const calls: string[] = [];
 	const pi = {
@@ -18,7 +18,8 @@ test("development_harness es opt-in: registrar no ejecuta modelo, GitHub ni camb
 	assert.ok(commands.has("omi-work"));
 	for (const name of ["omi_workflow", "omi_workflow_check", "omi_workflow_lens", "omi_workflow_inspect", "omi_workflow_commit"]) assert.ok(tools.has(name), name);
 	assert.deepEqual(calls, []);
-	for (const tool of tools.values()) assert.equal(tool.defaultActive, false, "el chat normal no declara tools del workflow antes de iniciarlo");
+	for (const [name, tool] of tools) if (name !== "omi_work_begin") assert.equal(tool.defaultActive, false, "el chat normal no declara tools del workflow antes de iniciarlo");
+	assert.notEqual(tools.get("omi_work_begin")?.defaultActive, false, "el chat normal ofrece empezar un trabajo, que siempre pide un sí humano");
 	const ctx = { cwd: io.cwd, mode: "tui", sessionManager: { getBranch: () => [] }, ui: { setStatus: () => {}, notify: () => {} } } as unknown as ExtensionContext;
 	await events.get("session_start")!({}, ctx);
 	assert.deepEqual(calls, []);
