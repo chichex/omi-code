@@ -1,4 +1,4 @@
-// Mutaciones Git sólo por el Enter explícito del triage. Nunca checkout/stash/fetch en el origen.
+// Mutaciones Git sólo tras el sí humano al empezar un trabajo (development-begin). Nunca checkout/stash/fetch en el origen.
 import { execFile } from "node:child_process";
 import { lstat, mkdir, realpath } from "node:fs/promises";
 import { devNull } from "node:os";
@@ -36,14 +36,19 @@ async function available(path: string): Promise<void> {
 	catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
 	throw new Error(`Ya existe ${path}. Abrí ese worktree o su sesión con /resume; no se sobrescribió nada.`);
 }
+/** Sólo lectura: la base de todo worktree de issue es el commit de main local. */
+export async function mainBaseCommit(git: Pick<GitSnapshot, "root">, signal?: AbortSignal, run: WorktreeCommand = gitCommand): Promise<string> {
+	signal?.throwIfAborted();
+	const base = await run(["rev-parse", "--verify", "refs/heads/main^{commit}"], git.root, signal);
+	const baseCommit = base.stdout.trim();
+	if (base.code !== 0 || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(baseCommit)) throw new Error("No hay una main local con commits. Prepará main antes de iniciar el issue; OMI no hace fetch ni usa otra rama como base.");
+	return baseCommit;
+}
 export async function checkIssueWorktree(git: Pick<GitSnapshot, "root" | "mainRoot">, number: number, signal?: AbortSignal, run: WorktreeCommand = gitCommand): Promise<{ worktree: string; baseCommit: string }> {
 	signal?.throwIfAborted();
 	const worktree = issueWorktreePath(git, number);
 	await available(worktree);
-	const base = await run(["rev-parse", "--verify", "refs/heads/main^{commit}"], git.root, signal);
-	const baseCommit = base.stdout.trim();
-	if (base.code !== 0 || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(baseCommit)) throw new Error("No hay una main local con commits. Prepará main antes de iniciar el issue; OMI no hace fetch ni usa otra rama como base.");
-	return { worktree, baseCommit };
+	return { worktree, baseCommit: await mainBaseCommit(git, signal, run) };
 }
 export async function planIssueWorktree(git: Pick<GitSnapshot, "root" | "mainRoot">, issue: { number: number; title: string }, type: IssueType, signal?: AbortSignal, run: WorktreeCommand = gitCommand): Promise<IssueWorktree> {
 	const { worktree, baseCommit } = await checkIssueWorktree(git, issue.number, signal, run);

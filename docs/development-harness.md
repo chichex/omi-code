@@ -2,19 +2,38 @@
 
 Primer corte para **repos existentes con issues de GitHub**, sobre sesiones y tools nativas de Pi. Implementa Directa, Diagnóstico y Con spec. No incluye Fundación, prototipos descartables, perfiles/fallbacks de modelos, Review externa, Land ni Ship.
 
-## Entrar y continuar
+## Empezar y continuar
 
-1. En Issues, preparar o retomar un issue con `/omi-triage N`.
-2. Dentro de su worktree, ejecutar `/omi-work start`.
-3. Autorizar la exploración. El agente lee código y entrega una receta; no obtiene permiso de editar por iniciar el flujo.
-4. Responder preguntas y aprobar la receta completa en la UI. La aprobación incluye los comandos exactos de los casos y commits locales, no un push. El diálogo lista primero esos comandos, que después corren sin volver a preguntar. Si la persona dice que no, el agente rehace la receta conservando exploración y respuestas. Un pedido que no entra en un comentario de GitHub falla al iniciar, antes de autorizar.
-5. El agente implementa, verifica y pide otro consentimiento para publicar la rama y abrir un PR draft.
+1. Pedí en el chat un cambio de código del repo que valga la pena seguir: feature, fix, mejora o chore con impacto. Preguntas, explicaciones, operaciones de OMI y cambios triviales que pedís hacer directo siguen en el chat normal, sin harness ni issue.
+2. El agente propone empezar con la tool `omi_work_begin`:
+   - si el pedido nombra un issue (`#N`), con ese issue;
+   - si no, con un título y un cuerpo para crear uno. La sesión nueva no hereda el chat, así que el cuerpo tiene que traer el pedido completo.
 
-`/omi-triage` conserva su contrato anterior: prepara worktree/sesión y no inicia implementación. El harness es opt-in; sus tools empiezan inactivas y no se imponen a todas las conversaciones.
+   La tool no crea nada: deja un pedido de un solo uso, ligado a la sesión, y termina el turno. Si el agente la llamó junto con otras tools, Pi le da una respuesta más antes de terminar. Mientras el pedido espera el sí, el resto de las tools del agente quedan bloqueadas. Un Esc en ese turno descarta el pedido sin preguntar.
+3. OMI te pide **un solo sí**. El diálogo dice primero qué va a pasar. Si el issue es nuevo, lo muestra completo al final (repo, título y cuerpo). Dice también quién lo pidió: el motivo del agente, o que vino del panel de Issues. Lo que se puede comprobar sin efectos falla antes de preguntar:
+   - el tamaño del pedido;
+   - caracteres invisibles o de dirección de texto en el título o el cuerpo;
+   - la identidad de una preparación guardada (también una anterior al registro, que se reconoce por su sesión), y que su worktree y su sesión sigan ahí;
+   - que exista `main` local;
+   - que la ruta del worktree no sea ajena;
+   - el modo offline (`--offline` o `PI_OFFLINE`); en ese caso el panel tampoco ofrece Enter;
+   - la falta de modelo o de confianza.
+4. Si aceptás:
+   - se crea el issue, si hace falta;
+   - se clasifica el issue;
+   - se prepara un worktree desde `main` local, con su propia sesión;
+   - se cambia a esa sesión y el trabajo sigue en Explorar.
+
+   Si decís que no, no se crea issue, worktree, sesión ni trabajo.
+5. Explorar no habilita escrituras. Respondé las preguntas y aprobá la receta completa en la UI. La aprobación incluye los comandos exactos de los casos y los commits locales, no un push. El diálogo lista primero esos comandos, que después corren sin volver a preguntar. Si decís que no, el agente rehace la receta conservando la exploración y las respuestas.
+6. El agente implementa, verifica y pide otro consentimiento para publicar la rama y abrir un PR draft.
+
+**Enter iniciar trabajo** (o **retomar trabajo**) en el panel de Issues y «Trabajar en el issue seleccionado» en la paleta entran por el mismo camino y piden el mismo sí. Si el issue ya tenía worktree y sesión, se retoman sin reclasificar ni volver a leer sus etiquetas. Un trabajo guardado sigue desde su etapa, sin duplicarse, y el diálogo dice en cuál está. Si estaba pausado, el diálogo lo avisa y el sí lo reanuda, como `/omi-work resume`, sin conceder aprobaciones. Si algo falla después de crear el issue, el aviso trae su número: hay que pedir ese issue, no crear otro.
+
+No hay un comando para empezar: `/omi-triage` y `/omi-work start` ya no existen. Una tool no puede cambiar de sesión, así que el pedido viaja como un comando interno con un token de un solo uso, que vive sólo en la memoria del proceso. Escribir ese comando a mano, sin un token vigente, no hace nada. Con el harness activo, `omi_work_begin` no se ofrece. Un arranque y `/omi-main` no corren a la vez: los dos cambian de sesión.
 
 | Comando humano | Efecto |
 |---|---|
-| `/omi-work start` | Crear un trabajo o contrastar/retomar el existente, sin duplicarlo. Necesita GitHub para leer la fuente vigente. |
 | `/omi-work resume` | Adoptar explícitamente el estado guardado; no repite comandos ya hechos. Si estaba pausado, reanuda sin conceder aprobaciones. |
 | `/omi-work approve` | Aprobar receta/spec vigente y agregar su artefacto al issue. Revalida fuente y código explorado. |
 | `/omi-work pause` | Pausar conservando fase, decisiones, archivos y evidencia. |
@@ -24,7 +43,7 @@ Primer corte para **repos existentes con issues de GitHub**, sobre sesiones y to
 | `/omi-work stop` | Salir explícitamente del flujo y restaurar las tools normales del chat, sin borrar ni revertir archivos. También sale de un harness bloqueado (estado inválido o atrasado) sin tocar el estado guardado. |
 | `/omi-progress` | Detalle del progreso en el workspace TUI, también con la lateral oculta. |
 
-Restaurar una sesión o recargar OMI **no ejecuta** pruebas, modelo, commits ni publicaciones. `resume` es una acción humana explícita. En offline se puede restaurar/consultar el estado local; contrastar el pedido, aprobar una receta nueva o publicar necesita GitHub. En el modo clásico se conserva el status y `/omi-work status`, no el panel del workspace.
+Restaurar una sesión o recargar OMI **no ejecuta** pruebas, modelo, commits ni publicaciones. `resume` es una acción humana explícita. En offline se puede restaurar/consultar el estado local; empezar, contrastar el pedido, aprobar una receta nueva o publicar necesita GitHub. Para abrir offline la sesión de un issue preparado, usá `/resume` de Pi. En el modo clásico se conserva el status y `/omi-work status`, no el panel del workspace.
 
 ## Etapas y rutas
 
@@ -57,7 +76,7 @@ Mientras el flujo está activo, shell arbitrario, tools desconocidas y operacion
 
 ## Persistencia, sesiones y recuperación
 
-El trabajo se guarda en `<git-common-dir>/omi/development/N.json`, separado de `.omi/project.json` y de las fases de preparación de `/omi-triage`. No requiere vincular el repo a un proyecto de infraestructura OMI.
+El trabajo se guarda en `<git-common-dir>/omi/development/N.json`, separado de `.omi/project.json` y del registro de preparación del worktree (`<git-common-dir>/omi/issue-workspaces/N.json`). No requiere vincular el repo a un proyecto de infraestructura OMI.
 
 - Esquema versionado, identidad completa de issue/checkout/base, revisión optimista, archivo 0600, escritura atómica y lock exclusivo con PID/host.
 - No se siguen symlinks para el estado. Registro corrupto, recurso perdido o checkout ajeno no se reemplazan automáticamente.
@@ -68,6 +87,8 @@ El trabajo se guarda en `<git-common-dir>/omi/development/N.json`, separado de `
 Los cambios externos del filesystem no se revierten. Una operación ejecutada sin recibo por cierre abrupto requiere inspección y revalidación, no replay automático.
 
 ## GitHub sin sobrescribir el pedido
+
+Crear el issue de un pedido nuevo es la única escritura en GitHub antes de Explorar. Pasa sólo con el sí, una vez, con el título y el cuerpo que mostró el diálogo. Si GitHub no confirma la creación, no se reintenta: hay que revisar el repo antes de volver a pedirlo, para no duplicarlo.
 
 GitHub no ofrece un CAS efectivo para reemplazar el body del issue con `gh issue edit`. Por eso **la fuente humana se conserva intacta**: receta/spec y evidencia se agregan como comentarios append-only administrados, no como reemplazo de la descripción. La evidencia publicada lleva comando, exit code, HEAD y fingerprint; la salida de los comandos queda sólo en el estado local, porque nadie la revisa antes de publicar. Se deduplican por identidad, autor y contenido exacto; un POST ambiguo se intenta recuperar antes de repetirlo. No se editan comentarios ajenos.
 
@@ -83,4 +104,4 @@ El panel sólo pertenece al cwd/worktree/rama correctos, se reinicia al cambiar 
 
 ## Verificación del cambio
 
-Los tests nuevos cubren las tres rutas con Git y comandos reales en repos temporales, modelos/GitHub falsos, consentimientos, invalidación, evidencia, recuperación, concurrencia, cancelación y panel estrecho/claro/oscuro. El empaquetado comprueba el binario instalado. No equivalen a una prueba contra GitHub/OMI real ni a una evaluación de calidad de modelos: esas pruebas requieren una persona.
+El arranque tiene sus propios tests, con Git, worktrees y sesiones reales y con GitHub y modelo falsos: pedido nuevo con un solo sí, issue existente sin duplicar, decir que no, token de un solo uso, guardas sin efectos y recarga sin kickoff. Dos tests de pty real recorren los dos caminos. El del panel: Enter en Issues, el sí, Esc en la clasificación y el harness arrancado en el worktree. El del agente: un pedido en el chat, la tool, un turno que termina sin seguir, el sí antes de crear el issue y de clasificar, y el harness en el worktree del issue nuevo. Los tests del flujo cubren las tres rutas con Git y comandos reales en repos temporales, modelos/GitHub falsos, consentimientos, invalidación, evidencia, recuperación, concurrencia, cancelación y panel estrecho/claro/oscuro. El empaquetado comprueba el binario instalado. No equivalen a una prueba contra GitHub/OMI real ni a una evaluación de calidad de modelos: esas pruebas requieren una persona.

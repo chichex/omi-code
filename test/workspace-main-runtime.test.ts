@@ -43,7 +43,7 @@ while time.monotonic() - start < 22:
     elif phase == 7 and elapsed - phase_at > 0.5:
         os.write(fd, b'/omi-main\\r'); phase, mark = 8, len(output)
     elif phase == 8 and b'Ya est' in output[mark:]:
-        os.write(fd, b'/omi-triage 42\\r'); phase = 9
+        os.write(fd, b'/probe-issue\\r'); phase = 9
     elif phase == 9 and os.path.exists(os.environ['MAIN_BACK_ISSUE']):
         phase, phase_at = 10, elapsed
     elif phase == 10 and elapsed - phase_at > 0.3:
@@ -94,7 +94,10 @@ for (const mode of ["original", "empty"] as const) test(`workspace_main PTY · $
 	await writeFile(join(agent, "models.json"), JSON.stringify({ providers: { mock: { baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`, api: "openai-completions", apiKey: "test-not-a-key", models: [{ id: "selected", name: "Main test", contextWindow: 200000, maxTokens: 8192 }] } } }));
 	const markers = { MAIN_READY: join(home, "main-ready"), MAIN_ENTER: join(home, "main-enter"), MAIN_AGAIN: join(home, "main-again"), MAIN_BACK_ISSUE: join(home, "back-issue"), MAIN_EVENTS: join(home, "events") };
 	const extension = join(home, "probe.ts"); await writeFile(extension, `import {appendFile,writeFile,access} from 'node:fs/promises';
-export default function(pi) { pi.on('session_start', async (event,ctx) => {
+export default function(pi) {
+ // Vuelta al issue con un cambio de sesión genérico: /omi-triage ya no existe y esto prueba /omi-main.
+ pi.registerCommand('probe-issue', { handler: async (_args, ctx) => { await ctx.switchSession(process.env.ISSUE_SESSION); } });
+ pi.on('session_start', async (event,ctx) => {
  const main = ctx.cwd === ${JSON.stringify(root)};
  const state = {cwd:ctx.cwd,session:ctx.sessionManager.getSessionFile(),issue:ctx.sessionManager.getBranch().some(e=>e.type==='custom'&&e.customType==='omi-issue-triage')};
  await appendFile(process.env.MAIN_EVENTS, JSON.stringify(state)+'\\n');
@@ -107,7 +110,7 @@ export default function(pi) { pi.on('session_start', async (event,ctx) => {
 	const binary = fileURLToPath(new URL("../bin/omi.ts", import.meta.url));
 	const result = await new Promise<{ code: number | null; output: string }>((resolve, reject) => {
 		const child = spawn("python3", ["-I", "-c", driver, process.execPath, binary, "--session", sessionFile!, ...(mode === "original" ? ["--session-dir", sessions] : []), "--offline", "--provider", "mock", "--model", "selected", "--no-extensions", "--extension", extension, "--no-context-files", "--no-skills", "--approve"], {
-			cwd: state.worktree, env: { ...process.env, HOME: home, OMI_HOME: "", HERDR_ENV: "0", TERM: "xterm-256color", MAIN_MODE: mode, ...markers }, stdio: ["ignore", "pipe", "pipe"],
+			cwd: state.worktree, env: { ...process.env, HOME: home, OMI_HOME: "", HERDR_ENV: "0", TERM: "xterm-256color", MAIN_MODE: mode, ISSUE_SESSION: sessionFile!, ...markers }, stdio: ["ignore", "pipe", "pipe"],
 		});
 		let output = ""; child.stdout.on("data", (data: Buffer) => { output += data; }); child.stderr.on("data", (data: Buffer) => { output += data; }); child.on("error", reject); child.on("close", (code) => resolve({ code, output }));
 	});

@@ -1,5 +1,4 @@
 // Shell propio de OMI sobre los componentes y el renderer de Pi. No hay un segundo TUI.
-import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, InlineExtension, Theme } from "@earendil-works/pi-coding-agent";
 import { colorToHex, Container, isViewportTUI, matchesKey, type Component, type TUI } from "@earendil-works/pi-tui";
 import type { Io } from "../../cli/io.ts";
@@ -22,10 +21,9 @@ import { WorkflowProgressMonitor, workflowProgressDetail } from "./workflow-prog
 import { GithubInspector } from "./github-inspector.ts";
 import { consumeSubagentEvent, SubagentMonitor } from "./subagents.ts";
 import { readBranchPullRequest, type BranchPullRequest } from "./pull-request.ts";
-import { ISSUE_TYPES } from "./issue-worktree.ts";
-import { classifyIssue, restoreIssueTriage, type IssueTriageState } from "./issue-triage.ts";
-import { discoverLegacyPreparations, IssuePreparationBusyError, loadIssuePreparations, rememberIssueSession, type IssuePreparationEntry } from "./issue-registry.ts";
-import { prepareIssue, type IssueClassification } from "./issue-preparation.ts";
+import { restoreIssueTriage, type IssueTriageState } from "./issue-triage.ts";
+import { discoverLegacyPreparations, loadIssuePreparations, rememberIssueSession, type IssuePreparationEntry } from "./issue-registry.ts";
+import { developmentOffline, holdSessionSwitch, requestDevelopmentBegin, sessionSwitchOwner } from "../development-tickets.ts";
 import { preparePrincipalSession, PrincipalSessionBusyError } from "./main-workspace.ts";
 
 type View = WorkspaceView;
@@ -35,7 +33,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 	return { name: "omi-workspace", factory: async (pi: ExtensionAPI) => {
 		if (io.env.OMI_TUI === "classic") return;
 		// El import de coding-agent sucede después de fijar PI_CODING_AGENT_DIR en launchTui.
-		const { BorderedLoader, CustomEditor, Theme: PiTheme, ToolExecutionComponent, VERSION, parseArgs } = await import("@earendil-works/pi-coding-agent");
+		const { CustomEditor, Theme: PiTheme, ToolExecutionComponent, VERSION, parseArgs } = await import("@earendil-works/pi-coding-agent");
 		const parsed = parseArgs(args);
 		let active = false; let ctx: ExtensionContext; let tui: TUI | undefined;
 		let prefs: WorkspacePreferences = { favorites: [], sidebar: true }; let session = sessionStats([]);
@@ -48,12 +46,12 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		let actions: Record<ActionGroup, ActionState> = { reviews: {}, releases: {} };
 		let branchPr: BranchPullRequest | undefined; let branchPrError: string | undefined;
 		let openingBranchPr = false;
-		let infoPrompt = false; let triageBusy = false; let mainBusy = false;
+		let infoPrompt = false; let mainBusy = false;
 		let issueTriage: IssueTriageState | undefined;
 		let preparations = new Map<number, IssuePreparationEntry>(); let preparationsError: string | undefined;
 		let preparationsRepo: string | undefined; let legacyScanned = false; let sessionRemembered = false;
 		let legacyPreparations = new Map<number, IssuePreparationEntry>();
-		let issuePreparationTask: Promise<unknown> | undefined; let issueSessionTask: Promise<void> | undefined; let mainSessionTask: Promise<unknown> | undefined;
+		let issueSessionTask: Promise<void> | undefined; let mainSessionTask: Promise<unknown> | undefined;
 		let environments: EnvironmentStatus[] = []; let services: string[] = []; let project: string | undefined; let envError: string | undefined; let envAt: number | undefined;
 		let localBusy = false; let remoteBusy = false; let timer: ReturnType<typeof setInterval> | undefined;
 		let lastRemote = 0; let selectedFile = 0; let diff: string | undefined; let diffLoading = false; let diffRequest = 0;
@@ -141,7 +139,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 						}
 						for (const [number, entry] of legacyPreparations) if (!saved.has(number)) saved.set(number, entry);
 						if (active) { preparations = saved; preparationsError = undefined; }
-					} catch { if (active) preparationsError = "Registro local no disponible; no se inicia otro triage hasta poder leerlo."; }
+					} catch { if (active) preparationsError = "Registro local no disponible; no se inicia otro trabajo hasta poder leerlo."; }
 				}
 			}
 			localBusy = false;
@@ -233,11 +231,18 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 				if (active && hidden) { prefs.hiddenSections = hidden; changed(); await save(); }
 			} finally { finishModal = undefined; infoPrompt = false; }
 		}
+		// El mismo pedido que Enter en Issues: el harness pide el sí, prepara y cambia de sesión.
+		function workOnSelectedIssue(): void {
+			const number = github.issues.items?.[github.issues.selected]?.number; const sessionFile = ctx.sessionManager.getSessionFile();
+			if (number === undefined) { ctx.ui.notify("Abrí Issues y seleccioná un issue cargado.", "warning"); return; }
+			if (!sessionFile) { ctx.ui.notify("El trabajo requiere una sesión persistente. Volvé a abrir OMI sin --no-session.", "warning"); return; }
+			switchView("chat"); requestDevelopmentBegin(pi, sessionFile, { issue: number });
+		}
 		async function palette(): Promise<void> {
 			if (!active || finishModal) return;
 			const actions: [string, () => void | Promise<void>][] = [...WORKSPACE_VIEWS.map((item): [string, () => void] => [item.label, () => switchView(item.id)]),
 				["Progreso de desarrollo", showProgress], ["PR de la rama actual", showBranchPr], ["GitHub Actions", showActions], ["Subagentes", showSubagents], ["Elegir modelo", showModel], ["Ventana de contexto", showContext], ["Ubicación / worktree", showWorkspace], ["Recursos del equipo", showResources], ["Mostrar / ocultar lateral", toggleSidebar], ["Personalizar lateral", customizeSidebar], ["Alternar detalle de herramientas", () => { ctx.ui.setToolsExpanded(!ctx.ui.getToolsExpanded()); }], ["Actualizar datos", () => { void refreshLocal(); void refreshRemote(); }],
-				["Preparar / retomar el issue seleccionado", () => pi.sendUserMessage("/omi-triage", { expandPromptTemplates: true })]];
+				["Trabajar en el issue seleccionado", workOnSelectedIssue]];
 			if (git?.linked) actions.splice(WORKSPACE_VIEWS.length, 0, ["Volver al repo principal", () => pi.sendUserMessage("/omi-main", { expandPromptTemplates: true })]);
 			let selected: string | undefined;
 			try {
@@ -285,7 +290,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			return false;
 		}, changed, () => rows() - 6);
 		const githubInspector = new GithubInspector({ state: () => ({ ctx, git, github, view, preparations, preparationsError }), active: () => active,
-			gitIdentity, changed, modalBusy: () => !!finishModal, signal: controller.signal, offline: parsed.offline, pi, info });
+			gitIdentity, changed, modalBusy: () => !!finishModal, signal: controller.signal, offline: parsed.offline, pi, info, onBegin: () => switchView("chat"), canBegin: !developmentOffline(args, io.env) });
 		const showGithubDetail = (kind: GithubView): Promise<void> => githubInspector.show(kind);
 		function githubPane(kind: GithubView): ReadView {
 			const pane = new ReadView((width) => {
@@ -308,11 +313,14 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		}
 		const issuesPane = githubPane("issues"); const prsPane = githubPane("prs");
 		async function returnToPrincipal(_args: string, command: ExtensionCommandContext): Promise<void> {
-			if (!active || command.mode !== "tui" || mainBusy || triageBusy || blocked || finishModal) return;
+			if (!active || command.mode !== "tui" || mainBusy || blocked || finishModal) return;
 			const warn = (message: string) => command.ui.notify(message, "warning");
 			if (!command.isProjectTrusted()) { warn("Volver al repo principal requiere un proyecto de confianza."); return; }
 			if (!command.isIdle() || command.hasPendingMessages()) { warn("Esperá a que el agente termine antes de volver al repo principal."); return; }
 			if (parsed.noSession) { warn("Volver al repo principal requiere una sesión persistente. Volvé a abrir OMI sin --no-session."); return; }
+			// Exclusivo con el arranque de un trabajo, que vive en otra extensión y también cambia de sesión.
+			const release = holdSessionSwitch("regreso al repo principal");
+			if (!release) { warn(`Hay un ${sessionSwitchOwner() ?? "cambio de sesión"} en curso; esperá a que termine.`); return; }
 			mainBusy = true;
 			const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]);
 			const current = () => active && !signal.aborted && ctx.cwd === command.cwd && command.isIdle() && !command.hasPendingMessages();
@@ -329,63 +337,9 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 				if (result.cancelled) warn("Regreso cancelado. Seguís en el worktree; la sesión del repo principal quedó disponible para reintentar.");
 			} catch (error) {
 				if (active && !controller.signal.aborted) command.ui.notify(text(error instanceof Error ? error.message : "No se pudo volver al repo principal"), error instanceof PrincipalSessionBusyError ? "warning" : "error");
-			} finally { mainSessionTask = undefined; mainBusy = false; changed(); }
+			} finally { mainSessionTask = undefined; mainBusy = false; release(); changed(); }
 		}
 		pi.registerCommand("omi-main", { description: "Volver del worktree al repo principal y retomar su sesión, sin cambiar ramas", handler: returnToPrincipal });
-		async function startIssueTriage(args: string, command: ExtensionCommandContext): Promise<void> {
-			if (!active || command.mode !== "tui" || triageBusy || mainBusy || blocked || finishModal) return;
-			const warn = (message: string) => command.ui.notify(message, "warning");
-			if (!command.isProjectTrusted()) { warn("El triage y retomar un worktree requieren un proyecto de confianza."); return; }
-			if (!command.isIdle() || command.hasPendingMessages()) { warn("Esperá a que el agente termine antes de preparar o retomar un issue."); return; }
-			if (parsed.noSession) { warn("El worktree requiere una sesión persistente. Volvé a abrir OMI sin --no-session."); return; }
-			const number = args.trim() ? /^[1-9]\d*$/.test(args.trim()) ? Number(args.trim()) : NaN : github.issues.items?.[github.issues.selected]?.number ?? NaN;
-			const item = github.issues.items?.find((item) => item.number === number); const snapshot = git;
-			if (!snapshot || !Number.isSafeInteger(number) || number <= 0) { warn("Abrí Issues y seleccioná un issue cargado. Uso: /omi-triage [número]."); return; }
-			triageBusy = true; const identity = gitIdentity(); const abort = new AbortController();
-			const current = () => active && identity === gitIdentity() && command.isIdle() && !command.hasPendingMessages();
-			try {
-				const preparing = prepareIssue(snapshot, number, item, command, {
-					...(parsed.sessionDir ? { sessionDir: parsed.sessionDir } : {}), signal: controller.signal, isCurrent: current,
-					classify: async () => {
-						if (parsed.offline) { warn("Un triage nuevo requiere conexión; quitá --offline. Los ya guardados se pueden retomar."); return; }
-						if (!command.model || !command.modelRegistry.hasConfiguredAuth(command.model)) { warn("Elegí un modelo autenticado con /omi-model o /login antes de iniciar el triage."); return; }
-						if (!item) return;
-						let failure: unknown; infoPrompt = true;
-						const classification = await command.ui.custom<IssueClassification | undefined>((ui, modalTheme, _keys, done) => {
-							const loader = new BorderedLoader(ui, modalTheme, `Issue triage · #${number} · Esc cancelar`);
-							let finished = false;
-							const finish = (value?: IssueClassification) => { if (!finished) { finished = true; done(value); } };
-							finishModal = () => { abort.abort(); finish(); }; loader.onAbort = finishModal;
-							const signal = AbortSignal.any([controller.signal, abort.signal, AbortSignal.timeout(90_000)]);
-							void (async () => {
-								const body = await readGithubDetail(snapshot, "issue", item.number, signal);
-								return { ...await classifyIssue(command, item, body, signal), body };
-							})().then(finish, (error) => { failure = error; finish(); });
-							return loader;
-						}, { overlay: true, overlayOptions: () => overlayOptions() });
-						infoPrompt = false; finishModal = undefined;
-						if (!current() || abort.signal.aborted) return;
-						if (failure) throw failure;
-						return classification;
-					},
-				});
-				issuePreparationTask = preparing;
-				const prepared = await preparing; issuePreparationTask = undefined;
-				if (!prepared || !current()) return;
-				const { record, resumed } = prepared; const { state, sessionFile } = record;
-				preparations.set(number, { record }); changed();
-				const activeSession = command.sessionManager.getSessionFile();
-				if (activeSession && resolve(activeSession) === resolve(sessionFile!) && resolve(command.cwd) === resolve(state.worktree)) {
-					switchView("chat"); command.ui.notify(`Ya estás en la sesión del issue #${number}. No se creó ni se cambió nada.`, "info"); return;
-				}
-				const message = resumed ? `Issue #${number} · ${ISSUE_TYPES[state.triage.type].label}. Sesión retomada; conversación y cambios conservados.` : `Issue #${number} · ${ISSUE_TYPES[state.triage.type].label}. Worktree listo; implementación no iniciada.`;
-				const result = await command.switchSession(sessionFile!, { withSession: async (replacement) => { replacement.ui.notify(message, "info"); } });
-				if (result.cancelled) warn(`Cambio de sesión cancelado. La preparación quedó guardada en ${state.worktree}. Volvé al detalle y elegí retomar worktree.`);
-			} catch (error) {
-				if (active && !controller.signal.aborted) command.ui.notify(text(error instanceof Error ? error.message : "No se pudo preparar o retomar el issue"), error instanceof IssuePreparationBusyError ? "warning" : "error");
-			} finally { abort.abort(); issuePreparationTask = undefined; triageBusy = false; infoPrompt = false; finishModal = undefined; changed(); }
-		}
-		pi.registerCommand("omi-triage", { description: "Preparar o retomar el triage, worktree y sesión del issue", handler: startIssueTriage });
 		const omiPane = new ReadView((width) => omiViewLines(theme(), { project, services, environments, error: envError, at: envAt, now: Date.now() }, width), (data) => {
 			if (matchesKey(data, "escape")) { switchView("chat"); return true; }
 			if (data === "r") { void refreshRemote(); return true; }
@@ -464,7 +418,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			working = !ctx.isIdle();
 			timer = setInterval(() => { void refreshLocal(); }, 3000); timer.unref(); if (parsed.offline || !ctx.isProjectTrusted()) void refreshRemote(); void refreshLocal(); changed();
 		});
-		pi.on("session_shutdown", async () => { active = false; unsubscribeWorkflow?.(); unsubscribeWorkflow = undefined; workflow.clear(); unsubscribeSubagents?.(); unsubscribeSubagents = undefined; subagents.clear(); controller.abort(); if (timer) clearInterval(timer); unsubscribeInput?.(); finishModal?.(); finishModal = undefined; if (tui && baseRoot && isViewportTUI(tui)) tui.setLayoutRoot(baseRoot); await Promise.all([saveQueue, issuePreparationTask?.catch(() => {}), issueSessionTask?.catch(() => {}), mainSessionTask?.catch(() => {})]); });
+		pi.on("session_shutdown", async () => { active = false; unsubscribeWorkflow?.(); unsubscribeWorkflow = undefined; workflow.clear(); unsubscribeSubagents?.(); unsubscribeSubagents = undefined; subagents.clear(); controller.abort(); if (timer) clearInterval(timer); unsubscribeInput?.(); finishModal?.(); finishModal = undefined; if (tui && baseRoot && isViewportTUI(tui)) tui.setLayoutRoot(baseRoot); await Promise.all([saveQueue, issueSessionTask?.catch(() => {}), mainSessionTask?.catch(() => {})]); });
 		pi.on("before_agent_start", (_event, context) => { ctx = context; working = true; activity = "Preparando turno"; changed(); });
 		pi.on("agent_start", (_event, context) => { ctx = context; working = true; activity = "Trabajando"; changed(); });
 		pi.on("agent_settled", (_event, context) => { ctx = context; working = false; runningTools.clear(); activity = "Listo"; void refreshLocal(); changed(); });
