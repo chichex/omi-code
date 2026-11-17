@@ -11,6 +11,12 @@ import { tempDir, testIo } from "./helpers/io.ts";
 import { linkedProject } from "./helpers/project.ts";
 import { fakeRunner } from "./helpers/runner.ts";
 
+const longContextIds = [
+	"gpt-5.4", "gpt-5.5", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra",
+	"gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol", "gpt-6.1-terra",
+];
+const longContextDefaults = Object.fromEntries(longContextIds.map((id) => [id, { contextWindow: 1_050_000 }]));
+
 interface Call {
 	args: string[];
 	agentDirEnv: string | undefined;
@@ -57,11 +63,11 @@ test("launchTui_usa ~/.omi/agent como configuración global de Pi", async (t) =>
 	assert.deepEqual(calls[0]?.args.slice(-1), ["--continue"]);
 });
 
-test("launchTui configura Sol con 1.050.000 tokens antes de arrancar Pi", async (t) => {
+test("launchTui configura los diez GPT verificados con 1.050.000 tokens antes de arrancar Pi", async (t) => {
 	const home = await tempDir(t);
 	await launchTui([], testIo({ homeDir: home }), { piMain: async () => {
 		const models = JSON.parse(await readFile(join(agentDir(home), "models.json"), "utf8"));
-		assert.equal(models.providers.openai.modelOverrides["gpt-6.1-sol"].contextWindow, 1_050_000);
+		assert.deepEqual(models, { providers: { openai: { modelOverrides: longContextDefaults } } });
 	} });
 });
 
@@ -73,15 +79,15 @@ test("launchTui agrega el default de Sol sin reemplazar configuración de modelo
 	await writeFile(path, JSON.stringify(original));
 	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi([]) });
 	assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
-		providers: { ...original.providers, openai: { ...original.providers.openai, modelOverrides: { "gpt-6.1-sol": { maxTokens: 32_000, contextWindow: 1_050_000 } } } },
+		providers: { ...original.providers, openai: { ...original.providers.openai, modelOverrides: { ...longContextDefaults, "gpt-6.1-sol": { maxTokens: 32_000, contextWindow: 1_050_000 } } } },
 	});
 });
 
-test("launchTui respeta el contextWindow explícito del usuario y no reescribe su archivo", async (t) => {
+test("launchTui no reescribe el archivo si todos los GPT ya tienen un límite explícito", async (t) => {
 	const home = await tempDir(t);
 	await mkdir(agentDir(home), { recursive: true });
 	const path = join(agentDir(home), "models.json");
-	const original = '{ "providers": { "openai": { "modelOverrides": { "gpt-6.1-sol": { "contextWindow": 400000 } } } } }\n';
+	const original = ` ${JSON.stringify({ providers: { openai: { modelOverrides: { ...longContextDefaults, "gpt-6.1-sol": { contextWindow: 400_000 } } } } })}\n`;
 	await writeFile(path, original);
 	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi([]) });
 	assert.equal(await readFile(path, "utf8"), original);
@@ -91,13 +97,62 @@ test("launchTui conserva una definición completa de Sol del usuario", async (t)
 	const home = await tempDir(t);
 	await mkdir(agentDir(home), { recursive: true });
 	const path = join(agentDir(home), "models.json");
-	const original = JSON.stringify({ providers: { openai: { models: [{ id: "gpt-6.1-sol", contextWindow: 500_000 }] } } });
+	const others = Object.fromEntries(Object.entries(longContextDefaults).filter(([id]) => id !== "gpt-6.1-sol"));
+	const original = JSON.stringify({ providers: { openai: { modelOverrides: others, models: [{ id: "gpt-6.1-sol", contextWindow: 500_000 }] } } });
 	await writeFile(path, original);
 	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi([]) });
 	assert.equal(await readFile(path, "utf8"), original);
 });
 
-for (const original of ['{malformed', 'null', '{"providers": []}', '{"providers":{"openai":{"modelOverrides":false}}}']) {
+test("launchTui no amplía otros modelos ni copia límites a otros proveedores", async (t) => {
+	const home = await tempDir(t);
+	await mkdir(agentDir(home), { recursive: true });
+	const path = join(agentDir(home), "models.json");
+	const overrides = { "gpt-5.4-mini": { contextWindow: 400_000 }, "gpt-5.6-cyber": { contextWindow: 400_000 } };
+	const providers = {
+		openai: { modelOverrides: overrides },
+		"openai-codex": { modelOverrides: { "gpt-6.1-sol": { contextWindow: 500_000 } } },
+		anthropic: { modelOverrides: { "claude-haiku-4-5": { contextWindow: 200_000 } } },
+		google: { modelOverrides: { "gemini-2.5-pro": { contextWindow: 1_048_576 } } },
+	};
+	await writeFile(path, JSON.stringify({ providers }));
+	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi([]) });
+	assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
+		providers: { ...providers, openai: { modelOverrides: { ...overrides, ...longContextDefaults } } },
+	});
+});
+
+test("launchTui completa una instalación que ya tenía el default de Sol y es idempotente", async (t) => {
+	const home = await tempDir(t);
+	await mkdir(agentDir(home), { recursive: true });
+	const path = join(agentDir(home), "models.json");
+	await writeFile(path, JSON.stringify({ providers: { openai: { modelOverrides: { "gpt-6.1-sol": { contextWindow: 1_050_000 } } } } }));
+	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi([]) });
+	const text = await readFile(path, "utf8");
+	assert.deepEqual(JSON.parse(text), { providers: { openai: { modelOverrides: longContextDefaults } } });
+	const before = await stat(path);
+	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi([]) });
+	assert.equal(await readFile(path, "utf8"), text);
+	assert.equal((await stat(path)).mtimeMs, before.mtimeMs);
+});
+
+for (const id of longContextIds) for (const source of ["modelOverrides", "models"]) {
+	test(`launchTui respeta ${source} de ${id} y completa los otros nueve`, async (t) => {
+		const home = await tempDir(t);
+		await mkdir(agentDir(home), { recursive: true });
+		const path = join(agentDir(home), "models.json");
+		const explicit = { contextWindow: 300_000, maxTokens: 16_000 };
+		const openai = source === "models" ? { models: [{ id, ...explicit }] } : { modelOverrides: { [id]: explicit } };
+		await writeFile(path, JSON.stringify({ providers: { openai } }));
+		await launchTui([], testIo({ homeDir: home }), { piMain: fakePi([]) });
+		const expected = Object.fromEntries(Object.entries(longContextDefaults).filter(([model]) => model !== id));
+		assert.deepEqual(JSON.parse(await readFile(path, "utf8")), { providers: { openai: source === "models"
+			? { ...openai, modelOverrides: expected }
+			: { modelOverrides: { ...expected, [id]: explicit } } } });
+	});
+}
+
+for (const original of ['{malformed', 'null', '{"providers": []}', '{"providers":{"openai":{"modelOverrides":false}}}', '{"providers":{"openai":{"modelOverrides":{"gpt-6.1-terra":false}}}}', '{"providers":{"openai":{"models":false,"modelOverrides":{"gpt-6.1-sol":{"contextWindow":1050000}}}}}']) {
 	test(`launchTui no modifica models.json inválido: ${original}`, async (t) => {
 		const home = await tempDir(t);
 		await mkdir(agentDir(home), { recursive: true });
