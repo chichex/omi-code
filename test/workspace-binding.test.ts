@@ -4,6 +4,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionCommandContext, ExtensionContext, InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { OmiModelPicker, PickerResult } from "../src/tui/workspace/model-picker.ts";
 import { workspaceExtension } from "../src/tui/workspace/index.ts";
+import { holdSessionSwitch } from "../src/tui/development-tickets.ts";
 import { tempDir, testIo } from "./helpers/io.ts";
 
 const base: Model<Api> = { id: "model", name: "Model", provider: "test", api: "anthropic-messages", baseUrl: "https://example.invalid", reasoning: false, input: ["text"], contextWindow: 200000, maxTokens: 8192, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
@@ -90,4 +91,11 @@ test("workspace_main exige confianza, reposo y sesión persistente antes de camb
 test("workspace_un turno activo no se cambia de modelo por detrás", async (t) => {
 	const ui = await harness(await tempDir(t), { busy: true }); t.after(ui.stop);
 	await ui.commands.get("omi-model")!.handler(); assert.equal(ui.selections.length, 0); assert.equal(ui.pickerCount(), 0);
+});
+
+test("workspace_main no compite con un arranque de trabajo en curso", async (t) => {
+	const release = holdSessionSwitch("arranque de trabajo")!; t.after(release);
+	const ui = await harness(await tempDir(t), { trusted: true }); t.after(ui.stop);
+	await ui.main();
+	assert.match(ui.notifications.join("\n"), /arranque de trabajo en curso/); assert.doesNotMatch(ui.notifications.join("\n"), /repositorio Git/);
 });

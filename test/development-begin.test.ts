@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { access, mkdir, readFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 import { readWorkflow } from "../src/harness/store.ts";
 import { WORKFLOW_TOOLS } from "../src/harness/permissions.ts";
 import { readGit } from "../src/tui/workspace/data.ts";
-import { readIssuePreparation } from "../src/tui/workspace/issue-registry.ts";
-import { issueDevelopmentTicket, requestDevelopmentBegin, takeDevelopmentTicket } from "../src/tui/development-tickets.ts";
+import { issueRegistryDir, readIssuePreparation } from "../src/tui/workspace/issue-registry.ts";
+import { holdSessionSwitch, issueDevelopmentTicket, requestDevelopmentBegin, takeDevelopmentTicket } from "../src/tui/development-tickets.ts";
 import { beginFixture } from "./helpers/development-begin.ts";
 
 const KICKOFF = /Continuá el harness de desarrollo/;
@@ -43,6 +43,8 @@ test("development_begin con un issue existente no crea otro, y volver a pedirlo 
 	const f = await beginFixture(t);
 	await f.ask({ issue: 42, reason: "La persona nombró el #42" });
 	assert.deepEqual(f.remote.created, []); assert.equal(f.modelCalls.length, 1);
+	const labelReads = () => f.calls.filter((args) => args.includes("labels")).length;
+	assert.equal(labelReads(), 1, "las etiquetas se leen para clasificar");
 	const first = (await workflowOf(f.root, 42))!; const record = (await preparation(f.root, 42))!;
 	assert.match(f.prompts[0]!.description, /#42/); assert.match(f.prompts[0]!.description, /Corregir resultado/);
 	assert.equal(f.current().ctx.cwd, record.state.worktree);
@@ -52,6 +54,7 @@ test("development_begin con un issue existente no crea otro, y volver a pedirlo 
 	assert.deepEqual(f.switches, [record.sessionFile, record.sessionFile], "retoma la misma sesión");
 	assert.equal(f.kickoffs().filter((text) => KICKOFF.test(text)).length, 1);
 	assert.equal(f.modelCalls.length, 1, "no reclasifica"); assert.deepEqual(f.remote.created, []);
+	assert.equal(labelReads(), 1, "retomar no vuelve a pedir las etiquetas: no las usa");
 	assert.equal((await workflowOf(f.root, 42))!.id, first.id, "no duplica el trabajo");
 	assert.equal(f.prompts.length, 2);
 });
@@ -89,7 +92,12 @@ test("development_begin la tool sólo se ofrece fuera del harness y valida el pe
 	const tool = f.current().tools.get("omi_work_begin")!;
 	assert.match(tool.description, /vale la pena/); assert.ok(tool.promptGuidelines?.some((line) => /trivial/.test(line)));
 	for (const input of [{ reason: "nada" }, { issue: 42, title: "x", body: "y", reason: "ambos" }, { title: "sin cuerpo", reason: "falta body" }]) await assert.rejects(f.invoke("omi_work_begin", input), /Pasá issue con el número de un issue existente/);
-	for (const input of [{ title: "Normal\u202Eoculto", body: "x", reason: "bidi" }, { title: "x", body: "cuerpo\u200Bcon ancho cero", reason: "ancho cero" }]) await assert.rejects(f.invoke("omi_work_begin", input), /invisibles|dirección/);
+	const hidden = ["\u202E", "\u200B", "\u061C", "\u00AD", "\u2066", "\u180E", String.fromCodePoint(0xE0041), String.fromCodePoint(0xE0100)];
+	for (const char of hidden) {
+		await assert.rejects(f.invoke("omi_work_begin", { title: `Normal${char}oculto`, body: "x", reason: "título" }), /invisibles|dirección/, `título con U+${char.codePointAt(0)!.toString(16)}`);
+		await assert.rejects(f.invoke("omi_work_begin", { title: "x", body: `cuerpo${char}oculto`, reason: "cuerpo" }), /invisibles|dirección/, `cuerpo con U+${char.codePointAt(0)!.toString(16)}`);
+	}
+	await f.invoke("omi_work_begin", { title: "Emoji ❤️ y acentos ñ", body: "Texto común con emoji ✅", reason: "visible" }); await f.emit("agent_settled", { aborted: true }); await f.flush();
 	assert.deepEqual(f.calls, [], "validar no consulta GitHub");
 	await f.ask({ ...request, body: "é".repeat(40000) });
 	assert.equal(f.prompts.length, 0, "un pedido que no entra en un comentario de GitHub falla antes de preguntar");
@@ -192,4 +200,64 @@ test("development_begin retomar con el pedido editado en GitHub lo contrasta, vu
 	assert.equal(after.id, first.id); assert.ok(after.revision > first.revision, "se registró el cambio del pedido");
 	assert.equal(after.source.title, "Corregir resultado (editado)"); assert.equal(after.phase, "explore"); assert.equal(after.approval, null);
 	assert.match(f.current().notices.join("\n"), /El pedido cambió/);
+});
+
+test("development_begin una preparación anterior al registro se retoma desde su sesión, sin reclasificar ni chocar con su worktree", async (t) => {
+	const f = await beginFixture(t);
+	await f.ask({ issue: 42, reason: "Pedido" });
+	const record = (await preparation(f.root, 42))!;
+	await rm(join(issueRegistryDir((await readGit(f.root))!), "42.json"));
+	await f.openMain(); await f.ask({ issue: 42, reason: "Retomar" });
+	assert.match(f.prompts.at(-1)!.title, /Retomar el trabajo del issue #42/, f.current().notices.join("\n"));
+	assert.deepEqual(f.switches, [record.sessionFile, record.sessionFile]); assert.equal(f.modelCalls.length, 1, "no reclasifica");
+});
+
+test("development_begin una preparación guardada rota falla antes de preguntar", async (t) => {
+	const f = await beginFixture(t);
+	await f.ask({ issue: 42, reason: "Pedido" });
+	const record = (await preparation(f.root, 42))!;
+	await f.openMain(); await rm(record.sessionFile!);
+	await f.ask({ issue: 42, reason: "Retomar" });
+	assert.equal(f.prompts.length, 1, "no se pregunta por algo que no se puede retomar"); assert.match(f.current().notices.join("\n"), /Falta la sesión guardada/);
+	assert.equal(f.current().ctx.cwd, f.root);
+});
+
+test("development_begin retomar un trabajo pausado lo dice en el diálogo y el sí lo reanuda, en el worktree y desde main", async (t) => {
+	const f = await beginFixture(t);
+	await f.ask({ issue: 42, reason: "Pedido" }); await f.command("stop");
+	const kickoffs = () => f.kickoffs().filter((text) => KICKOFF.test(text)).length;
+	await f.ask({ issue: 42, reason: "Seguir acá" });
+	assert.match(f.prompts.at(-1)!.title, /Retomar el trabajo del issue #42/); assert.match(f.prompts.at(-1)!.description, /pausado/); assert.match(f.prompts.at(-1)!.description, /se reanuda/);
+	// Igual que /omi-work resume: deja de estar pausado y el bloqueo propio de la etapa lo resuelve el agente.
+	assert.notEqual((await workflowOf(f.root, 42))!.status, "paused"); assert.equal(kickoffs(), 2, "el agente sigue después del sí");
+	await f.command("stop"); await f.openMain(); await f.ask({ issue: 42, reason: "Seguir desde main" });
+	assert.match(f.prompts.at(-1)!.title, /Retomar/); assert.match(f.prompts.at(-1)!.description, /pausado/); assert.match(f.prompts.at(-1)!.description, /se reanuda/);
+	assert.notEqual((await workflowOf(f.root, 42))!.status, "paused"); assert.equal(kickoffs(), 1, "sigue en la sesión del worktree");
+});
+
+test("development_begin un Esc en el turno del agente descarta el pedido sin preguntar", async (t) => {
+	const f = await beginFixture(t);
+	await f.invoke("omi_work_begin", request); await f.emit("agent_settled", { aborted: true }); await f.flush();
+	assert.equal(f.prompts.length, 0); assert.match(f.current().notices.join("\n"), /Esc/); assert.deepEqual(f.calls, []);
+	await f.emit("agent_settled", { aborted: false }); await f.flush();
+	assert.equal(f.prompts.length, 0, "el pedido descartado no vuelve en el turno siguiente");
+	assert.equal(await f.emit("tool_call", { toolName: "read", input: { path: "value.cjs" } }), undefined, "las tools vuelven a estar disponibles");
+});
+
+test("development_begin no arranca mientras otro cambio de sesión está en curso", async (t) => {
+	const f = await beginFixture(t);
+	const release = holdSessionSwitch("regreso al repo principal")!; t.after(release);
+	assert.equal(holdSessionSwitch("arranque"), undefined, "el cerrojo es exclusivo");
+	await f.ask(request);
+	assert.match(f.current().notices.join("\n"), /regreso al repo principal en curso/); assert.equal(f.prompts.length, 0); assert.deepEqual(f.calls, []);
+	release(); await f.ask({ issue: 42, reason: "Ahora sí" });
+	assert.equal(f.prompts.length, 1, "liberado, se puede arrancar");
+});
+
+test("development_begin un lock ocupado después de crear el issue se avisa como advertencia, con el número del issue", async (t) => {
+	const f = await beginFixture(t); const dir = issueRegistryDir((await readGit(f.root))!);
+	await mkdir(dir, { recursive: true }); await writeFile(join(dir, "43.lock"), "{}\n");
+	await f.ask(request);
+	const index = f.current().notices.findIndex((message) => /#43 ya se creó/.test(message));
+	assert.ok(index >= 0, f.current().notices.join("\n")); assert.match(f.current().notices[index]!, /otra ventana/); assert.equal(f.current().levels[index], "warning");
 });

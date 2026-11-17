@@ -14,6 +14,8 @@ interface InspectorOptions {
  signal: AbortSignal; offline: boolean | undefined; pi: ExtensionAPI; info: (detail: InfoDetail) => Promise<boolean>;
  /** El trabajo sigue en el chat: ahí se ven el sí, los avisos y el agente. */
  onBegin: () => void;
+ /** El harness puede leer GitHub para empezar o retomar. */
+ canBegin: boolean;
 }
 export class GithubInspector {
  busy = false;
@@ -47,8 +49,8 @@ export class GithubInspector {
     body = await readGithubDetail(snapshot, kind === "issues" ? "issue" : "pr", item.number, signal);
    } catch (error) { if (!saved) throw error; staleBody = true; }
    if (!current()) return;
-   const start = await info(githubDetail({ kind, item, saved, body, staleBody }));
-   if (start && kind === "issues" && current()) {
+   const start = await info(githubDetail({ kind, item, saved, body, staleBody, canBegin: this.options.canBegin }));
+   if (start && kind === "issues" && this.options.canBegin && current()) {
     const sessionFile = ctx.sessionManager.getSessionFile();
     if (!sessionFile) ctx.ui.notify("El trabajo requiere una sesión persistente. Volvé a abrir OMI sin --no-session.", "warning");
     else { this.options.onBegin(); requestDevelopmentBegin(pi, sessionFile, { issue: item.number }); }

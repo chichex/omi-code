@@ -1,3 +1,4 @@
+// Estado compartido entre el workspace y el harness de desarrollo, en memoria del proceso.
 // Pedidos de arranque de un solo uso. Ni la tool del agente ni el panel conceden permisos: dejan
 // un pedido que sólo consume el comando interno, donde la persona confirma. Viven en memoria del
 // proceso: recargar o reabrir una sesión nunca vuelve a arrancar nada. Sin imports de Pi en tiempo
@@ -34,3 +35,16 @@ export const beginCommand = (token: string): string => `/omi-work ${BEGIN_SUBCOM
 export function requestDevelopmentBegin(pi: Pick<ExtensionAPI, "sendUserMessage">, sessionFile: string, request: BeginRequest): void {
 	pi.sendUserMessage(beginCommand(issueDevelopmentTicket({ kind: "request", sessionFile, origin: "panel", request })), { expandPromptTemplates: true });
 }
+
+// Un cambio de sesión a la vez entre extensiones: el arranque de un trabajo y el regreso al repo
+// principal hacen trabajo largo antes de switchSession, con el agente en reposo.
+let switching: string | undefined;
+/** Devuelve cómo liberarlo, o undefined si ya hay otro en curso. */
+export function holdSessionSwitch(owner: string): (() => void) | undefined {
+	if (switching) return undefined;
+	switching = owner; let released = false;
+	return () => { if (!released) { released = true; switching = undefined; } };
+}
+export const sessionSwitchOwner = (): string | undefined => switching;
+/** Lo mismo que mira el harness: sin GitHub no se empieza ni se retoma un trabajo. */
+export const developmentOffline = (args: readonly string[], env: Readonly<Record<string, string | undefined>>): boolean => args.includes("--offline") || /^(1|true|yes)$/i.test(env.PI_OFFLINE ?? "");

@@ -23,7 +23,7 @@ import { consumeSubagentEvent, SubagentMonitor } from "./subagents.ts";
 import { readBranchPullRequest, type BranchPullRequest } from "./pull-request.ts";
 import { restoreIssueTriage, type IssueTriageState } from "./issue-triage.ts";
 import { discoverLegacyPreparations, loadIssuePreparations, rememberIssueSession, type IssuePreparationEntry } from "./issue-registry.ts";
-import { requestDevelopmentBegin } from "../development-tickets.ts";
+import { developmentOffline, holdSessionSwitch, requestDevelopmentBegin, sessionSwitchOwner } from "../development-tickets.ts";
 import { preparePrincipalSession, PrincipalSessionBusyError } from "./main-workspace.ts";
 
 type View = WorkspaceView;
@@ -290,7 +290,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			return false;
 		}, changed, () => rows() - 6);
 		const githubInspector = new GithubInspector({ state: () => ({ ctx, git, github, view, preparations, preparationsError }), active: () => active,
-			gitIdentity, changed, modalBusy: () => !!finishModal, signal: controller.signal, offline: parsed.offline, pi, info, onBegin: () => switchView("chat") });
+			gitIdentity, changed, modalBusy: () => !!finishModal, signal: controller.signal, offline: parsed.offline, pi, info, onBegin: () => switchView("chat"), canBegin: !developmentOffline(args, io.env) });
 		const showGithubDetail = (kind: GithubView): Promise<void> => githubInspector.show(kind);
 		function githubPane(kind: GithubView): ReadView {
 			const pane = new ReadView((width) => {
@@ -318,6 +318,9 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			if (!command.isProjectTrusted()) { warn("Volver al repo principal requiere un proyecto de confianza."); return; }
 			if (!command.isIdle() || command.hasPendingMessages()) { warn("Esperá a que el agente termine antes de volver al repo principal."); return; }
 			if (parsed.noSession) { warn("Volver al repo principal requiere una sesión persistente. Volvé a abrir OMI sin --no-session."); return; }
+			// Exclusivo con el arranque de un trabajo, que vive en otra extensión y también cambia de sesión.
+			const release = holdSessionSwitch("regreso al repo principal");
+			if (!release) { warn(`Hay un ${sessionSwitchOwner() ?? "cambio de sesión"} en curso; esperá a que termine.`); return; }
 			mainBusy = true;
 			const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]);
 			const current = () => active && !signal.aborted && ctx.cwd === command.cwd && command.isIdle() && !command.hasPendingMessages();
@@ -334,7 +337,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 				if (result.cancelled) warn("Regreso cancelado. Seguís en el worktree; la sesión del repo principal quedó disponible para reintentar.");
 			} catch (error) {
 				if (active && !controller.signal.aborted) command.ui.notify(text(error instanceof Error ? error.message : "No se pudo volver al repo principal"), error instanceof PrincipalSessionBusyError ? "warning" : "error");
-			} finally { mainSessionTask = undefined; mainBusy = false; changed(); }
+			} finally { mainSessionTask = undefined; mainBusy = false; release(); changed(); }
 		}
 		pi.registerCommand("omi-main", { description: "Volver del worktree al repo principal y retomar su sesión, sin cambiar ramas", handler: returnToPrincipal });
 		const omiPane = new ReadView((width) => omiViewLines(theme(), { project, services, environments, error: envError, at: envAt, now: Date.now() }, width), (data) => {

@@ -9,14 +9,14 @@ Primer corte para **repos existentes con issues de GitHub**, sobre sesiones y to
    - si el pedido nombra un issue (`#N`), con ese issue;
    - si no, con un título y un cuerpo para crear uno. La sesión nueva no hereda el chat, así que el cuerpo tiene que traer el pedido completo.
 
-   La tool no crea nada: termina el turno y deja un pedido de un solo uso, ligado a la sesión. Mientras ese pedido espera el sí, el resto de las tools del agente quedan bloqueadas.
+   La tool no crea nada: deja un pedido de un solo uso, ligado a la sesión, y termina el turno. Si el agente la llamó junto con otras tools, Pi le da una respuesta más antes de terminar. Mientras el pedido espera el sí, el resto de las tools del agente quedan bloqueadas. Un Esc en ese turno descarta el pedido sin preguntar.
 3. OMI te pide **un solo sí**. El diálogo dice primero qué va a pasar. Si el issue es nuevo, lo muestra completo al final (repo, título y cuerpo). Dice también quién lo pidió: el motivo del agente, o que vino del panel de Issues. Lo que se puede comprobar sin efectos falla antes de preguntar:
    - el tamaño del pedido;
    - caracteres invisibles o de dirección de texto en el título o el cuerpo;
-   - la identidad de una preparación guardada;
+   - la identidad de una preparación guardada (también una anterior al registro, que se reconoce por su sesión), y que su worktree y su sesión sigan ahí;
    - que exista `main` local;
    - que la ruta del worktree no sea ajena;
-   - el modo offline;
+   - el modo offline (`--offline` o `PI_OFFLINE`); en ese caso el panel tampoco ofrece Enter;
    - la falta de modelo o de confianza.
 4. Si aceptás:
    - se crea el issue, si hace falta;
@@ -28,9 +28,9 @@ Primer corte para **repos existentes con issues de GitHub**, sobre sesiones y to
 5. Explorar no habilita escrituras. Respondé las preguntas y aprobá la receta completa en la UI. La aprobación incluye los comandos exactos de los casos y los commits locales, no un push. El diálogo lista primero esos comandos, que después corren sin volver a preguntar. Si decís que no, el agente rehace la receta conservando la exploración y las respuestas.
 6. El agente implementa, verifica y pide otro consentimiento para publicar la rama y abrir un PR draft.
 
-**Enter iniciar trabajo** (o **retomar trabajo**) en el panel de Issues y «Trabajar en el issue seleccionado» en la paleta entran por el mismo camino y piden el mismo sí. Si el issue ya tenía worktree y sesión, se retoman sin reclasificar. Un trabajo guardado sigue desde su etapa, sin duplicarse. Si estaba pausado, sigue pausado hasta `/omi-work resume`. Si algo falla después de crear el issue, el aviso trae su número: hay que pedir ese issue, no crear otro.
+**Enter iniciar trabajo** (o **retomar trabajo**) en el panel de Issues y «Trabajar en el issue seleccionado» en la paleta entran por el mismo camino y piden el mismo sí. Si el issue ya tenía worktree y sesión, se retoman sin reclasificar ni volver a leer sus etiquetas. Un trabajo guardado sigue desde su etapa, sin duplicarse, y el diálogo dice en cuál está. Si estaba pausado, el diálogo lo avisa y el sí lo reanuda, como `/omi-work resume`, sin conceder aprobaciones. Si algo falla después de crear el issue, el aviso trae su número: hay que pedir ese issue, no crear otro.
 
-No hay un comando para empezar: `/omi-triage` y `/omi-work start` ya no existen. Una tool no puede cambiar de sesión, así que el pedido viaja como un comando interno con un token de un solo uso, que vive sólo en la memoria del proceso. Escribir ese comando a mano, sin un token vigente, no hace nada. Con el harness activo, `omi_work_begin` no se ofrece.
+No hay un comando para empezar: `/omi-triage` y `/omi-work start` ya no existen. Una tool no puede cambiar de sesión, así que el pedido viaja como un comando interno con un token de un solo uso, que vive sólo en la memoria del proceso. Escribir ese comando a mano, sin un token vigente, no hace nada. Con el harness activo, `omi_work_begin` no se ofrece. Un arranque y `/omi-main` no corren a la vez: los dos cambian de sesión.
 
 | Comando humano | Efecto |
 |---|---|

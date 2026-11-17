@@ -12,7 +12,7 @@ import { tempDir, testIo } from "./io.ts";
 
 type Handler = (event: unknown, ctx: ExtensionCommandContext) => unknown;
 interface Sent { text: string; options?: { expandPromptTemplates?: boolean } }
-export interface Instance { stale: boolean; manager: SessionManager; ctx: ExtensionCommandContext; tools: Map<string, ToolDefinition>; commands: Map<string, { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }>; events: Map<string, Handler[]>; activeTools: string[]; sent: Sent[]; notices: string[]; send: (text: string, options?: Sent["options"]) => void }
+export interface Instance { stale: boolean; manager: SessionManager; ctx: ExtensionCommandContext; tools: Map<string, ToolDefinition>; commands: Map<string, { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }>; events: Map<string, Handler[]>; activeTools: string[]; sent: Sent[]; notices: string[]; levels: (string | undefined)[]; send: (text: string, options?: Sent["options"]) => void }
 const TRIAGE = JSON.stringify({ type: "fix", summary: "Corregir el valor", rationale: "Describe un bug", scope: [], acceptanceCriteria: [], questions: [] });
 
 export async function beginFixture(t: TestContext, options: { args?: readonly string[]; trusted?: boolean; authenticated?: boolean; persistent?: boolean; busy?: boolean; noMain?: boolean } = {}) {
@@ -49,7 +49,7 @@ export async function beginFixture(t: TestContext, options: { args?: readonly st
 	let current: Instance;
 	async function attach(manager: SessionManager): Promise<Instance> {
 		const tools = new Map<string, ToolDefinition>(); const commands: Instance["commands"] = new Map(); const events = new Map<string, Handler[]>();
-		const instance = { stale: false, manager, tools, commands, events, activeTools: ["read", "bash", "write", "edit"], sent: [] as Sent[], notices: [] as string[] } as Instance;
+		const instance = { stale: false, manager, tools, commands, events, activeTools: ["read", "bash", "write", "edit"], sent: [] as Sent[], notices: [] as string[], levels: [] as (string | undefined)[] } as Instance;
 		// Como Pi: después de reemplazar la sesión, usar el pi o el ctx viejos es un error.
 		const live = () => { if (instance.stale) throw new Error("Stale extension: se usó la instancia de una sesión reemplazada"); };
 		const send = instance.send = (text: string, sendOptions?: Sent["options"]) => {
@@ -66,7 +66,7 @@ export async function beginFixture(t: TestContext, options: { args?: readonly st
 		instance.ctx = {
 			cwd: manager.getCwd(), mode: "tui", hasUI: true, sessionManager: manager, model: { id: "mock", provider: "mock", input: ["text"] }, thinkingLevel: "off",
 			isProjectTrusted: () => options.trusted ?? true, isIdle: () => !options.busy, hasPendingMessages: () => false,
-			ui: { setStatus: () => {}, notify: (message: string) => { live(); instance.notices.push(message); }, confirm: async (title: string, description: string) => { live(); prompts.push({ title, description }); await remote.hold; return remote.confirm; } },
+			ui: { setStatus: () => {}, notify: (message: string, level?: string) => { live(); instance.notices.push(message); instance.levels.push(level); }, confirm: async (title: string, description: string) => { live(); prompts.push({ title, description }); await remote.hold; return remote.confirm; } },
 			modelRegistry: {
 				hasConfiguredAuth: () => options.authenticated ?? true,
 				complete: async (_model: unknown, input: unknown) => { modelCalls.push(input); return { stopReason: "stop", provider: "mock", model: "mock", content: [{ type: "text", text: remote.classify }], usage: { input: 1, output: 1, totalTokens: 2, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }; },

@@ -18,6 +18,7 @@ import { restoreIssueTriage } from "./workspace/issue-triage.ts";
 import { readGit } from "./workspace/data.ts";
 import { developmentProgress, PHASE_LABELS } from "./development-view.ts";
 import type { BeginLoader } from "./development-begin.ts";
+import { developmentOffline } from "./development-tickets.ts";
 
 export const DEVELOPMENT_ANCHOR = "omi-development-workflow";
 const AnchorSchema = Type.Object({ id: Type.String(), root: Type.String(), issue: Type.Integer({ minimum: 1 }), revision: Type.Integer({ minimum: 0 }), disabled: Type.Optional(Type.Boolean()) });
@@ -50,7 +51,7 @@ export class DevelopmentSession {
 	constructor(pi: ExtensionAPI, io: Io, args: readonly string[], deps: DevelopmentDeps = {}) {
 		this.pi = pi; this.io = io;
 		this.runner = deps.runner ?? processRunner; this.now = deps.now ?? (() => new Date().toISOString());
-		this.offline = args.includes("--offline") || /^(1|true|yes)$/i.test(io.env.PI_OFFLINE ?? "");
+		this.offline = developmentOffline(args, io.env);
 	}
 	private anchor(): void {
 		const s = this.state;
@@ -108,7 +109,7 @@ export class DevelopmentSession {
 	// La persona ya dio el sí al empezar (development-begin): acá no se vuelve a preguntar.
 	async start(ctx: ExtensionContext): Promise<void> {
 		this.context = ctx; this.checkContext(ctx);
-		if (this.offline) throw new Error("Iniciar requiere leer el issue vigente en GitHub; quitá --offline. Retomar lo guardado no requiere red.");
+		if (this.offline) throw new Error("Iniciar requiere leer el issue vigente en GitHub; quitá --offline o PI_OFFLINE. Retomar lo guardado no requiere red.");
 		const checkout = await this.checkout(ctx); const prepared = restoreIssueTriage(ctx.sessionManager.getBranch(), ctx.cwd)!;
 		const existing = await readWorkflow(checkout, prepared.issue.number);
 		if (existing) { await this.restore(ctx, true); this.current(ctx); await this.fresh(ctx); return; }

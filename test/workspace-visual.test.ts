@@ -25,7 +25,7 @@ import { OmiSidebarSettings } from "../src/tui/workspace/sidebar-settings.ts";
 
 const theme = { fg: (_role: string, value: string) => value, bold: (value: string) => value, style: (value: string) => value, getColorMode: () => "truecolor" } as unknown as Theme;
 
-async function visualHarness(home: string, options: { cwd?: string; trusted?: boolean; online?: boolean; paletteAction?: string; browserCode?: number; theme?: Theme; entries?: SessionEntry[]; detailKey?: string; sessionFile?: string; sessionDir?: string; sessionHeader?: SessionHeader; mode?: string; classic?: boolean; settingsKeys?: string[] } = {}) {
+async function visualHarness(home: string, options: { env?: Record<string, string>; cwd?: string; trusted?: boolean; online?: boolean; paletteAction?: string; browserCode?: number; theme?: Theme; entries?: SessionEntry[]; detailKey?: string; sessionFile?: string; sessionDir?: string; sessionHeader?: SessionHeader; mode?: string; classic?: boolean; settingsKeys?: string[] } = {}) {
 	const activeTheme = options.theme ?? theme;
 	const modals: { lines: string[]; width: number; dispatchedBefore: number }[] = [];
 	const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
@@ -82,7 +82,7 @@ async function visualHarness(home: string, options: { cwd?: string; trusted?: bo
 			},
 		},
 	} as unknown as ExtensionContext;
-	const extension = workspaceExtension(testIo({ cwd: options.cwd ?? home, homeDir: home, env: options.classic ? { OMI_TUI: "classic" } : {} }), [...(options.online ? [] : ["--offline"]), ...(options.sessionDir ? ["--session-dir", options.sessionDir] : [])]);
+	const extension = workspaceExtension(testIo({ cwd: options.cwd ?? home, homeDir: home, env: { ...(options.classic ? { OMI_TUI: "classic" } : {}), ...options.env } }), [...(options.online ? [] : ["--offline"]), ...(options.sessionDir ? ["--session-dir", options.sessionDir] : [])]);
 	if (typeof extension === "function") throw new Error("expected named extension");
 	await extension.factory({ events, on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => handlers.set(name, handler), registerCommand: (name: string, command: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }) => commands.set(name, command), getSettings: () => ({}), registerMarkdownTransformer() {}, sendUserMessage: (text: string, options: unknown) => dispatched.push({ text, options }), exec: async (command: string, args: string[], execOptions = {}) => { browserCalls.push({ command, args, options: execOptions }); return { code: options.browserCode ?? 0, stdout: "", stderr: "" }; } } as never);
 	await handlers.get("session_start")?.({}, ctx);
@@ -533,6 +533,23 @@ test("workspace_Enter en el detalle de un issue pide empezar el trabajo; Esc y e
 			assert.match(ui.prompts.at(-1)!, /PR #42/); assert.equal(ui.dispatched.length, before);
 		} finally { await ui.stop(); }
 	}
+});
+
+test("workspace_con PI_OFFLINE el detalle de un issue no ofrece empezar: el harness no puede leer GitHub", { skip: process.platform === "win32" }, async (t) => {
+	const home = await tempDir(t); const root = join(home, "repo"); const bin = join(home, "bin"); await mkdir(root); await mkdir(bin);
+	execFileSync("git", ["init", "-b", "main"], { cwd: root, stdio: "ignore" });
+	await writeFile(join(bin, "gh"), `#!${process.execPath}\nconst args = process.argv.slice(2); if (args[0] === 'run') { console.log('[]'); } else if (args[1] === 'status') { console.log('{}'); } else { console.log(JSON.stringify(args[1] === 'view' ? {body: 'ISSUE_BODY'} : [{number: 42, title: 'ISSUE_OFFLINE', url: 'https://github.com/test/repo/issues/42', labels: [], author: {login: 'ada'}}])); }\n`, { mode: 0o755 });
+	const previous = process.env.PATH; process.env.PATH = bin + delimiter + (previous ?? ""); t.after(() => { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; });
+	const ui = await visualHarness(home, { cwd: root, trusted: true, online: true, detailKey: "\r", sessionFile: join(home, "main.jsonl"), env: { PI_OFFLINE: "1" } });
+	try {
+		await ui.command("omi-issues");
+		for (let i = 0; i < 100 && !ui.frame().lines.map(stripTerminalSequences).some((line) => line.includes("ISSUE_OFFLINE")); i++) await setTimeout(20);
+		ui.input("\r");
+		for (let i = 0; i < 100 && !ui.prompts.length; i++) await setTimeout(20);
+		for (let i = 0; i < 5; i++) await Promise.resolve();
+		assert.doesNotMatch(ui.prompts.at(-1)!, /iniciar trabajo|retomar trabajo/); assert.match(ui.prompts.at(-1)!, /PI_OFFLINE/); assert.match(ui.prompts.at(-1)!, /\/resume/);
+		assert.deepEqual(ui.dispatched, [], "Enter no pide un arranque que va a fallar");
+	} finally { await ui.stop(); }
 });
 
 test("workspace_issue preparado: badges locales, Enter siempre detalle, Esc no cambia y el segundo Enter pide retomar el trabajo sin que el panel cambie de sesión", { skip: process.platform === "win32" }, async (t) => {
