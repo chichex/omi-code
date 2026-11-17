@@ -181,3 +181,15 @@ test("development_begin mientras el pedido espera el sí, el agente no puede seg
 	await f.emit("agent_settled"); await f.flush();
 	assert.equal(f.prompts.length, 1);
 });
+
+test("development_begin retomar con el pedido editado en GitHub lo contrasta, vuelve a Explorar y no duplica el trabajo", async (t) => {
+	const f = await beginFixture(t);
+	await f.ask({ issue: 42, reason: "Pedido" });
+	const first = (await workflowOf(f.root, 42))!;
+	f.remote.issues.set(42, { ...f.remote.issues.get(42)!, title: "Corregir resultado (editado)" });
+	await f.openMain(); await f.ask({ issue: 42, reason: "Retomar" });
+	const after = (await workflowOf(f.root, 42))!;
+	assert.equal(after.id, first.id); assert.ok(after.revision > first.revision, "se registró el cambio del pedido");
+	assert.equal(after.source.title, "Corregir resultado (editado)"); assert.equal(after.phase, "explore"); assert.equal(after.approval, null);
+	assert.match(f.current().notices.join("\n"), /El pedido cambió/);
+});
