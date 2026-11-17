@@ -1,10 +1,14 @@
 // Carga del detalle GitHub y preparación local; los modales conservan el renderer del workspace.
+// Enter en un issue no prepara nada: pide al harness empezar o retomar, y el harness pide el sí.
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { readGithubDetail, type GithubItem, type GitSnapshot } from "./data.ts";
 import { githubDetail, type InfoDetail } from "./details.ts";
 import { assertIssueIdentity, readIssuePreparation, verifyIssuePreparation, type IssuePreparationEntry } from "./issue-registry.ts";
 import { notice } from "./modals.ts";
 import type { WorkspaceView } from "./navigation.ts";
+import { requestDevelopmentBegin } from "../development-tickets.ts";
+
+export const ISSUE_PANEL_REASON = "Elegido por la persona en Issues";
 interface GithubList { items: GithubItem[] | undefined; selected: number }
 interface InspectorOptions {
  state: () => { ctx: ExtensionContext; git: GitSnapshot | undefined; github: Record<"issues" | "prs", GithubList>; view: WorkspaceView; preparations: Map<number, IssuePreparationEntry>; preparationsError: string | undefined };
@@ -44,7 +48,11 @@ export class GithubInspector {
    } catch (error) { if (!saved) throw error; staleBody = true; }
    if (!current()) return;
    const start = await info(githubDetail({ kind, item, saved, body, staleBody }));
-   if (start && kind === "issues" && current()) pi.sendUserMessage(`/omi-triage ${item.number}`, { expandPromptTemplates: true });
+   if (start && kind === "issues" && current()) {
+    const sessionFile = ctx.sessionManager.getSessionFile();
+    if (!sessionFile) ctx.ui.notify("El trabajo requiere una sesión persistente. Volvé a abrir OMI sin --no-session.", "warning");
+    else requestDevelopmentBegin(pi, sessionFile, { issue: item.number, reason: ISSUE_PANEL_REASON });
+   }
   } catch { if (current()) await info({ title: "GitHub · detalle no disponible", content: [notice("Revisá gh, autenticación o red. El detalle también puede ser demasiado grande.", "warning")], options: { color: "warning", subtitle: "GitHub · no se pudo cargar el detalle" } }); }
   finally { this.busy = false; changed(); }
  }

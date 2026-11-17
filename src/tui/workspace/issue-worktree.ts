@@ -1,4 +1,4 @@
-// Mutaciones Git sólo por el Enter explícito del triage. Nunca checkout/stash/fetch en el origen.
+// Mutaciones Git sólo tras el sí humano al empezar un trabajo (development-begin). Nunca checkout/stash/fetch en el origen.
 import { execFile } from "node:child_process";
 import { lstat, mkdir, realpath } from "node:fs/promises";
 import { devNull } from "node:os";

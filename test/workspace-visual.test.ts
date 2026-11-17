@@ -16,6 +16,7 @@ import { createIssueWorktree } from "../src/tui/workspace/issue-worktree.ts";
 import { ISSUE_TRIAGE_ENTRY, issueTriageState, type IssueTriage } from "../src/tui/workspace/issue-triage.ts";
 import { prepareIssue } from "../src/tui/workspace/issue-preparation.ts";
 import { readGit, type GithubItem } from "../src/tui/workspace/data.ts";
+import { takeDevelopmentTicket } from "../src/tui/development-tickets.ts";
 import { tempDir, testIo } from "./helpers/io.ts";
 import { linkedProject } from "./helpers/project.ts";
 import { WORKSPACE_VIEWS, workspaceTabs } from "../src/tui/workspace/navigation.ts";
@@ -501,21 +502,30 @@ test("workspace_triage muestra issue y categoría debajo de recursos, incluso en
 	try { assert.doesNotMatch(other.frame().lines.map(stripTerminalSequences).join("\n"), /ISSUE ACTIVO|#42 · Nuevo feature/); } finally { await other.stop(); }
 });
 
-test("workspace_Enter en el detalle de un issue despacha triage; Esc y el detalle de PR siguen sin mutaciones", { skip: process.platform === "win32" }, async (t) => {
+// El panel no prepara ni cambia nada: deja un pedido de un solo uso para el harness, que pide el sí.
+const beginToken = (text: string) => /^\/omi-work begin ([0-9a-f-]{36})$/.exec(text)?.[1];
+test("workspace_Enter en el detalle de un issue pide empezar el trabajo; Esc y el detalle de PR siguen sin mutaciones", { skip: process.platform === "win32" }, async (t) => {
 	const home = await tempDir(t); const root = join(home, "repo"); const bin = join(home, "bin"); await mkdir(root); await mkdir(bin);
 	execFileSync("git", ["init", "-b", "main"], { cwd: root, stdio: "ignore" });
 	await writeFile(join(bin, "gh"), `#!${process.execPath}\nconst args = process.argv.slice(2); if (args[0] === 'run') { console.log('[]'); } else if (args[1] === 'status') { console.log('{}'); } else { console.log(JSON.stringify(args[1] === 'view' ? {body: 'ISSUE_BODY'} : [{number: 42, title: 'ISSUE_TO_TRIAGE', url: 'https://github.com/test/repo/issues/42', labels: [], author: {login: 'ada'}}])); }\n`, { mode: 0o755 });
 	const previous = process.env.PATH; process.env.PATH = bin + delimiter + (previous ?? ""); t.after(() => { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; });
 	for (const key of ["\r", "\x1b"]) {
-		const ui = await visualHarness(home, { cwd: root, trusted: true, online: true, detailKey: key });
+		const sessionFile = join(home, `main-${key === "\r" ? "enter" : "esc"}.jsonl`);
+		const ui = await visualHarness(home, { cwd: root, trusted: true, online: true, detailKey: key, sessionFile });
 		try {
 			await ui.command("omi-issues");
 			for (let i = 0; i < 100 && !ui.frame().lines.map(stripTerminalSequences).some((line) => line.includes("ISSUE_TO_TRIAGE")); i++) await setTimeout(20);
 			ui.input("\r");
 			for (let i = 0; i < 100 && !ui.prompts.length; i++) await setTimeout(20);
 			for (let i = 0; i < 5; i++) await Promise.resolve();
-			assert.match(ui.prompts.at(-1)!, /Enter iniciar triage/); assert.match(ui.prompts.at(-1)!, /main local/);
-			assert.deepEqual(ui.dispatched, key === "\r" ? [{ text: "/omi-triage 42", options: { expandPromptTemplates: true } }] : []);
+			assert.match(ui.prompts.at(-1)!, /Enter iniciar trabajo/); assert.match(ui.prompts.at(-1)!, /main local/); assert.match(ui.prompts.at(-1)!, /confirmación/);
+			assert.equal(ui.dispatched.length, key === "\r" ? 1 : 0); assert.deepEqual(ui.switches, []);
+			if (key === "\r") {
+				assert.deepEqual(ui.dispatched[0]!.options, { expandPromptTemplates: true });
+				const token = beginToken(ui.dispatched[0]!.text)!; assert.ok(token, ui.dispatched[0]!.text);
+				assert.deepEqual(takeDevelopmentTicket(token, sessionFile), { kind: "request", sessionFile, request: { issue: 42, reason: "Elegido por la persona en Issues" } });
+				assert.equal(takeDevelopmentTicket(token, sessionFile), undefined, "el pedido se consume una sola vez");
+			}
 			const before = ui.dispatched.length; await ui.command("omi-prs"); ui.input("\r");
 			for (let i = 0; i < 100 && !ui.prompts.at(-1)?.includes("PR #42"); i++) await setTimeout(20);
 			assert.match(ui.prompts.at(-1)!, /PR #42/); assert.equal(ui.dispatched.length, before);
@@ -523,7 +533,7 @@ test("workspace_Enter en el detalle de un issue despacha triage; Esc y el detall
 	}
 });
 
-test("workspace_issue preparado: badges locales, Enter siempre detalle, Esc no cambia y el segundo Enter retoma o permanece en la sesión actual", { skip: process.platform === "win32" }, async (t) => {
+test("workspace_issue preparado: badges locales, Enter siempre detalle, Esc no cambia y el segundo Enter pide retomar el trabajo sin que el panel cambie de sesión", { skip: process.platform === "win32" }, async (t) => {
 	const home = await tempDir(t); const root = join(home, "repo"); const bin = join(home, "bin"); await mkdir(root); await mkdir(bin);
 	const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 	git("init", "-b", "main"); git("config", "user.email", "test@example.test"); git("config", "user.name", "Test");
@@ -540,8 +550,9 @@ test("workspace_issue preparado: badges locales, Enter siempre detalle, Esc no c
 	await writeFile(join(bin, "gh"), `#!${process.execPath}\nconst args = process.argv.slice(2); console.log(JSON.stringify(args[0] === 'run' ? [] : args[1] === 'status' ? {} : args[1] === 'view' ? {body:'ISSUE_BODY'} : [{number:42,title:'ISSUE_PREPARED',url:'https://github.com/test/repo/issues/42',labels:[{name:'bug'}],author:{login:'ada'}},{number:43,title:'ISSUE_FRESH',url:'https://github.com/test/repo/issues/43',labels:[],author:{login:'ada'}}]));\n`, { mode: 0o755 });
 	const previous = process.env.PATH; process.env.PATH = bin + delimiter + (previous ?? ""); t.after(() => { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; });
 	for (const here of [false, true]) for (const key of ["\x1b", "\r"]) {
-		const ui = await visualHarness(home, { cwd: here ? state.worktree : root, trusted: true, online: true, sessionDir, detailKey: key,
-			...(here ? { entries: SessionManager.open(sessionFile!).getBranch(), sessionFile: sessionFile! } : {}) });
+		const current = here ? sessionFile! : join(home, "main.jsonl");
+		const ui = await visualHarness(home, { cwd: here ? state.worktree : root, trusted: true, online: true, sessionDir, detailKey: key, sessionFile: current,
+			...(here ? { entries: SessionManager.open(sessionFile!).getBranch() } : {}) });
 		try {
 			await ui.command("omi-issues");
 			for (let i = 0; i < 100 && !ui.frame().lines.map(stripTerminalSequences).join("\n").includes("[issue-42]"); i++) await setTimeout(20);
@@ -551,29 +562,18 @@ test("workspace_issue preparado: badges locales, Enter siempre detalle, Esc no c
 			for (let i = 0; i < 100 && !ui.prompts.length; i++) await setTimeout(20);
 			for (let i = 0; i < 5; i++) await Promise.resolve();
 			const detail = ui.prompts.at(-1)!;
-			assert.match(detail, /Enter retomar worktree/); assert.match(detail, /Clasificación local: Fix/); assert.match(detail, /Rama: fix\/issue-42-issue-prepared/);
+			assert.match(detail, /Enter retomar trabajo/); assert.match(detail, /confirmación/); assert.match(detail, /Clasificación local: Fix/); assert.match(detail, /Rama: fix\/issue-42-issue-prepared/);
 			assert.ok(detail.includes(state.worktree)); assert.match(detail, /Etiquetas GitHub: bug/); assert.equal(ui.modals.at(-1)!.dispatchedBefore, 0, "el Enter de la lista sólo abre el detalle");
 			assert.equal(ui.dispatched.length, key === "\r" ? 1 : 0); assert.equal(ui.switches.length, 0);
 			if (key === "\r") {
-				await ui.command("omi-triage", "42");
-				assert.deepEqual(ui.switches, here ? [] : [sessionFile]);
-				assert.ok(ui.notices.some((message) => message.includes(here ? "Ya estás en la sesión" : "Cambio de sesión cancelado")));
+				const token = beginToken(ui.dispatched[0]!.text)!; assert.ok(token, ui.dispatched[0]!.text);
+				assert.deepEqual(takeDevelopmentTicket(token, current), { kind: "request", sessionFile: current, request: { issue: 42, reason: "Elegido por la persona en Issues" } }, "retomar también pasa por el sí del harness");
 			}
+			assert.ok(!ui.commands.has("omi-triage"), "no queda una entrada manual de triage");
 			assert.equal(ui.authChecks(), 0); assert.equal(await readFile(sessionFile!, "utf8"), conversation);
 			assert.equal(await readFile(join(state.worktree, "keep"), "utf8"), "Trabajo sin commit");
-			if (!here && key === "\x1b") {
-				await ui.command("omi-triage", "43");
-				assert.equal(ui.authChecks(), 1, "un issue nuevo sí exige modelo autenticado antes de clasificar");
-				assert.ok(ui.notices.some((message) => message.includes("modelo autenticado")));
-				assert.equal(git("branch", "--list", "*issue-43*"), "");
-			}
 		} finally { await ui.stop(); }
 	}
-	const offline = await visualHarness(home, { cwd: root, trusted: true, sessionDir });
-	try {
-		for (let i = 0; i < 100 && !offline.frame().lines.map(stripTerminalSequences).join("\n").includes("Repo principal"); i++) await setTimeout(20);
-		await offline.command("omi-triage", "42"); assert.deepEqual(offline.switches, [sessionFile]); assert.equal(offline.authChecks(), 0);
-	} finally { await offline.stop(); }
 	// Ni el badge ni el detalle prometen retomar cuando falta la conversación guardada.
 	await writeFile(sessionFile!, "sesión dañada");
 	const broken = await visualHarness(home, { cwd: root, trusted: true, online: true, sessionDir, detailKey: "\r" });
@@ -581,7 +581,7 @@ test("workspace_issue preparado: badges locales, Enter siempre detalle, Esc no c
 		await broken.command("omi-issues");
 		for (let i = 0; i < 100 && !broken.frame().lines.map(stripTerminalSequences).join("\n").includes("ISSUE_PREPARED"); i++) await setTimeout(20);
 		broken.input("\r"); for (let i = 0; i < 100 && !broken.prompts.length; i++) await setTimeout(20);
-		assert.match(broken.prompts.at(-1)!, /Recuperación pendiente/); assert.doesNotMatch(broken.prompts.at(-1)!, /Enter retomar worktree/);
+		assert.match(broken.prompts.at(-1)!, /Recuperación pendiente/); assert.doesNotMatch(broken.prompts.at(-1)!, /Enter retomar/);
 		assert.equal(broken.dispatched.length, 0); assert.match(broken.frame().lines.map(stripTerminalSequences).join("\n"), /\[Fix\] \[Revisar\]/);
 	} finally { await broken.stop(); }
 });

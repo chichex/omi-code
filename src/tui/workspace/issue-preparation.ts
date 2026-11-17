@@ -31,7 +31,7 @@ export async function prepareIssue(git: GitSnapshot, number: number, item: Githu
 		}
 		let classification: IssueClassification | undefined;
 		if (!record) {
-			if (!item) throw new Error("Abrí Issues y seleccioná un issue cargado. Uso: /omi-triage [número].");
+			if (!item) throw new Error("Falta el issue de GitHub para prepararlo. Pedí el cambio en el chat o elegí un issue en Issues.");
 			// Antes de gastar una llamada al modelo: ni rutas ni ramas ajenas se adoptan a ciegas.
 			await checkIssueWorktree(git, number, options.signal); current();
 			classification = await options.classify();

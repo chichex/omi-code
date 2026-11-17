@@ -42,7 +42,7 @@ async function harness(home: string, options: { authenticated?: boolean; busy?: 
 		setThinkingLevel: (level: string) => thinking.push(level),
 	} as never);
 	await handlers.get("session_start")?.({}, context);
-	return { commands, selections, thinking, notifications, triage: () => commands.get("omi-triage")!.handler("", context as ExtensionCommandContext), main: () => commands.get("omi-main")!.handler("", context as ExtensionCommandContext), pickerCount: () => pickerCount, input: (data: string) => terminalInput?.(data), stop: async () => { await handlers.get("session_shutdown")?.({}, context); } };
+	return { commands, selections, thinking, notifications, main: () => commands.get("omi-main")!.handler("", context as ExtensionCommandContext), pickerCount: () => pickerCount, input: (data: string) => terminalInput?.(data), stop: async () => { await handlers.get("session_shutdown")?.({}, context); } };
 }
 
 test("workspace_las vistas usan Control 1–5 con CSI-u y modifyOtherKeys, sin interceptar números ni Option", async (t) => {
@@ -70,17 +70,9 @@ test("workspace_cancelar selector no llama setModel", async (t) => {
 	await ui.commands.get("omi-model")!.handler(); assert.equal(ui.selections.length, 0);
 });
 
-test("workspace_triage exige confianza/sesión persistente, reposo y selección; no exige auth/red antes de resolver lo guardado", async (t) => {
-	const cases: [Parameters<typeof harness>[1], RegExp][] = [
-		[{ trusted: true }, /seleccioná/], [{ args: [] }, /confianza/], [{ args: [], trusted: true, busy: true }, /termine/],
-		[{ args: [], trusted: true, pending: true }, /termine/], [{ args: ["--no-session"], trusted: true }, /persistente/],
-		[{ args: [], trusted: true, authenticated: false }, /seleccioná/], [{ args: [], trusted: true }, /seleccioná/],
-	];
-	for (const [options, expected] of cases) {
-		const ui = await harness(await tempDir(t), options);
-		try { await ui.triage(); assert.match(ui.notifications.join("\n"), expected); assert.equal(ui.pickerCount(), 0); }
-		finally { await ui.stop(); }
-	}
+test("workspace_no registra /omi-triage: empezar o retomar un issue es del harness de desarrollo", async (t) => {
+	const ui = await harness(await tempDir(t), { args: [], trusted: true }); t.after(ui.stop);
+	assert.ok(!ui.commands.has("omi-triage")); assert.ok(ui.commands.has("omi-main"));
 });
 
 test("workspace_main exige confianza, reposo y sesión persistente antes de cambiar de workspace", async (t) => {
