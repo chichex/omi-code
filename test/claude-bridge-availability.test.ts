@@ -41,13 +41,16 @@ for (const installation of ["missing", "path", "configured", "invalid-configured
 		assert.equal(models.models.some((model) => model.provider === "claude-bridge"), available);
 		const commands = await rpc(omi, { id: "probe", type: "get_commands" }) as { commands: { name: string; description: string }[] };
 		const metadata = JSON.parse(commands.commands.find((command) => command.name === "bridge-probe")!.description);
-		assert.deepEqual(metadata, { authenticated: available, catalog: true }, "el builtin conserva catálogo sin fabricar disponibilidad");
+		assert.deepEqual(metadata, { authenticated: available, catalog: available }, "sin CLI no registra modelos que Pi pueda ofrecer provisionalmente; el builtin sigue distribuido");
 	});
 }
 
-for (const apiKey of ["not-used", "!printf synthetic-test-key"]) test("Claude bridge: un apiKey explícito en models.json no lo vuelve disponible sin ejecutable", async (t) => {
+for (const apiKey of ["not-used", "!printf synthetic-test-key"]) for (const customDefault of [false, true]) test(`Claude bridge: un apiKey explícito no habilita modelos sin ejecutable · custom/default=${customDefault}`, async (t) => {
 	const home = await tempDir(t); const agent = agentDir(home); await mkdir(agent, { recursive: true });
-	await writeFile(join(agent, "models.json"), JSON.stringify({ providers: { "claude-bridge": { apiKey } } }));
+	await writeFile(join(agent, "models.json"), JSON.stringify({ providers: { "claude-bridge": { apiKey, ...(customDefault ? {
+		api: "claude-bridge", baseUrl: "http://127.0.0.1:1", models: [{ id: "synthetic-model", name: "Synthetic", contextWindow: 1000, maxTokens: 100 }],
+	} : {}) } } }));
+	if (customDefault) await writeFile(join(agent, "settings.json"), JSON.stringify({ defaultProvider: "claude-bridge", defaultModel: "synthetic-model" }));
 	const omi = { command: process.execPath, args: [bin, "--offline"], cwd: home, env: { HOME: home, OMI_HOME: "", PATH: "/usr/bin:/bin" } };
 	const state = await rpc(omi, { id: "state", type: "get_state" }) as { model: { provider: string } };
 	assert.notEqual(state.model.provider, "claude-bridge");

@@ -3,8 +3,7 @@
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
-import type { ExtensionAPI, ExtensionFactory, ProviderConfig } from "@earendil-works/pi-coding-agent";
-import type { Provider } from "@earendil-works/pi-ai";
+import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { isCompiledBinary } from "../core/paths.ts";
 import { claudeCodeAvailable, configuredClaudeCode, requireClaudeCode, validateClaudeBridgeSelection } from "./claude-code.ts";
 
@@ -16,12 +15,17 @@ export function claudeQueryOptions(options: Options = {}): Options {
 }
 
 export async function loadClaudeBridge(args: readonly string[] = []): Promise<ExtensionFactory> {
-	const [{ createJiti }, ai, compat, coding, sdk] = await Promise.all([
-		import("jiti/static"), import("@earendil-works/pi-ai"), import("@earendil-works/pi-ai/compat"),
-		import("@earendil-works/pi-coding-agent"), import("@anthropic-ai/claude-agent-sdk"),
-	]);
+	const coding = await import("@earendil-works/pi-coding-agent");
 	const agent = coding.getAgentDir(); const executable = configuredClaudeCode(agent);
 	await validateClaudeBridgeSelection([...args], agent);
+	// Pi incluye el catálogo registrado en snapshots provisionales antes de aplicar filtros/auth.
+	// Un catálogo legacy vacío prevalece incluso sobre models.json; no alcanza con filtrar después.
+	// El builtin y su bundle siguen incluidos: instalar el CLI y /reload registra el catálogo real.
+	if (!claudeCodeAvailable(executable)) return (pi) => pi.registerProvider("claude-bridge", { models: [] });
+	const [{ createJiti }, ai, compat, sdk] = await Promise.all([
+		import("jiti/static"), import("@earendil-works/pi-ai"), import("@earendil-works/pi-ai/compat"),
+		import("@anthropic-ai/claude-agent-sdk"),
+	]);
 	const entry = isCompiledBinary()
 		? join(coding.getPackageDir(), "claude-bridge/src/index.js")
 		: fileURLToPath(import.meta.resolve("pi-claude-bridge/src/index.ts"));
@@ -47,41 +51,5 @@ export async function loadClaudeBridge(args: readonly string[] = []): Promise<Ex
 		throw new Error(`claude_bridge_load_failed: ${String(error)}`, { cause: error });
 	});
 	if (typeof factory !== "function") throw new Error("claude_bridge_invalid_extension");
-	return (pi) => factory({ ...pi, registerProvider(providerOrName: Provider | string, config?: ProviderConfig) {
-		if (typeof providerOrName !== "string") { pi.registerProvider(providerOrName); return; }
-		if (!config) throw new Error("claude_bridge_invalid_provider");
-		if (providerOrName !== "claude-bridge") { pi.registerProvider(providerOrName, config); return; }
-		// Pi marca el registro legacy configurado sincrónicamente. Conservarlo cuando hay
-		// ejecutable evita una carrera de sus refreshes al elegir el primer modelo.
-		if (claudeCodeAvailable(executable)) pi.registerProvider(providerOrName, config);
-		else pi.registerProvider(claudeBridgeProvider(config, executable, agent, ai.createProvider));
-	} } satisfies ExtensionAPI);
-}
-
-/** Sustituye sólo el marcador de auth upstream: el catálogo y el streaming siguen siendo suyos. */
-function claudeBridgeProvider(config: ProviderConfig, executable: string, agent: string, createProvider: typeof import("@earendil-works/pi-ai").createProvider): Provider {
-	const { api, baseUrl, streamSimple, models } = config;
-	if (!api || !baseUrl || !streamSimple || !models || models.some((model) => model.type && model.type !== "chat")) throw new Error("claude_bridge_invalid_provider");
-	return createProvider({
-		id: "claude-bridge", baseUrl,
-		models: models.filter((model) => model.type !== "image" && model.type !== "classifier").map((entry) => {
-			const { inputLimits, thinkingLevelMap, promptCache, samplingParams, compat, ...model } = entry;
-			return { ...model, api: model.api ?? api, baseUrl: model.baseUrl ?? baseUrl, provider: "claude-bridge",
-				...(inputLimits ? { inputLimits } : {}), ...(thinkingLevelMap ? { thinkingLevelMap } : {}), ...(promptCache ? { promptCache } : {}),
-				...(samplingParams ? { samplingParams } : {}), ...(compat ? { compat } : {}),
-			};
-		}),
-		api: { stream: streamSimple, streamSimple },
-		// Un apiKey explícito en models.json puede declarar auth configurada en Pi: no volver
-		// disponibles modelos sin ejecutable por ese overlay (ni ejecutar sus comandos de auth).
-		filterModels: (catalog) => claudeCodeAvailable(executable) ? catalog : [],
-		auth: { apiKey: {
-			name: "Claude Code externo",
-			async check() { return claudeCodeAvailable(executable) ? { type: "api_key", source: "Claude Code local (login no verificado)" } : undefined; },
-			async resolve({ credential }) {
-				requireClaudeCode(executable, agent);
-				return { auth: { apiKey: "not-used" }, ...(credential?.env ? { env: credential.env } : {}), source: "Claude Code externo" };
-			},
-		} },
-	});
+	return (pi) => factory(pi);
 }

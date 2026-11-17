@@ -67,6 +67,7 @@ test("release real_compila, instala y arranca sin Node ni repo", { skip: !enable
 	assert.equal(version.stdout.trim(), pkg.version);
 	await assert.rejects(stat(join(installRoot, "runtime/skills")));
 	assert.equal((await stat(join(installRoot, "runtime/theme/dark.json"))).isFile(), true);
+	assert.equal((await stat(join(installRoot, "runtime/claude-bridge/src/index.js"))).isFile(), true, "el bundle se distribuye aunque no haya ejecutable externo");
 
 	// El workspace también debe funcionar compilado, sin Node ni el repo en PATH.
 	const terminal = await exerciseWorkspace(binary, ["--no-extensions", "--no-context-files", "--no-skills", "--offline"], home, { HOME: home, PATH: "/usr/bin:/bin", OMI_HOME: installRoot });
