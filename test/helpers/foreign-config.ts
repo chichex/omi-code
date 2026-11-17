@@ -102,22 +102,32 @@ export function rpc(omi: Omit<OmiProcess, "agent">, request: { id: string; type:
 		const child = spawn(omi.command, [...(omi.args ?? []), "--mode", "rpc", "--no-session"], { cwd: omi.cwd, env: omi.env, stdio: ["pipe", "pipe", "pipe"] });
 		let output = "";
 		let stderr = "";
-		const timeout = setTimeout(() => { child.kill("SIGKILL"); reject(new Error(`RPC no respondió: ${stderr}`)); }, 20000);
+		let result: { success: true; data: unknown } | { success: false; error: Error } | undefined;
+		const timeout = setTimeout(() => {
+			result = { success: false, error: new Error(`RPC ${result ? "no terminó" : "no respondió"}: ${stderr}`) };
+			child.kill("SIGKILL");
+		}, 20000);
 		child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
 		child.stdout.on("data", (chunk: Buffer) => {
+			if (result) return;
 			output += chunk.toString("utf8");
 			for (const line of output.split("\n").slice(0, -1)) {
 				if (!line.startsWith("{")) continue;
 				const message = JSON.parse(line) as { id?: unknown; type?: string; success?: boolean; data?: unknown; error?: string };
 				if (message.type !== "response" || message.id !== request.id) continue;
-				clearTimeout(timeout);
+				result = message.success === false ? { success: false, error: new Error(message.error) } : { success: true, data: message.data };
 				child.kill();
-				if (message.success === false) reject(new Error(message.error));
-				else resolve(message.data);
 				return;
 			}
 		});
-		child.on("error", (error) => { clearTimeout(timeout); reject(error); });
+		child.on("error", (error) => { result = { success: false, error }; });
+		child.stdin.on("error", (error: Error) => { result = { success: false, error }; child.kill("SIGKILL"); });
+		child.on("close", (code, signal) => {
+			clearTimeout(timeout);
+			if (!result) reject(new Error(`RPC terminó sin responder (${signal ?? code}): ${stderr}`));
+			else if (result.success) resolve(result.data);
+			else reject(result.error);
+		});
 		child.stdin.write(`${JSON.stringify(request)}\n`);
 	});
 }
