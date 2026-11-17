@@ -5,7 +5,7 @@ import { dirname, relative } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isInside } from "../core/files.ts";
 import { artifactHash, type Evidence, type EvidenceKind } from "../harness/model.ts";
-import { isApproved, recipeApprovalHash } from "../harness/state.ts";
+import { expectedFailure, isApproved, recipeApprovalHash, successful } from "../harness/state.ts";
 import { inspectCheckout, assertStepCommit } from "../harness/git.ts";
 import { runWorkflowCommand, type WorkflowCommandResult } from "../harness/commands.ts";
 import { workflowWritePath } from "../harness/permissions.ts";
@@ -48,9 +48,7 @@ export async function executeCheck(session: DevelopmentSession, input: CheckInpu
 		exitCode: result.exitCode, outcome: interrupted ? "interrupted" : result.exitCode === 0 ? "passed" : "failed",
 		output: result.output.slice(-12000), fingerprint: after.fingerprint, head: after.head, startedAt, finishedAt: session.now(),
 	};
-	const failedAsExpected = evidence.outcome === "failed" && evidence.exitCode !== null && evidence.exitCode > 0 && evidence.exitCode < 126;
-	const passed = evidence.outcome === "passed" && evidence.exitCode === 0;
-	const invalidAttempt = input.kind === "red" && !failedAsExpected || input.kind === "green" && !passed || input.kind === "reproduction" && !passed && !failedAsExpected;
+	const invalidAttempt = input.kind === "red" && !expectedFailure(evidence) || input.kind === "green" && !successful(evidence) || input.kind === "reproduction" && !successful(evidence) && !expectedFailure(evidence);
 	await session.apply({ type: invalidAttempt ? "check_failed" : "evidence", evidence }, ctx); return evidence;
 }
 
@@ -74,8 +72,9 @@ export async function commitStep(session: DevelopmentSession, input: { stepId: s
 			if (!isInside(state.checkout.root, parent)) throw new Error("Un path del commit sale del checkout por un symlink");
 			paths.push(relative(state.checkout.root, absolute));
 		}
+		// Paths literales: `:(top)` o un glob no pueden ampliar lo que se stagea.
 		const git = async (args: string[]) => {
-			const result = await session.runner.run("git", args, { cwd: state.checkout.root, signal });
+			const result = await session.runner.run("git", ["--literal-pathspecs", ...args], { cwd: state.checkout.root, signal });
 			if (result.code !== 0) throw new Error(`git ${args[0]} falló: ${result.stderr.slice(-2000)}`);
 			return result.stdout;
 		};

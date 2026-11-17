@@ -23,9 +23,12 @@ export function workflowToolAllowed(state: Workflow, name: string, input: Record
 	});
 }
 
+// Pi expande `~` y `file://` antes de escribir (resolveToCwd): el guard no los interpreta, los rechaza.
 export function workflowWritePath(root: string, path: string): string {
-	const target = resolve(root, path.replace(/^@/, "")); const inside = relative(resolve(root), target);
+	const raw = path.replace(/^@/, "");
+	if (raw.startsWith("~") || /^file:/i.test(raw)) throw new Error("Escritura fuera del checkout del harness: usá rutas relativas al checkout, sin ~ ni file://");
+	const target = resolve(root, raw); const inside = relative(resolve(root), target);
 	if (!inside || inside === ".." || inside.startsWith(`..${sep}`) || resolve(root, inside) !== target) throw new Error("Escritura fuera del checkout del harness");
-	if (inside.split(sep).some((part) => part.toLowerCase() === ".git") || /(^|[/\\])(?:\.env(?:\..*)?|credentials(?:\..*)?|auth\.json|id_(?:rsa|ed25519)|[^/\\]+\.(?:pem|key|p12|pfx))$/i.test(inside)) throw new Error("Ruta protegida: metadata Git o posible secreto");
+	if (inside.split(sep).some((part) => part.toLowerCase() === ".git") || /(^|[/\\])(?:\.env(?:\..*)?|\.npmrc|\.netrc|\.pypirc|credentials(?:\..*)?|auth\.json|id_(?:rsa|ed25519|ecdsa|dsa)|[^/\\]+\.(?:pem|key|p12|pfx|keystore|jks))$/i.test(inside)) throw new Error("Ruta protegida: metadata Git o posible secreto");
 	return target;
 }

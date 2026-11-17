@@ -16,7 +16,7 @@ export class GithubInspector {
  private options: InspectorOptions;
  constructor(options: InspectorOptions) { this.options = options; }
  async show(kind: "issues" | "prs"): Promise<void> {
-  const { git, github, preparations, preparationsError, ctx } = this.options.state();
+  const { git, github, preparations, ctx } = this.options.state();
   const { active, gitIdentity, changed, info, pi } = this.options;
   const item = github[kind].items?.[github[kind].selected]; const snapshot = git;
   if (!item || !snapshot || this.busy || this.options.modalBusy() || !active() || !ctx.isProjectTrusted()) return;
@@ -32,8 +32,10 @@ export class GithubInspector {
      try { assertIssueIdentity(saved.record, item); if (saved.record.phase === "ready") await verifyIssuePreparation(snapshot, saved.record, signal); }
      catch (error) { saved = { ...saved, error: error instanceof Error ? error.message : "Preparación no disponible" }; }
     }
-    if (!saved && preparationsError) saved = { error: preparationsError };
-    if (saved) preparations.set(item.number, saved);
+    // Tras los await, un refresco local pudo reemplazar el Map y el error: se escribe en los vigentes.
+    const live = this.options.state();
+    if (!saved && live.preparationsError) saved = { error: live.preparationsError };
+    if (saved) live.preparations.set(item.number, saved);
    }
    let body = saved?.record?.source.body ?? ""; let staleBody = false;
    try {

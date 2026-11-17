@@ -5,6 +5,7 @@ import { Type, type Static, type TSchema } from "typebox";
 import { Value } from "typebox/value";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ExplorationSchema, InferenceInputSchema, LensSchema, PlanSchema, SpecSchema, text } from "../harness/model.ts";
+import { expectedFailure, successful } from "../harness/state.ts";
 import { gitRead, inspectCheckout, readWorkflowDiff, validateReferences } from "../harness/git.ts";
 import { DevelopmentSession } from "./development-session.ts";
 import { referenceDigest } from "../harness/references.ts";
@@ -79,8 +80,9 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 				case "retry": await session.apply({ type: "retry", reason: checked(text(), input.reason) }, ctx); break;
 				case "pause": await session.apply({ type: "pause", reason: checked(text(), input.reason) }, ctx); terminate = true; break;
 				case "refresh":
-					if (await session.fresh(ctx)) await session.apply({ type: "source_changed", source: session.current(ctx).source }, ctx);
-					session.reads.clear(); break;
+					// Descarta aprobación y evidencia: el modelo lo propone, la persona lo confirma.
+					if (!(await session.confirm(ctx, "Volver a explorar", "Se descartan exploración, receta, aprobación, pasos y evidencia de este trabajo, y los comandos autorizados. No borra archivos ni commits."))) { terminate = true; break; }
+					await session.refresh(ctx); break;
 				case "publish": await session.publish(ctx); terminate = true; break;
 			}
 			return { ...result(session), terminate };
@@ -93,9 +95,7 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 			const observation = await executeCheck(session, input, ctx, AbortSignal.any([signal ?? new AbortController().signal, session.lifecycle.signal]));
 			if ("setup" in observation) return { content: [{ type: "text", text: `Comando auxiliar; no acredita pruebas ni casos.\n${JSON.stringify(observation.setup)}` }], details: { setup: observation.setup }, isError: observation.setup.interrupted || observation.setup.exitCode !== 0 };
 			const evidence = observation;
-			const expectedFailure = evidence.kind === "red" && evidence.outcome === "failed" && evidence.exitCode !== null && evidence.exitCode > 0 && evidence.exitCode < 126;
-			const reproduction = evidence.kind === "reproduction" && evidence.outcome !== "interrupted" && evidence.exitCode !== null && evidence.exitCode < 126;
-			const success = evidence.kind === "red" ? expectedFailure : evidence.kind === "reproduction" ? reproduction : evidence.outcome === "passed" && evidence.exitCode === 0;
+			const success = evidence.kind === "red" ? expectedFailure(evidence) : evidence.kind === "reproduction" ? successful(evidence) || expectedFailure(evidence) : successful(evidence);
 			return { content: [{ type: "text", text: JSON.stringify(evidence) }], details: { evidence }, isError: !success };
 		},
 	});

@@ -31,3 +31,7 @@ test("symlinks in state, directories and lock are refused without touching targe
 test("an existing owner lock is not stolen, even after a restart or old timestamp", async () => {
  const f = await fixture(); try { await updateWorkflow(f.checkout, 7, undefined, () => f.state); const lock = `${workflowPath(f.checkout, 7)}.lock`; await writeFile(lock, JSON.stringify({ pid: 99999999, hostname: hostname(), at: "1970-01-01" })); await assert.rejects(updateWorkflow(f.checkout, 7, 0, pause), WorkflowConflictError); assert.equal(JSON.parse(await readFile(lock, "utf8")).pid, 99999999); assert.equal((await readWorkflow(f.checkout, 7))?.revision, 0); } finally { await rm(f.dir, { recursive: true }); }
 });
+test("a held lock names the file a person must inspect before removing it", async () => {
+ const f = await fixture(); try { await updateWorkflow(f.checkout, 7, undefined, () => f.state); const lock = `${workflowPath(f.checkout, 7)}.lock`; await writeFile(lock, JSON.stringify({ pid: 99999999, hostname: hostname() }));
+  await assert.rejects(updateWorkflow(f.checkout, 7, 0, pause), (error: unknown) => error instanceof WorkflowConflictError && error.message.includes(lock) && /PID/.test(error.message)); } finally { await rm(f.dir, { recursive: true }); }
+});

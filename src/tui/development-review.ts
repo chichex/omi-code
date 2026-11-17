@@ -4,6 +4,7 @@ import { Value } from "typebox/value";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Lens, Review } from "../harness/model.ts";
 import { inspectCheckout, readWorkflowDiff } from "../harness/git.ts";
+import { lensRunBlock } from "../harness/state.ts";
 import type { DevelopmentSession } from "./development-session.ts";
 
 const ResultSchema = Type.Object({ verdict: Type.Union([Type.Literal("pass"), Type.Literal("fail"), Type.Literal("unknown")]), findings: Type.Array(Type.String({ minLength: 1, maxLength: 4000 }), { maxItems: 50 }) }, { additionalProperties: false });
@@ -27,6 +28,8 @@ export async function runLens(session: DevelopmentSession, lens: Lens, ctx: Exte
 	if (!ctx.model) throw new Error("Elegí un modelo autenticado para ejecutar el lente");
 	const snapshot = await inspectCheckout(state.checkout, session.runner, signal);
 	if (!snapshot.clean) throw new Error("Los lentes se ejecutan sobre el cambio commiteado y limpio");
+	// Antes de gastar el modelo: un lente fallido no se vuelve a tirar sobre el mismo contenido.
+	const blocked = lensRunBlock(state, lens, snapshot.fingerprint); if (blocked) throw new Error(blocked);
 	const diff = await readWorkflowDiff(state.checkout, session.runner, signal);
 	session.emit(`Lente ${lens} · sólo lectura`);
 	const response = await ctx.modelRegistry.streamSimple(ctx.model, {

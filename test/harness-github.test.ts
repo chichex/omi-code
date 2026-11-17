@@ -15,7 +15,7 @@ async function fixture(t: import("node:test").TestContext) {
  const workflow: Workflow = { version: 1, id: "w", revision: 0, source, checkout, phase: "pr", status: "active", blockedReason: "", activity: "testing", exploration: null, inferences: [], recipe: null, diagnosis: null, spec: null, steps: [], evidence: [], reviews: [], round: 0, maxRounds: 3, approval: { sourceHash: source.hash, recipeHash: "approved", at: "now" }, publication: { status: "pending", head, bodyHash: "body", at: "now" }, history: [] };
  if (workflow.publication.status === "pending") workflow.publication.bodyHash = artifactHash(renderWorkflowArtifact(workflow));
  const calls: { command: string; args: string[]; options?: CommandOptions }[] = [];
- const state = { issue: { number: 42, title: source.title, body: source.body, url: source.url }, prs: [] as unknown[], comments: [] as Comment[], createError: false, postError: false, storePost: true, remote: "git@github.com:acme/repo.git", head, changeHeadOnList: false, changeHeadOnPush: false, editHumanOnComments: false };
+ const state = { issue: { number: 42, title: source.title, body: source.body, url: source.url }, prs: [] as unknown[], comments: [] as Comment[], createError: false, postError: false, storePost: true, remote: "git@github.com:acme/repo.git", head, changeHeadOnList: false, changeHeadOnPush: false, editHumanOnComments: false, pushError: false };
  const pr = { number: 3, url: "https://github.com/acme/repo/pull/3", state: "OPEN", isDraft: true, isCrossRepository: false, headRefName: checkout.branch, baseRefName: "main", headRefOid: head, body: "" };
  const runner: Runner = { async run(command, args, options) {
   calls.push({ command, args, ...(options ? { options } : {}) }); let stdout = "";
@@ -25,6 +25,7 @@ async function fixture(t: import("node:test").TestContext) {
    if (a[0] === "symbolic-ref") stdout = `refs/heads/${checkout.branch}`;
    if (a[0] === "remote") stdout = state.remote;
    if (a[0] === "push" && state.changeHeadOnPush) state.head = "c".repeat(40);
+   if (a[0] === "push" && state.pushError) return { code: 1, stdout: "", stderr: "! [rejected] feat/task (non-fast-forward)" };
   } else if (args[0] === "issue" && args[1] === "view") stdout = JSON.stringify(state.issue);
   else if (args[0] === "repo") stdout = JSON.stringify({ nameWithOwner: "acme/repo", url: "https://github.com/acme/repo" });
   else if (args[0] === "pr" && args[1] === "list") { stdout = JSON.stringify(state.prs); if (state.changeHeadOnList) state.head = "c".repeat(40); }
@@ -140,7 +141,19 @@ test("GitHub body limit includes comment and PR ownership wrappers before any re
  assert.equal(f.calls.length, 0);
 });
 
-test("large evidence outputs may be summarized explicitly without losing mandatory artifact", async (t) => {
- const f = await fixture(t); f.workflow.evidence = [{ id: "E1", kind: "verification", command: "npm test", stepId: null, caseId: null, exitCode: 0, outcome: "passed", output: "z".repeat(12000), fingerprint: "fp", head: "b".repeat(40), startedAt: "now", finishedAt: "now" }];
+test("large evidence lists may be summarized explicitly without losing mandatory artifact", async (t) => {
+ const f = await fixture(t); f.workflow.evidence = Array.from({ length: 120 }, (_, i) => ({ id: `E${i}`, kind: "verification" as const, command: "npm test", stepId: null, caseId: null, exitCode: 0, outcome: "passed" as const, output: "z".repeat(12000), fingerprint: "fp", head: "b".repeat(40), startedAt: "now", finishedAt: "now" }));
  const body = renderWorkflowArtifact(f.workflow); assert.ok(body.includes("estado local completo")); assert.ok(body.includes("npm test")); assert.ok(body.length < 65536);
+});
+
+test("command output never leaves the machine: issue comments and PR carry exit codes, not output", async (t) => {
+ const f = await fixture(t); f.workflow.evidence = [{ id: "E1", kind: "verification", command: "npm test", stepId: null, caseId: "D1", exitCode: 0, outcome: "passed", output: "GITHUB_TOKEN=ghp_PRINTED_BY_A_TEST\nok", fingerprint: "fp", head: "b".repeat(40), startedAt: "now", finishedAt: "now" }];
+ const body = renderWorkflowArtifact(f.workflow);
+ assert.ok(body.includes("npm test")); assert.match(body, /"exitCode": 0/); assert.doesNotMatch(body, /ghp_PRINTED_BY_A_TEST|"output"/);
+});
+
+test("a rejected push explains the likely cause instead of a generic Git verification error", async (t) => {
+ const f = await fixture(t); f.state.pushError = true;
+ await assert.rejects(publishDraft(f.workflow, f.runner), /push.*(autenticación|protegida|non-fast-forward)/i);
+ assert.equal(f.calls.filter(c => c.args[0] === "pr" && c.args[1] === "create").length, 0);
 });

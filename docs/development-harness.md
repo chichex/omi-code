@@ -18,7 +18,7 @@ Primer corte para **repos existentes con issues de GitHub**, sobre sesiones y to
 | `/omi-work resume` | Adoptar explícitamente el estado guardado; no repite comandos ya hechos. Si estaba pausado, reanuda sin conceder aprobaciones. |
 | `/omi-work approve` | Aprobar receta/spec vigente y agregar su artefacto al issue. Revalida fuente y código explorado. |
 | `/omi-work pause` | Pausar conservando fase, decisiones, archivos y evidencia. |
-| `/omi-work refresh` | Volver a leer el pedido y explorar; invalida receta, decisiones y pruebas activas. |
+| `/omi-work refresh` | Volver a leer el pedido y explorar; invalida receta, decisiones y pruebas activas. También reabre un trabajo que el agente cerró sin cambio. Si lo propone el agente, pide confirmación. |
 | `/omi-work pr` | Revalidar y pedir permiso remoto para comentario de evidencia, push normal y PR draft. |
 | `/omi-work status` | Consultar el estado sin llamar al modelo. |
 | `/omi-work stop` | Salir explícitamente del flujo y restaurar las tools normales del chat, sin borrar ni revertir archivos. |
@@ -35,7 +35,7 @@ Restaurar una sesión o recargar OMI **no ejecuta** pruebas, modelo, commits ni 
 - **Diagnóstico:** bug sin causa conocida. Pide reproducción observada y causa; después el arreglo sigue como Directa o Con spec según su tamaño. No habilita arreglos durante el diagnóstico.
 - **Con spec:** trabajo grande. Exige por qué, pasos C con cobertura explícita de todos los D y playbook humano antes de aprobar.
 - **Implementar:** un C activo por vez, test rojo real, mismo comando verde, commit convencional nuevo por paso. No se completa un paso mediante texto del modelo.
-- **Verificar:** cada D con su comando aprobado, salida/exit code y contenido actuales; gates ejecutados y lentes solicitados. Seguridad y Cumplimiento son obligatorios con riesgo alto. Los lentes son llamadas de sólo lectura, sin tools ni conversación del implementador; no sustituyen la Review externa del PR. Un resultado inválido, incompleto o cancelado no aprueba el lente.
+- **Verificar:** cada D con su comando aprobado, salida/exit code y contenido actuales; gates ejecutados y lentes solicitados. Seguridad y Cumplimiento son obligatorios con riesgo alto. Los lentes son llamadas de sólo lectura, sin tools ni conversación del implementador; no sustituyen la Review externa del PR. Un resultado inválido, incompleto o cancelado no aprueba el lente. Un lente que falló no se repite sobre el mismo contenido: hay que corregir en otra vuelta. Cada lente corre hasta tres veces por contenido.
 - **PR:** sólo con cambio limpio y verificado, confirmación humana remota y un SHA autorizado. Termina en un draft; no mergea ni cierra el issue.
 
 Base incompleta, dependencia bloqueante, información insuficiente, inferencia nueva o imposibilidad de verificar deben quedar como espera/pausa. En este corte, Fundación no se ejecuta: la persona completa la base y usa `refresh`.
@@ -50,10 +50,10 @@ Base incompleta, dependencia bloqueante, información insuficiente, inferencia n
 - Un rojo que pasa, comando ausente, cancelación o contenido modificado durante el comando no se convierte en prueba válida. Los intentos fallidos quedan registrados sin habilitar pasos.
 - El fingerprint representa contenido cambiado desde la base y archivos nuevos no ignorados, incluidos modos/eliminaciones/symlinks. Permanece estable al hacer stage/commit del mismo contenido.
 - Las pruebas de cada paso y su commit deben coincidir. La verificación final debe corresponder al contenido actual; un verde histórico o un comando distinto no alcanza.
-- Hay hasta tres vueltas de corrección. Reintentar invalida pruebas activas y conserva sus resultados en un archivo de intentos anteriores; no pueden acreditar la nueva vuelta. Se mantiene la aprobación sólo si pedido, receta y spec son exactamente los mismos.
+- Hay hasta tres vueltas de corrección. Reintentar invalida pruebas activas y conserva sus resultados en un archivo de intentos anteriores; no pueden acreditar la nueva vuelta. Los pasos ya commiteados siguen hechos y la vuelta agrega un paso de corrección `C<n>` que cubre todos los D, con su propio rojo, verde y commit. Se mantiene la aprobación sólo si pedido, receta y spec son exactamente los mismos.
 - Cambiar el pedido invalida receta/aprobación/pruebas cuando se contrasta con GitHub, en los checkpoints de inicio/retoma, planificación, aprobación y publicación. Si el alcance cambia en chat, hay que pausar, actualizar el issue y hacer `refresh`; no tratarlo como un cambio silencioso del Cómo.
 
-Mientras el flujo está activo, shell arbitrario, tools desconocidas y operaciones OMI no están habilitadas por el harness. Edit/write requieren receta aprobada y C activo, con paths dentro del checkout y sin metadata Git ni rutas evidentes de secretos. Las tools conservan el pipeline y hooks de Pi. **No es una frontera de seguridad:** comparte usuario, filesystem y credenciales; un comando aprobado ejecuta código arbitrario con esos permisos. No reemplaza aislamiento del sistema operativo ni los guardrails de OMI. Las reglas del proyecto prevalecen.
+Mientras el flujo está activo, shell arbitrario, tools desconocidas y operaciones OMI no están habilitadas por el harness. Edit/write requieren receta aprobada y C activo, con paths relativos dentro del checkout (sin `~` ni `file://`, que Pi expandiría afuera) y sin metadata Git ni rutas evidentes de secretos. El commit del paso trata sus paths como literales, no como pathspecs. Las tools conservan el pipeline y hooks de Pi. **No es una frontera de seguridad:** comparte usuario, filesystem y credenciales; un comando aprobado ejecuta código arbitrario con esos permisos. No reemplaza aislamiento del sistema operativo ni los guardrails de OMI. Las reglas del proyecto prevalecen.
 
 ## Persistencia, sesiones y recuperación
 
@@ -69,7 +69,7 @@ Los cambios externos del filesystem no se revierten. Una operación ejecutada si
 
 ## GitHub sin sobrescribir el pedido
 
-GitHub no ofrece un CAS efectivo para reemplazar el body del issue con `gh issue edit`. Por eso **la fuente humana se conserva intacta**: receta/spec y evidencia se agregan como comentarios append-only administrados, no como reemplazo de la descripción. Se deduplican por identidad, autor y contenido exacto; un POST ambiguo se intenta recuperar antes de repetirlo. No se editan comentarios ajenos.
+GitHub no ofrece un CAS efectivo para reemplazar el body del issue con `gh issue edit`. Por eso **la fuente humana se conserva intacta**: receta/spec y evidencia se agregan como comentarios append-only administrados, no como reemplazo de la descripción. La evidencia publicada lleva comando, exit code, HEAD y fingerprint; la salida de los comandos queda sólo en el estado local, porque nadie la revisa antes de publicar. Se deduplican por identidad, autor y contenido exacto; un POST ambiguo se intenta recuperar antes de repetirlo. No se editan comentarios ajenos.
 
 La publicación guarda un recibo pendiente antes del push, valida repositorio/origin/branch y usa el SHA inmutable aprobado, sin force ni tags. Recupera sólo un draft abierto de esa rama/base/SHA con identidad y cuerpo exactos de este trabajo. Un PR ajeno o editado por una persona requiere intervención; no se sobrescribe ni se duplica. Los artefactos obligatorios se publican completos o fallan pidiendo dividir la tarea; no se aprueba una spec silenciosamente truncada.
 

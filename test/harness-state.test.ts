@@ -61,19 +61,45 @@ test("verification requires exact commands, current fingerprint, and passing len
  s = send(s, { type: "evidence", evidence: evidence("verification", { command: "true" }) }); s = send(s, { type: "reviewed", review: { lens: "quality", fingerprint: "tree", verdict: "pass", findings: [], at } }); assert.throws(() => send(s, { type: "verified", fingerprint: "tree" }));
  s = send(s, { type: "evidence", evidence: evidence("verification", { id: "exact" }) }); assert.throws(() => send(s, { type: "verified", fingerprint: "stale" })); assert.equal(send(s, { type: "verified", fingerprint: "tree" }).phase, "pr");
 });
+// Una vuelta agrega un paso de corrección: lo ya commiteado no puede volver a dar rojo.
+function correct(s: Workflow, round: number): Workflow {
+ const id = `C${round + 1}`;
+ s = send(s, { type: "step_started", id });
+ s = send(s, { type: "evidence", evidence: evidence("red", { id: `red${round}`, stepId: id }) });
+ s = send(s, { type: "evidence", evidence: evidence("green", { id: `green${round}`, stepId: id }) });
+ return send(s, { type: "step_completed", id, commit: `fix${round}`, fingerprint: "tree" });
+}
 test("retry is bounded, preserves history and does not preserve green checks", () => {
  let s = pr(); const history = s.history.length;
- for (let round = 1; round <= 3; round++) { s = send(s, { type: "retry", reason: "review" }); assert.equal(s.phase, "implement"); assert.equal(s.round, round); assert.equal(s.steps[0]?.green, null); assert.equal(s.reviews.length, 0); assert.throws(() => send(s, { type: "verified", fingerprint: "tree" })); s = send(s, { type: "step_started", id: "C1" }); s = send(s, { type: "evidence", evidence: evidence("red") }); s = send(s, { type: "evidence", evidence: evidence("green") }); s = send(s, { type: "step_completed", id: "C1", commit: "head", fingerprint: "tree" }); }
+ for (let round = 1; round <= 3; round++) {
+  s = send(s, { type: "retry", reason: "review" }); assert.equal(s.phase, "implement"); assert.equal(s.round, round); assert.equal(s.reviews.length, 0); assert.deepEqual(s.evidence, []);
+  const added = s.steps.at(-1); assert.equal(s.steps.length, round + 1); assert.equal(added?.id, `C${round + 1}`); assert.equal(added?.status, "pending"); assert.equal(added?.green, null); assert.equal(added?.red, null); assert.deepEqual(added?.cases, ["D1"]); assert.match(added?.title ?? "", /review/);
+  assert.throws(() => send(s, { type: "verified", fingerprint: "tree" }));
+  s = correct(s, round); assert.equal(s.phase, "verify");
+ }
  s = send(s, { type: "retry", reason: "again" }); assert.equal(s.status, "waiting"); assert.equal(s.round, 3); assert.ok(s.history.length > history);
+});
+test("retry keeps completed steps and their commits; the correction needs a new red and a new commit", () => {
+ let s = send(pr(), { type: "retry", reason: "lens finding" });
+ assert.equal(s.steps[0]?.status, "done"); assert.equal(s.steps[0]?.commit, "head"); assert.equal(isApproved(s), true);
+ assert.throws(() => send(s, { type: "step_started", id: "C1" }));
+ s = send(s, { type: "step_started", id: "C2" });
+ assert.throws(() => send(s, { type: "evidence", evidence: evidence("green", { id: "early", stepId: "C2" }) }));
+ s = send(s, { type: "evidence", evidence: evidence("red", { id: "red2", stepId: "C2" }) }); s = send(s, { type: "evidence", evidence: evidence("green", { id: "green2", stepId: "C2" }) });
+ assert.throws(() => send(s, { type: "step_completed", id: "C2", commit: "head", fingerprint: "tree" }), /otro paso/);
+ assert.equal(send(s, { type: "step_completed", id: "C2", commit: "fix", fingerprint: "tree" }).phase, "verify");
 });
 test("pause/resume in the final allowed round does not falsely exhaust the workflow", () => {
  let s = pr();
- for (let round = 0; round < 3; round++) {
+ for (let round = 1; round <= 3; round++) {
   s = send(s, { type: "retry", reason: "review" });
-  if (round === 2) break;
-  s = send(s, { type: "step_started", id: "C1" }); s = send(s, { type: "evidence", evidence: evidence("red") }); s = send(s, { type: "evidence", evidence: evidence("green") }); s = send(s, { type: "step_completed", id: "C1", commit: "head", fingerprint: "tree" });
+  if (round === 3) break;
+  s = correct(s, round);
  }
  s = send(send(s, { type: "pause", reason: "break" }), { type: "resume" }); assert.equal(s.status, "active"); assert.equal(s.phase, "implement");
+ s = send(send(correct(s, 3), { type: "retry", reason: "again" }), { type: "pause", reason: "break" });
+ s = send(s, { type: "resume" }); assert.equal(s.status, "waiting"); assert.match(s.blockedReason, /agotaron/);
+ assert.throws(() => send(s, { type: "evidence", evidence: evidence("verification", { id: "late" }) }), /agotaron/);
 });
 test("publication persists pending and rejects wrong head before completion", () => {
  let s = pr(); s = send(s, { type: "publishing", head: "head", bodyHash: "body" }); assert.equal(s.publication.status, "pending"); assert.throws(() => send(s, { type: "published", head: "other", url: "https://example.test/pr", number: 9 }));
@@ -199,4 +225,35 @@ test("verification considers the latest attempt for each case, not a filtered ol
  assert.equal(send(staleReview, { type: "verified", fingerprint: "tree" }).phase, "pr");
  const failedReview = send(staleReview, { type: "reviewed", review: { lens: "quality", fingerprint: "tree", verdict: "fail", findings: ["current bug"], at } });
  assert.throws(() => send(failedReview, { type: "verified", fingerprint: "tree" }));
+});
+
+test("a wontfix closed by the model can be reopened by refreshing the request, and nothing else", () => {
+ const closed = send(fresh(), { type: "explored", exploration: { ...exploration, disposition: "wontfix", reason: "duplicate" } });
+ for (const event of [{ type: "pause", reason: "later" }, { type: "resume" }, { type: "explored", exploration }] as const) assert.throws(() => send(closed, event), /cerrado/);
+ const reopened = send(closed, { type: "source_changed", source });
+ assert.equal(reopened.phase, "explore"); assert.equal(reopened.status, "active"); assert.equal(reopened.exploration, null); assert.equal(reopened.blockedReason, "");
+ const done = { ...pr(), phase: "done" as const, status: "complete" as const };
+ assert.throws(() => send(done, { type: "source_changed", source }), /cerrado/);
+});
+test("history is a bounded window: long sessions never make the saved state invalid", () => {
+ const full = send(fresh(), { type: "explored", exploration });
+ full.history = Array.from({ length: 1000 }, (_, i) => ({ at, phase: "decide" as const, activity: `old ${i}` }));
+ const s = send(send(full, { type: "pause", reason: "late" }), { type: "resume" });
+ assert.equal(s.history.length, 1000); assert.equal(s.history[0]?.activity, "old 2"); assert.equal(s.history.at(-2)?.activity, "pause: late"); assert.equal(s.history.at(-1)?.activity, "resume");
+ assert.equal(send(s, { type: "pause", reason: "still works" }).status, "paused");
+});
+test("a failed lens cannot be re-rolled on the same content and lens runs are bounded", () => {
+ const review = (verdict: "pass" | "fail" | "unknown", fingerprint = "tree") => ({ type: "reviewed" as const, review: { lens: "quality" as const, fingerprint, verdict, findings: verdict === "pass" ? [] : ["src/a.ts:1 · finding"], at } });
+ let s = send(verifying(), { type: "evidence", evidence: evidence("verification") });
+ s = send(s, review("fail"));
+ assert.throws(() => send(s, review("pass")), /ya falló/);
+ assert.equal(send(s, review("pass", "changed")).reviews.length, 2);
+ let unknown = send(send(send(verifying(), { type: "evidence", evidence: evidence("verification") }), review("unknown")), review("unknown"));
+ unknown = send(unknown, review("pass")); assert.equal(send(unknown, { type: "verified", fingerprint: "tree" }).phase, "pr");
+ assert.throws(() => send(unknown, review("pass")), /intentos/);
+});
+test("a red must fail inside the 1..125 range everywhere, not by signal-like codes", () => {
+ const s = activeStep();
+ for (const exitCode of [126, 127, 128, 130, 200, 255]) assert.throws(() => send(s, { type: "evidence", evidence: evidence("red", { id: `red${exitCode}`, exitCode }) }), /rojo/);
+ assert.equal(send(s, { type: "evidence", evidence: evidence("red", { exitCode: 125 }) }).steps[0]?.red, "red");
 });

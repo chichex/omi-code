@@ -130,8 +130,9 @@ export class DevelopmentSession {
 		try { return await ctx.ui.confirm(title, description, { signal: this.lifecycle.signal }); }
 		finally { this.emit(); }
 	}
-	async approve(ctx: ExtensionContext): Promise<void> {
-		if (!(await this.fresh(ctx))) return;
+	// true sólo si la persona aprobó: un no no vuelve a disparar al modelo.
+	async approve(ctx: ExtensionContext): Promise<boolean> {
+		if (!(await this.fresh(ctx))) return false;
 		const state = this.current(ctx);
 		if (state.phase !== "approve") throw new Error("Todavía no hay una receta/spec lista para aprobar");
 		const assertExplored = async () => {
@@ -141,11 +142,17 @@ export class DevelopmentSession {
 		await assertExplored();
 		const preview = JSON.stringify({ source: { number: state.source.number, title: state.source.title, url: state.source.url, hash: state.source.hash }, recipe: state.recipe, spec: state.spec, inferences: state.inferences }, null, 2);
 		if (preview.length > 50000) throw new Error("La receta es demasiado grande para aprobarla completa; acotá el trabajo");
-		if (!(await this.confirm(ctx, "Aprobar receta y sincronizar issue", `${preview}\n\nAutoriza implementar estos pasos, commits locales y comandos exactos de los casos D. Se agrega un comentario administrado con la receta al issue, sin reemplazar su descripción; no autoriza push, merge, workflows ni deploy.`))) return;
+		if (!(await this.confirm(ctx, "Aprobar receta y sincronizar issue", `${preview}\n\nAutoriza implementar estos pasos, commits locales y comandos exactos de los casos D. Se agrega un comentario administrado con la receta al issue, sin reemplazar su descripción; no autoriza push, merge, workflows ni deploy.`))) return false;
 		await assertExplored();
 		await syncIssueArtifact(state, this.runner, this.lifecycle.signal);
 		await assertExplored();
 		await this.apply({ type: "approved" }, ctx);
+		return true;
+	}
+	// Volver a explorar descarta receta, aprobación y pruebas; también las lecturas y comandos autorizados.
+	async refresh(ctx: ExtensionContext): Promise<void> {
+		if (await this.fresh(ctx)) await this.apply({ type: "source_changed", source: this.current(ctx).source }, ctx);
+		this.reads.clear(); this.approvedCommands.clear();
 	}
 	async publish(ctx: ExtensionContext): Promise<void> {
 		if (!(await this.fresh(ctx))) return;
@@ -175,7 +182,11 @@ export class DevelopmentSession {
 	async stop(ctx: ExtensionContext): Promise<void> {
 		const s = this.current(ctx);
 		if (!(await this.confirm(ctx, "Salir del harness", "Se pausa el trabajo y el chat vuelve a sus tools normales. No borra archivos ni revierte acciones. Para continuar el flujo usá /omi-work resume."))) return;
-		if (s.status !== "complete") await this.apply({ type: "pause", reason: "La persona salió del harness" }, ctx);
+		// Salir no depende de que el estado admita otra transición: un trabajo pausado o inválido también se deja.
+		if (s.status !== "complete" && s.status !== "paused") {
+			try { await this.apply({ type: "pause", reason: "La persona salió del harness" }, ctx); }
+			catch (error) { ctx.ui.notify(`No se pudo pausar el estado guardado (${error instanceof Error ? error.message : "error"}); se sale igual del harness.`, "warning"); }
+		}
 		this.pi.appendEntry(DEVELOPMENT_ANCHOR, { id: s.id, root: s.checkout.root, issue: s.source.number, revision: this.state!.revision, disabled: true });
 		this.state = undefined; this.lockedReason = ""; this.emit();
 	}

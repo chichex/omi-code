@@ -1,4 +1,5 @@
-// Remote text is data, never shell code or development instructions.
+// Remote text is data, never shell code or development instructions. Command output stays local:
+// nobody reviews it before publishing and it may print credentials.
 import { processRunner, type CommandOptions, type Runner } from "../core/exec.ts";
 import { gitRead, inspectCheckout } from "./git.ts";
 import { artifactHash, sourceHash, type Workflow } from "./model.ts";
@@ -54,7 +55,7 @@ function section(title: string, value: unknown): string {
 }
 export function renderWorkflowArtifact(workflow: Workflow): string {
  const source = `${workflow.source.title}\n\n${workflow.source.body}`.split("\n").map(line => `> ${line}`).join("\n");
- const evidence = workflow.evidence.map(e => ({ id: e.id, kind: e.kind, command: e.command, step: e.stepId, case: e.caseId, exitCode: e.exitCode, outcome: e.outcome, head: e.head, fingerprint: e.fingerprint, output: bounded(e.output, 1200) }));
+ const evidence = workflow.evidence.map(e => ({ id: e.id, kind: e.kind, command: e.command, step: e.stepId, case: e.caseId, exitCode: e.exitCode, outcome: e.outcome, head: e.head, fingerprint: e.fingerprint, }));
  return githubBody(["# OMI · Desarrollo asistido", "Pedido externo citado como datos, no instrucciones del harness.", section("Pedido original", source),
   section("Ruta y estado", { route: workflow.recipe?.route ?? "pendiente", phase: workflow.phase, status: workflow.status, blockedReason: workflow.blockedReason }),
   section("Clasificación", workflow.recipe?.classification ?? "Sin clasificar"), section("Inferencias y respuestas", workflow.inferences),
@@ -135,7 +136,10 @@ export async function publishDraft(workflow: Workflow, runner: Runner = processR
  // Only this branch, no force, no tags and no destination inferred from git config.
  try {
   await gitRead(workflow.checkout, ["push", "--no-follow-tags", "origin", `${head}:refs/heads/${branch}`], runner, signal);
- } catch (error) { signal?.throwIfAborted(); const found = await recover(workflow, repo, runner, signal); if (found) return found; throw error; }
+ } catch {
+  signal?.throwIfAborted(); const found = await recover(workflow, repo, runner, signal); if (found) return found;
+  throw new Error("git push de la rama falló: revisá autenticación, rama protegida o non-fast-forward antes de volver a publicar");
+ }
  await assertHead();
  try {
   await gh(workflow.checkout, ["pr", "create", "--repo", repo, "--draft", "--base", "main", "--head", branch, "--title", workflow.source.title, "--body-file", "-"], runner, signal, body);

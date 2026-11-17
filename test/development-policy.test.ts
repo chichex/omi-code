@@ -34,6 +34,16 @@ test("development_policy las rutas de escritura no pueden escapar del checkout n
 	for (const path of ["../other.ts", "/tmp/elsewhere", ".git/config", ".GIT/config", ".env", "keys/private.pem", "../repo-two/file.ts"]) assert.throws(() => workflowWritePath("/tmp/repo", path), /fuera|proteg|secreto/i);
 });
 
+test("development_policy rechaza las rutas que Pi expande fuera del checkout (~ y file://)", () => {
+	for (const path of ["~", "~/.zshrc", "@~/.ssh/authorized_keys", "~/repo/src/file.ts", "file:///etc/hosts", "FILE:///etc/hosts", "@file:///tmp/repo/src/file.ts"]) assert.throws(() => workflowWritePath("/tmp/repo", path), /fuera/i, path);
+	assert.equal(workflowWritePath("/tmp/repo", "src/~notes.md"), "/tmp/repo/src/~notes.md");
+});
+
+test("development_policy protege credenciales comunes de paquetes, red y keystores", () => {
+	for (const path of [".npmrc", "packages/app/.npmrc", ".netrc", ".pypirc", "keys/id_ecdsa", "id_dsa", "android/release.keystore", "certs/app.jks"]) assert.throws(() => workflowWritePath("/tmp/repo", path), /proteg|secreto/i, path);
+	for (const path of ["src/npmrc.ts", "docs/keystore.md"]) assert.ok(workflowWritePath("/tmp/repo", path));
+});
+
 test("development_view progreso sale del estado y no interpreta texto del modelo como pasos terminados", () => {
 	const state = workflow();
 	const view = developmentProgress(state);

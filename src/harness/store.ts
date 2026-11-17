@@ -82,7 +82,10 @@ export async function updateWorkflow(checkout: Workflow["checkout"], issueNumber
  const lockPath = `${path}.lock`;
  let lock: FileHandle;
  try { lock = await open(lockPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
- catch (error) { if (codeIs(error, "EEXIST") || codeIs(error, "ELOOP")) throw new WorkflowConflictError(); throw error; }
+ catch (error) {
+  if (codeIs(error, "EEXIST") || codeIs(error, "ELOOP")) throw new WorkflowConflictError(`El trabajo está bloqueado por otro proceso. Si no hay otro OMI activo, verificá el PID/host guardado en ${lockPath} y retiralo a mano.`);
+  throw error;
+ }
  let temp: string | undefined;
  try {
   await lock.writeFile(JSON.stringify({ pid: process.pid, hostname: hostname() }));

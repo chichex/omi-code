@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 
+// Topes compartidos por el esquema y el reducer: el reducer los respeta antes de validar.
+export const MAX_HISTORY = 1000; export const MAX_STEPS = 50; export const MAX_ATTEMPTS = 100;
 export const text = (maxLength = 4000) => Type.String({ minLength: 1, maxLength, pattern: "\\S" });
 const list = () => Type.Array(text(), { maxItems: 100 });
 const nullableText = () => Type.Union([text(8192), Type.Null()]);
@@ -73,12 +75,12 @@ export const WorkflowSchema = Type.Object({
 	blockedReason: Type.String({ maxLength: 4000 }), activity: text(),
 	exploration: Type.Union([ExplorationSchema, Type.Null()]), inferences: Type.Array(InferenceSchema, { maxItems: 100 }), recipe: Type.Union([RecipeSchema, Type.Null()]),
 	diagnosis: Type.Union([Type.Object({ cause: text(), reproduction: text(100), size: Type.Union([Type.Literal("small"), Type.Literal("large")]) }, { additionalProperties: false }), Type.Null()]),
-	spec: Type.Union([SpecSchema, Type.Null()]), steps: Type.Array(StepSchema, { maxItems: 50 }), evidence: Type.Array(EvidenceSchema, { maxItems: 1000 }), reviews: Type.Array(ReviewSchema, { maxItems: 100 }),
+	spec: Type.Union([SpecSchema, Type.Null()]), steps: Type.Array(StepSchema, { maxItems: MAX_STEPS }), evidence: Type.Array(EvidenceSchema, { maxItems: 1000 }), reviews: Type.Array(ReviewSchema, { maxItems: 100 }),
 	round: Type.Integer({ minimum: 0 }), maxRounds: Type.Integer({ minimum: 1, maximum: 10 }),
-	attempts: Type.Optional(Type.Array(Type.Object({ sourceHash: text(128), round: Type.Integer({ minimum: 0 }), reason: text(), at: text(100), evidence: Type.Array(EvidenceSchema, { maxItems: 1000 }), reviews: Type.Array(ReviewSchema, { maxItems: 100 }) }, { additionalProperties: false }), { maxItems: 100 })),
+	attempts: Type.Optional(Type.Array(Type.Object({ sourceHash: text(128), round: Type.Integer({ minimum: 0 }), reason: text(), at: text(100), evidence: Type.Array(EvidenceSchema, { maxItems: 1000 }), reviews: Type.Array(ReviewSchema, { maxItems: 100 }) }, { additionalProperties: false }), { maxItems: MAX_ATTEMPTS })),
 	approval: Type.Union([Type.Object({ sourceHash: text(128), recipeHash: text(128), at: text(100) }, { additionalProperties: false }), Type.Null()]),
 	publication: PublicationSchema,
-	history: Type.Array(Type.Object({ at: text(100), phase: PhaseSchema, activity: text() }, { additionalProperties: false }), { maxItems: 1000 }),
+	history: Type.Array(Type.Object({ at: text(100), phase: PhaseSchema, activity: text() }, { additionalProperties: false }), { maxItems: MAX_HISTORY }),
 }, { additionalProperties: false });
 export type Workflow = Omit<Static<typeof WorkflowSchema>, "inferences"> & { inferences: Inference[] };
 export const sourceHash = (title: string, body: string): string => createHash("sha256").update(JSON.stringify({ title, body })).digest("hex");

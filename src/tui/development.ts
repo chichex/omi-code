@@ -51,12 +51,10 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 						await session.restore(ctx, true); session.current(ctx);
 						if (!session.offline && !(await session.fresh(ctx))) { loadout(); return; }
 						if (session.state?.status === "paused") await session.apply({ type: "resume" }, ctx);
-					} else if (command === "approve") await session.approve(ctx);
+					} else if (command === "approve") { if (!(await session.approve(ctx))) { loadout(); ctx.ui.notify(session.status(), "info"); return; } }
 					else if (command === "pause") await session.apply({ type: "pause", reason: "Pausado por la persona" }, ctx);
-					else if (command === "refresh") {
-						if (await session.fresh(ctx)) await session.apply({ type: "source_changed", source: session.current(ctx).source }, ctx);
-						session.reads.clear(); session.approvedCommands.clear();
-					} else if (command === "pr") await session.publish(ctx);
+					else if (command === "refresh") await session.refresh(ctx);
+					else if (command === "pr") await session.publish(ctx);
 					else if (command === "stop") await session.stop(ctx);
 					else throw new Error("Uso: /omi-work start | resume | approve | pause | refresh | pr | status | stop");
 					loadout();

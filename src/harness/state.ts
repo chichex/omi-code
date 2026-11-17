@@ -1,4 +1,4 @@
-import { artifactHash, parseWorkflow, sourceHash, type Workflow, type Exploration, type InferenceInput, type Plan, type Spec, type Evidence, type Review, type Step } from "./model.ts";
+import { artifactHash, MAX_ATTEMPTS, MAX_HISTORY, MAX_STEPS, parseWorkflow, sourceHash, type Workflow, type Exploration, type InferenceInput, type Plan, type Spec, type Evidence, type Review, type Step } from "./model.ts";
 
 export type WorkflowEvent =
  | { type: "explored"; exploration: Exploration }
@@ -95,9 +95,19 @@ function specify(state: Workflow, spec: Spec): void {
  state.steps = spec.steps.map(s => ({ ...s, status: "pending", red: null, green: null, commit: null }));
  state.phase = "approve";
 }
-function successful(evidence: Evidence): boolean { return evidence.exitCode === 0 && evidence.outcome === "passed"; }
-function confirmedFailure(evidence: Evidence): boolean {
- return evidence.outcome === "failed" && evidence.exitCode !== null && evidence.exitCode > 0 && evidence.exitCode <= 255 && evidence.exitCode !== 126 && evidence.exitCode !== 127;
+export function successful(evidence: Pick<Evidence, "exitCode" | "outcome">): boolean { return evidence.exitCode === 0 && evidence.outcome === "passed"; }
+// Único criterio de "falló de verdad": 126/127 son comando ausente o no ejecutable y >=128 es una señal.
+export function expectedFailure(evidence: Pick<Evidence, "exitCode" | "outcome">): boolean {
+ return evidence.outcome === "failed" && evidence.exitCode !== null && evidence.exitCode >= 1 && evidence.exitCode <= 125;
+}
+const EXHAUSTED = "Se agotaron las vueltas; se necesita intervención humana";
+const MAX_LENS_RUNS = 3;
+// Un lente que falló no se vuelve a tirar sobre el mismo contenido: hay que cambiar el código.
+export function lensRunBlock(state: Workflow, lens: Review["lens"], fingerprint: string): string {
+ const runs = state.reviews.filter(r => r.lens === lens && r.fingerprint === fingerprint);
+ if (runs.at(-1)?.verdict === "fail") return `El lente ${lens} ya falló sobre este contenido; corregí el cambio con retry`;
+ if (runs.length >= MAX_LENS_RUNS) return `Se agotaron los intentos del lente ${lens} sobre este contenido`;
+ return "";
 }
 function getStep(state: Workflow, id: string): Step {
  const step = state.steps.find(s => s.id === id);
@@ -117,11 +127,11 @@ function recordFailedCheck(state: Workflow, evidence: Evidence): void {
  requireCondition(!state.evidence.some(e => e.id === evidence.id), "id de evidencia repetido");
  if (evidence.kind === "reproduction") {
   requirePhase(state, "explore", "diagnose");
-  requireCondition(!successful(evidence) && !confirmedFailure(evidence), "la reproducción es válida; usar evidence");
+  requireCondition(!successful(evidence) && !expectedFailure(evidence), "la reproducción es válida; usar evidence");
  } else {
   requireCondition(evidence.kind === "red" || evidence.kind === "green", "check_failed sólo admite reproducción, rojo o verde");
   const step = activeEvidenceStep(state, evidence);
-  requireCondition(evidence.kind === "red" ? !confirmedFailure(evidence) : !successful(evidence), "el check es válido; usar evidence");
+  requireCondition(evidence.kind === "red" ? !expectedFailure(evidence) : !successful(evidence), "el check es válido; usar evidence");
   step.green = null;
   if (evidence.kind === "red") step.red = null;
  }
@@ -132,16 +142,16 @@ function recordEvidence(state: Workflow, evidence: Evidence): void {
  switch (evidence.kind) {
   case "reproduction":
    requirePhase(state, "explore", "diagnose");
-   requireCondition(successful(evidence) || confirmedFailure(evidence), "reproducción no confirmada");
+   requireCondition(successful(evidence) || expectedFailure(evidence), "reproducción no confirmada");
    break;
   case "red": case "green": {
    const step = activeEvidenceStep(state, evidence);
    if (evidence.kind === "red") {
-    requireCondition(confirmedFailure(evidence), "rojo debe fallar realmente, no por comando ausente o interrumpido");
+    requireCondition(expectedFailure(evidence), "rojo debe fallar realmente, no por comando ausente o interrumpido");
     step.red = evidence.id; step.green = null;
    } else {
     const red = state.evidence.find(e => e.id === step.red);
-    requireCondition(red && confirmedFailure(red) && red.command === evidence.command, "verde requiere rojo previo del mismo comando");
+    requireCondition(red && expectedFailure(red) && red.command === evidence.command, "verde requiere rojo previo del mismo comando");
     requireCondition(successful(evidence), "verde debe terminar con exit 0"); step.green = evidence.id;
    }
    break;
@@ -187,16 +197,19 @@ function completeStep(state: Workflow, event: Extract<WorkflowEvent, { type: "st
 }
 function archiveAttempt(state: Workflow, reason: string, at: string): void {
  if (!state.evidence.length && !state.reviews.length) return;
- state.attempts ??= [];
- state.attempts.push({ sourceHash: state.source.hash, round: state.round, reason, at, evidence: state.evidence, reviews: state.reviews });
+ state.attempts = [...(state.attempts ?? []), { sourceHash: state.source.hash, round: state.round, reason, at, evidence: state.evidence, reviews: state.reviews }].slice(-MAX_ATTEMPTS);
 }
+// Lo ya commiteado sigue hecho: no puede volver a dar rojo. La vuelta agrega un paso de
+// corrección que cubre todos los D y exige su propio rojo, verde y commit.
 function retry(state: Workflow, reason: string, at: string): void {
  requirePhase(state, "verify", "pr"); requireCondition(nonempty(reason), "falta motivo del reintento");
- requireCondition(state.status === "active" && !decisionBlock(state), "hay un bloqueo pendiente");
- if (state.round >= state.maxRounds) { setBlock(state, "Se agotaron las vueltas; se necesita intervención humana"); return; }
+ requireCondition(state.status === "active" && !decisionBlock(state) && state.recipe, "hay un bloqueo pendiente");
+ if (state.round >= state.maxRounds) { setBlock(state, EXHAUSTED); return; }
+ requireCondition(state.steps.length < MAX_STEPS, "no quedan pasos para otra vuelta; dividí la tarea");
  archiveAttempt(state, reason, at);
  state.round++; state.phase = "implement";
- state.steps = state.steps.map(s => ({ ...s, status: "pending", red: null, green: null, commit: null }));
+ const next = Math.max(0, ...state.steps.map(s => Number(/^C(\d+)$/.exec(s.id)?.[1] ?? 0))) + 1;
+ state.steps.push({ id: `C${next}`, title: `Corrección de la vuelta ${state.round}: ${reason}`.slice(0, 4000), cases: state.recipe.cases.map(c => c.id), status: "pending", red: null, green: null, commit: null });
  state.evidence = []; state.reviews = []; state.publication = { status: "none" };
  // La aprobación se conserva sólo para exactamente el mismo source/receta/spec.
  if (!isApproved(state)) state.approval = null;
@@ -210,17 +223,19 @@ function sourceChanged(state: Workflow, source: Workflow["source"], at: string):
  state.steps = []; state.evidence = []; state.reviews = []; state.approval = null; state.round = 0;
  state.publication = { status: "none" }; state.phase = "explore"; setBlock(state, "");
 }
+// El bloqueo de vueltas agotadas vive en el estado, no en el historial: el historial es una ventana acotada.
 function retriesExhausted(state: Workflow): boolean {
- return state.round >= state.maxRounds && state.history.findLast(h => h.activity.startsWith("retry:"))?.phase !== "implement";
+ return state.round >= state.maxRounds && state.blockedReason === EXHAUSTED;
 }
 function resumeBlock(state: Workflow): string {
- if (retriesExhausted(state)) return "Se agotaron las vueltas; se necesita intervención humana";
+ if (retriesExhausted(state)) return EXHAUSTED;
  const approvalRequired = state.phase === "approve" || (["implement", "verify", "pr"].includes(state.phase) && !isApproved(state));
  return decisionBlock(state) || (approvalRequired ? "Falta aprobación humana vigente" : "") || state.blockedReason;
 }
 function recordReview(state: Workflow, review: Review): void {
  requirePhase(state, "verify");
  requireCondition(state.recipe?.lenses.includes(review.lens), "lente fuera de la receta");
+ const blocked = lensRunBlock(state, review.lens, review.fingerprint); requireCondition(!blocked, blocked);
  requireCondition(review.verdict !== "pass" || review.findings.length === 0, "un lente con hallazgos no puede aprobar");
  state.reviews.push(review);
 }
@@ -229,13 +244,14 @@ function recordReview(state: Workflow, review: Review): void {
 export function transition(original: Workflow, event: WorkflowEvent, at: string): Workflow {
  const state = validate(original);
  requireCondition(nonempty(at), "falta fecha");
- requireCondition(state.status !== "complete", "el trabajo ya está cerrado");
+ // Un cierre sin cambio lo decide el modelo; volver a leer el pedido es la salida humana.
+ requireCondition(state.status !== "complete" || state.phase === "closed" && event.type === "source_changed", "el trabajo ya está cerrado");
  requireCondition(state.status !== "paused" || event.type === "resume" || event.type === "source_changed", "el trabajo está pausado");
  if (state.status === "waiting" && retriesExhausted(state)) requireCondition(["pause", "resume", "source_changed"].includes(event.type), "se agotaron las vueltas");
  applyEvent(state, event, at);
  state.revision++;
  state.activity = event.type === "pause" || event.type === "retry" ? `${event.type}: ${event.reason}` : event.type;
- state.history.push({ at, phase: state.phase, activity: state.activity });
+ state.history = [...state.history, { at, phase: state.phase, activity: state.activity }].slice(-MAX_HISTORY);
  return validate(state);
 }
 // Tabla de eventos: los helpers mantienen juntas las invariantes de cada artefacto.
@@ -267,7 +283,7 @@ function applyEvent(state: Workflow, event: WorkflowEvent, at: string): void {
   case "diagnosed": {
    requirePhase(state, "diagnose"); requireCondition(state.recipe && nonempty(event.cause), "falta causa");
    const reproduction = state.evidence.find(e => e.id === event.reproduction && e.kind === "reproduction");
-   requireCondition(reproduction && (successful(reproduction) || confirmedFailure(reproduction)), "falta reproducción confirmada");
+   requireCondition(reproduction && (successful(reproduction) || expectedFailure(reproduction)), "falta reproducción confirmada");
    state.diagnosis = { cause: event.cause, reproduction: event.reproduction, size: event.size };
    state.recipe.classification.causeKnown = true; state.recipe.classification.size = event.size;
    state.recipe.route = event.size === "small" ? "direct" : "spec"; stepsFor(state); return;
