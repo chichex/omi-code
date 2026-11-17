@@ -436,13 +436,13 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 					extra: text([...footerData.getExtensionStatuses().values()].join(" · ")), model: ctx.model, thinking: ctx.thinkingLevel ?? "off", modelShortcut, pr: branchPr, prStale: branchPrError !== undefined }),
 					{ openPr: openBranchPr, showModel, palette, showContext, showWorkspace });
 			});
-			// Adaptador acotado a Pi 1.5.0: sus siete componentes públicos montados, sin tocar node_modules.
+			// Adaptador acotado a Pi 1.5.1: sus siete componentes públicos montados, sin tocar node_modules.
 			// Si cambia ese contrato, conservar la TUI base en lugar de apropiarse de un árbol desconocido.
 			const children = tui?.children;
-			if (VERSION === "1.5.0" && children?.length === 7 && Array.isArray((children[4] as Container)?.children) && (children[0] as Container)?.children?.length === 3) {
+			if (VERSION === "1.5.1" && children?.length === 7 && Array.isArray((children[4] as Container)?.children) && (children[0] as Container)?.children?.length === 3) {
 				layoutCompatible = true;
 				[document, pending, status, above, editor, below, footer] = children as [Component, Component, Component, Component, Container, Component, Component];
-				// Pi 1.5.0: header, recursos y chat. Quitar sólo el header vacío con sus
+				// Pi 1.5.1: header, recursos y chat. Quitar sólo el header vacío con sus
 				// márgenes; conservar recursos externos, diagnósticos y el chat intactos.
 				const [, loadedResources, chat] = (document as Container).children;
 				workspaceDocument = new Container();

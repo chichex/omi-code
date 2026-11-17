@@ -75,6 +75,15 @@ async function stageRuntime(stage: string): Promise<void> {
 		if (name.endsWith(".json")) await cp(join(themes, name), join(stage, "theme", name));
 	}
 	await cp(join(ROOT, "node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm"), join(stage, "photon_rs_bg.wasm"));
+	// El bridge conserva su metadata junto al bundle; Pi y el SDK vienen del host por
+	// virtualModules. No copiar el CLI nativo opcional del SDK ni node_modules enteros.
+	const bridge = join(ROOT, "node_modules/pi-claude-bridge");
+	const target = join(stage, "claude-bridge");
+	await mkdir(join(target, "src"), { recursive: true });
+	for (const name of ["package.json", "README.md", "LICENSE"]) await cp(join(bridge, name), join(target, name));
+	execFileSync("bun", ["build", join(bridge, "src/index.ts"), "--target=node", "--format=esm",
+		"--external=@earendil-works/*", "--external=@anthropic-ai/claude-agent-sdk",
+		"--outfile", join(target, "src/index.js")], { cwd: ROOT, stdio: ["ignore", "ignore", "inherit"] });
 }
 
 async function writeChecksums(out: string, names: readonly string[]): Promise<void> {

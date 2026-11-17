@@ -34,12 +34,13 @@ Se instala en `~/.omi`; `OMI_HOME=/ruta/absoluta` permite otra raíz. El binario
 
 ### Integraciones por defecto
 
-Una instalación nueva trae estas integraciones **dentro del binario**, sin descargar paquetes ni requerir Pi, Node o npm aparte. También quedan disponibles al actualizar una instalación existente, sin reemplazar sus ajustes.
+Una instalación nueva trae estas integraciones **en la distribución de OMI**, sin descargar paquetes ni requerir Pi, Node o npm aparte. También quedan disponibles al actualizar una instalación existente, sin reemplazar sus ajustes.
 
 | Integración | Qué trae | Autenticación |
 |---|---|---|
 | Subagentes | Tool `subagent` con `scout`, `planner`, `reviewer` y `worker`; background, espera explícita y panel `SUBAGENTES` | El modelo y razonamiento elegidos en la sesión |
 | Desarrollo | Harness opt-in con Directa, Diagnóstico y Con spec, evidencia y progreso hasta PR draft | Modelo de la sesión y `gh` autenticado |
+| Claude Bridge | Proveedor `claude-bridge/...` con `pi-claude-bridge@0.13.0` incluido | Claude Code externo, autenticado con `claude auth login` |
 | KB de [Harness](https://github.com/chichex/harness/tree/main/kb) | MCP `harness-kb`, por Streamable HTTP en `https://kb-prod-chiche.ohmyinfra.com/mcp` | OAuth desde `/mcp login harness-kb` |
 | OMI | El mismo catálogo de `omi mcp`, integrado **nativamente** en el agente, con confirmaciones en la UI | `omi login` |
 
@@ -64,19 +65,37 @@ Si el principal necesita el resultado antes de seguir, puede delegar con **`back
 
 Hay un máximo de 4 lotes de background, 8 tareas por lote y **4 tareas activas globales**, compartidas con foreground; 32 turnos por tarea, 256 llamadas delegadas por lote background y cancelación solicitada a los 10 minutos de cada tarea activa. Una cadena se corta ante el primer error. La cancelación es cooperativa: no revierte archivos ni operaciones ya enviadas. La salida se limita a 6 KB / 200 líneas por tarea, con un archivo temporal privado para el resultado completo si se trunca. Las llamadas en background adquieren un contexto de tool nuevo por ejecución, con IDs propios, en vez de retener el scope de la llamada original ya finalizada; siguen pasando por validación, hooks y confirmaciones del padre.
 
-Se pueden desactivar en `~/.omi/agent/settings.json`:
+#### Claude por Claude Code
+
+El builtin `omi-claude-bridge` distribuye `pi-claude-bridge@0.13.0` con OMI; requiere Pi 1.5.1, incluido en el binario. No descarga ni instala paquetes en el home al arrancar, no agrega paquetes a `settings.json` ni cambia tu modelo predeterminado.
+
+Necesitás **Claude Code instalado aparte**, con `claude` en `PATH`: OMI no lo instala. Autenticá desde una terminal, fuera de OMI:
+
+```sh
+claude auth login
+```
+
+Después, en OMI, seleccioná un modelo **`claude-bridge/...` desde `/model`**. No uses `anthropic/...` ni `/login` de Pi para autenticar este bridge: son otro proveedor y otro flujo de autenticación. En la CLI, usá `--model claude-bridge/claude-opus-5-5`; si querés la API de Anthropic, usá `--model anthropic/claude-opus-5-5`. Un ID Claude sin proveedor puede ser ambiguo si ambos están disponibles. El proveedor sigue apareciendo con `--offline` o `--no-mcp`; eso no permite usar Claude sin conexión.
+
+La configuración avanzada va en `<OMI_HOME>/agent/claude-bridge.json` (por defecto, `~/.omi/agent/claude-bridge.json`). Se respeta `provider.pathToClaudeCodeExecutable` si configuraste otra ruta al ejecutable.
+
+La sesión y las credenciales de Claude Code viven en `~/.claude`, fuera de la configuración de OMI (o en `CLAUDE_CONFIG_DIR`, si lo configuraste). OMI fuerza `settingSources: []`: **no carga los ajustes ni hooks de usuario o proyecto de Claude Code**. El contexto y las herramientas siguen viniendo del agente OMI; usar Claude Code para autenticar no importa la configuración de otro harness.
+
+#### Desactivar integraciones
+
+Se pueden desactivar en `~/.omi/agent/settings.json` (o `<OMI_HOME>/agent/settings.json`):
 
 ```json
 {
-  "extensions": ["-builtin:omi-subagents", "-builtin:omi-kb"]
+  "extensions": ["-builtin:omi-subagents", "-builtin:omi-kb", "-builtin:omi-claude-bridge"]
 }
 ```
 
-Una extensión del usuario que ya registre `subagent` reemplaza la incluida, sin duplicar la tool. `--no-extensions` omite ambas integraciones por defecto en esa corrida; `--no-mcp` omite la KB, no las tools nativas de OMI. Con `--offline` o `PI_OFFLINE=1` no se registra la KB remota por defecto. Un servidor `harness-kb` en `~/.omi/agent/mcp.json` o en `.pi/mcp.json` (proyecto de confianza) prevalece sobre el default, sin ser modificado. Los cambios de exposición/activación hechos desde `/mcp` sobre el registro por defecto duran esa sesión; para persistirlos, usá los ajustes anteriores o una entrada propia en `mcp.json`.
+Una extensión del usuario que ya registre `subagent` reemplaza la incluida, sin duplicar la tool. `--no-extensions` omite las extensiones por defecto en esa corrida; `--no-mcp` omite la KB, no Claude Bridge ni las tools nativas de OMI. Con `--offline` o `PI_OFFLINE=1` no se registra la KB remota por defecto. Un servidor `harness-kb` en `~/.omi/agent/mcp.json` o en `.pi/mcp.json` (proyecto de confianza) prevalece sobre el default, sin ser modificado. Los cambios de exposición/activación hechos desde `/mcp` sobre el registro por defecto duran esa sesión; para persistirlos, usá los ajustes anteriores o una entrada propia en `mcp.json`.
 
 ### Configuración y aislamiento
 
-No trae skills ni modelo seleccionado de antemano. Para usar un modelo, entrá con `/login` o importá credenciales.
+No trae skills ni modelo seleccionado de antemano, ni reemplaza el predeterminado del usuario. Para usar un proveedor nativo de Pi, entrá con `/login` o importá credenciales; para Claude Bridge, usá el flujo de Claude Code indicado arriba.
 
 Para los siguientes modelos del proveedor **OpenAI**, omi configura por defecto una ventana de
 **1.050.000 tokens**, según el límite publicado en la ficha API de cada modelo:
@@ -95,7 +114,7 @@ proveedores ni el catálogo cacheado: los Claude y Gemini recientes ya declaran 
 El contexto largo puede aumentar el costo API; se mantienen las tarifas por tramos del catálogo.
 Esto no verifica permisos ni disponibilidad en tu cuenta, ni aplica el límite API al proveedor Codex.
 
-omi sólo lee configuración de `~/.omi/agent` y del proyecto, del directorio actual hasta la raíz del repo.
+Para la configuración del agente, omi sólo lee `~/.omi/agent` y el proyecto, del directorio actual hasta la raíz del repo.
 Por ejemplo, no carga `~/.pi/agent`, `~/.agents/skills` ni `~/AGENTS.md`. Para instrucciones globales usá `~/.omi/agent/AGENTS.md`.
 La configuración del repo (`.pi/`, `.agents/skills`) sigue valiendo, con la confirmación de confianza.
 
@@ -244,7 +263,7 @@ OMI_TUI=classic npm run omi
 ```
 
 `--tui-mode regular` conserva el modo de scrollback del terminal, sin las vistas fullscreen ni la lateral.
-RPC, JSON, print y MCP no abren recursos de la UI. El adaptador del layout está verificado con Pi 1.5.0;
+RPC, JSON, print y MCP no abren recursos de la UI. El adaptador del layout está verificado con Pi 1.5.1;
 si cambia su contrato, conserva la vista base y avisa. No parchea archivos de `node_modules`.
 
 ### Harness de desarrollo hasta PR draft

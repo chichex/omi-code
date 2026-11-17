@@ -16,6 +16,7 @@ import { tempDir } from "./helpers/io.ts";
 import { exerciseWorkspace, plainTerminal } from "./helpers/workspace-pty.ts";
 import { exerciseSubagentRuntime } from "./helpers/subagent-runtime.ts";
 import { exerciseSubagentBackgroundRuntime } from "./helpers/subagent-background-runtime.ts";
+import { exerciseClaudeBridgeRuntime } from "./helpers/claude-bridge-runtime.ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const enabled = process.env.OMI_PACKAGING_SMOKE === "1";
@@ -85,12 +86,18 @@ test("release real_compila, instala y arranca sin Node ni repo", { skip: !enable
 	const observed = JSON.parse(metadata?.description ?? "null");
 	assert.deepEqual(observed, { version: pkg.dependencies["@earendil-works/pi-coding-agent"], packageDir: await realpath(join(installRoot, "runtime")), examples: true });
 	const models = await rpc(binary, home, { id: "models", type: "get_available_models" }, [], { GEMINI_API_KEY: "del-shell" });
-	assert.deepEqual((models.find((line) => line.id === "models")?.data as { models: unknown[] }).models, []);
+	const available = (models.find((line) => line.id === "models")?.data as { models: { provider: string }[] }).models;
+	assert.ok(available.length > 0, "el bridge viene incluido, sin instalar paquetes ni Claude Code");
+	assert.ok(available.every((model) => model.provider === "claude-bridge"), "la API key del shell no habilita otros proveedores");
+	const disabled = await rpc(binary, home, { id: "disabled", type: "get_available_models" }, ["--no-extensions"], { GEMINI_API_KEY: "del-shell" });
+	assert.deepEqual((disabled.find((line) => line.id === "disabled")?.data as { models: unknown[] }).models, []);
 	const shell = await rpc(binary, home, { id: "env", type: "bash", command: 'printf "%s|%s|%s" "${PI_PACKAGE_DIR-unset}" "${GEMINI_API_KEY-unset}" "${OMI_AGENT_SESSION-unset}"' }, [], { GEMINI_API_KEY: "del-shell" });
 	const shellResponse = shell.find((line) => line.id === "env" && line.type === "response");
 	assert.ok(shellResponse?.data, JSON.stringify(shell));
 	assert.equal((shellResponse.data as { output: string }).output, "unset|del-shell|1");
 	const agent = join(installRoot, "agent");
+	await exerciseClaudeBridgeRuntime({ command: binary, cwd: home, agent, env: { HOME: home, OMI_HOME: "" } });
+	await exerciseClaudeBridgeRuntime({ command: binary, cwd: home, agent, env: { HOME: home, OMI_HOME: "" } }, true);
 	await exerciseSubagentRuntime({ command: binary, cwd: home, agent, env: { HOME: home, PATH: "/usr/bin:/bin", OMI_HOME: "" } });
 	await exerciseSubagentBackgroundRuntime({ command: binary, cwd: home, agent, env: { HOME: home, PATH: "/usr/bin:/bin", OMI_HOME: "" } });
 	const seededCwd = await seedConfig(home, agent);
