@@ -4,7 +4,7 @@ import { defaultExtensions, HARNESS_KB_URL } from "../src/tui/defaults.ts";
 import { agentDir } from "../src/core/paths.ts";
 import { rpc, requestSeenByModel } from "./helpers/foreign-config.ts";
 import { exerciseSubagentRuntime } from "./helpers/subagent-runtime.ts";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -13,21 +13,21 @@ import { fileURLToPath } from "node:url";
 
 const bin = fileURLToPath(new URL("../bin/omi.ts", import.meta.url));
 
-test("defaults: subagentes y KB incluidos como builtins configurables, sin paquetes descargados", async () => {
+test("defaults: subagentes, KB y Claude bridge incluidos como builtins configurables, sin paquetes descargados", async () => {
 	const extensions = await defaultExtensions([], {});
-	assert.deepEqual(extensions.map((e) => typeof e === "function" ? "" : [e.name, e.builtin]), [["omi-subagents", true], ["omi-kb", true]]);
-	const kb = extensions[1]!; const servers: unknown[] = [];
+	assert.deepEqual(extensions.map((e) => typeof e === "function" ? "" : [e.name, e.builtin]), [["omi-subagents", true], ["omi-claude-bridge", true], ["omi-kb", true]]);
+	const kb = extensions[2]!; const servers: unknown[] = [];
 	if (typeof kb === "function") throw new Error("expected builtin");
 	kb.factory({ on: (_event: string, handler: () => void) => handler(), getSettings: () => ({}), registerMcpServer: (name: string, config: unknown) => servers.push({ name, config }) } as never);
 	assert.deepEqual(servers, [{ name: "harness-kb", config: { url: HARNESS_KB_URL, exposure: "deferred", description: "KB de Harness: buscar, leer y guardar documentación de producto y diseño. Requiere login OAuth desde /mcp." } }]);
 });
 
 for (const [args, env] of [[ ["--no-mcp"], {} ], [ ["--offline"], {} ], [ [], { PI_OFFLINE: "1" } ], [ [], { PI_OFFLINE: "true" } ]] as const) test(`defaults: no conecta KB con ${JSON.stringify({ args, env })}`, async () => {
-	assert.deepEqual((await defaultExtensions(args, env)).map((e) => typeof e === "function" ? "" : e.name), ["omi-subagents"]);
+	assert.deepEqual((await defaultExtensions(args, env)).map((e) => typeof e === "function" ? "" : e.name), ["omi-subagents", "omi-claude-bridge"]);
 });
 
 test("defaults: deshabilitar builtin:mcp no deja registros sin cliente", async () => {
-	const kb = (await defaultExtensions([], {}))[1]!;
+	const kb = (await defaultExtensions([], {}))[2]!;
 	if (typeof kb === "function") throw new Error("expected builtin");
 	kb.factory({ on: (_event: string, handler: () => void) => handler(), getSettings: () => ({ extensions: ["-builtin:mcp"] }), registerMcpServer: () => assert.fail("MCP deshabilitado") } as never);
 });
@@ -41,6 +41,20 @@ for (const mode of ["default", "settings", "--no-extensions"] as const) test(`ru
 	const tools = JSON.parse(result.commands.find((c) => c.name === "probe-defaults")!.description) as string[];
 	assert.equal(tools.includes("subagent"), mode === "default");
 	assert.equal(tools.filter((name) => name === "omi_link_project").length, 1, "OMI no se duplica por MCP");
+});
+
+for (const mode of ["default", "settings", "--no-extensions"] as const) test(`runtime: Claude bridge · ${mode}`, async (t) => {
+	const home = await tempDir(t); const dir = agentDir(home); await mkdir(dir, { recursive: true });
+	const settings = JSON.stringify({ defaultProvider: "openai", defaultModel: "gpt-5.4", ...(mode === "settings" ? { extensions: ["-builtin:omi-claude-bridge"] } : {}) });
+	await writeFile(join(dir, "settings.json"), settings);
+	const executable = join(home, "claude"); await writeFile(executable, "#!/bin/sh\nexit 99\n"); await chmod(executable, 0o700);
+	const data = await rpc({ command: process.execPath, args: [bin, "--offline", ...(mode === "--no-extensions" ? [mode] : [])], cwd: home, env: { HOME: home, PATH: `${home}:/usr/bin:/bin`, OMI_HOME: "" } }, { id: "bridge", type: "get_available_models" }) as { models: { provider: string; id: string }[] };
+	const models = data.models.filter((model) => model.provider === "claude-bridge");
+	assert.equal(models.length > 0, mode === "default");
+	assert.equal(new Set(models.map((model) => model.id)).size, models.length);
+	const saved = JSON.parse(await readFile(join(dir, "settings.json"), "utf8"));
+	assert.equal(saved.defaultProvider, "openai"); assert.equal(saved.defaultModel, "gpt-5.4");
+	assert.equal(saved.packages, undefined, "no instala paquetes en el home al arrancar");
 });
 
 test("runtime: conserva una extensión de subagentes del usuario en lugar de duplicarla", async (t) => {

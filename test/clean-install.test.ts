@@ -27,10 +27,16 @@ test("instalación nueva_no trae ningún skill", async (t) => {
 	assert.deepEqual(await skillNames(omi(home, home)), []);
 });
 
-test("instalación nueva_las API keys del shell no le dan un modelo", async (t) => {
+test("instalación nueva_sin Claude Code las API keys del shell no habilitan modelos", async (t) => {
 	const home = await tempDir(t);
-	const data = await rpc(omi(home, home, { GEMINI_API_KEY: "del-shell", OPENAI_API_KEY: "del-shell", AWS_PROFILE: "del-shell" }), { id: "1", type: "get_available_models" }) as { models: unknown[] };
-	assert.deepEqual(data.models, []);
+	const request = { id: "1", type: "get_available_models" };
+	const baseline = await rpc(omi(home, home, { PATH: "/usr/bin:/bin" }), request) as { models: { provider: string }[] };
+	assert.deepEqual(baseline.models, []);
+	const process = omi(home, home, { PATH: "/usr/bin:/bin", GEMINI_API_KEY: "del-shell", OPENAI_API_KEY: "del-shell", AWS_PROFILE: "del-shell" });
+	const data = await rpc(process, request) as { models: unknown[] };
+	assert.deepEqual(data.models, baseline.models, "las credenciales del shell no agregan modelos");
+	const disabled = await rpc({ ...process, args: [bin, "--no-extensions"] }, request) as { models: unknown[] };
+	assert.deepEqual(disabled.models, []);
 });
 
 test("las API keys del shell siguen llegando a los comandos que corre el usuario", async (t) => {
