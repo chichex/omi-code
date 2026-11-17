@@ -39,7 +39,7 @@ Una instalación nueva trae estas integraciones **en la distribución de OMI**, 
 | Integración | Qué trae | Autenticación |
 |---|---|---|
 | Subagentes | Tool `subagent` con `scout`, `planner`, `reviewer` y `worker`; background, espera explícita y panel `SUBAGENTES` | El modelo y razonamiento elegidos en la sesión |
-| Desarrollo | Harness opt-in con Directa, Diagnóstico y Con spec, evidencia y progreso hasta PR draft | Modelo de la sesión y `gh` autenticado |
+| Desarrollo | Harness que arranca ante un pedido de desarrollo, con un sí humano; Directa, Diagnóstico y Con spec, evidencia y progreso hasta PR draft | Modelo de la sesión y `gh` autenticado |
 | Claude Bridge | Catálogo `claude-bridge/...` con `pi-claude-bridge@0.13.0` incluido; requiere ejecutable externo | Claude Code con `claude auth login` o `CLAUDE_CODE_OAUTH_TOKEN` |
 | KB de [Harness](https://github.com/chichex/harness/tree/main/kb) | MCP `harness-kb`, por Streamable HTTP en `https://kb-prod-chiche.ohmyinfra.com/mcp` | OAuth desde `/mcp login harness-kb` |
 | OMI | El mismo catálogo de `omi mcp`, integrado **nativamente** en el agente, con confirmaciones en la UI | `omi login` |
@@ -137,22 +137,22 @@ el historial y la edición siguen usando el renderer de Pi; no hay un segundo pr
 - **3 · PRs:** hasta 100 PRs abiertos de todo el repo, incluidos los borradores.
   Ambas listas requieren `gh` instalado y autenticado; flechas seleccionan, **Enter** carga la descripción del elemento elegido y **r** actualiza.
   Los errores se muestran por separado y conservan la última lista como desactualizada, no como una lista vacía exitosa.
-  No crean issues ni cierran o fusionan PRs. El detalle de PR sigue siendo de sólo lectura.
-  **Issue triage:** **Enter en la lista siempre abre el detalle**, también si el issue ya está preparado. **Esc** sólo lo cierra, sin cambiar de workspace.
-  Sin preparación guardada, el detalle ofrece **Enter iniciar triage**. Usa el modelo seleccionado (sin tools) para clasificarlo como **Nuevo feature**, **Fix**, **Mejora** o **Chore**, con objetivo, alcance inicial, criterios de aceptación sugeridos y dudas.
+  Las listas no crean issues ni cierran o fusionan PRs. El detalle de PR sigue siendo de sólo lectura.
+  **Trabajar en un issue:** **Enter en la lista siempre abre el detalle**, también si el issue ya está preparado. **Esc** sólo lo cierra, sin cambiar de workspace.
+  Sin preparación guardada, el detalle ofrece **Enter iniciar trabajo**: le pide al [harness de desarrollo](#harness-de-desarrollo-hasta-pr-draft) que empiece, y el harness pide tu confirmación antes de tocar nada. Con el sí, usa el modelo seleccionado (sin tools) para clasificarlo como **Nuevo feature**, **Fix**, **Mejora** o **Chore**, con objetivo, alcance inicial, criterios de aceptación sugeridos y dudas.
   Crea una rama `feat/issue-N-título`, `fix/issue-N-título`, `improve/issue-N-título` o `chore/issue-N-título` desde el commit de **`main` local**, no desde HEAD ni `origin/main`.
   El worktree queda en `<repo-principal>-worktrees/issue-N`, fuera del checkout original. No hace fetch, pull, stash, commit ni push; tampoco mueve la rama, índice o cambios del origen.
-  Abre una sesión nueva en ese directorio, con el issue y su triage en el contexto. La lateral muestra **ISSUE ACTIVO** debajo de **Recursos**, con número, título y tipo; se restaura con `/reload` y `/resume`.
-  **Se detiene ahí:** no inicia la implementación ni define todavía etapas. La conversación anterior queda en su sesión.
+  Abre una sesión nueva en ese directorio, con el issue y su triage en el contexto, y el harness sigue en **Explorar**. La lateral muestra **PROGRESO · #N** (o **ISSUE ACTIVO** si no hay un trabajo) debajo de **Recursos**; se restaura con `/reload` y `/resume`.
+  No se escribe código hasta que apruebes la receta. La conversación anterior queda en su sesión.
   **Idempotente:** la lista muestra badges locales, por ejemplo `#42 [Fix] [issue-42]`, o `[Sin triage]`. No son etiquetas de GitHub ni generan llamadas al modelo al abrir la lista.
-  El detalle de uno preparado muestra clasificación, rama y ruta, con **Enter retomar worktree**: vuelve a la misma sesión, conservando conversación y cambios, sin reclasificar ni crear otra rama, worktree o sesión. Si ya estás en esa sesión, permanece ahí.
+  El detalle de uno preparado muestra clasificación, rama y ruta, con **Enter retomar trabajo**: pide tu confirmación y vuelve a la misma sesión, conservando conversación y cambios, sin reclasificar ni crear otra rama, worktree o sesión; el trabajo sigue desde su etapa guardada. Si ya estás trabajando en ese issue, permanece ahí.
   El vínculo se guarda por issue en `<git-common-dir>/omi/issue-workspaces/N.json`, compartido por todos los worktrees del clon. `/resume` y `/fork` explícitos vinculan la sesión elegida si conserva el mismo triage y worktree.
   Las preparaciones anteriores se reconocen por su metadata de sesión y su identidad Git, no sólo por el nombre de la carpeta. Si coinciden varias sesiones antiguas, pide elegir con `/resume`.
-  Para **preparar uno nuevo** requiere `gh`, conexión, proyecto de confianza, modelo autenticado y sesión persistente (sin `--offline` ni `--no-session`), con el agente en reposo. **Retomar** no necesita reclasificación ni autenticación del modelo; `/omi-triage N` también funciona con `--offline` usando el registro local.
+  **Empezar o retomar** requiere `gh`, conexión, proyecto de confianza, modelo autenticado y sesión persistente (sin `--offline` ni `--no-session`), con el agente en reposo. Retomar no reclasifica. Para abrir offline la sesión de un issue preparado, usá `/resume`.
   Se puede cancelar con **Esc** mientras clasifica. Si falta `main`, el modelo falla o una ruta/rama ajena ya existe, no usa otra base ni sobrescribe nada.
   Guarda el progreso de preparación para continuar un intento interrumpido sin repetir el triage. Si falta un worktree o una conversación que ya estaban listos, o no coincide su identidad, indica recuperación pendiente en lugar de reemplazarlos.
   Un lock por issue impide preparaciones simultáneas desde dos ventanas. Tras un cierre abrupto, un lock abandonado no se roba por antigüedad: hay que verificar el PID/host indicado en `N.lock` antes de quitarlo.
-  Si se cancela el cambio de sesión, conserva la preparación y el segundo Enter permite retomarla. Un worktree no es un sandbox.
+  Si se cancela el cambio de sesión, conserva la preparación y volver a pedir el issue permite retomarla. Un worktree no es un sandbox.
 - **4 · Cambios:** lista de hasta 100 archivos y diffs de working tree / stage, sin drivers de diff ni textconv externos.
   Cada archivo con seguimiento muestra `+líneas` en verde y `−líneas` en rojo, alineadas a la derecha incluso al acortar una ruta larga.
   Es el cambio neto respecto de HEAD (stage + working tree, sin contar dos veces la misma edición); sin commits se compara con el árbol vacío.
@@ -231,7 +231,6 @@ el historial y la edición siguen usando el renderer de Pi; no hay un segundo pr
 | Ctrl O o `/omi-output` | Alternar detalle de herramientas; clic en un resumen abre sólo ese grupo |
 | `/omi-actions` | Detalle de Claude reviews y releases de GitHub Actions |
 | `/omi-pr` | URL, título y estado del PR de la rama actual |
-| `/omi-triage [número]` | Preparar el issue seleccionado desde main local o retomar su worktree/sesión guardados |
 | `/omi-model` | Selector propio, también si otra extensión personaliza el editor |
 | `/omi-workspace` | Ubicación y, desde un worktree, opción para volver al repo principal |
 | `/omi-main` | Retomar la sesión del repo principal sin cambiar ramas ni tocar el worktree |
@@ -275,11 +274,11 @@ si cambia su contrato, conserva la vista base y avisa. No parchea archivos de `n
 
 ### Harness de desarrollo hasta PR draft
 
-Después de preparar y entrar a un issue con `/omi-triage N`, **`/omi-work start`** inicia el flujo de desarrollo de manera explícita. `/omi-triage` por sí solo sigue sin implementar nada.
+**Arranca solo ante un pedido.** Si en el chat pedís un cambio de código del repo que vale la pena seguir (feature, fix, mejora o chore con impacto), el agente propone empezar con la tool `omi_work_begin`. Si nombrás un issue (`#N`), usa ese; si no, propone crear uno con el pedido completo. OMI te pide **un solo sí** y muestra el issue que se va a crear, si hace falta. Con el sí crea el issue, lo clasifica, prepara un worktree desde `main` local, cambia a su sesión y sigue en **Explorar**. Si decís que no, no se crea nada. Preguntas, explicaciones, operaciones de OMI y cambios triviales siguen en el chat normal, sin harness ni issue. **Enter iniciar trabajo** en Issues entra por el mismo camino.
 
 Explora código, resuelve inferencias y deja una receta persistente. Tiene tres rutas: **Directa**, **Diagnóstico** para bugs sin causa confirmada y **Con spec** para trabajo grande. Antes de escribir pide aprobación humana de la receta completa. Registra rojo/verde reales, commits por paso, verificación por caso y lentes; sólo entonces puede pedir permiso separado para subir la rama y abrir un **PR draft**. No mergea, dispara workflows ni despliega.
 
-La lateral muestra **PROGRESO · #N** con ruta, etapa, actividad, pasos, checks y bloqueos. Clic o **`/omi-progress`** abre el detalle, también con la lateral oculta. El avance sale del estado y de resultados observados, no de frases del modelo. `/omi-work status`, `pause`, `resume`, `refresh`, `approve`, `pr` y `stop` permiten controlarlo. Cargar una sesión no reejecuta efectos automáticamente.
+La lateral muestra **PROGRESO · #N** con ruta, etapa, actividad, pasos, checks y bloqueos. Clic o **`/omi-progress`** abre el detalle, también con la lateral oculta. El avance sale del estado y de resultados observados, no de frases del modelo. `/omi-work status`, `pause`, `resume`, `refresh`, `approve`, `pr` y `stop` permiten controlarlo; no hay un comando para empezar. Cargar una sesión no reejecuta efectos automáticamente.
 
 La descripción humana del issue se conserva: receta/spec y evidencia se agregan como **comentarios administrados append-only**, con recuperación de publicaciones ambiguas. El estado local vive bajo el Git common-dir, independiente del vínculo de infraestructura OMI. Este corte es para repos existentes; quedan afuera Fundación, prototipos, perfiles avanzados de modelos, Review externa, Land y Ship.
 
