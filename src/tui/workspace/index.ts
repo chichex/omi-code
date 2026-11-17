@@ -13,16 +13,18 @@ import { text, tokens } from "./presentation.ts";
 import { field, notice, OmiCommandPalette, OmiInfoModal } from "./modals.ts";
 import { CompactTranscript, Lines, ReadView } from "./components.ts";
 import { transcriptRoots, workspaceEditor, workspaceFooter, workspaceHeader, workspaceRoot, workspaceWelcome } from "./chrome.ts";
-import { actionsDetail, branchPrDetail, contextDetail, githubDetail, resourcesDetail, subagentsDetail, workspaceDetail, type InfoDetail } from "./details.ts";
+import { actionsDetail, branchPrDetail, contextDetail, resourcesDetail, subagentsDetail, workspaceDetail, type InfoDetail } from "./details.ts";
 import { changesViewLines, githubViewLines, omiViewLines, type GithubView } from "./read-views.ts";
 import { WORKSPACE_VIEWS, type WorkspaceView } from "./navigation.ts";
 import { ACTION_GROUPS, readActionRuns, type ActionGroup, type ActionState } from "./github-actions.ts";
 import { workspaceSidebar } from "./sidebar.ts";
+import { WorkflowProgressMonitor, workflowProgressDetail } from "./workflow-progress.ts";
+import { GithubInspector } from "./github-inspector.ts";
 import { consumeSubagentEvent, SubagentMonitor } from "./subagents.ts";
 import { readBranchPullRequest, type BranchPullRequest } from "./pull-request.ts";
 import { ISSUE_TYPES } from "./issue-worktree.ts";
 import { classifyIssue, restoreIssueTriage, type IssueTriageState } from "./issue-triage.ts";
-import { assertIssueIdentity, discoverLegacyPreparations, IssuePreparationBusyError, loadIssuePreparations, readIssuePreparation, rememberIssueSession, verifyIssuePreparation, type IssuePreparationEntry } from "./issue-registry.ts";
+import { discoverLegacyPreparations, IssuePreparationBusyError, loadIssuePreparations, rememberIssueSession, type IssuePreparationEntry } from "./issue-registry.ts";
 import { prepareIssue, type IssueClassification } from "./issue-preparation.ts";
 import { preparePrincipalSession, PrincipalSessionBusyError } from "./main-workspace.ts";
 
@@ -40,12 +42,13 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		let view: View = "chat"; let working = false; let blocked = false; let activity = "Listo";
 		const runningTools = new Map<string, string>();
 		const subagents = new SubagentMonitor(); let unsubscribeSubagents: (() => void) | undefined;
+		const workflow = new WorkflowProgressMonitor(); let unsubscribeWorkflow: (() => void) | undefined;
 		let git: GitSnapshot | undefined; let gitError = false; let resources: Resources | undefined;
 		const github: Record<GithubView, GithubList> = { issues: emptyGithubList(), prs: emptyGithubList() };
 		let actions: Record<ActionGroup, ActionState> = { reviews: {}, releases: {} };
 		let branchPr: BranchPullRequest | undefined; let branchPrError: string | undefined;
 		let openingBranchPr = false;
-		let githubDetailBusy = false; let infoPrompt = false; let triageBusy = false; let mainBusy = false;
+		let infoPrompt = false; let triageBusy = false; let mainBusy = false;
 		let issueTriage: IssueTriageState | undefined;
 		let preparations = new Map<number, IssuePreparationEntry>(); let preparationsError: string | undefined;
 		let preparationsRepo: string | undefined; let legacyScanned = false; let sessionRemembered = false;
@@ -172,6 +175,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			} finally { openingBranchPr = false; }
 		}
 		async function showActions(): Promise<void> { await info(actionsDetail(actions)); }
+		async function showProgress(): Promise<void> { await info({ title: "Progreso de desarrollo", content: workflowProgressDetail(gitError ? undefined : workflow.current(ctx.cwd, git)), options: { color: "accent", subtitle: "Desarrollo · estado observado hasta PR draft" } }); }
 		async function showResources(): Promise<void> { await info(resourcesDetail(resources)); }
 		async function showSubagents(args = ""): Promise<void> {
 			if (!active) return;
@@ -232,7 +236,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		async function palette(): Promise<void> {
 			if (!active || finishModal) return;
 			const actions: [string, () => void | Promise<void>][] = [...WORKSPACE_VIEWS.map((item): [string, () => void] => [item.label, () => switchView(item.id)]),
-				["PR de la rama actual", showBranchPr], ["GitHub Actions", showActions], ["Subagentes", showSubagents], ["Elegir modelo", showModel], ["Ventana de contexto", showContext], ["Ubicación / worktree", showWorkspace], ["Recursos del equipo", showResources], ["Mostrar / ocultar lateral", toggleSidebar], ["Personalizar lateral", customizeSidebar], ["Alternar detalle de herramientas", () => { ctx.ui.setToolsExpanded(!ctx.ui.getToolsExpanded()); }], ["Actualizar datos", () => { void refreshLocal(); void refreshRemote(); }],
+				["Progreso de desarrollo", showProgress], ["PR de la rama actual", showBranchPr], ["GitHub Actions", showActions], ["Subagentes", showSubagents], ["Elegir modelo", showModel], ["Ventana de contexto", showContext], ["Ubicación / worktree", showWorkspace], ["Recursos del equipo", showResources], ["Mostrar / ocultar lateral", toggleSidebar], ["Personalizar lateral", customizeSidebar], ["Alternar detalle de herramientas", () => { ctx.ui.setToolsExpanded(!ctx.ui.getToolsExpanded()); }], ["Actualizar datos", () => { void refreshLocal(); void refreshRemote(); }],
 				["Preparar / retomar el issue seleccionado", () => pi.sendUserMessage("/omi-triage", { expandPromptTemplates: true })]];
 			if (git?.linked) actions.splice(WORKSPACE_VIEWS.length, 0, ["Volver al repo principal", () => pi.sendUserMessage("/omi-main", { expandPromptTemplates: true })]);
 			let selected: string | undefined;
@@ -245,13 +249,13 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			if (active) await actions.find(([label]) => label === selected)?.[1]();
 		}
 		const header = workspaceHeader(() => ({ theme: theme(), cwd: ctx.cwd, git, view }), { palette, switchView });
-		const sidebarFrame = (width: number) => workspaceSidebar({ theme: theme(), cwd: ctx.cwd, height: Math.max(1, rows() - 6), git, gitError, resources, actions, project, envAt, envError, context: contextState(), issueTriage, subagents, hiddenSections: prefs.hiddenSections, model: ctx.model, thinking: ctx.thinkingLevel ?? "off", session }, width);
+		const sidebarFrame = (width: number) => workspaceSidebar({ theme: theme(), cwd: ctx.cwd, height: Math.max(1, rows() - 6), git, gitError, resources, actions, project, envAt, envError, context: contextState(), issueTriage, subagents, workflowProgress: gitError ? undefined : workflow.current(ctx.cwd, git), hiddenSections: prefs.hiddenSections, model: ctx.model, thinking: ctx.thinkingLevel ?? "off", session }, width);
 		const sidebar = new Lines((width) => sidebarFrame(width).lines, (event) => {
 			if (event.type !== "click") return;
 			const target = sidebarFrame(event.width).targets.get(event.y);
 			if (target === "resources") void showResources(); else if (target === "context") void showContext();
 			else if (target === "workspace") void showWorkspace(); else if (target === "actions") void showActions();
-			else if (target === "subagents") void showSubagents(); else if (target === "model") void showModel();
+			else if (target === "subagents") void showSubagents(); else if (target === "progress") void showProgress(); else if (target === "model") void showModel();
 			else if (target === "sidebar-settings") void customizeSidebar(); else if (target) switchView(target);
 			return { handled: true };
 		});
@@ -280,41 +284,14 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			}
 			return false;
 		}, changed, () => rows() - 6);
-		async function showGithubDetail(kind: GithubView): Promise<void> {
-			const item = github[kind].items?.[github[kind].selected]; const snapshot = git;
-			if (!item || !snapshot || githubDetailBusy || finishModal || !active || !ctx.isProjectTrusted()) return;
-			githubDetailBusy = true; const identity = gitIdentity(); changed();
-			const current = () => active && identity === gitIdentity() && view === kind && github[kind].items?.[github[kind].selected]?.number === item.number;
-			try {
-				const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(6000)]);
-				let saved = kind === "issues" ? preparations.get(item.number) : undefined;
-				if (kind === "issues") {
-					try { const record = await readIssuePreparation(snapshot, item.number); if (record) saved = { record }; }
-					catch (error) { saved = { error: error instanceof Error ? error.message : "Registro local no disponible" }; }
-					if (saved?.record) {
-						try { assertIssueIdentity(saved.record, item); if (saved.record.phase === "ready") await verifyIssuePreparation(snapshot, saved.record, signal); }
-						catch (error) { saved = { ...saved, error: error instanceof Error ? error.message : "Preparación no disponible" }; }
-					}
-					if (!saved && preparationsError) saved = { error: preparationsError };
-					if (saved) preparations.set(item.number, saved);
-				}
-				let body = saved?.record?.source.body ?? ""; let staleBody = false;
-				try {
-					if (parsed.offline) throw new Error("Offline");
-					body = await readGithubDetail(snapshot, kind === "issues" ? "issue" : "pr", item.number, signal);
-				} catch (error) { if (!saved) throw error; staleBody = true; }
-				if (!current()) return;
-				const start = await info(githubDetail({ kind, item, saved, body, staleBody }));
-				// Siempre detalle primero. Sólo su segundo Enter despacha una acción de sesión.
-				if (start && kind === "issues" && current()) pi.sendUserMessage(`/omi-triage ${item.number}`, { expandPromptTemplates: true });
-			} catch { if (current()) await info({ title: "GitHub · detalle no disponible", content: [notice("Revisá gh, autenticación o red. El detalle también puede ser demasiado grande.", "warning")], options: { color: "warning", subtitle: "GitHub · no se pudo cargar el detalle" } }); }
-			finally { githubDetailBusy = false; changed(); }
-		}
+		const githubInspector = new GithubInspector({ state: () => ({ ctx, git, github, view, preparations, preparationsError }), active: () => active,
+			gitIdentity, changed, modalBusy: () => !!finishModal, signal: controller.signal, offline: parsed.offline, pi, info });
+		const showGithubDetail = (kind: GithubView): Promise<void> => githubInspector.show(kind);
 		function githubPane(kind: GithubView): ReadView {
 			const pane = new ReadView((width) => {
 				const state = github[kind];
 				state.selected = Math.max(0, Math.min(state.selected, (state.items?.length ?? 1) - 1));
-				return githubViewLines(theme(), { kind, state, hasGit: !!git, remoteBusy, preparations, preparationsError, detailBusy: githubDetailBusy, now: Date.now() }, width);
+				return githubViewLines(theme(), { kind, state, hasGit: !!git, remoteBusy, preparations, preparationsError, detailBusy: githubInspector.busy, now: Date.now() }, width);
 			}, (data) => {
 				if (matchesKey(data, "escape")) { switchView("chat"); return true; }
 				if (data === "r") { if (kind === "issues") { legacyScanned = false; void refreshLocal(); } void refreshRemote(); return true; }
@@ -429,6 +406,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			["omi", "Paleta de comandos de OMI", palette], ["omi-model", "Selector propio de modelo", showModel],
 			["omi-workspace", "Ubicación y worktree", showWorkspace], ["omi-resources", "CPU, RAM y disco del host", showResources],
 			["omi-actions", "Claude reviews y releases de GitHub Actions", showActions],
+			["omi-progress", "Progreso del desarrollo hasta PR draft", showProgress],
 			["omi-pr", "Enlace al PR de la rama actual", showBranchPr],
 			["omi-context", "Ventana de contexto", showContext], ["omi-sidebar", "Mostrar / ocultar lateral", toggleSidebar], ["omi-output", "Alternar detalle de herramientas", () => { ctx.ui.setToolsExpanded(!ctx.ui.getToolsExpanded()); }],
 			["omi-sidebar-settings", "Elegir los bloques visibles de la lateral", customizeSidebar],
@@ -441,6 +419,8 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			if (context.mode !== "tui") return;
 			ctx = context; prefs = await loadWorkspacePreferences(io.homeDir); session = sessionStats(ctx.sessionManager.getBranch()); active = true;
 			unsubscribeSubagents?.(); subagents.clear();
+			unsubscribeWorkflow?.(); workflow.clear();
+			unsubscribeWorkflow = pi.events.on("omi:workflow", (event) => { if (active && workflow.consume(event)) changed(); });
 			unsubscribeSubagents = pi.events.on("omi:subagents", (event) => { if (active && consumeSubagentEvent(subagents, event)) changed(); });
 			issueTriage = restoreIssueTriage(ctx.sessionManager.getBranch(), ctx.cwd);
 			if (!parsed.useTheme && !pi.getSettings().theme) {
@@ -482,9 +462,9 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 				return undefined;
 			});
 			working = !ctx.isIdle();
-			timer = setInterval(() => { void refreshLocal(); }, 3000); timer.unref(); void refreshLocal(); changed();
+			timer = setInterval(() => { void refreshLocal(); }, 3000); timer.unref(); if (parsed.offline || !ctx.isProjectTrusted()) void refreshRemote(); void refreshLocal(); changed();
 		});
-		pi.on("session_shutdown", async () => { active = false; unsubscribeSubagents?.(); unsubscribeSubagents = undefined; subagents.clear(); controller.abort(); if (timer) clearInterval(timer); unsubscribeInput?.(); finishModal?.(); finishModal = undefined; if (tui && baseRoot && isViewportTUI(tui)) tui.setLayoutRoot(baseRoot); await Promise.all([saveQueue, issuePreparationTask?.catch(() => {}), issueSessionTask?.catch(() => {}), mainSessionTask?.catch(() => {})]); });
+		pi.on("session_shutdown", async () => { active = false; unsubscribeWorkflow?.(); unsubscribeWorkflow = undefined; workflow.clear(); unsubscribeSubagents?.(); unsubscribeSubagents = undefined; subagents.clear(); controller.abort(); if (timer) clearInterval(timer); unsubscribeInput?.(); finishModal?.(); finishModal = undefined; if (tui && baseRoot && isViewportTUI(tui)) tui.setLayoutRoot(baseRoot); await Promise.all([saveQueue, issuePreparationTask?.catch(() => {}), issueSessionTask?.catch(() => {}), mainSessionTask?.catch(() => {})]); });
 		pi.on("before_agent_start", (_event, context) => { ctx = context; working = true; activity = "Preparando turno"; changed(); });
 		pi.on("agent_start", (_event, context) => { ctx = context; working = true; activity = "Trabajando"; changed(); });
 		pi.on("agent_settled", (_event, context) => { ctx = context; working = false; runningTools.clear(); activity = "Listo"; void refreshLocal(); changed(); });
@@ -495,6 +475,6 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		const update = (_event: unknown, context: ExtensionContext): void => { ctx = context; session = sessionStats(ctx.sessionManager.getBranch()); changed(); };
 		pi.on("message_end", update); pi.on("session_compact", update); pi.on("session_compact_failed", update);
 		pi.on("model_select", update); pi.on("thinking_level_select", update);
-		pi.on("session_tree", (_event, context) => { subagents.clear(); issueTriage = restoreIssueTriage(context.sessionManager.getBranch(), context.cwd); update(_event, context); });
+		pi.on("session_tree", (_event, context) => { workflow.clear(); subagents.clear(); issueTriage = restoreIssueTriage(context.sessionManager.getBranch(), context.cwd); update(_event, context); });
 	} };
 }

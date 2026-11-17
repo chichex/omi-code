@@ -43,10 +43,11 @@ export async function launchTui(args: string[], io: Io, deps: LaunchDeps = {}): 
 	const piMain = deps.piMain ?? (await import("@earendil-works/pi-coding-agent")).main;
 
 	const isolation = await isolatePi(args, dir, io);
+	const { developmentHarnessExtension } = await import("./development.ts");
 	// El workspace usa fullscreen; --tui-mode explícito gana y OMI_TUI=classic conserva el arranque anterior.
 	const workspace = io.env.OMI_TUI !== "classic";
 	const presentation = workspace ? ["--tui-mode", "fullscreen"] : [];
-	const extensions = [omiToolsExtension(io), await runtimeShellExtension(io), herdrExtension(io, args), workspaceExtension(io, args), ...isolation.extensions, ...await defaultExtensions(args, io.env)];
+	const extensions = [omiToolsExtension(io), await runtimeShellExtension(io), herdrExtension(io, args), workspaceExtension(io, args), developmentHarnessExtension(io, args), ...isolation.extensions, ...await defaultExtensions(args, io.env)];
 	// Son componentes del producto, no extensiones que el usuario deba administrar.
 	if (workspace) for (const extension of extensions) if (typeof extension !== "function") extension.hidden = true;
 	// Pi viene fijado dentro de OMI: actualizarlo por separado rompe el contrato del layout.

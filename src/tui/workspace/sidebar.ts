@@ -12,8 +12,9 @@ import type { SidebarSectionId } from "./preferences.ts";
 import { fit, gitSyncSummary, percentage, text, tokens } from "./presentation.ts";
 import type { SessionStats } from "./session-stats.ts";
 import { subagentsPanel, type SubagentMonitor } from "./subagents.ts";
+import { matchingWorkflow, workflowProgressPanel, type WorkflowProgress } from "./workflow-progress.ts";
 
-export type SidebarTarget = WorkspaceView | "workspace" | "actions" | "subagents" | "context" | "resources" | "model" | "sidebar-settings";
+export type SidebarTarget = WorkspaceView | "workspace" | "actions" | "subagents" | "context" | "resources" | "model" | "sidebar-settings" | "progress";
 export interface SidebarState {
 	theme: Theme; cwd: string; height: number; git?: GitSnapshot | undefined; gitError: boolean; resources?: Resources | undefined;
 	actions: Record<ActionGroup, ActionState>; project?: string | undefined; envAt?: number | undefined; envError?: string | undefined;
@@ -21,6 +22,7 @@ export interface SidebarState {
 	issueTriage?: IssueTriageState | undefined; subagents: SubagentMonitor;
 	hiddenSections?: readonly SidebarSectionId[] | undefined; model?: { name: string; provider: string } | undefined;
 	thinking?: string | undefined; session?: SessionStats | undefined;
+	workflowProgress?: WorkflowProgress | undefined;
 }
 interface Row { line: string; target?: SidebarTarget }
 interface Panel {
@@ -84,6 +86,14 @@ function resourcesPanel(state: SidebarState): Panel {
 	] };
 }
 
+function progressPanel(state: SidebarState, progress: WorkflowProgress, width: number, compact: boolean): Panel {
+	const blocked = !!progress.blockedReason;
+	const rows = workflowProgressPanel(state.theme, progress, width, 7).slice(1).map((line) => row(line));
+	return { id: "issue", title: `PROGRESO · #${progress.issueNumber}${compact ? ` · ${text(progress.phaseLabel)}` : ""}`,
+		color: blocked || progress.status === "waiting" || progress.status === "paused" ? "warning" : "accent", target: "progress",
+		rows: compact ? rows.slice(blocked ? 4 : 2, blocked ? 5 : 3) : rows };
+}
+
 function panels(state: SidebarState, width: number, compact: boolean): Panel[] {
 	const { theme: t, git, issueTriage: triage } = state;
 	const issue = triage && (!git || git.root === triage.worktree && git.branch === triage.branch) ? triage : undefined;
@@ -98,7 +108,9 @@ function panels(state: SidebarState, width: number, compact: boolean): Panel[] {
 		{ id: "subagents", title: `SUBAGENTES${tasks.length ? ` · ${counts}` : ""}`, color: failures ? "error" : "syntaxVariable", target: "subagents",
 			rows: subagentsPanel(t, state.subagents, width, 2).slice(1).map((line) => row(line)) },
 		resourcesPanel(state)];
-	if (issue) result.push({ id: "issue", title: compact ? `ISSUE ACTIVO · #${issue.issue.number} · ${ISSUE_TYPES[issue.triage.type].label}` : "ISSUE ACTIVO", color: "accent",
+	const progress = matchingWorkflow(state.workflowProgress, state.cwd, git);
+	if (progress) result.push(progressPanel(state, progress, width, compact));
+	else if (issue) result.push({ id: "issue", title: compact ? `ISSUE ACTIVO · #${issue.issue.number} · ${ISSUE_TYPES[issue.triage.type].label}` : "ISSUE ACTIVO", color: "accent",
 		rows: [...(compact ? [] : [row(t.fg("accent", `#${issue.issue.number} · ${ISSUE_TYPES[issue.triage.type].label}`))]), row(t.fg("muted", text(issue.issue.title)))] });
 	return result.filter((panel) => !state.hiddenSections?.includes(panel.id));
 }
@@ -115,6 +127,19 @@ function expandPanels(state: SidebarState, current: Panel[], normal: Panel[], wi
 		if (extra < 0 || extra > spare) return;
 		panel.rows = rows; if (title) panel.title = title; spare -= extra;
 	};
+	// The compact progress row reserves blockers (or activity). Spend spare rows on
+	// observed steps/checks first, without taking space from any other visible panel.
+	const progress = matchingWorkflow(state.workflowProgress, state.cwd, state.git);
+	const fullProgress = normal.find((panel) => panel.id === "issue" && panel.target === "progress");
+	if (joined && progress && fullProgress) {
+		const selected = new Set([progress.blockedReason ? 4 : 2]);
+		for (const index of [3, 0, 1, 2, 4, 5]) {
+			if (index >= fullProgress.rows.length || selected.has(index)) continue;
+			selected.add(index);
+			const rows = fullProgress.rows.filter((_, offset) => selected.has(offset));
+			replace("issue", rows, selected.has(0) ? fullProgress.title : undefined);
+		}
+	}
 	if (joined) for (const id of ["session", "workspace", "omi", "issue"] as const) {
 		const panel = normal.find((item) => item.id === id); if (panel) replace(id, panel.rows, panel.title);
 	}
