@@ -282,3 +282,21 @@ test("a red must fail inside the 1..125 range everywhere, not by signal-like cod
  for (const exitCode of [126, 127, 128, 130, 200, 255]) assert.throws(() => send(s, { type: "evidence", evidence: evidence("red", { id: `red${exitCode}`, exitCode }) }), /rojo/);
  assert.equal(send(s, { type: "evidence", evidence: evidence("red", { exitCode: 125 }) }).steps[0]?.red, "red");
 });
+test("a recipe waiting for approval can be re-planned without losing exploration or human answers", () => {
+ let s = send(fresh(), { type: "explored", exploration });
+ s = send(s, { type: "inferences", inferences: [{ id: "I1", kind: "what", question: "scope?", recommended: "small", confidence: 10, irreversible: false, references: [] }] });
+ s = send(send(s, { type: "answered", id: "I1", answer: "human answer" }), { type: "planned", plan });
+ assert.equal(s.phase, "approve");
+ const revised = send(s, { type: "planned", plan: { ...plan, objective: "revised objective" } });
+ assert.equal(revised.phase, "approve"); assert.equal(revised.recipe?.objective, "revised objective"); assert.equal(revised.approval, null);
+ assert.deepEqual(revised.exploration, s.exploration); assert.equal(revised.inferences[0]?.answer, "human answer");
+ assert.throws(() => send(send(s, { type: "approved" }), { type: "planned", plan }), /fase/);
+});
+test("long blockers are bounded instead of invalidating the saved state", () => {
+ const s = send(fresh(), { type: "explored", exploration: { ...exploration, missingFoundation: ["a".repeat(2500), "b".repeat(2500)] } });
+ assert.equal(s.status, "waiting"); assert.ok(s.blockedReason.length <= 4000); assert.match(s.blockedReason, /^Falta fundación/);
+});
+test("the evidence cap explains the exit available in the current phase", () => {
+ const full = activeStep(); full.evidence = Array.from({ length: 1000 }, (_, i) => evidence("reproduction", { id: `old${i}` }));
+ assert.throws(() => send(full, { type: "evidence", evidence: evidence("red") }), (error: unknown) => error instanceof Error && /refresh/.test(error.message) && !/retry/.test(error.message));
+});

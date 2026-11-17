@@ -66,3 +66,8 @@ test("development_view sólo cuenta el último resultado del comando y contenido
 	state.evidence = [evidence, { ...evidence, id: "wrong", command: "true", fingerprint: "new" }];
 	assert.equal(developmentProgress(state).passedChecks, 0);
 });
+
+test("development_policy no confunde código o plantillas con secretos", () => {
+	for (const path of ["src/auth/credentials.ts", "test/credentials.test.ts", ".env.example", "config/.env.sample", ".env.template"]) assert.ok(workflowWritePath("/tmp/repo", path), path);
+	for (const path of ["credentials", "credentials.json", "config/credentials.yml", "credentials.local", ".env", ".env.local", ".env.production"]) assert.throws(() => workflowWritePath("/tmp/repo", path), /proteg|secreto/i, path);
+});

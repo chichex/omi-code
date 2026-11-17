@@ -157,3 +157,8 @@ test("a rejected push explains the likely cause instead of a generic Git verific
  await assert.rejects(publishDraft(f.workflow, f.runner), /push.*(autenticación|protegida|non-fast-forward)/i);
  assert.equal(f.calls.filter(c => c.args[0] === "pr" && c.args[1] === "create").length, 0);
 });
+
+test("lens findings in the artifact are bounded explicitly so publishing cannot fail on their size", async (t) => {
+ const f = await fixture(t); f.workflow.reviews = Array.from({ length: 18 }, (_, i) => ({ lens: "quality" as const, fingerprint: `fp${i}`, verdict: "fail" as const, findings: Array.from({ length: 50 }, () => "h".repeat(4000)), at: "now" }));
+ const body = renderWorkflowArtifact(f.workflow); assert.ok(body.includes("estado local completo")); assert.ok(Buffer.byteLength(body) < 65536);
+});

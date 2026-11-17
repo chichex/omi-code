@@ -263,3 +263,27 @@ test("development_flow un directorio con un archivo protegido no deja el índice
 	const { execFileSync } = await import("node:child_process");
 	assert.equal(execFileSync("git", ["diff", "--cached", "--name-only"], { cwd: f.checkout.root, encoding: "utf8" }), "", "lo stageado por el intento se deshace");
 });
+
+test("development_flow tras declinar la aprobación el modelo re-planifica y se vuelve a pedir el sí", async (t) => {
+	const f = await developmentFixture(t); await f.command("start"); await f.explore(); await f.action({ action: "planned", plan: f.plan() });
+	f.remote.confirmations = false; await f.action({ action: "approve" }); assert.equal((await f.state()).phase, "approve");
+	await f.action({ action: "planned", plan: { ...f.plan(), objective: "Devolver 2 con el ajuste pedido" } });
+	assert.equal((await f.state()).recipe?.objective, "Devolver 2 con el ajuste pedido");
+	f.remote.confirmations = true; await f.action({ action: "approve" }); assert.equal((await f.state()).phase, "implement");
+});
+
+test("development_flow un pedido que no entra en un comentario de GitHub falla al iniciar, antes de autorizar", async (t) => {
+	const f = await developmentFixture(t); f.remote.body = "x".repeat(70000); const prompts = f.prompts.length;
+	await f.command("start");
+	assert.equal(f.prompts.length, prompts, "no se pide autorizar un trabajo que no se podrá aprobar"); assert.ok(f.messages.some((m) => /GitHub|grande/i.test(m)));
+	const { readWorkflow } = await import("../src/harness/store.ts"); assert.equal(await readWorkflow(f.checkout, 42), undefined);
+});
+
+test("development_flow una respuesta humana demasiado larga se rechaza con un mensaje claro", async (t) => {
+	const f = await developmentFixture(t); await f.command("start"); await f.readReference();
+	await f.action({ action: "explored", exploration: { references: [{ path: "value.cjs", line: 1, detail: "Valor" }], findings: [], approach: "Corregir", missingFoundation: [], dependencies: [], disposition: "continue", reason: "Existe" } });
+	await f.action({ action: "inferences", inferences: [{ id: "I1", kind: "what", question: "¿Alcance?", recommended: "chico", confidence: 10, irreversible: false, references: [] }] });
+	f.remote.answer = "r".repeat(4001);
+	await assert.rejects(f.action({ action: "ask", id: "I1" }), /4\.000|larga/);
+	assert.equal((await f.state()).inferences[0]?.resolution, "pending");
+});

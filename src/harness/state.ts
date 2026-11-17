@@ -54,7 +54,7 @@ function decisionBlock(state: Workflow): string {
 }
 function setBlock(state: Workflow, reason: string): void {
  state.status = reason ? "waiting" : "active";
- state.blockedReason = reason;
+ state.blockedReason = reason.slice(0, 4000);
 }
 function requirePhase(state: Workflow, ...phases: Workflow["phase"][]): void {
  requireCondition(phases.includes(state.phase), `evento inválido en fase ${state.phase}`);
@@ -67,8 +67,10 @@ function stepsFor(state: Workflow): void {
   state.phase = "approve";
  } else state.phase = recipe.route === "diagnostic" ? "diagnose" : "spec";
 }
+// Una receta sin aprobar se puede rehacer: si la persona dice que no, se ajusta sin perder
+// exploración ni respuestas. Aprobada, sólo cambia con refresh.
 function planWorkflow(state: Workflow, plan: Plan): void {
- requirePhase(state, "recipe");
+ requirePhase(state, "recipe", "approve");
  requireCondition(!decisionBlock(state), "resolver exploración y preguntas antes del Plan");
  requireCondition(new Set(plan.cases.map(c => c.id)).size === plan.cases.length && plan.cases.every(c => /^D[1-9]\d*$/.test(c.id)), "casos D únicos requeridos");
  const classification = { ...plan.classification };
@@ -117,7 +119,8 @@ export function lensRunBlock(state: Workflow, lens: Review["lens"], fingerprint:
  return "";
 }
 function requireEvidenceRoom(state: Workflow): void {
- requireCondition(state.evidence.length < MAX_EVIDENCE, "la evidencia de esta vuelta llegó al tope; hacé retry o refresh");
+ const exit = state.phase === "verify" || state.phase === "pr" ? "hacé retry o refresh" : "pausá y usá /omi-work refresh";
+ requireCondition(state.evidence.length < MAX_EVIDENCE, `la evidencia de esta vuelta llegó al tope; ${exit}`);
 }
 function getStep(state: Workflow, id: string): Step {
  const step = state.steps.find(s => s.id === id);

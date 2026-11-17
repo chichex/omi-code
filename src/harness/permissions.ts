@@ -29,6 +29,6 @@ export function workflowWritePath(root: string, path: string): string {
 	if (raw.startsWith("~") || /^file:/i.test(raw)) throw new Error("Escritura fuera del checkout del harness: usá rutas relativas al checkout, sin ~ ni file://");
 	const target = resolve(root, raw); const inside = relative(resolve(root), target);
 	if (!inside || inside === ".." || inside.startsWith(`..${sep}`) || resolve(root, inside) !== target) throw new Error("Escritura fuera del checkout del harness");
-	if (inside.split(sep).some((part) => part.toLowerCase() === ".git") || /(^|[/\\])(?:\.env(?:\..*)?|\.npmrc|\.netrc|\.pypirc|credentials(?:\..*)?|auth\.json|id_(?:rsa|ed25519|ecdsa|dsa)|[^/\\]+\.(?:pem|key|p12|pfx|keystore|jks))$/i.test(inside)) throw new Error("Ruta protegida: metadata Git o posible secreto");
+	if (inside.split(sep).some((part) => part.toLowerCase() === ".git") || /(^|[/\\])(?:\.env(?!\.(?:example|sample|template|dist)$)(?:\..*)?|\.npmrc|\.netrc|\.pypirc|credentials(?:\.(?:json|ya?ml|toml|ini|xml|csv|txt|conf|cfg|properties|local|env))?|auth\.json|id_(?:rsa|ed25519|ecdsa|dsa)|[^/\\]+\.(?:pem|key|p12|pfx|keystore|jks))$/i.test(inside)) throw new Error("Ruta protegida: metadata Git o posible secreto");
 	return target;
 }

@@ -5,9 +5,9 @@ import { Type, type Static, type TSchema } from "typebox";
 import { Value } from "typebox/value";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ExplorationSchema, InferenceInputSchema, LensSchema, PlanSchema, SpecSchema, text } from "../harness/model.ts";
-import { expectedFailure, successful } from "../harness/state.ts";
+import { expectedFailure, successful, transition, type WorkflowEvent } from "../harness/state.ts";
 import { gitRead, inspectCheckout, readWorkflowDiff, validateReferences } from "../harness/git.ts";
-import { DevelopmentSession } from "./development-session.ts";
+import { approvalPreview, DevelopmentSession } from "./development-session.ts";
 import { referenceDigest } from "../harness/references.ts";
 import { executeCheck, commitStep } from "./development-execution.ts";
 import { runLens } from "./development-review.ts";
@@ -35,6 +35,11 @@ async function observedReferences(session: DevelopmentSession, references: Stati
 		const receipt = session.reads.get(path);
 		if (!receipt || receipt.digest !== await referenceDigest(path) || !receipt.ranges.some(([start, end]) => reference.line >= start && reference.line <= end)) throw new Error(`La referencia ${reference.path}:${reference.line} no se leyó con read o cambió desde la lectura. Explorá antes de citar.`);
 	}
+}
+// Una receta que no se podrá aprobar falla al registrarla, no después del sí humano.
+function assertApprovable(session: DevelopmentSession, ctx: ExtensionContext, event: WorkflowEvent): void {
+	const next = transition(session.current(ctx), event, session.now());
+	if (next.phase === "approve") approvalPreview(next);
 }
 async function currentExploration(session: DevelopmentSession, ctx: ExtensionContext): Promise<void> {
 	const state = session.current(ctx);
@@ -64,12 +69,18 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 					await session.apply({ type: "inferences", inferences }, ctx); break;
 				}
 				case "ask": terminate = !(await session.answer(checked(text(100), input.id), ctx)); break;
-				case "planned":
+				case "planned": {
 					await currentExploration(session, ctx);
-					if (await session.fresh(ctx)) await session.apply({ type: "planned", plan: checked(PlanSchema, input.plan) }, ctx); break;
+					if (!(await session.fresh(ctx))) break;
+					const event = { type: "planned" as const, plan: checked(PlanSchema, input.plan) };
+					assertApprovable(session, ctx, event); await session.apply(event, ctx); break;
+				}
 				case "diagnosed":
 					await session.apply({ type: "diagnosed", cause: checked(text(), input.cause), reproduction: checked(text(100), input.reproduction), size: checked(Type.Union([Type.Literal("small"), Type.Literal("large")]), input.size) }, ctx); break;
-				case "specified": await session.apply({ type: "specified", spec: checked(SpecSchema, input.spec) }, ctx); break;
+				case "specified": {
+					const event = { type: "specified" as const, spec: checked(SpecSchema, input.spec) };
+					assertApprovable(session, ctx, event); await session.apply(event, ctx); break;
+				}
 				case "approve": await currentExploration(session, ctx); await session.approve(ctx); terminate = session.state?.phase === "approve"; break;
 				case "step": await session.apply({ type: "step_started", id: checked(text(100), input.id) }, ctx); break;
 				case "verified": {

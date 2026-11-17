@@ -21,6 +21,15 @@ import { developmentProgress, PHASE_LABELS } from "./development-view.ts";
 export const DEVELOPMENT_ANCHOR = "omi-development-workflow";
 const AnchorSchema = Type.Object({ id: Type.String(), root: Type.String(), issue: Type.Integer({ minimum: 1 }), revision: Type.Integer({ minimum: 0 }), disabled: Type.Optional(Type.Boolean()) });
 export interface DevelopmentDeps { runner?: Runner; now?: () => string }
+// Lo que la persona aprueba. Falla antes de pedir el sí si no entra en el diálogo o en GitHub.
+// Lo que se ejecuta sin volver a preguntar va primero y legible, no enterrado en el JSON.
+export function approvalPreview(state: Workflow): string {
+	const commands = `Comandos que quedan autorizados y se ejecutan sin volver a preguntar:\n${(state.recipe?.cases ?? []).map((c) => `- ${c.id} · ${c.command}`).join("\n")}`;
+	const preview = JSON.stringify({ source: { number: state.source.number, title: state.source.title, url: state.source.url, hash: state.source.hash }, recipe: state.recipe, spec: state.spec, inferences: state.inferences }, null, 2);
+	if (preview.length > 50000) throw new Error("La receta es demasiado grande para aprobarla completa; acotá el trabajo con planned o specified");
+	renderWorkflowArtifact(state);
+	return `${commands}\n\n${preview}`;
+}
 export class DevelopmentSession {
 	state: Workflow | undefined;
 	onChange: (() => void) | undefined;
@@ -105,6 +114,9 @@ export class DevelopmentSession {
 		if (!snapshot.clean) throw new Error("Iniciá el harness con el worktree limpio; no se adoptan cambios ajenos a la receta");
 		const source = await readIssueSource(checkout, prepared.issue.number, this.runner, this.lifecycle.signal);
 		if (source.url.replace(/\/$/, "") !== prepared.issue.url.replace(/\/$/, "")) throw new Error("GitHub devolvió otro issue/repositorio");
+		// El pedido se cita en los comentarios del issue: si no entra, nunca se podrá aprobar.
+		try { renderWorkflowArtifact(createWorkflow(source, checkout, "preview", this.now())); }
+		catch { throw new Error("El pedido es demasiado grande para citarlo en un comentario de GitHub; acotá el issue antes de iniciar"); }
 		if (!(await this.confirm(ctx, "Autorizar trabajo de desarrollo", `Issue #${source.number}: ${source.title}\n${source.url}\n\nExplorar y guardar estado local. No se habilitan escrituras de código hasta aprobar la receta. Comandos ejecutables y cambios remotos tienen autorización separada. Se termina en PR draft, sin merge ni deploy.`))) return;
 		this.state = await updateWorkflow(checkout, source.number, undefined, () => createWorkflow(source, checkout, randomUUID(), this.now()));
 		this.anchor(); this.emit();
@@ -143,11 +155,8 @@ export class DevelopmentSession {
 			if (!state.exploration?.fingerprint || snapshot.fingerprint !== state.exploration.fingerprint) throw new Error("El código cambió desde Explorar. Usá /omi-work refresh y volvé a explorar antes de aprobar.");
 		};
 		await assertExplored();
-		// Lo que se ejecuta sin volver a preguntar va primero y legible, no enterrado en el JSON.
-		const commands = `Comandos que quedan autorizados y se ejecutan sin volver a preguntar:\n${(state.recipe?.cases ?? []).map((c) => `- ${c.id} · ${c.command}`).join("\n")}`;
-		const preview = JSON.stringify({ source: { number: state.source.number, title: state.source.title, url: state.source.url, hash: state.source.hash }, recipe: state.recipe, spec: state.spec, inferences: state.inferences }, null, 2);
-		if (preview.length > 50000) throw new Error("La receta es demasiado grande para aprobarla completa; acotá el trabajo");
-		if (!(await this.confirm(ctx, "Aprobar receta y sincronizar issue", `${commands}\n\n${preview}\n\nAutoriza implementar estos pasos, commits locales y comandos exactos de los casos D. Se agrega un comentario administrado con la receta al issue, sin reemplazar su descripción; no autoriza push, merge, workflows ni deploy.`))) return false;
+		const preview = approvalPreview(state);
+		if (!(await this.confirm(ctx, "Aprobar receta y sincronizar issue", `${preview}\n\nAutoriza implementar estos pasos, commits locales y comandos exactos de los casos D. Se agrega un comentario administrado con la receta al issue, sin reemplazar su descripción; no autoriza push, merge, workflows ni deploy.`))) return false;
 		await assertExplored();
 		await syncIssueArtifact(state, this.runner, this.lifecycle.signal);
 		await assertExplored();
@@ -167,6 +176,7 @@ export class DevelopmentSession {
 		if (!snapshot.clean) throw new Error("El worktree cambió después de verificar. Volvé a Implementar/Verificar.");
 		// Revalidar evidencia con el fingerprint actual, también al recuperar una publicación pendiente.
 		transition({ ...state, phase: "verify", publication: { status: "none" } }, { type: "verified", fingerprint: snapshot.fingerprint }, this.now());
+		renderWorkflowArtifact(state); // Falla antes del sí si el artefacto no entra en GitHub.
 		if (!(await this.confirm(ctx, "Subir rama y abrir PR draft", `${state.checkout.branch} → main\nCommit ${snapshot.head}\nIssue #${state.source.number}\n\nAgrega evidencia en un comentario administrado del issue, hace push normal sólo de esta rama y crea o recupera su PR draft. No mergea, no fuerza pushes ni ejecuta workflows.`))) return;
 		await syncIssueArtifact(state, this.runner, this.lifecycle.signal);
 		if (state.publication.status === "none") state = await this.apply({ type: "publishing", head: snapshot.head, bodyHash: artifactHash(renderWorkflowArtifact(state)) }, ctx);
@@ -182,6 +192,7 @@ export class DevelopmentSession {
 		try { answer = await ctx.ui.input(`${id} · ${inference.question}`, `Recomendada: ${inference.recommended}`, { signal: this.lifecycle.signal }); }
 		finally { this.emit(); }
 		if (!answer?.trim()) return false;
+		if (answer.trim().length > 4000) throw new Error("La respuesta supera 4.000 caracteres; resumila y volvé a responder");
 		await this.apply({ type: "answered", id, answer: answer.trim() }, ctx); return true;
 	}
 	async stop(ctx: ExtensionContext): Promise<void> {
