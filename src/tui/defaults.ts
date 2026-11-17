@@ -10,7 +10,7 @@ export async function defaultExtensions(args: readonly string[], env: NodeJS.Pro
 		name: "omi-claude-bridge", builtin: true,
 		async factory(pi) {
 			const { loadClaudeBridge } = await import("./claude-bridge.ts");
-			await (await loadClaudeBridge())(pi);
+			await (await loadClaudeBridge(args))(pi);
 		},
 	}];
 	// Pi no conecta registros si builtin:mcp está desactivado. Tampoco hacer red con --offline.

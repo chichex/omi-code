@@ -4,7 +4,7 @@ import { defaultExtensions, HARNESS_KB_URL } from "../src/tui/defaults.ts";
 import { agentDir } from "../src/core/paths.ts";
 import { rpc, requestSeenByModel } from "./helpers/foreign-config.ts";
 import { exerciseSubagentRuntime } from "./helpers/subagent-runtime.ts";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -47,7 +47,8 @@ for (const mode of ["default", "settings", "--no-extensions"] as const) test(`ru
 	const home = await tempDir(t); const dir = agentDir(home); await mkdir(dir, { recursive: true });
 	const settings = JSON.stringify({ defaultProvider: "openai", defaultModel: "gpt-5.4", ...(mode === "settings" ? { extensions: ["-builtin:omi-claude-bridge"] } : {}) });
 	await writeFile(join(dir, "settings.json"), settings);
-	const data = await rpc({ command: process.execPath, args: [bin, "--offline", ...(mode === "--no-extensions" ? [mode] : [])], cwd: home, env: { HOME: home, PATH: "/usr/bin:/bin", OMI_HOME: "" } }, { id: "bridge", type: "get_available_models" }) as { models: { provider: string; id: string }[] };
+	const executable = join(home, "claude"); await writeFile(executable, "#!/bin/sh\nexit 99\n"); await chmod(executable, 0o700);
+	const data = await rpc({ command: process.execPath, args: [bin, "--offline", ...(mode === "--no-extensions" ? [mode] : [])], cwd: home, env: { HOME: home, PATH: `${home}:/usr/bin:/bin`, OMI_HOME: "" } }, { id: "bridge", type: "get_available_models" }) as { models: { provider: string; id: string }[] };
 	const models = data.models.filter((model) => model.provider === "claude-bridge");
 	assert.equal(models.length > 0, mode === "default");
 	assert.equal(new Set(models.map((model) => model.id)).size, models.length);

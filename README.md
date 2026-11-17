@@ -40,7 +40,7 @@ Una instalación nueva trae estas integraciones **en la distribución de OMI**, 
 |---|---|---|
 | Subagentes | Tool `subagent` con `scout`, `planner`, `reviewer` y `worker`; background, espera explícita y panel `SUBAGENTES` | El modelo y razonamiento elegidos en la sesión |
 | Desarrollo | Harness opt-in con Directa, Diagnóstico y Con spec, evidencia y progreso hasta PR draft | Modelo de la sesión y `gh` autenticado |
-| Claude Bridge | Proveedor `claude-bridge/...` con `pi-claude-bridge@0.13.0` incluido | Claude Code externo, autenticado con `claude auth login` |
+| Claude Bridge | Catálogo `claude-bridge/...` con `pi-claude-bridge@0.13.0` incluido; requiere ejecutable externo | Claude Code con `claude auth login` o `CLAUDE_CODE_OAUTH_TOKEN` |
 | KB de [Harness](https://github.com/chichex/harness/tree/main/kb) | MCP `harness-kb`, por Streamable HTTP en `https://kb-prod-chiche.ohmyinfra.com/mcp` | OAuth desde `/mcp login harness-kb` |
 | OMI | El mismo catálogo de `omi mcp`, integrado **nativamente** en el agente, con confirmaciones en la UI | `omi login` |
 
@@ -69,17 +69,21 @@ Hay un máximo de 4 lotes de background, 8 tareas por lote y **4 tareas activas 
 
 El builtin `omi-claude-bridge` distribuye `pi-claude-bridge@0.13.0` con OMI; requiere Pi 1.5.1, incluido en el binario. No descarga ni instala paquetes en el home al arrancar, no agrega paquetes a `settings.json` ni cambia tu modelo predeterminado.
 
-Necesitás **Claude Code instalado aparte**, con `claude` en `PATH`: OMI no lo instala. Autenticá desde una terminal, fuera de OMI:
+La integración soportada requiere **Claude Code instalado aparte**, con `claude` en `PATH` o una ruta global configurada: OMI no lo instala. Autenticá desde una terminal, fuera de OMI:
 
 ```sh
 claude auth login
 ```
 
-Después, en OMI, seleccioná un modelo **`claude-bridge/...` desde `/model`**. No uses `anthropic/...` ni `/login` de Pi para autenticar este bridge: son otro proveedor y otro flujo de autenticación. En la CLI, usá `--model claude-bridge/claude-opus-5-5`; si querés la API de Anthropic, usá `--model anthropic/claude-opus-5-5`. Un ID Claude sin proveedor puede ser ambiguo si ambos están disponibles. El proveedor sigue apareciendo con `--offline` o `--no-mcp`; eso no permite usar Claude sin conexión.
+También se admite `CLAUDE_CODE_OAUTH_TOKEN`, como variable de entorno propia de Claude Code, sin guardarla en los ajustes de OMI.
 
-La configuración avanzada va en `<OMI_HOME>/agent/claude-bridge.json` (por defecto, `~/.omi/agent/claude-bridge.json`). Se respeta `provider.pathToClaudeCodeExecutable` si configuraste otra ruta al ejecutable.
+Después, en OMI, seleccioná un modelo **`claude-bridge/...` desde `/model`**. No uses `anthropic/...` ni `/login` de Pi para autenticar este bridge: son otro proveedor y otro flujo de autenticación. En la CLI, usá `--model claude-bridge/claude-opus-5-5`; si querés la API de Anthropic, usá `--model anthropic/claude-opus-5-5`. Un ID Claude sin proveedor puede ser ambiguo si ambos están disponibles. El builtin y su catálogo siguen incluidos con `--offline` o `--no-mcp`; eso no permite usar Claude sin conexión.
 
-La sesión y las credenciales de Claude Code viven en `~/.claude`, fuera de la configuración de OMI (o en `CLAUDE_CONFIG_DIR`, si lo configuraste). OMI fuerza `settingSources: []`: **no carga los ajustes ni hooks de usuario o proyecto de Claude Code**. El contexto y las herramientas siguen viniendo del agente OMI; usar Claude Code para autenticar no importa la configuración de otro harness.
+La configuración avanzada va en `<OMI_HOME>/agent/claude-bridge.json` (por defecto, `~/.omi/agent/claude-bridge.json`). Se respeta `provider.pathToClaudeCodeExecutable` si configuraste otra ruta al ejecutable. En una instalación limpia, sin un ejecutable disponible, OMI no anuncia el bridge como disponible/autenticado ni lo autoselecciona. La detección es **local, sólo del ejecutable**: no consulta la red, no valida el login ni garantiza acceso a un modelo. No configures una `apiKey` para `claude-bridge` en `models.json` o `auth.json`: su autenticación es externa; declarar una clave en Pi no verifica el ejecutable ni el login.
+
+La sesión y las credenciales de Claude Code viven en `~/.claude`, fuera de la configuración de OMI (o en `CLAUDE_CONFIG_DIR`, si lo configuraste). OMI fuerza `settingSources: []`: **intencionalmente no carga los ajustes ni hooks de usuario o proyecto de Claude Code**. No se soporta autenticación basada en `settings.json`, su sección `env` ni `apiKeyHelper`. El contexto y las herramientas siguen viniendo del agente OMI; usar Claude Code para autenticar no importa la configuración de otro harness.
+
+Las credenciales del shell que el aislamiento oculta al host **no se reinyectan en el bridge**: por ejemplo, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `AWS_ACCESS_KEY_ID`, `AWS_PROFILE` y `GOOGLE_APPLICATION_CREDENTIALS` (lista no exhaustiva). Esto no significa que todas las variables `AWS_*` estén ocultas. Selectores como `CLAUDE_CODE_USE_BEDROCK` pueden heredarse, pero **Bedrock y Vertex no son flujos soportados por este builtin**. Para el bridge, usá un entorno de suscripción de Claude Code; para autenticación por API o cloud, configurá explícitamente el proveedor nativo correspondiente de Pi. No habilites hooks ni reinyectes secretos para sortear este aislamiento.
 
 #### Desactivar integraciones
 
@@ -95,7 +99,7 @@ Una extensión del usuario que ya registre `subagent` reemplaza la incluida, sin
 
 ### Configuración y aislamiento
 
-No trae skills ni modelo seleccionado de antemano, ni reemplaza el predeterminado del usuario. Para usar un proveedor nativo de Pi, entrá con `/login` o importá credenciales; para Claude Bridge, usá el flujo de Claude Code indicado arriba.
+No trae skills ni reemplaza el modelo predeterminado del usuario. Para usar un proveedor nativo de Pi, entrá con `/login` o importá credenciales; para Claude Bridge, usá el flujo de Claude Code indicado arriba. Detectar su ejecutable no equivale a validar la autenticación.
 
 Para los siguientes modelos del proveedor **OpenAI**, omi configura por defecto una ventana de
 **1.050.000 tokens**, según el límite publicado en la ficha API de cada modelo:

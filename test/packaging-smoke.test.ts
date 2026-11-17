@@ -85,10 +85,13 @@ test("release real_compila, instala y arranca sin Node ni repo", { skip: !enable
 	const metadata = commands.find((command) => command.name === "runtime-probe") as { description?: string } | undefined;
 	const observed = JSON.parse(metadata?.description ?? "null");
 	assert.deepEqual(observed, { version: pkg.dependencies["@earendil-works/pi-coding-agent"], packageDir: await realpath(join(installRoot, "runtime")), examples: true });
-	const models = await rpc(binary, home, { id: "models", type: "get_available_models" }, [], { GEMINI_API_KEY: "del-shell" });
+	const models = await rpc(binary, home, { id: "models", type: "get_available_models" }, [], { PATH: "/usr/bin:/bin", GEMINI_API_KEY: "del-shell" });
 	const available = (models.find((line) => line.id === "models")?.data as { models: { provider: string }[] }).models;
-	assert.ok(available.length > 0, "el bridge viene incluido, sin instalar paquetes ni Claude Code");
-	assert.ok(available.every((model) => model.provider === "claude-bridge"), "la API key del shell no habilita otros proveedores");
+	assert.deepEqual(available, [], "sin Claude Code no anuncia el bridge disponible; la API key del shell tampoco habilita otros proveedores");
+	const missingBridge = spawnSync(binary, ["--offline", "--no-session", "--model", "claude-bridge/claude-opus-5-5", "-p", "bridge missing"], { cwd: home, env: { HOME: home, OMI_HOME: "", PATH: "/usr/bin:/bin" }, encoding: "utf8", timeout: 15000 });
+	assert.equal(missingBridge.status, 1, missingBridge.stderr);
+	assert.match(missingBridge.stdout + missingBridge.stderr, /claude auth login/);
+	assert.match(missingBridge.stdout + missingBridge.stderr, /provider\.pathToClaudeCodeExecutable/);
 	const disabled = await rpc(binary, home, { id: "disabled", type: "get_available_models" }, ["--no-extensions"], { GEMINI_API_KEY: "del-shell" });
 	assert.deepEqual((disabled.find((line) => line.id === "disabled")?.data as { models: unknown[] }).models, []);
 	const shell = await rpc(binary, home, { id: "env", type: "bash", command: 'printf "%s|%s|%s" "${PI_PACKAGE_DIR-unset}" "${GEMINI_API_KEY-unset}" "${OMI_AGENT_SESSION-unset}"' }, [], { GEMINI_API_KEY: "del-shell" });

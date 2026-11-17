@@ -27,13 +27,12 @@ test("instalación nueva_no trae ningún skill", async (t) => {
 	assert.deepEqual(await skillNames(omi(home, home)), []);
 });
 
-test("instalación nueva_las API keys del shell no habilitan modelos aparte del bridge incluido", async (t) => {
+test("instalación nueva_sin Claude Code las API keys del shell no habilitan modelos", async (t) => {
 	const home = await tempDir(t);
 	const request = { id: "1", type: "get_available_models" };
-	const baseline = await rpc(omi(home, home), request) as { models: { provider: string }[] };
-	assert.ok(baseline.models.length > 0);
-	assert.ok(baseline.models.every((model) => model.provider === "claude-bridge"));
-	const process = omi(home, home, { GEMINI_API_KEY: "del-shell", OPENAI_API_KEY: "del-shell", AWS_PROFILE: "del-shell" });
+	const baseline = await rpc(omi(home, home, { PATH: "/usr/bin:/bin" }), request) as { models: { provider: string }[] };
+	assert.deepEqual(baseline.models, []);
+	const process = omi(home, home, { PATH: "/usr/bin:/bin", GEMINI_API_KEY: "del-shell", OPENAI_API_KEY: "del-shell", AWS_PROFILE: "del-shell" });
 	const data = await rpc(process, request) as { models: unknown[] };
 	assert.deepEqual(data.models, baseline.models, "las credenciales del shell no agregan modelos");
 	const disabled = await rpc({ ...process, args: [bin, "--no-extensions"] }, request) as { models: unknown[] };

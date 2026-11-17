@@ -14,6 +14,9 @@ import json, os, sys
 with open(os.environ["OMI_BRIDGE_PROBE"], "w") as capture:
     capture.write("\\n".join(sys.argv[1:]) + "\\n")
     capture.write("PACKAGE_DIR=" + os.environ.get("PI_PACKAGE_DIR", "unset") + "\\nAGENT=" + os.environ.get("OMI_AGENT_SESSION", "unset") + "\\n")
+    for name in ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "AWS_PROFILE", "AWS_ACCESS_KEY_ID", "GOOGLE_APPLICATION_CREDENTIALS", "GEMINI_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]:
+        capture.write("ENV " + name + "=" + ("present" if name in os.environ else "unset") + "\\n")
+    capture.write("CC_CONFIG_DIR=" + os.environ.get("CLAUDE_CONFIG_DIR", "unset") + "\\n")
 for line in sys.stdin:
     message = json.loads(line)
     if message["type"] == "control_request":
@@ -47,6 +50,9 @@ for line in sys.stdin:
 		assert.match(args, /--strict-mcp-config/);
 		assert.match(args, /(?:^|\n)--setting-sources=\n/, "no habilita ajustes/hooks globales ni del repo de Claude Code");
 		assert.match(args, /PACKAGE_DIR=unset\nAGENT=1/);
+		for (const name of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "AWS_PROFILE", "AWS_ACCESS_KEY_ID", "GOOGLE_APPLICATION_CREDENTIALS", "GEMINI_API_KEY"]) assert.ok(args.includes(`ENV ${name}=unset\n`), `${name} del shell no llega al bridge`);
+		assert.ok(args.includes(`ENV CLAUDE_CODE_OAUTH_TOKEN=${omi.env.CLAUDE_CODE_OAUTH_TOKEN ? "present" : "unset"}\n`));
+		assert.ok(args.includes(`CC_CONFIG_DIR=${omi.env.CLAUDE_CONFIG_DIR ?? "unset"}\n`));
 		await rm(captured);
 	}
 	await rm(join(omi.agent, "claude-bridge.json"));
