@@ -49,13 +49,37 @@ test("tool output: diferencia argumentos en streaming, ejecución parcial y fina
 	second.updateResult({ content: [], isError: false }); assert.match(h.plain(), /Ran 2 shell commands/);
 });
 
-test("tool output: errores, cancelaciones e imágenes conservan el renderer original visible", () => {
+test("tool output: errores y cancelaciones se resumen como Failed; las imágenes mantienen su renderer", () => {
 	const h = harness(); h.tool("bash", { command: "ok" }); const failed = h.tool("bash", { command: "fail" });
 	failed.updateResult({ content: [{ type: "text", text: "ERROR_VISIBLE exit code 1" }], isError: true });
 	const image = h.tool("read", { path: "picture.png" }); image.updateResult({ content: [{ type: "text", text: "IMAGE_VISIBLE" }, { type: "image", data: "", mimeType: "image/png" }], isError: false }); image.setExpanded(true);
 	const cancelled = h.tool("edit", { path: "bad.ts", oldText: "a", newText: "b" }); cancelled.updateResult({ content: [{ type: "text", text: "Operation aborted" }], isError: true });
-	const plain = h.plain(); assert.match(plain, /Ran 1 shell command/); assert.match(plain, /ERROR_VISIBLE/); assert.match(plain, /IMAGE_VISIBLE/); assert.match(plain, /Operation aborted/);
-	assert.doesNotMatch(plain, /Ran 2 shell commands|Read 1 file|Edited 1 file/);
+	const plain = h.plain(); assert.match(plain, /Ran 1 shell command/); assert.match(plain, /Failed 1 shell command/); assert.match(plain, /Failed 1 file/); assert.match(plain, /IMAGE_VISIBLE/);
+	assert.doesNotMatch(plain, /ERROR_VISIBLE|Operation aborted|Ran 2 shell commands|Read 1 file|Edited 1 file/);
+	const y = h.transcript.render(90).findIndex((line) => stripTerminalSequences(line).includes("Failed 1 shell command"));
+	h.click(y); assert.match(h.plain(), /ERROR_VISIBLE exit code 1/);
+	h.click(y); assert.doesNotMatch(h.plain(), /ERROR_VISIBLE/);
+	cancelled.setExpanded(true); assert.match(h.plain(), /Operation aborted/);
+	failed.setExpanded(true); assert.match(h.plain(), /ERROR_VISIBLE/);
+	assert.equal(Reflect.get(failed, "result").isError, true, "la presentación no convierte el fallo en éxito");
+});
+
+test("tool output: fallas consecutivas se agrupan sin ocultar éxitos ni ejecuciones activas", () => {
+	const h = harness(); h.tool("bash", { command: "ok" });
+	for (let i = 0; i < 2; i++) h.tool("bash", { command: `fail-${i}` }).updateResult({ content: [{ type: "text", text: `FAILURE_${i}` }], isError: true });
+	h.tool("bash", { command: "recovered" });
+	const running = h.tool("bash", { command: "pending" }, false); running.markExecutionStarted();
+	running.updateResult({ content: [{ type: "text", text: "PARTIAL_FAILURE" }], isError: true }, true);
+	assert.match(h.plain(), /Ran 1 shell command[\s\S]*Failed 2 shell commands[\s\S]*Running 2 shell commands.*1\/2 done/);
+	assert.doesNotMatch(h.plain(), /FAILURE_|PARTIAL_FAILURE/);
+	running.updateResult({ content: [{ type: "text", text: "FINAL_FAILURE" }], isError: true });
+	assert.match(h.plain(), /Failed 2 shell commands[\s\S]*Ran 1 shell command[\s\S]*Failed 1 shell command/);
+	for (const name of ["dark", "light"]) {
+		h.setTheme(getThemeByName(name)!);
+		for (const width of [1, 8, 28, 80, 132]) assert.ok(h.transcript.render(width).every((line) => visibleWidth(line) <= width));
+	}
+	const other = h.tool("omi_project_status"); other.updateResult({ content: [{ type: "text", text: "API_FAILURE" }], isError: true });
+	assert.match(h.plain(), /Failed omi_project_status 1 time/); assert.doesNotMatch(h.plain(), /API_FAILURE/);
 });
 
 test("tool output: texto de assistant, usuario, diagnósticos y herramientas ajenas no se reordenan", () => {
