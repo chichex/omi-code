@@ -13,7 +13,7 @@ import os, pty, select, signal, sys, time
 pid, fd = pty.fork()
 if pid == 0:
     os.execv(sys.argv[1], sys.argv[1:])
-start = time.monotonic()
+start, exit_sent = time.monotonic(), False
 output = b''
 while time.monotonic() - start < 12:
     if select.select([fd], [], [], 0.1)[0]:
@@ -24,8 +24,9 @@ while time.monotonic() - start < 12:
         if not chunk:
             break
         output += chunk
-    if time.monotonic() - start > 2:
+    if not exit_sent and time.monotonic() - start > 2:
         os.write(fd, b'\\x04')
+        exit_sent = True
 else:
     os.kill(pid, signal.SIGKILL)
 status = os.waitpid(pid, 0)[1]

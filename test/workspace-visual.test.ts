@@ -4,11 +4,11 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import { setTimeout } from "node:timers/promises";
 import { test } from "node:test";
-import { createEventBus, SessionManager, type ExtensionCommandContext, type ExtensionContext, type SessionEntry, type SessionHeader, type Theme } from "@earendil-works/pi-coding-agent";
+import { createEventBus, SessionManager, ToolExecutionComponent, type ExtensionCommandContext, type ExtensionContext, type SessionEntry, type SessionHeader, type Theme } from "@earendil-works/pi-coding-agent";
 import { Container, getOsc8LinkAtColumn, parseColor, sliceByColumn, stripTerminalSequences, Text, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 // Mismo contrato versionado que el adaptador de OMI, sin emular el algoritmo de layout.
 import { getLayoutBoxesAt, renderLayoutFrame } from "../node_modules/@earendil-works/pi-tui/dist/layout.js";
-import { getThemeByName } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
+import { getThemeByName, setThemeInstance } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import { workspaceExtension } from "../src/tui/workspace/index.ts";
 import { bar } from "../src/tui/workspace/presentation.ts";
 import { OmiCommandPalette, OmiInfoModal } from "../src/tui/workspace/modals.ts";
@@ -19,10 +19,12 @@ import { readGit, type GithubItem } from "../src/tui/workspace/data.ts";
 import { tempDir, testIo } from "./helpers/io.ts";
 import { linkedProject } from "./helpers/project.ts";
 import { WORKSPACE_VIEWS, workspaceTabs } from "../src/tui/workspace/navigation.ts";
+import { agentDir } from "../src/core/paths.ts";
+import { OmiSidebarSettings } from "../src/tui/workspace/sidebar-settings.ts";
 
 const theme = { fg: (_role: string, value: string) => value, bold: (value: string) => value, style: (value: string) => value, getColorMode: () => "truecolor" } as unknown as Theme;
 
-async function visualHarness(home: string, options: { cwd?: string; trusted?: boolean; online?: boolean; paletteAction?: string; browserCode?: number; theme?: Theme; entries?: SessionEntry[]; detailKey?: string; sessionFile?: string; sessionDir?: string; sessionHeader?: SessionHeader; mode?: string; classic?: boolean } = {}) {
+async function visualHarness(home: string, options: { cwd?: string; trusted?: boolean; online?: boolean; paletteAction?: string; browserCode?: number; theme?: Theme; entries?: SessionEntry[]; detailKey?: string; sessionFile?: string; sessionDir?: string; sessionHeader?: SessionHeader; mode?: string; classic?: boolean; settingsKeys?: string[] } = {}) {
 	const activeTheme = options.theme ?? theme;
 	const modals: { lines: string[]; width: number; dispatchedBefore: number }[] = [];
 	const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
@@ -33,7 +35,7 @@ async function visualHarness(home: string, options: { cwd?: string; trusted?: bo
 	const browserCalls: { command: string; args: string[]; options: { cwd?: string; timeout?: number } }[] = [];
 	const dispatched: { text: string; options: unknown }[] = []; const switches: string[] = []; let authChecks = 0;
 	let entries = options.entries;
-	let terminalInput: ((data: string) => unknown) | undefined;
+	let terminalInput: ((data: string) => unknown) | undefined; let toolsExpanded = false;
 	const commands = new Map<string, { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }>();
 	const resources = new Container(); const chat = new Container(); const document = new Container();
 	// El header viejo, sus márgenes y anuncios técnicos no deben ocupar el centro.
@@ -48,10 +50,11 @@ async function visualHarness(home: string, options: { cwd?: string; trusted?: bo
 		mode: options.mode ?? "tui", cwd: options.cwd ?? home, model: { id: "real", name: "Modelo real", provider: "proveedor-real", contextWindow: 200000 }, thinkingLevel: "high",
 		scopedModels: [], modelRegistry: { getAvailable: () => [], hasConfiguredAuth: () => { authChecks++; return false; } }, isIdle: () => true, hasPendingMessages: () => false, isProjectTrusted: () => options.trusted ?? false,
 		switchSession: async (file: string) => { switches.push(file); return { cancelled: true }; },
-		sessionManager: { getBranch: () => entries ?? (hasMessages ? [{ type: "message" }] : []), getSessionFile: () => options.sessionFile, getHeader: () => options.sessionHeader },
+		sessionManager: { getBranch: () => entries ?? (hasMessages ? [{ type: "message", id: "user", parentId: null, timestamp: new Date(0).toISOString(), message: { role: "user", content: "CONVERSACIÓN REAL", timestamp: 0 } }] : []), getSessionFile: () => options.sessionFile, getHeader: () => options.sessionHeader },
 		getContextUsage: () => unknownUsage ? undefined : { tokens: 56000, contextWindow: 200000, percent: 28 },
 		ui: {
 			theme: activeTheme, getTheme: () => undefined, setHeader() {}, getEditorComponent: () => undefined,
+			getToolsExpanded: () => toolsExpanded, setToolsExpanded: (value: boolean) => { toolsExpanded = value; for (const component of chat.children) if (component instanceof ToolExecutionComponent) component.setExpanded(value); },
 			setFooter: (factory: (ui: TUI, theme: Theme, data: unknown) => Component) => footer.addChild(factory(ui, activeTheme, { getExtensionStatuses: () => new Map() })),
 			setEditorComponent: (factory: (ui: TUI, theme: unknown, keys: unknown) => Component) => editor.addChild(factory(ui, { borderColor: (value: string) => value }, { getKeys: () => ["ctrl+l"], matches: () => false })),
 			onTerminalInput: (handler: (data: string) => unknown) => { terminalInput = handler; return () => { terminalInput = undefined; }; }, notify: (message: string) => notices.push(message),
@@ -72,6 +75,7 @@ async function visualHarness(home: string, options: { cwd?: string; trusted?: bo
 					if (index >= 0) { for (let i = 0; i < index; i++) component.handleInput("\x1b[B"); component.handleInput("\r"); }
 				}
 				if (component instanceof OmiInfoModal && options.detailKey) component.handleInput(options.detailKey);
+				if (component instanceof OmiSidebarSettings) for (const key of options.settingsKeys ?? []) { component.handleInput(key); component.render(width); }
 				handlers.get("ui_prompt_end")?.({}, ctx);
 				return result;
 			},
@@ -103,6 +107,54 @@ async function visualHarness(home: string, options: { cwd?: string; trusted?: bo
 	};
 }
 
+test("workspace_transcript real agrupa herramientas y /omi-output recupera los componentes nativos", async (t) => {
+	setThemeInstance(getThemeByName("dark")!);
+	const ui = await visualHarness(await tempDir(t)); t.after(ui.stop);
+	for (let index = 0; index < 3; index++) {
+		const component = new ToolExecutionComponent("bash", `tool-${index}`, { command: `COMMAND_${index}` }, { showImages: false }, undefined, { requestRender() {} } as unknown as TUI, "/repo");
+		component.markExecutionStarted(); component.updateResult({ content: [{ type: "text", text: `NATIVE_OUTPUT_${index}` }], isError: false }); ui.chat.addChild(component);
+	}
+	const screen = () => ui.frame().lines.map(stripTerminalSequences).join("\n");
+	assert.match(screen(), /Ran 3 shell commands/); assert.doesNotMatch(screen(), /NATIVE_OUTPUT_|COMMAND_/);
+	await ui.command("omi-output");
+	for (let index = 0; index < 3; index++) { assert.match(screen(), new RegExp(`NATIVE_OUTPUT_${index}`)); assert.match(screen(), new RegExp(`COMMAND_${index}`)); }
+	await ui.command("omi-output"); assert.doesNotMatch(screen(), /NATIVE_OUTPUT_/); assert.equal(ui.chat.children.length, 3);
+});
+
+test("workspace_lateral respeta bloques ocultos al reiniciar, sin perder los accesos por comandos", async (t) => {
+	const home = await tempDir(t); await mkdir(agentDir(home), { recursive: true });
+	await writeFile(join(agentDir(home), "workspace-ui.json"), JSON.stringify({ favorites: [], sidebar: true, hiddenSections: ["actions", "omi", "subagents", "resources", "issue"] }));
+	const ui = await visualHarness(home); t.after(ui.stop);
+	const lines = ui.frame().lines.map(stripTerminalSequences);
+	const side = lines.slice(3, -3).map((line) => sliceByColumn(line, 91, 41)).join("\n");
+	assert.match(side, /Sesión|SESIÓN/); assert.match(side, /Modelo real/); assert.match(side, /●{4}○{2}.*high/);
+	assert.doesNotMatch(side, /GITHUB ACTIONS|SUBAGENTES|RECURSOS|[┌├]─ OMI/);
+	assert.match(side, /Personalizar lateral/);
+	await ui.command("omi-actions"); assert.match(ui.prompts.at(-1)!, /GitHub Actions/);
+	await ui.command("omi-resources"); assert.match(ui.prompts.at(-1)!, /Recursos/);
+	await ui.command("omi-sidebar-settings"); assert.match(ui.prompts.at(-1)!, /Personalizar lateral/);
+});
+
+test("workspace_personalizar guarda sólo al aplicar, sobrevive reload y conserva contexto de respaldo", async (t) => {
+	const home = await tempDir(t);
+	const cancelled = await visualHarness(home, { settingsKeys: [" ", "\x1b"] });
+	try { await cancelled.command("omi-sidebar-settings"); assert.match(cancelled.frame().lines.map(stripTerminalSequences).join("\n"), /PROYECTO/); }
+	finally { await cancelled.stop(); }
+	await assert.rejects(readFile(join(agentDir(home), "workspace-ui.json")), { code: "ENOENT" });
+	const ui = await visualHarness(home, { paletteAction: "Personalizar lateral", settingsKeys: ["\x1b[B", " ", "\x13"] });
+	try {
+		await ui.command("omi");
+		const lines = ui.frame().lines.map(stripTerminalSequences);
+		assert.doesNotMatch(lines.slice(3, -3).map((line) => sliceByColumn(line, 91, 41)).join("\n"), /SESIÓN|Sesión|Modelo real/);
+		assert.match(lines[38]!, /Contexto 56k \/ 200k.*28%/);
+		ui.click(125, 38); assert.match(ui.prompts.at(-1)!, /Ventana de contexto/); await Promise.resolve();
+		assert.deepEqual(JSON.parse(await readFile(join(agentDir(home), "workspace-ui.json"), "utf8")).hiddenSections, ["session"]);
+	} finally { await ui.stop(); }
+	const reloaded = await visualHarness(home);
+	try { assert.match(stripTerminalSequences(reloaded.frame().lines[38]!), /Contexto/); }
+	finally { await reloaded.stop(); }
+});
+
 test("workspace_todos los modales propios usan el marco común y el color de su sección", async (t) => {
 	const theme = getThemeByName("dark")!;
 	const ui = await visualHarness(await tempDir(t), { theme }); t.after(ui.stop);
@@ -120,26 +172,28 @@ test("workspace_todos los modales propios usan el marco común y el color de su 
 	assert.ok(ui.modals.at(-1)!.lines.length <= 14);
 });
 
-test("workspace_geometría real: Inicio, contexto justo sobre Equipo, cuatro barras y modelo en su propia fila", async (t) => {
+test("workspace_geometría real: lateral de 41, sesión agrupada y círculos en rectángulos negros", async (t) => {
 	const ui = await visualHarness(await tempDir(t)); t.after(ui.stop);
 	for (const [width, height] of [[132, 40], [160, 70], [110, 32], [110, 26]] as const) {
 		const frame = ui.frame(width, height); const lines = frame.lines.map(stripTerminalSequences);
 		assert.equal(lines.length, height); assert.ok(lines.every((line) => visibleWidth(line) <= width));
 		assert.match(lines.join("\n"), /¿Qué hacemos en/); assert.doesNotMatch(lines.join("\n"), /HEADER INTERNO/);
-		const side = lines.slice(3, -3).map((line) => Array.from(line).slice(width - 33).join(""));
-		assert.ok(side.every((line) => line.startsWith("│")), `${width}x${height}`);
-		for (const title of ["PROYECTO", "GITHUB ACTIONS", "OMI", "SUBAGENTS", "CONTEXTO", "EQUIPO"]) assert.ok(side.some((line) => line.includes(`▌ ${title}`)), `${width}x${height}: ${title}`);
+		const side = lines.slice(3, -3).map((line) => sliceByColumn(line, width - 41, 41));
+		assert.ok(side.every((line) => visibleWidth(line) === 41), `${width}x${height}`);
+		const headings = ["PROYECTO", "SESIÓN", "GITHUB ACTIONS", "OMI", "SUBAGENTES", "RECURSOS"].map((title) => {
+			const y = side.findIndex((line) => new RegExp(`[┌├]─ ${title}`).test(line));
+			assert.ok(y >= 0, `${width}x${height}: ${title}`); return y;
+		});
+		assert.deepEqual(headings, [...headings].sort((a, b) => a - b));
 		assert.ok(side.some((line) => line.includes("Claude reviews"))); assert.ok(side.some((line) => line.includes("Releases")));
-		const context = side.findIndex((line) => line.includes("CONTEXTO"));
-		const omi = side.findIndex((line) => line.includes("▌ OMI"));
-		const subagents = side.findIndex((line) => line.includes("SUBAGENTS"));
-		assert.ok(omi < subagents && subagents < context);
-		assert.ok(context - subagents <= 3, "SUBAGENTS queda inmediatamente antes de Contexto, sin hueco creciente");
-		assert.match(side[context + 1]!, /56k \/ 200k tokens.*28%/);
-		assert.match(side[context + 2]!, /█{30}/); assert.match(side[context + 4]!, /EQUIPO/);
-		assert.equal(side.filter((line) => line.includes("█")).length, 4);
+		const session = side.slice(headings[1], headings[2]).join("\n");
+		assert.match(session, /Modelo real/); assert.match(session, /●{4}○{2} high/);
+		assert.match(session, /56k \/ 200k tokens.*●{3}○{7} 28%/);
+		assert.equal(side.filter((line) => /[●○]{10}/.test(line)).length, 4, "contexto, CPU, RAM y disco");
+		assert.doesNotMatch(side.join("\n"), /█|▌/);
+		assert.ok(side.some((line) => /^└─+┘$/.test(line))); assert.match(side.at(-1)!, /Personalizar lateral/);
 		assert.match(lines[height - 2]!, /Ctrl 1–5 vistas/); assert.doesNotMatch(lines.slice(-3).join("\n"), /Contexto|56k/);
-		assert.match(lines[height - 1]!, /Modelo: Modelo real.*proveedor-real.*Razonamiento: high.*Ctrl L cambiar/);
+		assert.match(lines[height - 1]!, /Modelo: Modelo real.*proveedor-real.*Razonamiento: ●{4}○{2} high.*Ctrl L cambiar/);
 		assert.match(lines[height - 4]!, /Enter enviar/);
 	}
 });
@@ -168,14 +222,14 @@ test("workspace_lateral refresca commits, distingue ceros reales de referencia a
 		assert.match(screen(), expected);
 	}
 	await waitFor(/1 archivos · Al día \(local\)/); assert.doesNotMatch(screen(), /↑0 ↓0/);
-	for (const title of ["PROYECTO", "GITHUB ACTIONS", "OMI", "CONTEXTO", "EQUIPO"]) assert.ok(screen().includes(`▌ ${title}`));
+	for (const title of ["PROYECTO", "SESIÓN", "GITHUB ACTIONS", "OMI", "RECURSOS"]) assert.match(screen(), new RegExp(`[┌├]─ ${title}`));
 	assert.doesNotMatch(screen(), /┌ GitHub Actions/); assert.match(screen(), /Claude reviews/); assert.match(screen(), /Releases/);
 	for (const height of [26, 40]) {
-		const side = ui.frame(132, height).lines.map((line) => stripTerminalSequences(sliceByColumn(line, 99, 33)));
+		const side = ui.frame(132, height).lines.map((line) => stripTerminalSequences(sliceByColumn(line, 91, 41)));
 		const actionsY = side.findIndex((line) => line.includes("Claude reviews"));
 		ui.click(120, height === 26 ? actionsY : actionsY + 1, 132, height);
 		assert.match(ui.prompts.at(-1)!, /GitHub Actions/, "los errores Offline repetidos no cambian el destino del clic"); await Promise.resolve();
-		ui.click(120, side.findIndex((line) => line.includes("▌ OMI")), 132, height);
+		ui.click(120, side.findIndex((line) => /[┌├]─ OMI/.test(line)), 132, height);
 		assert.match(ui.frame(132, height).lines.map(stripTerminalSequences)[1]!, /\[5 OMI\]/);
 		await ui.command("omi-chat");
 	}
@@ -193,7 +247,7 @@ test("workspace_panes bajos y angostos conservan modelo y contexto sin lateral n
 	for (const [width, height] of [[109, 40], [132, 25], [80, 24], [40, 24], [28, 16]] as const) {
 		const lines = ui.frame(width, height).lines.map(stripTerminalSequences);
 		assert.equal(lines.length, height); assert.ok(lines.every((line) => visibleWidth(line) <= width));
-		assert.doesNotMatch(lines.join("\n"), /CONTEXTO|EQUIPO/);
+		assert.doesNotMatch(lines.join("\n"), /SESIÓN|RECURSOS/);
 		assert.match(lines[height - 2]!, /Contexto/); assert.match(lines[height - 1]!, /Modelo: Modelo real/);
 	}
 	ui.unknown(); const lines = ui.frame(132, 40).lines.map(stripTerminalSequences);
@@ -207,7 +261,7 @@ test("workspace_no tapa conversación ni diagnósticos y el clic abre el detalle
 		const frame = ui.frame(width, height); const lines = frame.lines.map(stripTerminalSequences);
 		assert.doesNotMatch(lines.join("\n"), /¿Qué hacemos/);
 		assert.match(lines.join("\n"), /CONVERSACIÓN REAL/); assert.match(lines.join("\n"), /DIAGNÓSTICO IMPORTANTE/);
-		const y = width >= 110 ? lines.findIndex((line) => line.includes("CONTEXTO")) : height - 2;
+		const y = width >= 110 ? lines.findIndex((line) => line.includes("56k / 200k tokens")) : height - 2;
 		const x = width - 8; const box = getLayoutBoxesAt(frame, x, y).find((box) => box.component.handleMouse);
 		assert.ok(box);
 		box.component.handleMouse!({ type: "click", x: x - box.rect.x, y: y - box.rect.y, width: box.rect.width, height: box.rect.height } as never);
@@ -215,7 +269,7 @@ test("workspace_no tapa conversación ni diagnósticos y el clic abre el detalle
 		// Dejar finalizar el modal para poder abrir el siguiente.
 		await Promise.resolve();
 		if (width >= 110) {
-			const resourceY = lines.findIndex((line) => line.includes("EQUIPO"));
+			const resourceY = lines.findIndex((line) => line.includes("RECURSOS"));
 			const resourceBox = getLayoutBoxesAt(frame, x, resourceY).find((box) => box.component.handleMouse)!;
 			resourceBox.component.handleMouse!({ type: "click", x: x - resourceBox.rect.x, y: resourceY - resourceBox.rect.y, width: resourceBox.rect.width, height: resourceBox.rect.height } as never);
 			assert.match(ui.prompts.at(-1)!, /Recursos · equipo donde corre OMI/); await Promise.resolve();
@@ -234,7 +288,7 @@ test("workspace_las cinco vistas funcionan por teclado, comandos, clic y Escape 
 		let lines = ui.frame(width, 32).lines.map(stripTerminalSequences);
 		assert.equal(lines.length, 32); assert.ok(lines.every((line) => visibleWidth(line) <= width));
 		assert.ok(lines[1]!.includes(`[${index + 1} ${item.label}]`));
-		const mainWidth = width - (width >= 110 ? 33 : 0);
+		const mainWidth = width - (width >= 110 ? 41 : 0);
 		assert.doesNotMatch(lines.map((line) => sliceByColumn(line, 0, mainWidth)).join("\n"), /Entregas|ENTREGAS|GITHUB ACTIONS/);
 		if (item.id === "chat") assert.match(lines.join("\n"), /CONVERSACIÓN REAL/);
 		else assert.doesNotMatch(lines.slice(3, -3).join("\n"), /Enter enviar|CONVERSACIÓN REAL/);
@@ -302,8 +356,8 @@ console.log(JSON.stringify(args[1] === 'view' ? {body: 'DETAIL_' + args[0] + '_'
 		assert.match(failed.prompts.at(-1)!, /CURRENT_BRANCH_PR/); assert.match(failed.prompts.at(-1)!, /https:\/\/github.com\/test\/repo\/pull\/9/); assert.doesNotMatch(failed.prompts.at(-1)!, /Ubicación de trabajo/);
 	} finally { await failed.stop(); }
 	for (const height of [26, 28, 30, 32, 36, 40, 70]) {
-		const side = app.frame(132, height).lines.slice(3, -3).map((line) => stripTerminalSequences(sliceByColumn(line, 99, 33)));
-		for (const title of ["PROYECTO", "GITHUB ACTIONS", "OMI", "CONTEXTO", "EQUIPO"]) assert.ok(side.some((line) => line.includes(`▌ ${title}`)), `132x${height}: ${title}`);
+		const side = app.frame(132, height).lines.slice(3, -3).map((line) => stripTerminalSequences(sliceByColumn(line, 91, 41)));
+		for (const title of ["PROYECTO", "SESIÓN", "GITHUB ACTIONS", "OMI", "RECURSOS"]) assert.ok(side.some((line) => new RegExp(`[┌├]─ ${title}`).test(line)), `132x${height}: ${title}`);
 		assert.ok(side.some((line) => line.includes("Claude reviews"))); assert.ok(side.some((line) => line.includes("Releases")));
 		if (height === 26) assert.match(side.join("\n"), /Claude reviews.*✓ 42m.*\n.*Releases.*✓ 42m/);
 		if (height === 70) assert.equal(side.filter((line) => line.includes("✓")).length, 6);
@@ -320,7 +374,7 @@ console.log(JSON.stringify(args[1] === 'view' ? {body: 'DETAIL_' + args[0] + '_'
 	await waitFor(() => !!app.prompts.at(-1)?.includes("DETAIL_pr_7")); assert.match(app.prompts.at(-1)!, /feature → main/); assert.match(screen(), /\[3 PRs\]/);
 	await app.command("omi-platform"); await waitFor(() => screen().includes("1.2.3"));
 	assert.match(screen(), /acme\/tienda/); assert.match(screen(), /SERVICIOS Y AMBIENTES/); assert.match(screen(), /stage.*1\.2\.3.*running/);
-	assert.doesNotMatch(app.frame().lines.map((line) => stripTerminalSequences(sliceByColumn(line, 0, 99))).join("\n"), /ISSUE_FIRST|PR_OPEN|GITHUB ACTIONS/);
+	assert.doesNotMatch(app.frame().lines.map((line) => stripTerminalSequences(sliceByColumn(line, 0, 91))).join("\n"), /ISSUE_FIRST|PR_OPEN|GITHUB ACTIONS/);
 	assert.ok(linked.omi.requests.every((request) => request.method === "GET"), "la vista OMI no muta infraestructura");
 	data.issue[0]!.title = "ISSUE_REFRESHED"; data.failPr = true; data.failRuns = true; await writeFile(dataPath, JSON.stringify(data));
 	await app.command("omi-issues"); app.input("r"); await waitFor(() => screen().includes("ISSUE_REFRESHED"));
@@ -334,14 +388,15 @@ console.log(JSON.stringify(args[1] === 'view' ? {body: 'DETAIL_' + args[0] + '_'
 	// El enlace anterior desaparece al cambiar de rama, aunque la lista global conserve otros PRs.
 	data.currentBranch = null; data.failPr = false; await writeFile(dataPath, JSON.stringify(data));
 	execFileSync("git", ["symbolic-ref", "HEAD", "refs/heads/other"], { cwd: linked.repo }); await app.command("omi");
-	for (let i = 0; i < 120; i++) { await app.command("omi-pr"); if (app.prompts.at(-1)?.includes("No hay un PR asociado")) break; await setTimeout(25); }
+	for (let i = 0; i < 120; i++) { await app.command("omi-pr"); if (app.prompts.at(-1)?.includes("No hay un PR asociado") && app.prompts.at(-1)?.includes("Rama: other")) break; await setTimeout(25); }
 	assert.match(app.prompts.at(-1)!, /Rama: other/); assert.match(app.prompts.at(-1)!, /No hay un PR asociado/);
 	assert.doesNotMatch(screen(), /PR #9/);
 	const beforeBlocked = await readFile(logPath, "utf8");
 	for (const options of [{ trusted: true, online: false }, { trusted: false, online: true }]) {
 		const blocked = await visualHarness(linked.home, { cwd: linked.repo, ...options });
 		try {
-			await blocked.command("omi-issues"); await setTimeout(40);
+			await blocked.command("omi-issues");
+			await waitFor(() => blocked.frame().lines.map(stripTerminalSequences).join("\n").includes(options.online ? "Proyecto sin confianza" : "Offline"));
 			const lines = blocked.frame().lines.map(stripTerminalSequences).join("\n");
 			assert.match(lines, options.online ? /Proyecto sin confianza/ : /Offline/); assert.doesNotMatch(lines, /No hay issues abiertos/);
 			await blocked.command("omi-pr"); assert.match(blocked.prompts.at(-1)!, options.online ? /Proyecto sin confianza/ : /Offline/); assert.doesNotMatch(blocked.prompts.at(-1)!, /No hay un PR asociado/);
@@ -423,19 +478,19 @@ test("workspace_triage muestra issue y categoría debajo de recursos, incluso en
 	ui.events.emit("omi:subagents", { phase: "start", id: "triage-eight", args: { tasks: Array.from({ length: 8 }, () => ({ agent: "worker", task: "Conservar issue activo" })) } });
 	for (let i = 0; i < 100 && !ui.frame().lines.map(stripTerminalSequences).some((line) => line.includes("Worktree")); i++) await setTimeout(20);
 	for (const [width, height] of [[110, 26], [132, 28], [132, 32], [132, 34], [160, 70]] as const) {
-		const frame = ui.frame(width, height); const side = frame.lines.slice(3, -3).map((line) => stripTerminalSequences(sliceByColumn(line, width - 33, 33)));
+		const frame = ui.frame(width, height); const side = frame.lines.slice(3, -3).map((line) => stripTerminalSequences(sliceByColumn(line, width - 41, 41)));
 		assert.ok(frame.lines.every((line) => visibleWidth(line) <= width));
 		assert.match(side.join("\n"), /ISSUE ACTIVO/); assert.match(side.join("\n"), /#42 · Nuevo feature/); assert.match(side.join("\n"), /ISSUE_ACTIVO 漢字/);
-		const headings = ["PROYECTO", "GITHUB ACTIONS", "OMI", "SUBAGENTS", "CONTEXTO", "EQUIPO", "ISSUE ACTIVO"].map((title) => {
-			const index = side.findIndex((line) => line.includes(`▌ ${title}`)); assert.ok(index >= 0, `${width}x${height}: ${title}`); return index;
+		const headings = ["PROYECTO", "SESIÓN", "GITHUB ACTIONS", "OMI", "SUBAGENTES", "RECURSOS", "ISSUE ACTIVO"].map((title) => {
+			const index = side.findIndex((line) => new RegExp(`[┌├]─ ${title}`).test(line)); assert.ok(index >= 0, `${width}x${height}: ${title}`); return index;
 		});
 		assert.deepEqual(headings, [...headings].sort((a, b) => a - b), "Issue activo queda después de Equipo, no debajo de Proyecto");
 		const issueY = headings.at(-1)!; const hostEnd = side.findIndex((line) => line.includes("Detalles del host >"));
-		if (hostEnd >= 0) assert.equal(issueY, hostEnd + 2, "una línea separa los recursos del issue");
+		if (hostEnd >= 0) assert.equal(issueY, hostEnd + (side[hostEnd + 1]!.startsWith("└") ? 2 : 1), "marcos contiguos o borde compartido en compacto");
 		const before = ui.prompts.length; ui.click(width - 5, issueY + 3, width, height);
 		assert.equal(ui.prompts.length, before, "el issue no pertenece al área clickeable de recursos");
-		for (const [title, expected] of [["GITHUB ACTIONS", /GitHub Actions/], ["CONTEXTO", /Ventana de contexto/], ["EQUIPO", /Recursos · equipo/]] as const) {
-			const y = side.findIndex((line) => line.includes(`▌ ${title}`)) + 3;
+		for (const [title, expected] of [["GITHUB ACTIONS", /GitHub Actions/], ["56k / 200k tokens", /Ventana de contexto/], ["RECURSOS", /Recursos · equipo/]] as const) {
+			const y = side.findIndex((line) => line.includes(title)) + 3;
 			ui.click(width - 5, y, width, height); assert.match(ui.prompts.at(-1)!, expected); await Promise.resolve();
 		}
 	}
@@ -563,7 +618,7 @@ test("workspace_main sólo ofrece volver en worktrees: paleta, Enter en Ubicaci�
 test("workspace_SUBAGENTS: bus real, render inmediato, sigue al quedar padre idle y finaliza por end", async (t) => {
 	const ui = await visualHarness(await tempDir(t)); t.after(ui.stop);
 	const screen = () => ui.frame(132, 70).lines.map(stripTerminalSequences).join("\n");
-	assert.equal(ui.subscriptions(), 1); assert.match(screen(), /SUBAGENTS/); assert.match(screen(), /Sin subagentes activos/);
+	assert.equal(ui.subscriptions(), 1); assert.match(screen(), /SUBAGENTES/); assert.match(screen(), /Sin subagentes activos/);
 	ui.emitSession("tool_execution_start", { toolCallId: "native", toolName: "subagent", args: { agent: "worker", task: "No duplicar" } });
 	await ui.command("omi-subagents"); assert.match(ui.prompts.at(-1)!, /Sin subagentes activos/);
 	ui.events.emit("omi:subagents", { phase: "start", id: "bus-job", args: { tasks: [{ agent: "worker", task: "Implementar monitor" }, { agent: "scout", task: "Inspeccionar código" }] }, details: { results: [{ status: "pending" }, { status: "pending" }] } });
@@ -598,17 +653,17 @@ test("workspace_SUBAGENTS: ocho tareas, overflow y clics de todas las secciones 
 	for (const [width, height] of [[110, 26], [132, 28], [132, 40], [160, 70]] as const) {
 		const lines = ui.frame(width, height).lines.map(stripTerminalSequences);
 		assert.equal(lines.length, height); assert.ok(lines.every((line) => visibleWidth(line) <= width));
-		const side = lines.slice(3, -3).map((line) => stripTerminalSequences(sliceByColumn(line, width - 33, 33)));
-		const headings = ["PROYECTO", "GITHUB ACTIONS", "OMI", "SUBAGENTS", "CONTEXTO", "EQUIPO"].map((title) => side.findIndex((line) => line.includes(`▌ ${title}`)));
+		const side = lines.slice(3, -3).map((line) => stripTerminalSequences(sliceByColumn(line, width - 41, 41)));
+		const headings = ["PROYECTO", "SESIÓN", "GITHUB ACTIONS", "OMI", "SUBAGENTES", "RECURSOS"].map((title) => side.findIndex((line) => new RegExp(`[┌├]─ ${title}`).test(line)));
 		assert.ok(headings.every((row) => row >= 0), `${width}x${height}: ${side.join("\n")}`); assert.deepEqual(headings, [...headings].sort((a, b) => a - b));
-		assert.match(side.join("\n"), /4 act\/4 cola/);
+		assert.match(side.join("\n"), /4 act(?:ivos.*4 en|\/4) cola/);
 		if (height === 26) assert.match(side.join("\n"), /\+8 más/);
-		for (const [title, expected] of [["PROYECTO", /Ubicación de trabajo/], ["GITHUB ACTIONS", /GitHub Actions/], ["SUBAGENTS", /Subagentes.*|Delegación/], ["CONTEXTO", /Ventana de contexto/], ["EQUIPO", /Recursos · equipo/]] as const) {
-			const y = side.findIndex((line) => line.includes(`▌ ${title}`)) + 3;
+		for (const [title, expected] of [["PROYECTO", /Ubicación de trabajo/], ["GITHUB ACTIONS", /GitHub Actions/], ["SUBAGENTES", /Subagentes.*|Delegación/], ["56k / 200k tokens", /Ventana de contexto/], ["RECURSOS", /Recursos · equipo/]] as const) {
+			const y = side.findIndex((line) => line.includes(title)) + 3;
 			ui.click(width - 5, y, width, height); assert.match(ui.prompts.at(-1)!, expected); await Promise.resolve();
-			if (title === "SUBAGENTS") { assert.match(ui.prompts.at(-1)!, /ID: eight\/0/); assert.match(ui.prompts.at(-1)!, /Tarea: Tarea 0/); }
+			if (title === "SUBAGENTES") { assert.match(ui.prompts.at(-1)!, /ID: eight\/0/); assert.match(ui.prompts.at(-1)!, /Tarea: Tarea 0/); }
 		}
-		ui.click(width - 5, headings[2]! + 3, width, height); assert.match(ui.frame(width, height).lines.map(stripTerminalSequences)[1]!, /\[5 OMI\]/); await ui.command("omi-chat");
+		ui.click(width - 5, headings[3]! + 3, width, height); assert.match(ui.frame(width, height).lines.map(stripTerminalSequences)[1]!, /\[5 OMI\]/); await ui.command("omi-chat");
 	}
 });
 

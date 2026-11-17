@@ -14,7 +14,10 @@ function chunk(delta: unknown, finish: string | null): string {
 
 test("workspace_un turno real conserva streaming y tools; una confirmación vuelve de Cambios al editor", { skip: process.platform === "win32", timeout: 25000 }, async (t) => {
 	const home = await tempDir(t); const agent = join(home, ".omi/agent"); await mkdir(agent, { recursive: true });
+	// Probar el output fullscreen en vivo, no el volcado nativo de scrollback al cerrar Pi.
+	await writeFile(join(agent, "settings.json"), JSON.stringify({ fullscreenExitOutput: "resume-hint" }));
 	const promptMarker = join(home, "prompt-ready"); const replyMarker = join(home, "reply-ready");
+	await writeFile(join(home, "one.txt"), "READ_SUMMARY_ONE\n"); await writeFile(join(home, "two.txt"), "READ_SUMMARY_TWO\n");
 	const requests: string[] = [];
 	const server = createServer((request, response) => {
 		// Las sondas HTTP al puerto local no son llamadas al modelo ni deben avanzar el turno.
@@ -25,7 +28,11 @@ test("workspace_un turno real conserva streaming y tools; una confirmación vuel
 		request.on("end", () => {
 			requests.push(body);
 			response.writeHead(200, { "content-type": "text/event-stream" });
-			if (requests.length === 1) setTimeout(() => response.end(chunk({ role: "assistant", tool_calls: [{ index: 0, id: "probe", type: "function", function: { name: "workspace_confirm_probe", arguments: "{}" } }] }, null) + chunk({}, "tool_calls") + "data: [DONE]\n\n"), 900);
+			if (requests.length === 1) {
+				const calls = [["bash-one", "bash", { command: "printf BASH_SUMMARY_ONE" }], ["bash-two", "bash", { command: "printf BASH_SUMMARY_TWO" }],
+					["read-one", "read", { path: "one.txt" }], ["read-two", "read", { path: "two.txt" }], ["probe", "workspace_confirm_probe", {}]] as const;
+				setTimeout(() => response.end(chunk({ role: "assistant", tool_calls: calls.map(([id, name, args], index) => ({ index, id, type: "function", function: { name, arguments: JSON.stringify(args) } })) }, null) + chunk({}, "tool_calls") + "data: [DONE]\n\n"), 900);
+			}
 			else { response.end(chunk({ role: "assistant", content: "PROBE_COMPLETED" }, null) + chunk({}, "stop") + "data: [DONE]\n\n"); void writeFile(replyMarker, "done"); }
 		});
 	});
@@ -57,6 +64,12 @@ test("workspace_un turno real conserva streaming y tools; una confirmación vuel
 	const plain = plainTerminal(result.output);
 	assert.equal(requests.length, 2, JSON.stringify(requests, null, 2) + "\n" + plain);
 	assert.ok(requests[1]?.includes("PROBE_OK"), requests[1]);
+	const results = (JSON.parse(requests[1]!) as { messages: { role: string; content: unknown }[] }).messages.filter((message) => message.role === "tool");
+	for (const marker of ["BASH_SUMMARY_ONE", "BASH_SUMMARY_TWO", "READ_SUMMARY_ONE", "READ_SUMMARY_TWO"]) {
+		assert.ok(results.some((message) => JSON.stringify(message.content).includes(marker)), `el proveedor conserva ${marker}`);
+		assert.doesNotMatch(plain, new RegExp(marker), `el output queda colapsado visualmente, no se borra del contexto: ${plain.match(new RegExp(`.{0,80}${marker}.{0,80}`))?.[0] ?? ""}`);
+	}
+	assert.match(plain, /Ran 2 shell commands/); assert.match(plain, /Read 2 files/);
 	assert.match(plain, /▌ Vos/);
 	for (const body of requests) {
 		const payload = JSON.parse(body) as { messages: { role: string; content: unknown }[] };

@@ -38,7 +38,7 @@ Una instalación nueva trae estas integraciones **dentro del binario**, sin desc
 
 | Integración | Qué trae | Autenticación |
 |---|---|---|
-| Subagentes | Tool `subagent` con `scout`, `planner`, `reviewer` y `worker`; background, espera explícita y panel `SUBAGENTS` | El modelo y razonamiento elegidos en la sesión |
+| Subagentes | Tool `subagent` con `scout`, `planner`, `reviewer` y `worker`; background, espera explícita y panel `SUBAGENTES` | El modelo y razonamiento elegidos en la sesión |
 | KB de [Harness](https://github.com/chichex/harness/tree/main/kb) | MCP `harness-kb`, por Streamable HTTP en `https://kb-prod-chiche.ohmyinfra.com/mcp` | OAuth desde `/mcp login harness-kb` |
 | OMI | El mismo catálogo de `omi mcp`, integrado **nativamente** en el agente, con confirmaciones en la UI | `omi login` |
 
@@ -57,7 +57,7 @@ Cada subagente tiene contexto propio: recibe la tarea explícita y las instrucci
 Las llamadas pasan por el pipeline del padre: conservan cwd, hooks, validaciones y confirmaciones. **No es un sandbox:** comparten filesystem, y no hay que asignar los mismos archivos a workers en paralelo.
 **En TUI y RPC trabajan en segundo plano por defecto:** la llamada devuelve un ID y libera al principal para que puedas seguir conversando y haciendo otras tareas. Al terminar llega un aviso; el agente incorpora el resultado con `subagent` usando `action: "result"` e `id`. Leer un resultado todavía pendiente no espera, y consultar varias veces uno terminado no duplica su uso/costo. El uso se agrega a los totales de la sesión al recoger el resultado, no al lanzar el trabajo; además queda una entrada local de auditoría del uso al finalizar.
 
-El lateral muestra **`SUBAGENTS`**, con roles, estado, tools, duración, tareas activas/en cola y un resumen si no entran todas. Un clic o `/omi-subagents` abre el detalle; `/omi-subagents cancel <ID de tarea o lote>` solicita cancelar ese lote, con confirmación. La tool también acepta `action: "status"` para consultar y `action: "cancel"` con un ID o `"all"` para cancelar. No hay polling automático continuo.
+El lateral muestra **`SUBAGENTES`**, con roles, estado, tools, duración, tareas activas/en cola y un resumen si no entran todas. Un clic o `/omi-subagents` abre el detalle; `/omi-subagents cancel <ID de tarea o lote>` solicita cancelar ese lote, con confirmación. La tool también acepta `action: "status"` para consultar y `action: "cancel"` con un ID o `"all"` para cancelar. No hay polling automático continuo.
 
 Si el principal necesita el resultado antes de seguir, puede delegar con **`background: false`**. Ése es el comportamiento por defecto en print/JSON, donde el proceso no queda abierto para alojar trabajos. Esc cancela una delegación que está esperando; no cancela los trabajos ya desacoplados. Salir, recargar, cambiar de sesión o navegar el árbol sí solicita cancelar los trabajos: **no son jobs persistentes ni sobreviven al proceso**.
 
@@ -103,7 +103,7 @@ Las API keys del shell no le dan un modelo a omi. Por ejemplo, con `GEMINI_API_K
 ### Workspace de terminal
 
 `omi` arranca con un layout fullscreen propio: cabecera con **1 Chat / 2 Issues / 3 PRs / 4 Cambios / 5 OMI**, conversación y editor,
-lateral plegable con contexto encima de recursos y pie con actividad y una fila propia para el modelo. El fondo por defecto es negro; una selección de tema
+lateral personalizable con bloques rectangulares sobre negro, toda la sesión agrupada y pie con actividad y una fila propia para el modelo. El fondo por defecto es negro; una selección de tema
 explícita sigue controlando los colores del runtime. La conversación, las tools, sus confirmaciones, el streaming,
 el historial y la edición siguen usando el renderer de Pi; no hay un segundo proceso de chat ni una UI web.
 
@@ -118,7 +118,7 @@ el historial y la edición siguen usando el renderer de Pi; no hay un segundo pr
   Sin preparación guardada, el detalle ofrece **Enter iniciar triage**. Usa el modelo seleccionado (sin tools) para clasificarlo como **Nuevo feature**, **Fix**, **Mejora** o **Chore**, con objetivo, alcance inicial, criterios de aceptación sugeridos y dudas.
   Crea una rama `feat/issue-N-título`, `fix/issue-N-título`, `improve/issue-N-título` o `chore/issue-N-título` desde el commit de **`main` local**, no desde HEAD ni `origin/main`.
   El worktree queda en `<repo-principal>-worktrees/issue-N`, fuera del checkout original. No hace fetch, pull, stash, commit ni push; tampoco mueve la rama, índice o cambios del origen.
-  Abre una sesión nueva en ese directorio, con el issue y su triage en el contexto. La lateral muestra **ISSUE ACTIVO** debajo de **Equipo / recursos**, con número, título y tipo; se restaura con `/reload` y `/resume`.
+  Abre una sesión nueva en ese directorio, con el issue y su triage en el contexto. La lateral muestra **ISSUE ACTIVO** debajo de **Recursos**, con número, título y tipo; se restaura con `/reload` y `/resume`.
   **Se detiene ahí:** no inicia la implementación ni define todavía etapas. La conversación anterior queda en su sesión.
   **Idempotente:** la lista muestra badges locales, por ejemplo `#42 [Fix] [issue-42]`, o `[Sin triage]`. No son etiquetas de GitHub ni generan llamadas al modelo al abrir la lista.
   El detalle de uno preparado muestra clasificación, rama y ruta, con **Enter retomar worktree**: vuelve a la misma sesión, conservando conversación y cambios, sin reclasificar ni crear otra rama, worktree o sesión. Si ya estás en esa sesión, permanece ahí.
@@ -150,14 +150,26 @@ el historial y la edición siguen usando el renderer de Pi; no hay un segundo pr
   `↑N ↓N` son **commits** por subir/traer, no archivos ni líneas sin commit. Se comparan con la referencia local del último fetch;
   la lateral muestra `Al día (local)` si ambos son cero, `sin upstream` si no está configurado y `↑— ↓—` si el conteo no está disponible.
   No hace fetch automático ni convierte errores en ceros. `/omi-workspace` muestra el upstream y explica cómo actualizarlo con `git fetch`.
-  Las secciones Proyecto, GitHub Actions, OMI, Contexto y Equipo tienen encabezados de distintos colores, fondo tenue y separadores de caracteres, respetando el tema claro/oscuro.
-  Se agrupan sin dejar un hueco creciente antes de Contexto; el espacio libre queda al final. Los recortes y los márgenes conservan el fondo del panel.
-- **GitHub Actions en la lateral:** agrupa **Claude reviews** (`claude-review.yml`) y **Releases** (`release.yml`) con el mismo encabezado que las demás secciones, sin un marco adicional que reste ancho. Muestra hasta tres ejecuciones recientes por workflow de todo el repo, con estado, nombre y antigüedad alineada a la derecha y separada por al menos dos espacios. Se adapta al espacio disponible; en terminales bajas muestra un resumen por workflow sin ocultar OMI. Los nombres corresponden a las ejecuciones reales, no a tags inferidos. Un check indica ejecución exitosa, no aprobación del PR. Clic en la sección o `/omi-actions` abre el detalle con las URLs. Sólo consulta: no dispara reviews ni releases.
-- **Contexto:** encima de Equipo, con tokens estimados / límite real del modelo, porcentaje y barra sólida `█`.
-  Si el runtime no conoce el uso se muestra `—`, no cero. Con la lateral oculta, el dato queda en el pie.
-  No se inventa un desglose de tokens. `/omi-context` explica el dato y `/compact` sigue siendo explícito.
+  Proyecto, Sesión, GitHub Actions, OMI, Subagentes y Recursos usan marcos de caracteres con título, sin franjas de fondo coloreado.
+  La lateral tiene fondo negro uniforme en oscuro y blanco en claro. Los bloques se compactan cuando falta alto; el espacio libre queda al final.
+- **GitHub Actions en la lateral:** agrupa **Claude reviews** (`claude-review.yml`) y **Releases** (`release.yml`) dentro de su propio rectángulo, igual que las demás secciones. Muestra hasta tres ejecuciones recientes por workflow de todo el repo, con estado, nombre y antigüedad alineada a la derecha y separada por al menos dos espacios. Se adapta al espacio disponible; en terminales bajas muestra un resumen por workflow sin ocultar OMI. Los nombres corresponden a las ejecuciones reales, no a tags inferidos. Un check indica ejecución exitosa, no aprobación del PR. Clic en la sección o `/omi-actions` abre el detalle con las URLs. Sólo consulta: no dispara reviews ni releases.
+- **Sesión:** reúne el modelo y proveedor, esfuerzo de razonamiento con círculos `●○`, contexto estimado / límite real y porcentaje en un mismo rectángulo.
+  Incluye entrada/salida, caché y costo registrado de la rama de conversación activa cuando hay consumo informado; no es saldo ni cuota del proveedor.
+  Los círculos representan ocupación o esfuerzo, no un puntaje inventado de calidad del modelo.
+  Si el runtime no conoce el uso de contexto se muestra `—`, no cero. Con Sesión oculta o sin lateral, el contexto queda en el pie.
+  Clic en el modelo abre el selector; en contexto abre `/omi-context`. `/compact` sigue siendo explícito.
 - **Recursos:** CPU total, RAM disponible, volumen del proyecto y consumo separado del proceso OMI. Son del **host donde corre OMI**:
   conectado por SSH a Linux, no representan tu Mac. La RAM aproximada se marca `≈` y una métrica no soportada queda como no disponible.
+- **Output compacto:** en el workspace fullscreen, las herramientas consecutivas del mismo tipo se agrupan en una línea gris:
+  `Ran 3 shell commands`, `Read 5 files`, `Edited 2 files`, `Wrote 1 file` o `Ran 3 searches`.
+  Los comandos cuentan invocaciones de shell, no intentan interpretar cuántas instrucciones hay dentro de un script;
+  lectura/edición/escritura cuentan rutas distintas dentro del grupo. Otras herramientas muestran su nombre y cantidad de llamadas.
+  Durante la ejecución indica `Preparing`, `Running`, `Reading`, etc., sin anunciar éxito antes de terminar.
+  **Clic en el resumen** abre/cierra el grupo; **Ctrl+O** (o el atajo configurado), `/omi-output` y la paleta alternan el detalle global.
+  El detalle usa los componentes originales de Pi, con argumentos, salida y diffs intactos. Los errores/abortos y las imágenes mantienen su presentación nativa visible;
+  los resultados truncados conservan una advertencia. Texto del usuario/asistente, diagnósticos y confirmaciones no se agrupan ni reordenan.
+  Es sólo presentación: no reduce lo enviado al modelo ni altera herramientas, historial o datos. También agrupa sesiones restauradas.
+  El modo classic/regular y el volcado de transcript al salir siguen usando la presentación nativa de Pi.
 - **Modelo:** fila dedicada en el pie con nombre destacado, proveedor, razonamiento y atajo según el ancho disponible.
   `/model`, su atajo configurado (por defecto Ctrl L) o esa fila abren el selector propio de OMI.
   Abre en el proveedor actual; **Tab / Shift+Tab** recorren los proveedores configurados y la vista de todos.
@@ -188,6 +200,8 @@ el historial y la edición siguen usando el renderer de Pi; no hay un segundo pr
 | Ctrl 5 o `/omi-platform` | OMI: proyecto, servicios y ambientes |
 | Ctrl K o `/omi` | Paleta de comandos (Ctrl K reemplaza borrar hasta fin de línea en el editor) |
 | F4 o `/omi-sidebar` | Mostrar / ocultar lateral |
+| `/omi-sidebar-settings` | Elegir qué bloques mostrar en la lateral |
+| Ctrl O o `/omi-output` | Alternar detalle de herramientas; clic en un resumen abre sólo ese grupo |
 | `/omi-actions` | Detalle de Claude reviews y releases de GitHub Actions |
 | `/omi-pr` | URL, título y estado del PR de la rama actual |
 | `/omi-triage [número]` | Preparar el issue seleccionado desde main local o retomar su worktree/sesión guardados |
@@ -207,15 +221,17 @@ También conserva el enlace OSC 8 para la interacción nativa del terminal. `/om
 Si falla una actualización, se conserva el enlace con `*` como dato desactualizado; al cambiar de rama se descarta el anterior.
 Sin PR, con HEAD separado o sin datos no se inventa un enlace. Se respeta `--offline` y la confianza del proyecto.
 
-La lateral ocupa 33 columnas (incluido el separador) y se oculta por debajo de 110 columnas o 26 filas;
-los comandos y el pie siguen disponibles. Contexto, CPU, RAM y disco usan barras de bloques `█` de una fila;
-en panes bajos, las barras de recursos se acortan para conservar todos los datos.
+La lateral ocupa 41 columnas y se oculta por debajo de 110 columnas o 26 filas;
+los comandos y el pie siguen disponibles. Contexto, CPU, RAM y disco usan círculos llenos/vacíos `●○` junto al valor numérico.
+**Personalizar lateral**, al final del panel, en la paleta o con `/omi-sidebar-settings`, permite ocultar cada bloque:
+**↑↓** elige, **Espacio / Enter** alterna, **Ctrl+S** guarda, **Esc** cancela y **r** restablece todos visibles.
+Ocultar un bloque no desactiva sus comandos ni las verificaciones de seguridad.
 El inicio vacío muestra una bienvenida breve, sin inventar una conversación. Los componentes internos de OMI
 no aparecen en la lista de extensiones ni se ofrece actualizar Pi por separado. Las extensiones del usuario,
 sus diagnósticos y sus avisos de actualización se conservan; no se modifica `quietStartup` en los ajustes.
 Los datos locales se refrescan aproximadamente cada 3 segundos y los remotos cada 30, sin bloquear el streaming.
 Errores de GitHub u OMI se muestran como no disponibles / desactualizados, nunca como checks exitosos ni ambientes saludables inventados.
-`--offline` y los proyectos sin confianza no disparan estas consultas remotas. Favoritos y visibilidad de la lateral se guardan
+`--offline` y los proyectos sin confianza no disparan estas consultas remotas. Favoritos, visibilidad de la lateral y bloques ocultos se guardan
 sólo en `~/.omi/agent/workspace-ui.json` (o la raíz elegida con `OMI_HOME`).
 
 Para volver a la presentación anterior:
