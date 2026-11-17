@@ -31,6 +31,8 @@ export class DevelopmentSession {
 	readonly now: () => string;
 	readonly lifecycle = new AbortController();
 	private context: ExtensionContext | undefined;
+	// Último vínculo válido de la conversación: permite salir aunque el estado no se pueda leer.
+	private lastAnchor: { id: string; root: string; issue: number; revision: number } | undefined;
 	private alive = true;
 	offline: boolean;
 	readonly pi: ExtensionAPI;
@@ -49,7 +51,7 @@ export class DevelopmentSession {
 		const progress = this.state ? { ...developmentProgress(this.state, activity), ...(this.lockedReason || waiting ? { status: "waiting" as const, blockedReason: this.lockedReason } : {}) } : undefined;
 		this.onChange?.();
 		this.pi.events.emit("omi:workflow", { progress });
-		this.context?.ui.setStatus("omi-development", progress ? `Desarrollo · ${progress.phaseLabel}${progress.blockedReason ? " · bloqueado" : ""}` : undefined);
+		this.context?.ui.setStatus("omi-development", progress ? `Desarrollo · ${progress.phaseLabel}${progress.blockedReason ? " · bloqueado" : ""}` : this.lockedReason ? "Desarrollo · bloqueado · /omi-work stop para salir" : undefined);
 	}
 	private async checkout(ctx: ExtensionContext): Promise<Workflow["checkout"]> {
 		const prepared = restoreIssueTriage(ctx.sessionManager.getBranch(), ctx.cwd);
@@ -69,13 +71,14 @@ export class DevelopmentSession {
 		return this.state;
 	}
 	async restore(ctx: ExtensionContext, adopt = false): Promise<void> {
-		this.context = ctx; this.state = undefined; this.lockedReason = ""; this.reads.clear(); this.approvedCommands.clear();
+		this.context = ctx; this.state = undefined; this.lockedReason = ""; this.lastAnchor = undefined; this.reads.clear(); this.approvedCommands.clear();
 		const entry = ctx.sessionManager.getBranch().findLast((e) => e.type === "custom" && e.customType === DEVELOPMENT_ANCHOR);
 		if (!entry && !adopt) { this.emit(); return; }
 		try {
 			const anchor = entry?.type === "custom" ? entry.data : undefined;
 			if (anchor !== undefined && !Value.Check(AnchorSchema, anchor)) throw new Error("Vínculo del harness inválido; no se reinicia automáticamente");
 			if (Value.Check(AnchorSchema, anchor) && anchor.disabled && !adopt) { this.emit(); return; }
+			if (Value.Check(AnchorSchema, anchor)) this.lastAnchor = { id: anchor.id, root: anchor.root, issue: anchor.issue, revision: anchor.revision };
 			this.checkContext(ctx);
 			const checkout = await this.checkout(ctx);
 			const prepared = restoreIssueTriage(ctx.sessionManager.getBranch(), ctx.cwd)!;
@@ -140,9 +143,11 @@ export class DevelopmentSession {
 			if (!state.exploration?.fingerprint || snapshot.fingerprint !== state.exploration.fingerprint) throw new Error("El código cambió desde Explorar. Usá /omi-work refresh y volvé a explorar antes de aprobar.");
 		};
 		await assertExplored();
+		// Lo que se ejecuta sin volver a preguntar va primero y legible, no enterrado en el JSON.
+		const commands = `Comandos que quedan autorizados y se ejecutan sin volver a preguntar:\n${(state.recipe?.cases ?? []).map((c) => `- ${c.id} · ${c.command}`).join("\n")}`;
 		const preview = JSON.stringify({ source: { number: state.source.number, title: state.source.title, url: state.source.url, hash: state.source.hash }, recipe: state.recipe, spec: state.spec, inferences: state.inferences }, null, 2);
 		if (preview.length > 50000) throw new Error("La receta es demasiado grande para aprobarla completa; acotá el trabajo");
-		if (!(await this.confirm(ctx, "Aprobar receta y sincronizar issue", `${preview}\n\nAutoriza implementar estos pasos, commits locales y comandos exactos de los casos D. Se agrega un comentario administrado con la receta al issue, sin reemplazar su descripción; no autoriza push, merge, workflows ni deploy.`))) return false;
+		if (!(await this.confirm(ctx, "Aprobar receta y sincronizar issue", `${commands}\n\n${preview}\n\nAutoriza implementar estos pasos, commits locales y comandos exactos de los casos D. Se agrega un comentario administrado con la receta al issue, sin reemplazar su descripción; no autoriza push, merge, workflows ni deploy.`))) return false;
 		await assertExplored();
 		await syncIssueArtifact(state, this.runner, this.lifecycle.signal);
 		await assertExplored();
@@ -180,6 +185,7 @@ export class DevelopmentSession {
 		await this.apply({ type: "answered", id, answer: answer.trim() }, ctx); return true;
 	}
 	async stop(ctx: ExtensionContext): Promise<void> {
+		if (this.lockedReason) { await this.leaveLocked(ctx); return; }
 		const s = this.current(ctx);
 		if (!(await this.confirm(ctx, "Salir del harness", "Se pausa el trabajo y el chat vuelve a sus tools normales. No borra archivos ni revierte acciones. Para continuar el flujo usá /omi-work resume."))) return;
 		// Salir no depende de que el estado admita otra transición: un trabajo pausado o inválido también se deja.
@@ -188,6 +194,13 @@ export class DevelopmentSession {
 			catch (error) { ctx.ui.notify(`No se pudo pausar el estado guardado (${error instanceof Error ? error.message : "error"}); se sale igual del harness.`, "warning"); }
 		}
 		this.pi.appendEntry(DEVELOPMENT_ANCHOR, { id: s.id, root: s.checkout.root, issue: s.source.number, revision: this.state!.revision, disabled: true });
+		this.state = undefined; this.lockedReason = ""; this.emit();
+	}
+	// Un harness bloqueado (estado inválido, atrasado o ajeno) no se toca: sólo se deja de usar en esta conversación.
+	private async leaveLocked(ctx: ExtensionContext): Promise<void> {
+		if (!ctx.hasUI) throw new Error("Salir del harness: requiere confirmación humana interactiva");
+		if (!(await ctx.ui.confirm("Salir del harness bloqueado", `${this.lockedReason}\n\nEl chat vuelve a sus tools normales. No se modifica el estado guardado ni se borran archivos; recuperarlo queda a tu cargo.`, { signal: this.lifecycle.signal }))) return;
+		if (this.lastAnchor && this.alive) this.pi.appendEntry(DEVELOPMENT_ANCHOR, { ...this.lastAnchor, disabled: true });
 		this.state = undefined; this.lockedReason = ""; this.emit();
 	}
 	shutdown(): void { this.alive = false; this.lifecycle.abort(); }

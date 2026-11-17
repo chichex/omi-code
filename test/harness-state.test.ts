@@ -248,9 +248,34 @@ test("a failed lens cannot be re-rolled on the same content and lens runs are bo
  s = send(s, review("fail"));
  assert.throws(() => send(s, review("pass")), /ya falló/);
  assert.equal(send(s, review("pass", "changed")).reviews.length, 2);
- let unknown = send(send(send(verifying(), { type: "evidence", evidence: evidence("verification") }), review("unknown")), review("unknown"));
- unknown = send(unknown, review("pass")); assert.equal(send(unknown, { type: "verified", fingerprint: "tree" }).phase, "pr");
+ let unknown = send(verifying(), { type: "evidence", evidence: evidence("verification") });
+ for (let i = 0; i < 4; i++) unknown = send(unknown, review("unknown"));
+ unknown = send(unknown, review("pass")); assert.equal(send(unknown, { type: "verified", fingerprint: "tree" }).phase, "pr", "cancelar o un error del proveedor no gasta corridas");
+ unknown = send(send(unknown, review("pass")), review("pass"));
  assert.throws(() => send(unknown, review("pass")), /intentos/);
+ let flaky = verifying(); for (let i = 0; i < 10; i++) flaky = send(flaky, review("unknown"));
+ assert.throws(() => send(flaky, review("unknown")), /intentos/);
+});
+test("a refuter pass lets a failed lens run again on the same content", () => {
+ const withRefuter = { ...plan, lenses: ["quality", "refuter"] as Plan["lenses"] };
+ let s = send(ready(withRefuter), { type: "approved" }); s = send(s, { type: "step_started", id: "C1" }); s = send(s, { type: "evidence", evidence: evidence("red") }); s = send(s, { type: "evidence", evidence: evidence("green") }); s = send(s, { type: "step_completed", id: "C1", commit: "head", fingerprint: "tree" });
+ const lens = (name: "quality" | "refuter", verdict: "pass" | "fail") => ({ type: "reviewed" as const, review: { lens: name, fingerprint: "tree", verdict, findings: verdict === "pass" ? [] : ["src/a.ts:1 · finding"], at } });
+ s = send(s, lens("quality", "fail"));
+ assert.throws(() => send(s, lens("quality", "pass")), /ya falló/);
+ assert.throws(() => send(send(s, lens("refuter", "fail")), lens("quality", "pass")), /ya falló/);
+ s = send(s, lens("refuter", "pass"));
+ assert.equal(send(s, lens("quality", "pass")).reviews.at(-1)?.verdict, "pass");
+});
+test("schema limits fail on the event with a clear message, never as a corrupt state", () => {
+ assert.equal(send(fresh(), { type: "pause", reason: "x".repeat(4000) }).status, "paused");
+ const full = activeStep(); full.evidence = Array.from({ length: 1000 }, (_, i) => evidence("reproduction", { id: `old${i}` }));
+ assert.throws(() => send(full, { type: "evidence", evidence: evidence("red") }), /tope/);
+ assert.throws(() => send(full, { type: "check_failed", evidence: evidence("red", { exitCode: 0, outcome: "passed" }) }), /tope/);
+});
+test("archived attempts keep a short output tail, not every full command output", () => {
+ let s = verifying(); s = send(s, { type: "evidence", evidence: evidence("verification", { output: "y".repeat(12000) }) });
+ s = send(s, { type: "retry", reason: "review" });
+ const archived = s.attempts?.at(-1)?.evidence ?? []; assert.ok(archived.length >= 3); assert.ok(archived.every(e => e.output.length <= 500));
 });
 test("a red must fail inside the 1..125 range everywhere, not by signal-like codes", () => {
  const s = activeStep();

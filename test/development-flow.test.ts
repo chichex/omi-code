@@ -229,3 +229,37 @@ test("development_flow los paths del commit son literales: un pathspec mágico n
 	const { execFileSync } = await import("node:child_process");
 	assert.equal(execFileSync("git", ["diff", "--cached", "--name-only"], { cwd: f.checkout.root, encoding: "utf8" }), "", "el índice queda como estaba");
 });
+
+test("development_flow /omi-work stop sale de un harness bloqueado por estado inválido y lo muestra en el status", async (t) => {
+	const f = await developmentFixture(t); await f.command("start");
+	const { workflowPath } = await import("../src/harness/store.ts"); const { readFile, writeFile } = await import("node:fs/promises");
+	const path = workflowPath(f.checkout, 42); await writeFile(path, (await readFile(path, "utf8")).replace('"version": 1', '"version": 2'));
+	await f.attach();
+	assert.ok(f.statuses.at(-1)?.includes("bloqueado"), "el bloqueo se ve aunque no haya estado");
+	assert.ok(await f.emit("tool_call", { toolName: "bash", input: { command: "true" } }), "bloqueado no habilita bash");
+	await f.command("stop");
+	assert.equal(await f.emit("tool_call", { toolName: "bash", input: { command: "true" } }), undefined);
+	assert.equal(await f.emit("user_bash", {}), undefined);
+	await f.attach();
+	assert.equal(await f.emit("tool_call", { toolName: "bash", input: { command: "true" } }), undefined, "al recargar la sesión sigue fuera del harness");
+});
+
+test("development_flow aprobar muestra primero los comandos que quedan autorizados sin volver a preguntar", async (t) => {
+	const f = await developmentFixture(t); await f.command("start"); await f.explore(); await f.action({ action: "planned", plan: f.plan("large") });
+	await f.action({ action: "specified", spec: { why: "Dos valores", steps: [{ id: "C1", title: "Ambos", cases: ["D1", "D2"] }], playbook: ["Probar"] } });
+	await f.action({ action: "approve" });
+	const description = f.confirmationDetails[f.prompts.lastIndexOf("Aprobar receta y sincronizar issue")] ?? "";
+	const head = description.slice(0, description.indexOf("{"));
+	assert.match(head, /sin volver a preguntar/); assert.match(head, /D1 · node test\.cjs/); assert.match(head, /D2 · node other-test\.cjs/);
+});
+
+test("development_flow un directorio con un archivo protegido no deja el índice contaminado", async (t) => {
+	const f = await developmentFixture(t); await f.command("start"); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" });
+	await f.action({ action: "step", id: "C1" });
+	await f.write("test.cjs", 'require("node:assert/strict").equal(require("./value.cjs"), 2);\n'); await f.invoke("omi_workflow_check", { kind: "red", command: "node test.cjs", stepId: "C1" });
+	const { mkdir } = await import("node:fs/promises"); await mkdir(`${f.checkout.root}/d`); await f.write("d/.env", "TOKEN=x\n"); await f.write("d/a.txt", "a\n");
+	await f.write("value.cjs", "module.exports = 2;\n"); await f.invoke("omi_workflow_check", { kind: "green", command: "node test.cjs", stepId: "C1" });
+	await assert.rejects(f.invoke("omi_workflow_commit", { stepId: "C1", paths: ["d", "test.cjs", "value.cjs"], message: "fix: todo" }), /proteg|secreto/);
+	const { execFileSync } = await import("node:child_process");
+	assert.equal(execFileSync("git", ["diff", "--cached", "--name-only"], { cwd: f.checkout.root, encoding: "utf8" }), "", "lo stageado por el intento se deshace");
+});

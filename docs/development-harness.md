@@ -7,7 +7,7 @@ Primer corte para **repos existentes con issues de GitHub**, sobre sesiones y to
 1. En Issues, preparar o retomar un issue con `/omi-triage N`.
 2. Dentro de su worktree, ejecutar `/omi-work start`.
 3. Autorizar la exploración. El agente lee código y entrega una receta; no obtiene permiso de editar por iniciar el flujo.
-4. Responder preguntas y aprobar la receta completa en la UI. La aprobación incluye los comandos exactos de los casos y commits locales, no un push.
+4. Responder preguntas y aprobar la receta completa en la UI. La aprobación incluye los comandos exactos de los casos y commits locales, no un push. El diálogo lista primero esos comandos, que después corren sin volver a preguntar.
 5. El agente implementa, verifica y pide otro consentimiento para publicar la rama y abrir un PR draft.
 
 `/omi-triage` conserva su contrato anterior: prepara worktree/sesión y no inicia implementación. El harness es opt-in; sus tools empiezan inactivas y no se imponen a todas las conversaciones.
@@ -21,7 +21,7 @@ Primer corte para **repos existentes con issues de GitHub**, sobre sesiones y to
 | `/omi-work refresh` | Volver a leer el pedido y explorar; invalida receta, decisiones y pruebas activas. También reabre un trabajo que el agente cerró sin cambio. Si lo propone el agente, pide confirmación. |
 | `/omi-work pr` | Revalidar y pedir permiso remoto para comentario de evidencia, push normal y PR draft. |
 | `/omi-work status` | Consultar el estado sin llamar al modelo. |
-| `/omi-work stop` | Salir explícitamente del flujo y restaurar las tools normales del chat, sin borrar ni revertir archivos. |
+| `/omi-work stop` | Salir explícitamente del flujo y restaurar las tools normales del chat, sin borrar ni revertir archivos. También sale de un harness bloqueado (estado inválido o atrasado) sin tocar el estado guardado. |
 | `/omi-progress` | Detalle del progreso en el workspace TUI, también con la lateral oculta. |
 
 Restaurar una sesión o recargar OMI **no ejecuta** pruebas, modelo, commits ni publicaciones. `resume` es una acción humana explícita. En offline se puede restaurar/consultar el estado local; contrastar el pedido, aprobar una receta nueva o publicar necesita GitHub. En el modo clásico se conserva el status y `/omi-work status`, no el panel del workspace.
@@ -35,7 +35,7 @@ Restaurar una sesión o recargar OMI **no ejecuta** pruebas, modelo, commits ni 
 - **Diagnóstico:** bug sin causa conocida. Pide reproducción observada y causa; después el arreglo sigue como Directa o Con spec según su tamaño. No habilita arreglos durante el diagnóstico.
 - **Con spec:** trabajo grande. Exige por qué, pasos C con cobertura explícita de todos los D y playbook humano antes de aprobar.
 - **Implementar:** un C activo por vez, test rojo real, mismo comando verde, commit convencional nuevo por paso. No se completa un paso mediante texto del modelo.
-- **Verificar:** cada D con su comando aprobado, salida/exit code y contenido actuales; gates ejecutados y lentes solicitados. Seguridad y Cumplimiento son obligatorios con riesgo alto. Los lentes son llamadas de sólo lectura, sin tools ni conversación del implementador; no sustituyen la Review externa del PR. Un resultado inválido, incompleto o cancelado no aprueba el lente. Un lente que falló no se repite sobre el mismo contenido: hay que corregir en otra vuelta. Cada lente corre hasta tres veces por contenido.
+- **Verificar:** cada D con su comando aprobado, salida/exit code y contenido actuales; gates ejecutados y lentes solicitados. Seguridad y Cumplimiento son obligatorios con riesgo alto. Los lentes son llamadas de sólo lectura, sin tools ni conversación del implementador; no sustituyen la Review externa del PR. Un resultado inválido, incompleto o cancelado no aprueba el lente. Un lente que falló no se repite sobre el mismo contenido, salvo que un `refuter` posterior apruebe; si no, hay que corregir en otra vuelta. Por contenido, cada lente admite tres veredictos y diez corridas: cancelar o un error del proveedor no gasta veredictos.
 - **PR:** sólo con cambio limpio y verificado, confirmación humana remota y un SHA autorizado. Termina en un draft; no mergea ni cierra el issue.
 
 Base incompleta, dependencia bloqueante, información insuficiente, inferencia nueva o imposibilidad de verificar deben quedar como espera/pausa. En este corte, Fundación no se ejecuta: la persona completa la base y usa `refresh`.
@@ -50,7 +50,7 @@ Base incompleta, dependencia bloqueante, información insuficiente, inferencia n
 - Un rojo que pasa, comando ausente, cancelación o contenido modificado durante el comando no se convierte en prueba válida. Los intentos fallidos quedan registrados sin habilitar pasos.
 - El fingerprint representa contenido cambiado desde la base y archivos nuevos no ignorados, incluidos modos/eliminaciones/symlinks. Permanece estable al hacer stage/commit del mismo contenido.
 - Las pruebas de cada paso y su commit deben coincidir. La verificación final debe corresponder al contenido actual; un verde histórico o un comando distinto no alcanza.
-- Hay hasta tres vueltas de corrección. Reintentar invalida pruebas activas y conserva sus resultados en un archivo de intentos anteriores; no pueden acreditar la nueva vuelta. Los pasos ya commiteados siguen hechos y la vuelta agrega un paso de corrección `C<n>` que cubre todos los D, con su propio rojo, verde y commit. Se mantiene la aprobación sólo si pedido, receta y spec son exactamente los mismos.
+- Hay hasta tres vueltas de corrección. Reintentar invalida pruebas activas y conserva sus resultados en un archivo de intentos anteriores; no pueden acreditar la nueva vuelta. Los pasos ya commiteados siguen hechos y la vuelta agrega un paso de corrección `C<n>` que cubre todos los D, con su propio rojo, verde y commit. Ese paso conserva la aprobación porque usa los mismos casos y comandos aprobados; su título lo escribe el agente y la persona no lo aprueba aparte. Se mantiene la aprobación sólo si pedido, receta y spec son exactamente los mismos.
 - Cambiar el pedido invalida receta/aprobación/pruebas cuando se contrasta con GitHub, en los checkpoints de inicio/retoma, planificación, aprobación y publicación. Si el alcance cambia en chat, hay que pausar, actualizar el issue y hacer `refresh`; no tratarlo como un cambio silencioso del Cómo.
 
 Mientras el flujo está activo, shell arbitrario, tools desconocidas y operaciones OMI no están habilitadas por el harness. Edit/write requieren receta aprobada y C activo, con paths relativos dentro del checkout (sin `~` ni `file://`, que Pi expandiría afuera) y sin metadata Git ni rutas evidentes de secretos. El commit del paso trata sus paths como literales, no como pathspecs. Las tools conservan el pipeline y hooks de Pi. **No es una frontera de seguridad:** comparte usuario, filesystem y credenciales; un comando aprobado ejecuta código arbitrario con esos permisos. No reemplaza aislamiento del sistema operativo ni los guardrails de OMI. Las reglas del proyecto prevalecen.

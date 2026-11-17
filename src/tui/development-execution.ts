@@ -81,8 +81,13 @@ export async function commitStep(session: DevelopmentSession, input: { stepId: s
 		session.emit(`Commit de ${step.id}`);
 		await git(["add", "--", ...paths]);
 		const staged = (await git(["diff", "--cached", "--name-only", "-z"])).split("\0").filter(Boolean);
-		for (const path of staged) workflowWritePath(state.checkout.root, path);
-		if (staged.some((path) => !paths.some((selected) => path === selected || path.startsWith(`${selected}/`)))) throw new Error("Hay archivos staged fuera de los paths seleccionados; no se comitean a ciegas");
+		try {
+			for (const path of staged) workflowWritePath(state.checkout.root, path);
+			if (staged.some((path) => !paths.some((selected) => path === selected || path.startsWith(`${selected}/`)))) throw new Error("Hay archivos staged fuera de los paths seleccionados; no se comitean a ciegas");
+		} catch (error) {
+			// Deshacer lo que stageó este intento: si no, el próximo commit válido vuelve a fallar.
+			await git(["reset", "-q", "--", ...paths]).catch(() => {}); throw error;
+		}
 		await git(["commit", "-m", input.message]);
 		snapshot = await inspectCheckout(state.checkout, session.runner, signal);
 	}

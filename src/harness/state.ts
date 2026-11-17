@@ -1,4 +1,4 @@
-import { artifactHash, MAX_ATTEMPTS, MAX_HISTORY, MAX_STEPS, parseWorkflow, sourceHash, type Workflow, type Exploration, type InferenceInput, type Plan, type Spec, type Evidence, type Review, type Step } from "./model.ts";
+import { artifactHash, MAX_ATTEMPTS, MAX_EVIDENCE, MAX_HISTORY, MAX_REVIEWS, MAX_STEPS, parseWorkflow, sourceHash, type Workflow, type Exploration, type InferenceInput, type Plan, type Spec, type Evidence, type Review, type Step } from "./model.ts";
 
 export type WorkflowEvent =
  | { type: "explored"; exploration: Exploration }
@@ -101,13 +101,23 @@ export function expectedFailure(evidence: Pick<Evidence, "exitCode" | "outcome">
  return evidence.outcome === "failed" && evidence.exitCode !== null && evidence.exitCode >= 1 && evidence.exitCode <= 125;
 }
 const EXHAUSTED = "Se agotaron las vueltas; se necesita intervención humana";
-const MAX_LENS_RUNS = 3;
-// Un lente que falló no se vuelve a tirar sobre el mismo contenido: hay que cambiar el código.
+// Por lente y contenido: hasta 3 veredictos (pass/fail) y 10 corridas en total, contando
+// cancelaciones y errores del proveedor (unknown), que no gastan veredictos.
+const MAX_LENS_VERDICTS = 3; const MAX_LENS_RUNS = 10;
+// Un lente que falló no se vuelve a tirar sobre el mismo contenido, salvo que un refuter
+// posterior apruebe: si no, hay que corregir el código en otra vuelta.
 export function lensRunBlock(state: Workflow, lens: Review["lens"], fingerprint: string): string {
- const runs = state.reviews.filter(r => r.lens === lens && r.fingerprint === fingerprint);
- if (runs.at(-1)?.verdict === "fail") return `El lente ${lens} ya falló sobre este contenido; corregí el cambio con retry`;
- if (runs.length >= MAX_LENS_RUNS) return `Se agotaron los intentos del lente ${lens} sobre este contenido`;
+ const same = (r: Review) => r.lens === lens && r.fingerprint === fingerprint;
+ const runs = state.reviews.filter(same); const last = runs.at(-1);
+ if (last?.verdict === "fail") {
+  const after = state.reviews.slice(state.reviews.lastIndexOf(last) + 1);
+  if (lens === "refuter" || !after.some(r => r.lens === "refuter" && r.fingerprint === fingerprint && r.verdict === "pass")) return `El lente ${lens} ya falló sobre este contenido; corregí el cambio con retry`;
+ }
+ if (runs.filter(r => r.verdict !== "unknown").length >= MAX_LENS_VERDICTS || runs.length >= MAX_LENS_RUNS) return `Se agotaron los intentos del lente ${lens} sobre este contenido`;
  return "";
+}
+function requireEvidenceRoom(state: Workflow): void {
+ requireCondition(state.evidence.length < MAX_EVIDENCE, "la evidencia de esta vuelta llegó al tope; hacé retry o refresh");
 }
 function getStep(state: Workflow, id: string): Step {
  const step = state.steps.find(s => s.id === id);
@@ -124,7 +134,7 @@ function activeEvidenceStep(state: Workflow, evidence: Evidence): Step {
 }
 // Ledger de intentos no válidos: conserva la observación, nunca acredita un avance.
 function recordFailedCheck(state: Workflow, evidence: Evidence): void {
- requireCondition(!state.evidence.some(e => e.id === evidence.id), "id de evidencia repetido");
+ requireEvidenceRoom(state); requireCondition(!state.evidence.some(e => e.id === evidence.id), "id de evidencia repetido");
  if (evidence.kind === "reproduction") {
   requirePhase(state, "explore", "diagnose");
   requireCondition(!successful(evidence) && !expectedFailure(evidence), "la reproducción es válida; usar evidence");
@@ -138,7 +148,7 @@ function recordFailedCheck(state: Workflow, evidence: Evidence): void {
  state.evidence.push(evidence);
 }
 function recordEvidence(state: Workflow, evidence: Evidence): void {
- requireCondition(!state.evidence.some(e => e.id === evidence.id), "id de evidencia repetido");
+ requireEvidenceRoom(state); requireCondition(!state.evidence.some(e => e.id === evidence.id), "id de evidencia repetido");
  switch (evidence.kind) {
   case "reproduction":
    requirePhase(state, "explore", "diagnose");
@@ -197,7 +207,9 @@ function completeStep(state: Workflow, event: Extract<WorkflowEvent, { type: "st
 }
 function archiveAttempt(state: Workflow, reason: string, at: string): void {
  if (!state.evidence.length && !state.reviews.length) return;
- state.attempts = [...(state.attempts ?? []), { sourceHash: state.source.hash, round: state.round, reason, at, evidence: state.evidence, reviews: state.reviews }].slice(-MAX_ATTEMPTS);
+ // Sólo la cola de cada salida: el archivo de intentos no puede llenar el tope de 8 MB del estado.
+ const evidence = state.evidence.map(e => ({ ...e, output: e.output.slice(-500) }));
+ state.attempts = [...(state.attempts ?? []), { sourceHash: state.source.hash, round: state.round, reason, at, evidence, reviews: state.reviews }].slice(-MAX_ATTEMPTS);
 }
 // Lo ya commiteado sigue hecho: no puede volver a dar rojo. La vuelta agrega un paso de
 // corrección que cubre todos los D y exige su propio rojo, verde y commit.
@@ -236,6 +248,7 @@ function recordReview(state: Workflow, review: Review): void {
  requirePhase(state, "verify");
  requireCondition(state.recipe?.lenses.includes(review.lens), "lente fuera de la receta");
  const blocked = lensRunBlock(state, review.lens, review.fingerprint); requireCondition(!blocked, blocked);
+ requireCondition(state.reviews.length < MAX_REVIEWS, "los lentes de esta vuelta llegaron al tope; hacé retry o refresh");
  requireCondition(review.verdict !== "pass" || review.findings.length === 0, "un lente con hallazgos no puede aprobar");
  state.reviews.push(review);
 }
@@ -250,7 +263,7 @@ export function transition(original: Workflow, event: WorkflowEvent, at: string)
  if (state.status === "waiting" && retriesExhausted(state)) requireCondition(["pause", "resume", "source_changed"].includes(event.type), "se agotaron las vueltas");
  applyEvent(state, event, at);
  state.revision++;
- state.activity = event.type === "pause" || event.type === "retry" ? `${event.type}: ${event.reason}` : event.type;
+ state.activity = (event.type === "pause" || event.type === "retry" ? `${event.type}: ${event.reason}` : event.type).slice(0, 4000);
  state.history = [...state.history, { at, phase: state.phase, activity: state.activity }].slice(-MAX_HISTORY);
  return validate(state);
 }
