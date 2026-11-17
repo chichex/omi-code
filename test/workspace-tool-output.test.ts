@@ -38,6 +38,31 @@ test("tool output: cuenta archivos distintos, separa lectura, edición, escritur
 	assert.equal(plain.match(/Read /g)?.length, 1); assert.doesNotMatch(plain, /PRIVATE_OUTPUT/);
 });
 
+for (const [kind, past] of [["read", "Read"], ["edit", "Edited"], ["write", "Wrote"]] as const) {
+	test(`tool output: ${kind} distingue intentos fallidos de archivos exitosos distintos`, () => {
+		const h = harness();
+		const args = { path: "a.ts", oldText: "old", newText: "new", content: "new" };
+		h.tool(kind, args); h.tool(kind, { ...args, path: "/repo/a.ts" });
+		h.tool(kind, args).updateResult({ content: [{ type: "text", text: "FAILURE_ONE" }], isError: true });
+		assert.match(h.plain(), new RegExp(`Failed to ${kind} 1 file`));
+		h.tool(kind, { ...args, path: "/repo/a.ts" }).updateResult({ content: [{ type: "text", text: "FAILURE_TWO" }], isError: true });
+		h.tool(kind, args); h.tool(kind, { ...args, path: "/repo/a.ts" });
+		assert.deepEqual(h.plain().split("\n").map((line) => line.trim()).filter(Boolean), [
+			`▸ ${past} 1 file`, `▸ Failed to ${kind} 2 files`, `▸ ${past} 1 file`,
+		]);
+	});
+}
+
+test("tool output: fallas de shell, búsqueda y otras herramientas cuentan llamadas", () => {
+	const h = harness();
+	for (const [name, args] of [["bash", { command: "fail" }], ["grep", { path: ".", pattern: "needle" }], ["omi_project_status", {}]] as const) {
+		for (let i = 0; i < 2; i++) h.tool(name, args).updateResult({ content: [{ type: "text", text: "FAILURE" }], isError: true });
+	}
+	assert.deepEqual(h.plain().split("\n").map((line) => line.trim()).filter(Boolean), [
+		"▸ Failed 2 shell commands", "▸ Failed 2 searches", "▸ Failed omi_project_status 2 times",
+	]);
+});
+
 test("tool output: diferencia argumentos en streaming, ejecución parcial y finalización real", () => {
 	const h = harness(); const first = h.tool("bash", { command: "echo streamed" }, false);
 	assert.match(h.plain(), /Preparing 1 shell command/); assert.doesNotMatch(h.plain(), /Ran 1/);
@@ -54,7 +79,7 @@ test("tool output: errores y cancelaciones se resumen como Failed; las imágenes
 	failed.updateResult({ content: [{ type: "text", text: "ERROR_VISIBLE exit code 1" }], isError: true });
 	const image = h.tool("read", { path: "picture.png" }); image.updateResult({ content: [{ type: "text", text: "IMAGE_VISIBLE" }, { type: "image", data: "", mimeType: "image/png" }], isError: false }); image.setExpanded(true);
 	const cancelled = h.tool("edit", { path: "bad.ts", oldText: "a", newText: "b" }); cancelled.updateResult({ content: [{ type: "text", text: "Operation aborted" }], isError: true });
-	const plain = h.plain(); assert.match(plain, /Ran 1 shell command/); assert.match(plain, /Failed 1 shell command/); assert.match(plain, /Failed 1 file/); assert.match(plain, /IMAGE_VISIBLE/);
+	const plain = h.plain(); assert.match(plain, /Ran 1 shell command/); assert.match(plain, /Failed 1 shell command/); assert.match(plain, /Failed to edit 1 file/); assert.match(plain, /IMAGE_VISIBLE/);
 	assert.doesNotMatch(plain, /ERROR_VISIBLE|Operation aborted|Ran 2 shell commands|Read 1 file|Edited 1 file/);
 	const y = h.transcript.render(90).findIndex((line) => stripTerminalSequences(line).includes("Failed 1 shell command"));
 	h.click(y); assert.match(h.plain(), /ERROR_VISIBLE exit code 1/);
@@ -76,6 +101,18 @@ test("tool output: fallas consecutivas se agrupan sin ocultar éxitos ni ejecuci
 	assert.match(h.plain(), /Failed 2 shell commands[\s\S]*Ran 1 shell command[\s\S]*Failed 1 shell command/);
 	for (const name of ["dark", "light"]) {
 		h.setTheme(getThemeByName(name)!);
+		const rows = h.transcript.render(90);
+		const failedRows = rows.filter((line) => stripTerminalSequences(line).includes("▸ Failed"));
+		const successRows = rows.filter((line) => stripTerminalSequences(line).includes("▸ Ran"));
+		assert.equal(failedRows.length, 2); assert.equal(successRows.length, 2);
+		for (const row of failedRows) {
+			assert.ok(row.includes(h.theme().getFgAnsi("error")), `${name}: la fila fallida usa error`);
+			assert.ok(!row.includes(h.theme().getFgAnsi("muted")), `${name}: la fila fallida no usa gris`);
+		}
+		for (const row of successRows) {
+			assert.ok(row.includes(h.theme().getFgAnsi("muted")), `${name}: la fila exitosa conserva gris`);
+			assert.ok(!row.includes(h.theme().getFgAnsi("error")), `${name}: la fila exitosa no usa error`);
+		}
 		for (const width of [1, 8, 28, 80, 132]) assert.ok(h.transcript.render(width).every((line) => visibleWidth(line) <= width));
 	}
 	const other = h.tool("omi_project_status"); other.updateResult({ content: [{ type: "text", text: "API_FAILURE" }], isError: true });

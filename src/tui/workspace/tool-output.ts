@@ -39,20 +39,27 @@ function toolRow(component: ToolExecutionComponent): ToolRow | undefined {
 	if (["read", "edit", "write"].includes(kind) && !path && !partial) return;
 	const details = object(result) && object(result.details) ? result.details : undefined;
 	const truncated = details && object(details.truncation) && details.truncation.truncated === true;
-	return { component, name: text(name), kind, key: kind === "other" ? `other:${name}` : kind, path,
-		status: result !== undefined && !partial ? object(result) && result.isError ? "failed" : "done" : started ? "running" : "preparing", expanded, truncated: !!truncated };
+	let status: ToolRow["status"] = started ? "running" : "preparing";
+	if (object(result) && !partial) status = result.isError ? "failed" : "done";
+	return { component, name: text(name), kind, key: kind === "other" ? `other:${name}` : kind, path, status, expanded, truncated: !!truncated };
 }
 
-function summary(group: ToolRow[]): string {
+function groupStatus(group: ToolRow[]): ToolRow["status"] {
+	if (group.every((item) => item.status === "failed")) return "failed";
+	if (group.every((item) => item.status === "done")) return "done";
+	return group.some((item) => item.status === "running") ? "running" : "preparing";
+}
+
+function summary(group: ToolRow[], state: ToolRow["status"]): string {
 	const first = group[0]!;
-	const count = ["read", "edit", "write"].includes(first.kind) && group.every((item) => item.path)
+	const count = state !== "failed" && ["read", "edit", "write"].includes(first.kind) && group.every((item) => item.path)
 		? new Set(group.map((item) => item.path)).size : group.length;
 	const finished = group.filter((item) => item.status === "done").length;
-	const state = first.status === "failed" ? "failed" : finished === group.length ? "done" : group.some((item) => item.status === "running") ? "running" : "preparing";
 	const nouns: Record<Exclude<Kind, "other">, string> = { shell: "shell command", read: "file", edit: "file", write: "file", search: "search" };
 	const past: Record<Kind, string> = { shell: "Ran", read: "Read", edit: "Edited", write: "Wrote", search: "Ran", other: "Used" };
 	const present: Record<Kind, string> = { shell: "Running", read: "Reading", edit: "Editing", write: "Writing", search: "Running", other: "Using" };
-	const verb = state === "failed" ? "Failed" : state === "done" ? past[first.kind] : state === "running" ? present[first.kind] : "Preparing";
+	const failed: Record<Kind, string> = { shell: "Failed", read: "Failed to read", edit: "Failed to edit", write: "Failed to write", search: "Failed", other: "Failed" };
+	const verb = state === "failed" ? failed[first.kind] : state === "done" ? past[first.kind] : state === "running" ? present[first.kind] : "Preparing";
 	const noun = first.kind === "other" ? `${first.name} ${count} time${count === 1 ? "" : "s"}`
 		: `${count} ${nouns[first.kind]}${count === 1 ? "" : first.kind === "search" ? "es" : "s"}`;
 	return `${verb} ${noun}${(state === "running" || state === "preparing") && group.length > 1 ? ` · ${finished}/${group.length} done` : ""}`;
@@ -77,9 +84,9 @@ export class CompactTranscript implements Component {
 		};
 		const flush = () => {
 			if (!group.length) return;
-			const expanded = group.some((item) => item.expanded); const t = this.theme();
+			const expanded = group.some((item) => item.expanded); const state = groupStatus(group); const t = this.theme();
 			lines.push(""); regions.push({ y: lines.length, height: 1, group });
-			lines.push(fit(t.fg(group[0]?.status === "failed" ? "error" : "muted", ` ${expanded ? "▾" : "▸"} ${summary(group)}`)
+			lines.push(fit(t.fg(state === "failed" ? "error" : "muted", ` ${expanded ? "▾" : "▸"} ${summary(group, state)}`)
 				+ (group.some((item) => item.truncated) ? t.fg("warning", " [truncated]") : ""), width));
 			if (expanded) for (const item of group) native(item.component);
 			group = [];
@@ -87,6 +94,7 @@ export class CompactTranscript implements Component {
 		for (const component of children) {
 			const tool = component instanceof this.Tool ? toolRow(component) : undefined;
 			if (tool) {
+				// A failed group contains only failed attempts of the same kind, never successes or active calls.
 				if (group[0]?.key !== tool.key || (group[0]?.status === "failed") !== (tool.status === "failed")) flush();
 				group.push(tool);
 			} else {

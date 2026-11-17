@@ -164,10 +164,13 @@ el historial y la edición siguen usando el renderer de Pi; no hay un segundo pr
 - **Output compacto:** en el workspace fullscreen, las herramientas consecutivas del mismo tipo se agrupan en una línea gris:
   `Ran 3 shell commands`, `Read 5 files`, `Edited 2 files`, `Wrote 1 file` o `Ran 3 searches`.
   Los comandos cuentan invocaciones de shell, no intentan interpretar cuántas instrucciones hay dentro de un script;
-  lectura/edición/escritura cuentan rutas distintas dentro del grupo. Otras herramientas muestran su nombre y cantidad de llamadas.
+  lectura/edición/escritura exitosas cuentan rutas distintas dentro del grupo. Otras herramientas muestran su nombre y cantidad de llamadas.
   Durante la ejecución indica `Preparing`, `Running`, `Reading`, etc., sin anunciar éxito antes de terminar.
+  Los errores/abortos se colapsan en grupos separados de éxitos y ejecuciones activas, con el color de error del tema:
+  `Failed 2 shell commands`, `Failed to read 2 files`, `Failed to edit 1 file`, `Failed to write 1 file`, `Failed 3 searches` o `Failed omi_project_status 2 times`.
+  En estos grupos se cuentan intentos fallidos, incluso si repiten la misma ruta; no se distingue cancelación de error ni se anticipa el motivo.
   **Clic en el resumen** abre/cierra el grupo; **Ctrl+O** (o el atajo configurado), `/omi-output` y la paleta alternan el detalle global.
-  El detalle usa los componentes originales de Pi, con argumentos, salida y diffs intactos. Los errores/abortos y las imágenes mantienen su presentación nativa visible;
+  Al expandir, el detalle usa los componentes originales de Pi, con argumentos, salida, diffs y errores/abortos intactos. Las imágenes mantienen su presentación nativa visible;
   los resultados truncados conservan una advertencia. Texto del usuario/asistente, diagnósticos y confirmaciones no se agrupan ni reordenan.
   Es sólo presentación: no reduce lo enviado al modelo ni altera herramientas, historial o datos. También agrupa sesiones restauradas.
   El modo classic/regular y el volcado de transcript al salir siguen usando la presentación nativa de Pi.
