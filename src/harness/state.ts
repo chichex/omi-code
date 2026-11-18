@@ -258,6 +258,7 @@ function agree(state: Workflow, event: Extract<WorkflowEvent, { type: "agreed" }
  }
  state.agreements = agreements;
  // Sin receta todavía, el agente la arma con el acuerdo: no hay nada que rehacer.
+ // Los permisos de comandos (grants) se conservan: son por comando y por pedido, no por receta.
  if (!event.replan || !state.recipe) return;
  archiveAttempt(state, `Acuerdo del chat: ${event.summary}`, at);
  // Lo único que cambió el código desde Explorar son los pasos aprobados: es la base de la receta nueva.

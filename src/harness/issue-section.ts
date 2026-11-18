@@ -75,7 +75,7 @@ function stage(w: Workflow): string {
 // Un acuerdo del chat que cambió el alcance con receta ya armada la deja en revisión hasta el nuevo sí.
 const revising = (w: Workflow) => !isApproved(w) && (w.agreements ?? []).some((a) => a.replan && !["explore", "decide"].includes(a.phase));
 function approval(w: Workflow): string {
-	if (w.approval && isApproved(w)) return "aprobada por la persona en OMI";
+	if (w.approval && isApproved(w)) return w.approval.by === "foundations" ? "aprobada por Foundations (receta: auto), sin revisión humana" : "aprobada por la persona en OMI";
 	return revising(w) ? "en revisión: un acuerdo del chat cambió el alcance; la receta se rehace y se vuelve a aprobar" : "pendiente";
 }
 function recipe(w: Workflow): string[] {

@@ -113,7 +113,9 @@ test("foundations_policy: receta auto aprueba sola, lo registra y sus D fuera de
 	assert.equal(state.approval?.by, "foundations"); assert.match(state.approval?.foundations ?? "", /^[0-9a-f]{64}$/);
 	assert.deepEqual(others(f.prompts), ["Empezar el trabajo del issue #42"]);
 	assert.equal(f.reviews(), 0, "no abre la revisión de la receta");
-	assert.equal(f.remote.comments.length, 1, "el artefacto de la receta igual se agrega al issue");
+	assert.equal(f.remote.comments.length, 0);
+	assert.match(f.remote.body, /<!-- omi:harness:start -->/, "la receta igual queda en la sección del issue");
+	assert.match(f.remote.body, /\*\*Aprobación:\*\* aprobada por Foundations \(receta: auto\), sin revisión humana/);
 	await f.action({ action: "step", id: "C1" });
 	await f.write("test.cjs", "require(\"node:assert/strict\").equal(require(\"./value.cjs\"), 2);\n");
 	await f.invoke("omi_workflow_check", { kind: "red", command: "node test.cjs", stepId: "C1" });
@@ -148,4 +150,20 @@ test("foundations_policy: con todo en ask cada punto sigue preguntando", async (
 	const f = await fixture(t, block(["node test.cjs"])); await f.start(); await approve(f); await toPr(f);
 	await f.action({ action: "publish" });
 	assert.deepEqual(others(f.prompts), ["Empezar el trabajo del issue #42", "Aprobar receta y sincronizar issue", "Subir rama y abrir PR draft"]);
+});
+
+test("foundations_policy: con receta auto, la receta rehecha tras un replan también se aprueba sola", async (t) => {
+	const f = await fixture(t, block([], { receta: "auto" })); await f.start(); await approve(f);
+	const first = (await f.state()).approval!;
+	f.manager.appendMessage({ role: "user", content: "Sumá también que other.cjs devuelva 2", timestamp: Date.now() });
+	await f.action({ action: "agreed", quote: "Sumá también que other.cjs devuelva 2", agreement: "Ampliar el alcance a other.cjs", replan: true });
+	assert.equal((await f.state()).phase, "recipe");
+	await f.action({ action: "planned", plan: { ...f.plan(), cases: [...f.plan().cases, { id: "D2", description: "Otro devuelve 2", command: "node other-test.cjs" }] } });
+	await f.action({ action: "approve" });
+	const again = await f.state();
+	assert.equal(again.phase, "implement");
+	assert.equal(again.approval?.by, "foundations"); assert.equal(again.approval?.foundations, first.foundations, "el mismo hash de Foundations de la sesión");
+	assert.equal(f.reviews(), 0); assert.ok(!f.prompts.includes("Aprobar receta y sincronizar issue"));
+	assert.match(f.remote.body, /\*\*D2\*\* `node other-test\.cjs`/, "la sección del issue muestra la receta nueva");
+	assert.match(f.remote.body, /aprobada por Foundations \(receta: auto\)/);
 });

@@ -93,3 +93,16 @@ test("development_grants: la aprobación dice qué comandos siguen pidiendo perm
 	assert.match(preview, /comandos exactos de los casos D sin volver a preguntar, con cualquier etiqueta/);
 	assert.match(preview, /Otros comandos, también de setup, piden permiso una vez por trabajo, salvo los del catálogo de Foundations/);
 });
+
+// Un permiso es por comando y por pedido, no por receta: un replan por acuerdo del chat no cambia el pedido.
+test("development_grants: un replan por acuerdo del chat conserva los permisos guardados", async (t) => {
+	const f = await developmentFixture(t); await approved(f);
+	await f.invoke("omi_workflow_check", { kind: "setup", command: OK });
+	f.manager.appendMessage({ role: "user", content: "Sumá también que other.cjs devuelva 2", timestamp: Date.now() });
+	await f.action({ action: "agreed", quote: "Sumá también que other.cjs devuelva 2", agreement: "Ampliar el alcance a other.cjs", replan: true });
+	assert.deepEqual((await f.state()).grants?.map((g) => g.command), [OK]);
+	await f.action({ action: "planned", plan: { ...f.plan(), cases: [...f.plan().cases, { id: "D2", description: "Otro devuelve 2", command: "node other-test.cjs" }] } });
+	await f.action({ action: "approve" });
+	await f.invoke("omi_workflow_check", { kind: "setup", command: OK });
+	assert.equal(asked(f), 1);
+});
