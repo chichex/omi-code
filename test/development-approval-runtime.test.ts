@@ -110,7 +110,7 @@ export default function(pi) {
 `);
 	const result = await new Promise<{ code: number | null; output: string }>((resolve, reject) => {
 		const child = spawn("python3", ["-I", "-c", driver, process.execPath, source("bin/omi.ts"), "--no-extensions", "--extension", extension, "--no-context-files", "--no-skills", "--no-mcp", "--provider", "mock", "--model", "probe", "--use-theme", appearance, "--approve"],
-			{ cwd: root, env: { ...process.env, HOME: home, OMI_HOME: "", TERM: "xterm-256color", HERDR_ENV: "0" }, stdio: ["ignore", "pipe", "pipe"] });
+			{ cwd: root, env: { ...process.env, HOME: home, OMI_HOME: "", TERM: "xterm-256color", HERDR_ENV: "0", PI_TELEMETRY: "0" }, stdio: ["ignore", "pipe", "pipe"] });
 		let output = ""; child.stdout.on("data", (b: Buffer) => { output += b; }); child.stderr.on("data", (b: Buffer) => { output += b; }); child.on("error", reject); child.on("close", (code) => resolve({ code, output }));
 	});
 	const plainOutput = result.output.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");

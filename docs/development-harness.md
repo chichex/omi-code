@@ -219,6 +219,7 @@ El trabajo se guarda en `<git-common-dir>/omi/development/N.json`, separado de `
 - No se siguen symlinks para el estado. Registro corrupto, recurso perdido o checkout ajeno no se reemplazan automáticamente.
 - Los locks abandonados no se roban por antigüedad. Una persona verifica el proceso/host antes de retirarlos.
 - La conversación guarda un vínculo al trabajo y a su revisión. Una rama de conversación atrasada no adopta silenciosamente cambios de otra ventana; exige `resume`.
+- La rama también guarda las tools normales del chat mientras el harness las restringe. `/omi-work stop` las devuelve aunque la sesión se haya retomado, recargado o movido por el árbol, y retomar después de salir no vuelve a las restringidas. Al volver a abrir, `--tools`, `--exclude-tools` o una extensión desactivada prevalecen sobre lo guardado, con las reglas con que Pi retoma una sesión.
 - Las tareas de subagentes siguen siendo efímeras. Lo durable es el trabajo, no un proceso vivo ni un job remoto.
 
 Los cambios externos del filesystem no se revierten. Una operación ejecutada sin recibo por cierre abrupto requiere inspección y revalidación, no replay automático.
