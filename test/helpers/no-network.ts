@@ -25,16 +25,22 @@ function external(args: unknown[]): string | undefined {
 	return outside(typeof args[1] === "string" ? args[1] : undefined, first);
 }
 
+/** Anota la conexión en el log del archivo de test; sin log, o si su after ya lo borró, en stderr. */
+function record(line: string): void {
+	const log = process.env[LOG];
+	try {
+		if (log) { appendFileSync(log, `${line}\n`); return; }
+	} catch {}
+	process.stderr.write(`red bloqueada en tests: ${line}\n`);
+}
+
 const connect = net.Socket.prototype.connect;
 // connect tiene overloads: el reemplazo los acepta todos y delega con Reflect.apply.
 Object.assign(net.Socket.prototype, {
 	connect(this: net.Socket, ...args: unknown[]): net.Socket {
 		const target = external(args);
 		if (target === undefined) return Reflect.apply(connect, this, args);
-		const line = `${target} desde ${process.argv.slice(1).join(" ")}`;
-		const log = process.env[LOG];
-		if (log) appendFileSync(log, `${line}\n`);
-		else process.stderr.write(`red bloqueada en tests: ${line}\n`);
+		record(`${target} desde ${process.argv.slice(1).join(" ")}`);
 		process.nextTick(() => this.destroy(Object.assign(new Error(`red bloqueada en tests: ${target}`), { code: "ECONNREFUSED" })));
 		return this;
 	},

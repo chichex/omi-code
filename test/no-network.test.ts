@@ -60,6 +60,17 @@ test("no-network: corta TCP fuera de loopback en el proceso y en un hijo que her
 	assert.deepEqual(lines, [`${OUTSIDE} desde ${probe} parent ${OUTSIDE}`, `${OUTSIDE} desde ${probe} child ${OUTSIDE}`]);
 });
 
+test("no-network: un hijo rezagado, después de borrar el log, también recibe ECONNREFUSED", async (t) => {
+	const dir = await tempDir(t);
+	const probe = join(dir, "probe.mjs");
+	await writeFile(probe, PROBE);
+	// Así queda el log cuando el after del archivo ya limpió su directorio.
+	const result = await run(["--import", guard, probe, "child", OUTSIDE], dir, { OMI_TEST_NETWORK_LOG: join(dir, "borrado", "network.log") });
+	assert.equal(result.code, 0, result.stderr);
+	assert.deepEqual(JSON.parse(result.stdout), { results: ["ECONNREFUSED"] });
+	assert.match(result.stderr, /red bloqueada en tests: 192\.0\.2\.1:9 desde /);
+});
+
 test("no-network: un archivo de test que sale de loopback falla aunque sus tests pasen", async (t) => {
 	const dir = await tempDir(t);
 	await writeFile(join(dir, "afuera.test.ts"), `import net from "node:net";
