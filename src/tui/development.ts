@@ -18,6 +18,7 @@ import { restoreIssueTriage } from "./workspace/issue-triage.ts";
 import { IssuePreparationBusyError } from "./workspace/issue-registry.ts";
 import { effectivePolicy, foundationsLines } from "./development-foundations.ts";
 import { offerFoundations } from "./development-foundations-setup.ts";
+import { HeldLoadout } from "./development-loadout.ts";
 
 const KICKOFF = "Continuá el harness de desarrollo activo desde su etapa persistida. Respetá sus bloqueos y pedí los permisos pendientes; no saltees etapas.";
 const USAGE = "Uso: /omi-work resume | approve | pause | refresh | pr | status | stop";
@@ -38,16 +39,13 @@ async function checkWriteTarget(root: string, path: string): Promise<void> {
 	}
 }
 export function developmentHarnessExtension(io: Io, args: readonly string[], deps: DevelopmentDeps = {}): InlineExtension {
-	return { name: "omi-development", factory: (pi: ExtensionAPI) => {
+	return { name: "omi-development", factory: async (pi: ExtensionAPI) => {
 		const session = new DevelopmentSession(pi, io, args, deps);
-		let originalTools: string[] | undefined;
+		const held = new HeldLoadout(pi, (await import("@earendil-works/pi-coding-agent")).parseArgs([...args]));
 		const readsInFlight = new Map<string, { path: string; digest: string; start: number; limit: number }>();
 		const loadout = () => {
-			if (!session.state && !session.lockedReason) {
-				if (originalTools) { pi.setActiveTools(originalTools); originalTools = undefined; }
-				return;
-			}
-			originalTools ??= pi.getActiveTools();
+			if (!session.state && !session.lockedReason) { held.release(); return; }
+			const originalTools = held.hold();
 			const names = new Set([...originalTools, "read", "grep", "find", "ls", "subagent", ...WORKFLOW_TOOLS]);
 			pi.setActiveTools([...names].filter((name) => name === "subagent" || WORKFLOW_TOOLS.includes(name) || (session.state ? workflowToolAllowed(session.state, name, {}) : ["read", "grep", "find", "ls"].includes(name))));
 		};
@@ -130,8 +128,9 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 				} catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "No se pudo ejecutar el harness", busy(error) ? "warning" : "error"); }
 			},
 		});
-		pi.on("session_start", async (_event, ctx) => { session.foundations.load(ctx); await session.restore(ctx); loadout(); });
-		pi.on("session_tree", async (_event, ctx) => { await session.restore(ctx); loadout(); });
+		// Pi ya restauró las tools de la rama: con el harness activo, las restringidas.
+		pi.on("session_start", async (_event, ctx) => { held.recall(ctx.sessionManager.getBranch(), true); session.foundations.load(ctx); await session.restore(ctx); loadout(); });
+		pi.on("session_tree", async (_event, ctx) => { held.recall(ctx.sessionManager.getBranch(), false); await session.restore(ctx); loadout(); });
 		pi.on("session_shutdown", () => { readsInFlight.clear(); session.shutdown(); });
 		pi.on("before_agent_start", (event, ctx) => {
 			if (session.lockedReason) {
