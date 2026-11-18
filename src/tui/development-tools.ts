@@ -81,7 +81,7 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 					const event = { type: "specified" as const, spec: checked(SpecSchema, input.spec) };
 					assertApprovable(session, ctx, event); await session.apply(event, ctx); break;
 				}
-				case "approve": await currentExploration(session, ctx); await session.approve(ctx); terminate = session.state?.phase === "approve"; break;
+				case "approve": await currentExploration(session, ctx); await session.approve(ctx, signal); terminate = session.state?.phase === "approve"; break;
 				case "step": await session.apply({ type: "step_started", id: checked(text(100), input.id) }, ctx); break;
 				case "verified": {
 					const snapshot = await inspectCheckout(session.current(ctx).checkout, session.runner, signal);

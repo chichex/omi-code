@@ -1,6 +1,6 @@
 // Revisión dedicada: el cuerpo puede crecer, las decisiones nunca se desplazan con él.
-import type { Theme } from "@earendil-works/pi-coding-agent";
-import { matchesKey, visibleWidth, wrapTextWithAnsi, type Component, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
+import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { matchesKey, visibleWidth, wrapTextWithAnsi, type Component, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { modalBodyRows, modalHint, modalLines } from "./workspace/presentation.ts";
 import { approvalDisplayText, type ApprovalDocument, type ApprovalLine } from "./development-approval.ts";
 
@@ -84,4 +84,22 @@ export class ApprovalReview implements Component {
 	private finish(value: boolean): void { if (!this.closed) { this.closed = true; this.options.done(value); } }
 	invalidate(): void { this.cache = undefined; }
 	dispose(): void { this.finish(false); }
+}
+
+export async function showApprovalReview(ctx: ExtensionContext, document: ApprovalDocument, signal: AbortSignal): Promise<boolean> {
+	if (signal.aborted) return false;
+	let tui: TUI | undefined; let cancel: (() => void) | undefined;
+	try {
+		const approved = await ctx.ui.custom<boolean | undefined>((ui, theme, _keys, done) => {
+			tui = ui;
+			const review = new ApprovalReview({ document, theme: () => ctx.ui.theme ?? theme, rows: () => ui.terminal.rows,
+				redraw: () => ui.requestRender(), done: (value) => done(!signal.aborted && value) });
+			cancel = () => review.dispose();
+			signal.addEventListener("abort", cancel, { once: true });
+			if (signal.aborted) cancel();
+			return review;
+		}, { overlay: true, overlayOptions: () => ({ width: Math.max(1, Math.min(112, Math.floor((tui?.terminal.columns ?? 80) * .9))), maxHeight: "90%", anchor: "center" }),
+			blocked: { kind: "permission", message: document.title } });
+		return approved === true && !signal.aborted;
+	} finally { if (cancel) signal.removeEventListener("abort", cancel); }
 }

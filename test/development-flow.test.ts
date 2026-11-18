@@ -244,13 +244,15 @@ test("development_flow /omi-work stop sale de un harness bloqueado por estado in
 	assert.equal(await f.emit("tool_call", { toolName: "bash", input: { command: "true" } }), undefined, "al recargar la sesión sigue fuera del harness");
 });
 
-test("development_flow aprobar muestra primero los comandos que quedan autorizados sin volver a preguntar", async (t) => {
+test("development_flow aprobar ofrece resumen y comandos completos autorizados sin volver a preguntar", async (t) => {
 	const f = await developmentFixture(t); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan("large") });
 	await f.action({ action: "specified", spec: { why: "Dos valores", steps: [{ id: "C1", title: "Ambos", cases: ["D1", "D2"] }], playbook: ["Probar"] } });
 	await f.action({ action: "approve" });
 	const description = f.confirmationDetails[f.prompts.lastIndexOf("Aprobar receta y sincronizar issue")] ?? "";
-	const head = description.slice(0, description.indexOf("{"));
-	assert.match(head, /sin volver a preguntar/); assert.match(head, /D1 · node test\.cjs/); assert.match(head, /D2 · node other-test\.cjs/);
+	assert.match(f.reviewScreens[0]!, /Resumen/); assert.match(f.reviewScreens[0]!, /Objetivo/);
+	assert.match(description, /sin volver a preguntar/); assert.match(description, /Pruebas y comandos exactos/);
+	for (const c of (await f.state()).recipe!.cases) { assert.ok(description.includes(c.id)); assert.ok(description.includes(c.description)); assert.ok(description.includes(c.command)); }
+	assert.match(description, /commits locales/); assert.match(description, /No autoriza push, merge/);
 });
 
 test("development_flow un directorio con un archivo protegido no deja el índice contaminado", async (t) => {

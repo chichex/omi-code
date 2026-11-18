@@ -10,7 +10,7 @@ import { processRunner, type Runner } from "../core/exec.ts";
 import type { Workflow } from "../harness/model.ts";
 import { artifactHash } from "../harness/model.ts";
 import type { ReadReceipt } from "../harness/references.ts";
-import { createWorkflow, transition, type WorkflowEvent } from "../harness/state.ts";
+import { createWorkflow, recipeApprovalHash, transition, type WorkflowEvent } from "../harness/state.ts";
 import { readWorkflow, updateWorkflow } from "../harness/store.ts";
 import { inspectCheckout } from "../harness/git.ts";
 import { publishDraft, readIssueSource, renderWorkflowArtifact, syncIssueArtifact } from "../harness/github.ts";
@@ -20,6 +20,7 @@ import { developmentProgress, PHASE_LABELS } from "./development-view.ts";
 import type { BeginLoader } from "./development-begin.ts";
 import { developmentOffline } from "./development-tickets.ts";
 import { approvalDocument, approvalText } from "./development-approval.ts";
+import { showApprovalReview } from "./development-approval-view.ts";
 
 export const DEVELOPMENT_ANCHOR = "omi-development-workflow";
 const AnchorSchema = Type.Object({ id: Type.String(), root: Type.String(), issue: Type.Integer({ minimum: 1 }), revision: Type.Integer({ minimum: 0 }), disabled: Type.Optional(Type.Boolean()) });
@@ -142,7 +143,7 @@ export class DevelopmentSession {
 		finally { this.emit(); }
 	}
 	// true sólo si la persona aprobó: un no no vuelve a disparar al modelo.
-	async approve(ctx: ExtensionContext): Promise<boolean> {
+	async approve(ctx: ExtensionContext, signal?: AbortSignal): Promise<boolean> {
 		if (!(await this.fresh(ctx))) return false;
 		const state = this.current(ctx);
 		if (state.phase !== "approve") throw new Error("Todavía no hay una receta/spec lista para aprobar");
@@ -151,10 +152,23 @@ export class DevelopmentSession {
 			if (!state.exploration?.fingerprint || snapshot.fingerprint !== state.exploration.fingerprint) throw new Error("El código cambió desde Explorar. Usá /omi-work refresh y volvé a explorar antes de aprobar.");
 		};
 		await assertExplored();
-		const preview = approvalPreview(state);
-		if (!(await this.confirm(ctx, "Aprobar receta y sincronizar issue", `${preview}\n\nAutoriza implementar estos pasos, commits locales y comandos exactos de los casos D. Se agrega un comentario administrado con la receta al issue, sin reemplazar su descripción; no autoriza push, merge, workflows ni deploy.`))) return false;
+		const document = approvalDocument(state);
+		if (!ctx.hasUI || !["tui", "rpc"].includes(ctx.mode)) throw new Error("Aprobar receta: requiere confirmación humana interactiva");
+		const cancellation = AbortSignal.any([this.lifecycle.signal, ...((signal ?? ctx.signal) ? [signal ?? ctx.signal!] : [])]);
+		this.emit("Esperando revisión de receta", true);
+		let approved: boolean;
+		try {
+			approved = ctx.mode === "tui" ? await showApprovalReview(ctx, document, cancellation)
+				: await ctx.ui.confirm(document.title, approvalText(document), { signal: cancellation }) === true;
+		} finally { this.emit(); }
+		if (!approved || cancellation.aborted) return false;
+		// Una revisión larga no puede autorizar una receta distinta ni un estado adoptado por otra ventana.
+		const saved = await readWorkflow(state.checkout, state.source.number);
+		if (!saved || saved.id !== state.id || saved.revision !== state.revision || recipeApprovalHash(saved) !== recipeApprovalHash(state)) throw new Error("El trabajo cambió durante la revisión; retomá el estado vigente y revisá la receta otra vez.");
+		if (!(await this.fresh(ctx))) return false;
 		await assertExplored();
-		await syncIssueArtifact(state, this.runner, this.lifecycle.signal);
+		cancellation.throwIfAborted();
+		await syncIssueArtifact(state, this.runner, cancellation);
 		await assertExplored();
 		await this.apply({ type: "approved" }, ctx);
 		return true;

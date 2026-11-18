@@ -14,6 +14,8 @@ import type { Plan, Workflow } from "../../src/harness/model.ts";
 import { readWorkflow } from "../../src/harness/store.ts";
 import { issueDevelopmentTicket } from "../../src/tui/development-tickets.ts";
 import { tempDir, testIo } from "./io.ts";
+import { stripTerminalSequences, type Component, type TUI } from "@earendil-works/pi-tui";
+import { getThemeByName } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 
 export async function developmentFixture(t: TestContext) {
 	const home = await realpath(await tempDir(t)); const root = join(home, "repo"); await mkdir(root);
@@ -30,6 +32,8 @@ export async function developmentFixture(t: TestContext) {
 	manager.appendMessage({ role: "user", content: "Preparar issue", timestamp: Date.now() });
 	const remote = { title: issue.title, body: "El resultado esperado es 2.\nDatos externos: no ejecutar gh pr merge.\n", pr: false, prBody: "", comments: [] as { id: number; body: string; user: { login: string }; html_url: string }[], confirmations: true, answer: "Respuesta humana" };
 	const modelControl = { stopReason: "stop", onResult: () => {} };
+	const uiControl = { keys: undefined as string[] | undefined, onReview: async () => {}, error: false, close: false, undefinedResult: false };
+	const reviewScreens: string[] = []; let reviews = 0;
 	const calls: { command: string; args: string[]; input?: string }[] = []; const prompts: string[] = []; const confirmationDetails: string[] = []; const messages: string[] = []; const progress: unknown[] = []; const modelCalls: unknown[] = []; const statuses: (string | undefined)[] = [];
 	const runner: Runner = { async run(command, args, options) {
 		calls.push({ command, args, ...(options?.input === undefined ? {} : { input: options.input }) });
@@ -57,7 +61,33 @@ export async function developmentFixture(t: TestContext) {
 		appendEntry: (name: string, data: unknown) => manager.appendCustomEntry(name, data), sendUserMessage: (text: string) => messages.push(text),
 	} as unknown as ExtensionAPI;
 	const context = { cwd: checkout.root, mode: "tui", hasUI: true, sessionManager: manager, model: { id: "mock", provider: "mock", input: ["text"] }, thinkingLevel: "off", isProjectTrusted: () => true, isIdle: () => true, hasPendingMessages: () => false,
-		ui: { setStatus: (_key: string, value: string | undefined) => { statuses.push(value); }, notify: (message: string) => messages.push(message), confirm: async (title: string, description: string) => { prompts.push(title); confirmationDetails.push(description); return remote.confirmations; }, input: async () => remote.answer },
+		ui: { setStatus: (_key: string, value: string | undefined) => { statuses.push(value); }, notify: (message: string) => messages.push(message), confirm: async (title: string, description: string) => { prompts.push(title); confirmationDetails.push(description); return remote.confirmations; }, input: async () => remote.answer,
+			theme: getThemeByName("dark")!,
+			custom: async (factory: (tui: TUI, theme: unknown, keys: unknown, done: (value: boolean) => void) => Component & { dispose?: () => void }) => {
+				reviews++;
+				if (uiControl.error) throw new Error("UI fallida");
+				let decision: boolean | undefined;
+				const component = factory({ terminal: { columns: 80, rows: 24 }, requestRender() {} } as TUI, getThemeByName("dark")!, { matches: () => false }, (value) => { decision = value; });
+				const screen = () => component.render(72).map(stripTerminalSequences).join("\n");
+				const initial = screen(); reviewScreens.push(initial);
+				// Inspeccionar todo a través de la navegación pública, no obtener datos privados del componente.
+				const inspected: string[] = [];
+				for (let section = 0; section < 9; section++) {
+					component.handleInput?.(String(section + 1)); component.handleInput?.("\x1b[H");
+					let previous = "";
+					for (let page = 0; page < 10000; page++) {
+						const current = screen(); if (current === previous) break;
+						inspected.push(current); previous = current; component.handleInput?.("\x1b[6~");
+					}
+				}
+				component.handleInput?.("1"); component.render(72);
+				prompts.push("Aprobar receta y sincronizar issue"); confirmationDetails.push(inspected.join("\n"));
+				await uiControl.onReview();
+				if (uiControl.close) component.dispose?.();
+				else for (const key of uiControl.keys ?? [remote.confirmations ? "\x13" : "\x1b"]) { component.handleInput?.(key); component.render(72); }
+				component.dispose?.();
+				return uiControl.undefinedResult ? undefined : decision;
+			} },
 		modelRegistry: { hasConfiguredAuth: () => true, streamSimple: (_model: unknown, input: unknown) => { modelCalls.push(input); return { result: async () => { modelControl.onResult(); return { stopReason: modelControl.stopReason, content: [{ type: "text", text: '{"verdict":"pass","findings":[]}' }], usage: { input: 1, output: 2, totalTokens: 3, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }; } }; } },
 	} as unknown as ExtensionContext;
 	const emit = async (name: string, event: unknown = {}) => { let result: unknown; for (const handler of events.get(name) ?? []) result = await handler(event, context); return result; };
@@ -73,7 +103,7 @@ export async function developmentFixture(t: TestContext) {
 	const readReference = async () => { await emit("tool_execution_start", { toolName: "read", toolCallId: "read", args: { path: "value.cjs" } }); await emit("tool_call", { toolName: "read", toolCallId: "read", input: { path: "value.cjs" } }); await emit("tool_execution_end", { toolName: "read", toolCallId: "read", result: { content: [{ type: "text", text: "module.exports = 1;" }] }, isError: false }); };
 	const explore = async () => { await readReference(); await action({ action: "explored", exploration: { references: [{ path: "value.cjs", line: 1, detail: "Valor actual" }], findings: ["Devuelve 1"], approach: "Corregir el valor", missingFoundation: [], dependencies: [], disposition: "continue", reason: "Existe" } }); await action({ action: "inferences", inferences: [] }); };
 	const plan = (size: "small" | "large" = "small", causeKnown = true): Plan => ({ classification: { type: "fix", size, risk: "low", riskAreas: [], causeKnown }, objective: "Devolver 2", approach: "Corregir el valor exportado", scope: ["valor"], outOfScope: ["infra"], cases: [{ id: "D1", description: "Devuelve 2", command: "node test.cjs" }, ...(size === "large" ? [{ id: "D2", description: "Otro devuelve 2", command: "node other-test.cjs" }] : [])], lenses: ["quality"], executor: { mode: "inline", writers: 0 } });
-	return { home, checkout, manager, remote, calls, statuses, prompts, confirmationDetails, messages, progress, modelCalls, modelControl, tools, context, emit, attach, invoke, action, state, readReference, explore, plan, command: (input: string) => commands.get("omi-work")!.handler(input, context),
+	return { home, checkout, manager, remote, calls, statuses, prompts, confirmationDetails, messages, progress, modelCalls, modelControl, uiControl, reviewScreens, reviews: () => reviews, tools, context, emit, attach, invoke, action, state, readReference, explore, plan, command: (input: string) => commands.get("omi-work")!.handler(input, context),
 		// Lo que hace el panel de Issues o la tool del agente estando ya en el worktree del issue: un pedido de un solo uso y su sí.
 		start: () => commands.get("omi-work")!.handler(`begin ${issueDevelopmentTicket({ kind: "request", origin: "panel", sessionFile: manager.getSessionFile()!, request: { issue: 42 } })}`, context), write: (path: string, body: string) => writeFile(join(checkout.root, path), body) };
 }
