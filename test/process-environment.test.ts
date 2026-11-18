@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { processRunner } from "../src/core/exec.ts";
-import { childEnvironment, hideFromHost } from "../src/core/process-environment.ts";
+import { childEnvironment, hideFromHost, overrideInHost } from "../src/core/process-environment.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { runtimeShellExtension } from "../src/tui/runtime-shell.ts";
 import { tempDir, testIo } from "./helpers/io.ts";
@@ -54,4 +54,22 @@ test("hideFromHost_saca la variable del host y se la devuelve a los hijos", (t) 
 	const child = childEnvironment(process.env);
 	assert.equal(child.OMI_TEST_OCULTA, "valor");
 	assert.ok(!("OMI_TEST_INEXISTENTE" in child));
+});
+
+test("overrideInHost_restaurar dos veces o fuera de orden no pierde el valor del usuario", (t) => {
+	t.after(() => { delete process.env.OMI_TEST_FIJADA; });
+	process.env.OMI_TEST_FIJADA = "usuario";
+	const first = overrideInHost("OMI_TEST_FIJADA", "host");
+	const second = overrideInHost("OMI_TEST_FIJADA", "host");
+	first(); first();
+	assert.equal(process.env.OMI_TEST_FIJADA, "host", "la segunda sigue vigente");
+	assert.equal(childEnvironment(process.env).OMI_TEST_FIJADA, "usuario");
+	second(); second();
+	assert.equal(process.env.OMI_TEST_FIJADA, "usuario");
+	assert.equal(childEnvironment(process.env).OMI_TEST_FIJADA, "usuario");
+	const third = overrideInHost("OMI_TEST_FIJADA", "host");
+	third();
+	process.env.OMI_TEST_FIJADA = "después";
+	third();
+	assert.equal(process.env.OMI_TEST_FIJADA, "después", "un restore ya usado no vuelve a tocar el entorno");
 });
