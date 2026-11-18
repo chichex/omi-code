@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseWorkflow } from "../src/harness/model.ts";
 import { developmentFixture } from "./helpers/development.ts";
+import { approvalPreview } from "../src/tui/development-session.ts";
 
 const AUTHORIZE = "Autorizar comando del proyecto";
 const OK = "node -e \"process.exit(0)\"";
@@ -84,4 +85,11 @@ test("development_grants: un estado guardado sin permisos ni autor de la aprobac
 	const saved = JSON.parse(JSON.stringify(await f.state())) as Record<string, unknown> & { approval: Record<string, unknown> };
 	delete saved.grants; delete saved.approval.by; delete saved.approval.foundations;
 	assert.doesNotThrow(() => parseWorkflow(JSON.stringify(saved)));
+});
+
+test("development_grants: la aprobación dice qué comandos siguen pidiendo permiso", async (t) => {
+	const f = await developmentFixture(t); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() });
+	const preview = approvalPreview(await f.state());
+	assert.match(preview, /comandos exactos de los casos D sin volver a preguntar, con cualquier etiqueta/);
+	assert.match(preview, /Otros comandos, también de setup, piden permiso una vez por trabajo, salvo los del catálogo de Foundations/);
 });
