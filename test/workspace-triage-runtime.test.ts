@@ -171,7 +171,7 @@ export default function(pi) { pi.on('session_start', async (event,ctx) => {
 	const binary = fileURLToPath(new URL("../bin/omi.ts", import.meta.url));
 	const run = (script: string, extra: NodeJS.ProcessEnv = {}) => new Promise<{ code: number | null; output: string }>((resolve, reject) => {
 		const child = spawn("python3", ["-I", "-c", script, process.execPath, binary, "--provider", "mock", "--model", "triage", "--no-extensions", "--extension", extension, "--no-context-files", "--no-skills", "--approve"], {
-			cwd: root, env: { ...process.env, HOME: home, OMI_HOME: "", TERM: "xterm-256color", HERDR_ENV: "0", PATH: bin + delimiter + process.env.PATH, TRIAGE_READY: ready, TRIAGE_RELOADED: reloaded, TRIAGE_CONFIRMED: confirmed, TRIAGE_REPLY: reply, TRIAGE_RESUME_REPLY: resumeReply, TRIAGE_FAILURE: mode === "ready" ? "" : mode, TRIAGE_STARTED: started, ...extra }, stdio: ["ignore", "pipe", "pipe"],
+			cwd: root, env: { ...process.env, HOME: home, OMI_HOME: "", TERM: "xterm-256color", HERDR_ENV: "0", PI_TELEMETRY: "0", PATH: bin + delimiter + process.env.PATH, TRIAGE_READY: ready, TRIAGE_RELOADED: reloaded, TRIAGE_CONFIRMED: confirmed, TRIAGE_REPLY: reply, TRIAGE_RESUME_REPLY: resumeReply, TRIAGE_FAILURE: mode === "ready" ? "" : mode, TRIAGE_STARTED: started, ...extra }, stdio: ["ignore", "pipe", "pipe"],
 		});
 		let output = ""; child.stdout.on("data", (data: Buffer) => { output += data; }); child.stderr.on("data", (data: Buffer) => { output += data; }); child.on("error", reject); child.on("close", (code) => resolve({ code, output }));
 	});
