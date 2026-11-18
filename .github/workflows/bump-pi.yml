@@ -44,6 +44,9 @@ jobs:
           npm install --save-exact $packages
       - if: steps.pi.outputs.changed == 'true'
         run: npm run typecheck
+      # Pi baja fd y rg de github.com si no están en el PATH; npm test no sale a la red.
+      - if: steps.pi.outputs.changed == 'true'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ripgrep fd-find
       - if: steps.pi.outputs.changed == 'true'
         run: npm test
       - if: steps.pi.outputs.changed == 'true'

@@ -52,6 +52,6 @@ if (process.argv[1]?.endsWith(".test.ts")) {
 		let seen = "";
 		try { seen = readFileSync(log, "utf8"); } catch {}
 		rmSync(dir, { recursive: true, force: true });
-		assert.deepEqual(seen.split("\n").filter(Boolean), [], `${process.argv[1]}: un proceso del test intentó salir de loopback (¿Pi interactivo con HOME nuevo sin PI_TELEMETRY=0?)`);
+		assert.deepEqual(seen.split("\n").filter(Boolean), [], `${process.argv[1]}: un proceso del test intentó salir de loopback (¿Pi interactivo con HOME nuevo sin PI_TELEMETRY=0, o sin fd y rg en el PATH?)`);
 	});
 }
