@@ -84,6 +84,25 @@ test("linkBundledTools_sin el binario en el runtime no deja un enlace roto", asy
 	assert.equal(await link(bin, "fd"), join("..", "..", "runtime", "bin", "fd"));
 });
 
+test("linkBundledTools_con <agent> como symlink (stow, dotfiles) el enlace resuelve y repara el roto de antes", async (t) => {
+	const root = await tempDir(t);
+	const tools = join(root, "omi/runtime/bin");
+	const dotfiles = join(root, "dotfiles/omi-agent");
+	await mkdir(tools, { recursive: true });
+	await mkdir(join(dotfiles, "bin"), { recursive: true });
+	for (const name of ["fd", "rg"]) await writeFile(join(tools, name), `#!/bin/sh\necho ${name} incluido\n`, { mode: 0o755 });
+	await symlink(dotfiles, join(root, "omi/agent"));
+	// El enlace relativo que creaba la versión anterior: desde dotfiles, ../.. no es la instalación.
+	await symlink(join("..", "..", "runtime", "bin", "rg"), join(dotfiles, "bin/rg"));
+	const bin = join(root, "omi/agent/bin");
+	await linkBundledTools(bin, tools, "");
+	for (const name of ["fd", "rg"]) assert.equal(execFileSync(join(bin, name), { encoding: "utf8" }), `${name} incluido\n`, name);
+	const user = await tempDir(t);
+	for (const name of ["fd", "rg"]) await writeFile(join(user, name), "#!/bin/sh\n", { mode: 0o755 });
+	await linkBundledTools(bin, tools, user);
+	for (const name of ["fd", "rg"]) await assert.rejects(lstat(join(bin, name)), { code: "ENOENT" }, `${name}: sigue siendo propio y se saca`);
+});
+
 test("linkBundledTools_dos omi que arrancan a la vez sacan el mismo enlace sin fallar", async (t) => {
 	const { bin, tools, user } = await layout(t);
 	await linkBundledTools(bin, tools, user);
