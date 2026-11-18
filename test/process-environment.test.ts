@@ -73,3 +73,13 @@ test("overrideInHost_restaurar dos veces o fuera de orden no pierde el valor del
 	third();
 	assert.equal(process.env.OMI_TEST_FIJADA, "después", "un restore ya usado no vuelve a tocar el entorno");
 });
+
+test("overrideInHost_un valor que pasa quien lanza el comando gana sobre el del usuario", async (t) => {
+	t.after(() => { delete process.env.OMI_TEST_FIJADA; });
+	process.env.OMI_TEST_FIJADA = "usuario";
+	t.after(overrideInHost("OMI_TEST_FIJADA", "host"));
+	const print = ["-e", 'process.stdout.write(process.env.OMI_TEST_FIJADA ?? "unset")'];
+	assert.equal((await processRunner.run(process.execPath, print)).stdout, "usuario", "heredado del host: vuelve el del usuario");
+	assert.equal((await processRunner.run(process.execPath, print, { env: { OMI_TEST_FIJADA: "explícito" } })).stdout, "explícito");
+	assert.equal(childEnvironment({ PATH: "/usr/bin" }).OMI_TEST_FIJADA, undefined, "no agrega lo que el entorno pedido no tenía");
+});

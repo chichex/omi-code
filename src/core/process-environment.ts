@@ -44,7 +44,9 @@ export function overrideInHost(name: string, value: string): () => void {
 export function childEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 	const child = { ...hiddenFromHost, ...env };
 	delete child.PI_PACKAGE_DIR;
-	for (const [name, { user }] of overrides) {
+	// Sólo se cambia lo que el hijo heredó del host: un valor que pasa quien lo lanza, se respeta.
+	for (const [name, { user, active }] of overrides) {
+		if (child[name] !== active.at(-1)?.value) continue;
 		if (user === undefined) delete child[name];
 		else child[name] = user;
 	}
