@@ -41,7 +41,9 @@ async function checkWriteTarget(root: string, path: string): Promise<void> {
 export function developmentHarnessExtension(io: Io, args: readonly string[], deps: DevelopmentDeps = {}): InlineExtension {
 	return { name: "omi-development", factory: async (pi: ExtensionAPI) => {
 		const session = new DevelopmentSession(pi, io, args, deps);
-		const held = new HeldLoadout(pi, (await import("@earendil-works/pi-coding-agent")).parseArgs([...args]));
+		// Pi lee sus rutas al importarse: se importa al cargar la extensión, no con el módulo.
+		const cli = (await import("@earendil-works/pi-coding-agent")).parseArgs([...args]);
+		const held = new HeldLoadout(pi, cli);
 		const readsInFlight = new Map<string, { path: string; digest: string; start: number; limit: number }>();
 		const loadout = () => {
 			if (!session.state && !session.lockedReason) { held.release(); return; }
@@ -82,10 +84,9 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 			const release = holdSessionSwitch("arranque");
 			if (!release) { ctx.ui.notify(`Ya hay un ${sessionSwitchOwner() ?? "cambio de sesión"} en curso; esperá a que termine.`, "warning"); return; }
 			try {
-				const { parseArgs } = await import("@earendil-works/pi-coding-agent");
 				await beginDevelopment(ctx, { origin: ticket.origin, request: ticket.request }, {
 					runner: session.runner, offline: session.offline, signal: session.lifecycle.signal, now: session.now, loader: deps.loader ?? borderedLoader,
-					sessionDir: parseArgs([...args]).sessionDir, startHere: () => startHere(ctx),
+					sessionDir: cli.sessionDir, startHere: () => startHere(ctx),
 					// Foundations se decide recién acá: después de las guardas sin efectos y antes del sí del arranque.
 					confirm: async (context, title, description) => {
 						if ((await session.foundations.policy(context)).politica.arranque !== "auto") return session.confirm(context, title, description);
