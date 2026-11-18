@@ -84,3 +84,16 @@ test("retry invalidates verification; refresh ignores old history and pending st
  for (const id of ["decide", "recipe", "approve", "implement", "verify", "pr"]) assert.equal(stage(s, id).status, "pending", id);
  assert.equal(stage(s, "implement").observed, "unknown");
 });
+
+test("an exploration the reducer still blocks is never shown as completed", () => {
+ const base = explored().exploration!;
+ for (const changes of [{ references: [] }, { missingFoundation: ["CI"] }, { dependencies: [{ name: "API", blocking: true, ready: false }] }, { disposition: "needs-info" as const, reason: "Ask" }]) {
+  const s = send(fresh(), { type: "explored", exploration: { ...base, ...changes } });
+  assert.equal(s.phase, "decide"); assert.equal(s.status, "waiting");
+  assert.notEqual(stage(s, "explore").status, "done", JSON.stringify(changes));
+  assert.equal(stage(s, "decide").status, "waiting");
+ }
+ // Un cierre sin cambio no pasa por esos bloqueos en el reducer: Explorar sí se cumplió.
+ const closed = send(fresh(), { type: "explored", exploration: { ...base, references: [], disposition: "wontfix", reason: "No change" } });
+ assert.equal(closed.phase, "closed"); assert.equal(stage(closed, "explore").status, "done");
+});

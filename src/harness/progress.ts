@@ -1,7 +1,7 @@
 // Proyección pura: no ejecuta, no acredita gates y no usa mensajes/historial como evidencia.
 import type { Workflow } from "./model.ts";
 import { PHASES, recipeNextPhase, type Phase } from "./phases.ts";
-import { expectedFailure, isApproved, successful } from "./state.ts";
+import { expectedFailure, explorationBlock, isApproved, successful } from "./state.ts";
 export const STAGE_STATUSES = ["pending", "conditional", "active", "done", "not-applicable", "waiting", "paused", "failed", "interrupted"] as const;
 export const OBSERVED_MODES = ["unknown", "inline", "subagent", "mixed", "isolated-lens", "inline+lens", "subagent+lens", "mixed+lens"] as const;
 export interface StageProgress {
@@ -10,7 +10,8 @@ export interface StageProgress {
 }
 function completed(s: Workflow, id: Phase): boolean {
  switch (id) {
-  case "explore": return s.exploration !== null && s.exploration.disposition !== "needs-info" && !s.exploration.missingFoundation.length && !s.exploration.dependencies.some(d => d.blocking && !d.ready);
+  // El mismo criterio del reducer: una exploración bloqueada no está cumplida; un wontfix cierra sin esos bloqueos.
+  case "explore": return s.exploration !== null && (s.exploration.disposition === "wontfix" || !explorationBlock(s.exploration));
   case "decide": return s.phase === "recipe" || s.recipe !== null;
   case "recipe": return s.recipe !== null;
   case "diagnose": return s.diagnosis !== null;

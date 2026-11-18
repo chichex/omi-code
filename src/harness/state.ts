@@ -43,7 +43,7 @@ export function isApproved(state: Workflow): boolean {
  return state.recipe !== null && state.approval !== null && state.approval.sourceHash === state.source.hash
   && state.source.hash === sourceHash(state.source.title, state.source.body) && state.approval.recipeHash === recipeApprovalHash(state);
 }
-function explorationBlock(exploration: Exploration | null): string {
+export function explorationBlock(exploration: Exploration | null): string {
  if (!exploration) return "Falta explorar el repositorio";
  if (!exploration.references.length) return "Faltan referencias del repositorio";
  if (exploration.missingFoundation.length) return `Falta fundación: ${exploration.missingFoundation.join(", ")}`;
