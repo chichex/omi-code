@@ -57,6 +57,16 @@ for (const mode of ["default", "settings", "--no-extensions"] as const) test(`ru
 	assert.equal(saved.packages, undefined, "no instala paquetes en el home al arrancar");
 });
 
+// Default de OMI, no del usuario: los ajustes siguen pudiendo apagarlo con las reglas de Pi.
+for (const mode of ["default", "settings"] as const) test(`runtime: codemode · ${mode}`, async (t) => {
+	const home = await tempDir(t); const dir = agentDir(home); await mkdir(dir, { recursive: true });
+	if (mode === "settings") await writeFile(join(dir, "settings.json"), JSON.stringify({ defaultTools: ["-codemode"] }));
+	const body = await requestSeenByModel({ command: process.execPath, args: [bin, "--no-mcp"], cwd: home, agent: dir, env: { HOME: home, PATH: process.env.PATH, OMI_HOME: "", PI_SKIP_VERSION_CHECK: "1" } });
+	const tools = (JSON.parse(body) as { tools: { function: { name: string } }[] }).tools.map((tool) => tool.function.name);
+	assert.equal(tools.includes("codemode"), mode === "default");
+	for (const name of ["read", "bash", "edit", "write"]) assert.ok(tools.includes(name), `perdió ${name}`);
+});
+
 test("runtime: conserva una extensión de subagentes del usuario en lugar de duplicarla", async (t) => {
 	const home = await tempDir(t); const extension = join(home, "custom-subagent.ts");
 	await writeFile(extension, `export default function(pi) {

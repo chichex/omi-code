@@ -40,6 +40,7 @@ Una instalación nueva trae estas integraciones **en la distribución de OMI**, 
 |---|---|---|
 | Subagentes | Tool `subagent` con `scout`, `planner`, `reviewer` y `worker`; background, espera explícita y panel `SUBAGENTES` | El modelo y razonamiento elegidos en la sesión |
 | Desarrollo | Harness que arranca ante un pedido de desarrollo, con un sí humano; Directa, Diagnóstico y Con spec, evidencia y progreso hasta PR draft | Modelo de la sesión y `gh` autenticado |
+| Codemode | Tool `codemode` de Pi activa junto a `read`, `bash`, `edit` y `write`; el harness de desarrollo y los subagentes la dejan afuera | No requiere |
 | Claude Bridge | Catálogo `claude-bridge/...` con `pi-claude-bridge@0.13.0` incluido; requiere ejecutable externo | Claude Code con `claude auth login` o `CLAUDE_CODE_OAUTH_TOKEN` |
 | KB de [Harness](https://github.com/chichex/harness/tree/main/kb) | MCP `harness-kb`, por Streamable HTTP en `https://kb-prod-chiche.ohmyinfra.com/mcp` | OAuth desde `/mcp login harness-kb` |
 | OMI | El mismo catálogo de `omi mcp`, integrado **nativamente** en el agente, con confirmaciones en la UI | `omi login` |
@@ -94,6 +95,8 @@ Se pueden desactivar en `~/.omi/agent/settings.json` (o `<OMI_HOME>/agent/settin
   "extensions": ["-builtin:omi-subagents", "-builtin:omi-kb", "-builtin:omi-claude-bridge"]
 }
 ```
+
+Codemode se apaga con `"defaultTools": ["-codemode"]` en esos ajustes o con `--tools -codemode` en una corrida. Una lista con nombres simples en `defaultTools` o `--tools` reemplaza la selección: sólo trae codemode si lo nombra.
 
 Una extensión del usuario que ya registre `subagent` reemplaza la incluida, sin duplicar la tool. `--no-extensions` omite las extensiones por defecto en esa corrida; `--no-mcp` omite la KB, no Claude Bridge ni las tools nativas de OMI. Con `--offline` o `PI_OFFLINE=1` no se registra la KB remota por defecto. Un servidor `harness-kb` en `~/.omi/agent/mcp.json` o en `.pi/mcp.json` (proyecto de confianza) prevalece sobre el default, sin ser modificado. Los cambios de exposición/activación hechos desde `/mcp` sobre el registro por defecto duran esa sesión; para persistirlos, usá los ajustes anteriores o una entrada propia en `mcp.json`.
 
