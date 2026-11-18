@@ -28,6 +28,7 @@ Todos corren desde la raíz del repo. Un worktree nuevo no trae `node_modules`: 
 ## Ambientes
 
 - **Local:** todo corre contra un mock efímero de omi-api. Los tests no usan credenciales reales.
+- **Sin red en tests:** `npm test` precarga `test/helpers/no-network.ts`: corta toda conexión fuera de loopback de los procesos que heredan su entorno y hace fallar el archivo. Un hijo con Pi interactivo y HOME nuevo lleva `PI_TELEMETRY=0`; `PI_OFFLINE` apaga además la KB y GitHub.
 - **Real:** `https://app.ohmyinfra.com`, con `chichex/omi#140` desplegado. Sin eso, `omi login` falla con `session_token_unavailable`.
 - **Linux real:** el host `chichex-linux` sirve para probar el binario `linux-x64` en un HOME temporal.
 - **Git:** branch default `main`, remote `origin` en `github.com/chichex/omi-code`. `main` está protegida: exige PR y el check `cierre`, también para admins.
