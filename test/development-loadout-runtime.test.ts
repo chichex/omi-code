@@ -123,6 +123,33 @@ test("harness real · volver por el árbol a la rama del harness y salir devuelv
 	assert.deepEqual(sorted(session.getActiveToolNames()), sorted(normal));
 });
 
+test("harness real · salir, un request normal y retomar conserva lo que la persona eligió después", { timeout: 30000 }, async (t) => {
+	const r = await started(t);
+	await r.stop(r.first);
+	const chosen = r.normal.filter((name) => name !== "edit"); r.first.setActiveToolsByName(chosen);
+	await r.run(r.first, "hola"); r.first.dispose();
+	const resumed = await r.resume();
+	assert.deepEqual(sorted(resumed.getActiveToolNames()), sorted(chosen));
+});
+
+test("harness real · moverse por el árbol a una rama con otro loadout deja el de esa rama", { timeout: 30000 }, async (t) => {
+	const r = await harnessRuntime(t);
+	const session = await r.open(r.f.manager); const normal = session.getActiveToolNames();
+	// Declarar primero todas: Pi activa al restaurar las tools de extensión que la rama nunca mencionó.
+	await r.run(session, "hola"); session.setActiveToolsByName(["read"]); await r.run(session, "sólo leer"); const readOnly = r.f.manager.getLeafId()!;
+	session.setActiveToolsByName(normal); await r.begin(session);
+	await session.navigateTree(readOnly);
+	assert.deepEqual(session.getActiveToolNames(), ["read"]);
+});
+
+test("harness real · retomar con otra lista explícita de --tools y salir deja la nueva", { timeout: 30000 }, async (t) => {
+	const r = await harnessRuntime(t);
+	const first = await r.open(r.f.manager, ["--tools", "read,bash"]); await r.begin(first); first.dispose();
+	const resumed = await r.open(SessionManager.open(r.f.manager.getSessionFile()!), ["--tools", "read,bash,edit"]);
+	await r.stop(resumed);
+	assert.deepEqual(sorted(resumed.getActiveToolNames()), ["bash", "edit", "read"]);
+});
+
 // Lo que la persona elige al volver a abrir prevalece sobre lo guardado, con las reglas de Pi.
 for (const [label, args, settings, expected] of [
 	["--tools read,bash", ["--tools", "read,bash"], {}, (_normal: string[]) => ["read", "bash"]],
