@@ -5,6 +5,7 @@ import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-ag
 import type { Io } from "../cli/io.ts";
 import { EXIT_OK } from "../core/errors.ts";
 import { agentDir } from "../core/paths.ts";
+import { overrideInHost } from "../core/process-environment.ts";
 import { resolveRuntime } from "../core/runtime.ts";
 import { AGENT_SESSION_ENV } from "../guardrails/surfaces.ts";
 import { runPiImportOnboarding } from "../onboarding/pi-import.ts";
@@ -56,9 +57,13 @@ export async function launchTui(args: string[], io: Io, deps: LaunchDeps = {}): 
 	// No usar PI_OFFLINE: deben seguir funcionando proveedores, catálogos y extensiones del usuario.
 	const skipVersionCheck = process.env.PI_SKIP_VERSION_CHECK;
 	if (workspace) process.env.PI_SKIP_VERSION_CHECK = "1";
+	// Instalación limpia: Pi no reporta a pi.dev la instalación ni cada actualización, ni se atribuye
+	// las llamadas a proveedores. Gana sobre el shell y los ajustes; los comandos ven el valor del usuario.
+	const restoreTelemetry = overrideInHost("PI_TELEMETRY", "0");
 	try {
 		await piMain([...presentation, ...isolation.args, ...args], { extensionFactories: extensions });
 	} finally {
+		restoreTelemetry();
 		if (skipVersionCheck === undefined) delete process.env.PI_SKIP_VERSION_CHECK;
 		else process.env.PI_SKIP_VERSION_CHECK = skipVersionCheck;
 	}
