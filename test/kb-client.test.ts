@@ -159,3 +159,9 @@ test("kb_client: Pi sigue poniendo los builtins propios antes que los de OMI", a
 	const main = await readFile(join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "main.js"), "utf8");
 	assert.match(main, /\[\.\.\.builtInExtensions, \.\.\.\(options\?\.extensionFactories \?\? \[\]\)\]/);
 });
+
+test("kb_client: sin un directorio de configuración absoluto no se usa la KB", async (t) => {
+	const kb = await mockKb(t); const { client, cwd } = await host(t, kb, { agentDir: "" });
+	const result = await client.ready(cwd, signal());
+	assert.equal(result.ready, false); assert.match(result.ready ? "" : result.reason, /directorio/);
+});

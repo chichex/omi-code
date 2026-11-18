@@ -3,7 +3,7 @@
 // Así reusa la conexión, el OAuth, el refresh y los locks de Pi. Cualquier duda cuenta como no disponible.
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { Type, type Static, type TSchema } from "typebox";
 import { Value } from "typebox/value";
 import type { ExtensionAPI, InlineExtension, ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -100,6 +100,7 @@ export function createKbClient(options: KbClientOptions): KbHost {
 		async ready(cwd, signal) {
 			if (!options.enabled) return { ready: false, reason: "sin red (--offline o PI_OFFLINE) o MCP desactivado (--no-mcp)" };
 			if (!attached) return { ready: false, reason: "el MCP de OMI no está cargado (-builtin:mcp o --no-extensions)" };
+			if (!isAbsolute(options.agentDir)) return { ready: false, reason: "falta el directorio de configuración del agente" };
 			const redefined = await redefinition([join(options.agentDir, "mcp.json"), join(cwd, ".pi", "mcp.json")]);
 			if (redefined) return { ready: false, reason: redefined };
 			const deadline = Date.now() + readyTimeoutMs;
