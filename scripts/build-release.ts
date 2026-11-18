@@ -1,8 +1,9 @@
 // Arma una release: binario por plataforma, bundle de runtime y checksums.txt.
 //
-//   node scripts/build-release.ts [--targets darwin-arm64,linux-x64] [--out dist/release]
+//   node scripts/build-release.ts [--targets darwin-arm64,linux-x64] [--out dist/release] [--cache <dir>]
 //
-// Requiere bun. Sin --targets compila las cuatro plataformas.
+// Requiere bun. Sin --targets compila las cuatro plataformas. fd y rg salen de bundled-tools.json;
+// --cache cambia dónde quedan sus descargas (por defecto ~/.cache/omi-code/tools).
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -13,6 +14,7 @@ import { exists } from "../src/core/files.ts";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { PLATFORMS, assetNames, type Platform } from "../src/upgrade/release.ts";
+import { fetchTools, stageTools, type Download } from "./bundled-tools.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PI = join(ROOT, "node_modules/@earendil-works/pi-coding-agent");
@@ -92,7 +94,13 @@ async function writeChecksums(out: string, names: readonly string[]): Promise<vo
 	await writeFile(join(out, "checksums.txt"), `${lines.join("\n")}\n`);
 }
 
-export async function buildRelease(targets: readonly Platform[], out: string): Promise<string[]> {
+export interface BuildOptions {
+	cacheDir?: string;
+	/** Sólo para tests: reemplaza la descarga de fd y rg. */
+	download?: Download;
+}
+
+export async function buildRelease(targets: readonly Platform[], out: string, options: BuildOptions = {}): Promise<string[]> {
 	out = resolve(out);
 	const canonical = await realpath(out).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return out; throw error; });
 	const repo = relative(canonical, resolve(ROOT));
@@ -100,6 +108,7 @@ export async function buildRelease(targets: readonly Platform[], out: string): P
 		throw new Error(`unsafe_release_output: ${out} es el home, un checkout o un ancestro del repo; elegí un directorio de artifacts`);
 	}
 	await mkdir(out, { recursive: true });
+	const tools = await fetchTools(targets, options);
 	const work = await mkdtemp(join(out, ".build-"));
 	try {
 	const entries = await writeEntries(work);
@@ -112,6 +121,9 @@ export async function buildRelease(targets: readonly Platform[], out: string): P
 		const binary = join(out, names.binary);
 		compile(work, entries, platform, binary);
 		await cp(binary, join(stage, "omi"));
+		const archives = tools.get(platform);
+		if (archives === undefined) throw new Error(`bundled_tools: no se prepararon fd y rg para ${platform}`);
+		await stageTools(stage, archives);
 		// Sin xattrs: los de macOS llenan de advertencias el tar de Linux al instalar.
 		execFileSync("tar", ["--no-xattrs", "-czf", join(out, names.runtime), "-C", stage, "."], { env: { ...process.env, COPYFILE_DISABLE: "1" } });
 		artifacts.push(names.binary, names.runtime);
@@ -134,8 +146,8 @@ function parseTargets(value: string | undefined): Platform[] {
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-	const { values } = parseArgs({ options: { targets: { type: "string" }, out: { type: "string" } } });
+	const { values } = parseArgs({ options: { targets: { type: "string" }, out: { type: "string" }, cache: { type: "string" } } });
 	const out = resolve(values.out ?? join(ROOT, "dist/release"));
-	const artifacts = await buildRelease(parseTargets(values.targets), out);
+	const artifacts = await buildRelease(parseTargets(values.targets), out, values.cache === undefined ? {} : { cacheDir: resolve(values.cache) });
 	for (const name of artifacts) console.log(join(basename(out), name));
 }

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { lstat, mkdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { lstat, mkdir, readFile, readlink, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import { agentDir, sourcePiAgentDir as piAgentDir } from "../src/core/paths.ts";
 import { childEnvironment } from "../src/core/process-environment.ts";
 import { USER_SKILLS_EXCLUSION } from "../src/tui/isolation.ts";
@@ -9,6 +10,7 @@ import { launchTui, type PiMain } from "../src/tui/launch.ts";
 import { CATALOG } from "../src/tools/catalog.ts";
 import { registerCatalogTools } from "../src/tui/tools.ts";
 import { tempDir, testIo } from "./helpers/io.ts";
+import { pathWithout } from "./helpers/startup-network.ts";
 import { linkedProject } from "./helpers/project.ts";
 import { fakeRunner } from "./helpers/runner.ts";
 
@@ -435,4 +437,42 @@ test("launchTui_en desarrollo ignora una instalación vieja en ~/.omi/runtime", 
 	await mkdir(join(home, ".omi/runtime/theme"), { recursive: true });
 	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi([]), compiled: false });
 	assert.equal(process.env.PI_PACKAGE_DIR, undefined);
+});
+
+function restorePath(t: { after(fn: () => void): void }): void {
+	const previous = process.env.PATH;
+	t.after(() => {
+		if (previous === undefined) delete process.env.PATH;
+		else process.env.PATH = previous;
+	});
+}
+
+/** Un runtime instalado con fd y rg, y un PATH que no los trae (el resto, como git, sigue). */
+async function runtimeWithTools(t: TestContext, home: string): Promise<void> {
+	await mkdir(join(home, ".omi/runtime/theme"), { recursive: true });
+	await mkdir(join(home, ".omi/runtime/bin"));
+	for (const name of ["fd", "rg"]) await writeFile(join(home, ".omi/runtime/bin", name), `#!/bin/sh\necho ${name} incluido\n`, { mode: 0o755 });
+	process.env.PATH = await pathWithout(["fd", "fdfind", "rg"], process.env.PATH ?? "", await tempDir(t));
+}
+
+test("launchTui_en un binario instalado enlaza fd y rg del runtime donde Pi los busca antes de bajarlos", async (t) => {
+	restorePackageDir(t);
+	restorePath(t);
+	const home = await tempDir(t);
+	await runtimeWithTools(t, home);
+	const seen: string[] = [];
+	await launchTui([], testIo({ homeDir: home }), { compiled: true, piMain: async () => {
+		for (const name of ["fd", "rg"]) seen.push(await readlink(join(agentDir(home), "bin", name)));
+	} });
+	assert.deepEqual(seen, [join("..", "..", "runtime", "bin", "fd"), join("..", "..", "runtime", "bin", "rg")]);
+	assert.equal(execFileSync(join(agentDir(home), "bin/rg"), { encoding: "utf8" }), "rg incluido\n");
+});
+
+test("launchTui_en desarrollo no toca <agent>/bin: Pi sigue con fd y rg del sistema", async (t) => {
+	restorePackageDir(t);
+	restorePath(t);
+	const home = await tempDir(t);
+	await runtimeWithTools(t, home);
+	await launchTui([], testIo({ homeDir: home }), { compiled: false, piMain: fakePi([]) });
+	await assert.rejects(lstat(join(agentDir(home), "bin/fd")), { code: "ENOENT" });
 });

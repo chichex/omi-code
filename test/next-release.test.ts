@@ -11,7 +11,7 @@ const script = fileURLToPath(new URL("../scripts/next-release.ts", import.meta.u
 const commit = (message: string, ...files: string[]): Commit => ({ message, files });
 
 test("isPackaged_distingue lo que entra en el binario", () => {
-	for (const path of ["src/cli/main.ts", "bin/omi.ts", "package.json", "package-lock.json", "tsconfig.json", "install.sh", "scripts/build-release.ts"]) {
+	for (const path of ["src/cli/main.ts", "bin/omi.ts", "package.json", "package-lock.json", "tsconfig.json", "install.sh", "scripts/build-release.ts", "scripts/bundled-tools.ts", "scripts/bundled-tools.json"]) {
 		assert.equal(isPackaged(path), true, path);
 	}
 	for (const path of ["AGENTS.md", "docs/x.md", "README.md", "test/x.test.ts", "src/x.test.ts", ".github/workflows/ci.yml", "scripts/next-release.ts", "LICENSE", "srcs/x.ts"]) {

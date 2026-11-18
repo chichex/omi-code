@@ -31,6 +31,9 @@ async function runtimeTarball(t: TestContext, binary: string): Promise<Buffer> {
 	await mkdir(join(dir, "theme"), { recursive: true });
 	await writeFile(join(dir, "theme/dark.json"), "nuevo\n");
 	await writeFile(join(dir, "omi"), binary, { mode: 0o755 });
+	// fd y rg vienen en el runtime, como en una release real.
+	await mkdir(join(dir, "bin"));
+	for (const name of ["fd", "rg"]) await writeFile(join(dir, "bin", name), `#!/bin/sh\necho ${name} nuevo\n`, { mode: 0o755 });
 	const output = join(await tempDir(t), "runtime.tar.gz");
 	execFileSync("tar", ["-czf", output, "-C", dir, "."]);
 	return readFile(output);
@@ -177,6 +180,14 @@ test("runUpgrade_verifica y reemplaza binario y runtime", async (t) => {
 	assert.equal(await readFile(join(home, ".omi/runtime/theme/dark.json"), "utf8"), "nuevo\n");
 });
 
+test("runUpgrade_reemplaza fd y rg del runtime y quedan ejecutables", async (t) => {
+	const home = await installed(t);
+	await mkdir(join(home, ".omi/runtime/bin"));
+	await writeFile(join(home, ".omi/runtime/bin/rg"), "#!/bin/sh\necho rg viejo\n", { mode: 0o755 });
+	await runUpgrade(options(home, await releaseServer(t)));
+	for (const name of ["fd", "rg"]) assert.equal(execFileSync(join(home, ".omi/runtime/bin", name), { encoding: "utf8" }), `${name} nuevo\n`);
+});
+
 test("runUpgrade_no deja temporales en ~/.omi", async (t) => {
 	const home = await installed(t);
 	await runUpgrade(options(home, await releaseServer(t)));
@@ -252,7 +263,8 @@ test("runUpgrade_en macOS firma el binario antes de instalarlo", async (t) => {
 	}
 	release.files.set(darwin.checksums, Buffer.from((release.files.get(names.checksums)?.toString() ?? "").replaceAll("omi-linux-x64", "omi-darwin-arm64")));
 	await runUpgrade({ ...options(home, release, runner), platform: "darwin-arm64" });
-	// El binario suelto y el del runtime: cualquiera de los dos puede quedar activo.
+	// El binario suelto y el del runtime: cualquiera de los dos puede quedar activo. fd y rg no:
+	// llegan con la firma de upstream intacta.
 	assert.deepEqual(seen, ["--remove-signature", "--force", "--remove-signature", "--force"]);
 });
 

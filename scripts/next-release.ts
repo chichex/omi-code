@@ -17,7 +17,8 @@ export interface Commit {
 }
 
 const PACKAGED_DIRS = ["src/", "bin/"];
-const PACKAGED_FILES = new Set(["package.json", "package-lock.json", "tsconfig.json", "install.sh", "scripts/build-release.ts"]);
+// bundled-tools fija fd y rg del runtime: subirlos cambia lo que recibe el usuario.
+const PACKAGED_FILES = new Set(["package.json", "package-lock.json", "tsconfig.json", "install.sh", "scripts/build-release.ts", "scripts/bundled-tools.ts", "scripts/bundled-tools.json"]);
 const VERSION_TAG = /^v(\d+)\.(\d+)\.(\d+)$/;
 const LOG_FORMAT = "%x1e%B%x1f";
 
