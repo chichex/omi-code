@@ -228,14 +228,14 @@ OMI pregunta como AskUserQuestion de Claude Code: de 1 a 4 preguntas en una tand
    2. Alto
       Toca el contrato público
    3. Escribir otra respuesta
- ↑↓ o 1–3 elegir · Enter confirmar · Tab/←→ preguntas · Esc cancelar
+ 1–3 eligen y siguen · Enter confirmar · Tab/←→ preguntas · Esc cancelar
 ```
 
-- ↑/↓ mueven el cursor; un número elige esa opción. Enter confirma y pasa a la siguiente sin responder. Tab o ←/→ cambian de pregunta.
+- ↑/↓ mueven el cursor; un número elige esa opción y avanza. Enter confirma y pasa a la siguiente sin responder. Tab o ←/→ cambian de pregunta.
 - Elección múltiple: casillas; Espacio o un número marcan, Enter confirma lo marcado (también nada).
 - Con más de una pregunta, el paso **Enviar** repasa todas las respuestas antes de mandarlas. Si falta alguna, Enter vuelve a la primera sin responder.
 - Esc cancela la tanda: no quedan respuestas parciales ni consentimiento. En el texto libre, Esc sólo vuelve a las opciones.
-- Una pregunta sin recomendada, como el sí de guardar Foundations, arranca sin cursor: Enter solo no elige nada.
+- Una pregunta sin recomendada, como el sí de guardar Foundations, arranca sin cursor: Enter solo no elige nada, y un número sólo lleva el cursor. Elegir pide Enter.
 - Va en el lugar del editor, dentro del layout del workspace. Si no entra, primero esconde las descripciones de las otras opciones y después desplaza la lista, sin tapar la ayuda. Un texto largo, como el resumen de Foundations, se desplaza con PgUp/PgDn.
 
 El agente pregunta así con `omi_ask`: `questions` de 1 a 4, cada una con `question`, `header` (hasta 12 caracteres), `options` de 2 a 4 (`label` y `description`, la primera es la recomendada) y `multiSelect`. OMI agrega la respuesta libre. Devuelve, por pregunta, su id (`q1`…), el texto, las opciones elegidas (`options`) y lo escrito (`text`); al cancelar, `cancelled`, y el turno termina. En modo print, RPC o sin UI falla con un error: nunca supone una respuesta. Es `model-only`: ni `codemode` ni un subagente la pueden llamar.

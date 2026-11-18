@@ -32,7 +32,8 @@ const BUILD = ["1"];
 const KEY = (f: { kb: { url: string } }) => ({ kbUrl: f.kb.url, product: "repo", repo: REPO });
 const NODE_TEST = [KEYS.space, ...typed("node test.cjs"), KEYS.enter, KEYS.enter];
 const ALL_ASK = ["1", "1", "1", "1", KEYS.enter];
-const SAVE = ["1"];
+// El sí sensible: el número sólo lleva el cursor, Enter guarda.
+const SAVE = ["1", KEYS.enter];
 
 test("foundations_setup: la oferta es una pregunta con «Armar» recomendada y lo que pasa con cada opción", async (t) => {
 	const f = await fixture(t); await f.start();
@@ -113,7 +114,7 @@ test("foundations_setup: un comando libre inválido vuelve al texto con el motiv
 });
 
 test("foundations_setup: «Cancelar» o Esc en el resumen, o Esc en una pregunta, no guardan", async (t) => {
-	for (const keys of [[NODE_TEST, ALL_ASK, ["3"]], [NODE_TEST, ALL_ASK, [KEYS.esc]], [NODE_TEST, [KEYS.esc]], [[KEYS.esc]]]) {
+	for (const keys of [[NODE_TEST, ALL_ASK, ["3", KEYS.enter]], [NODE_TEST, ALL_ASK, [KEYS.esc]], [NODE_TEST, [KEYS.esc]], [[KEYS.esc]]]) {
 		const f = await fixture(t); f.uiControl.questions = batches(BUILD, ...keys);
 		await f.start();
 		assert.equal(saves(f.kb), 0, JSON.stringify(keys));
@@ -121,9 +122,17 @@ test("foundations_setup: «Cancelar» o Esc en el resumen, o Esc en una pregunta
 	}
 });
 
+test("foundations_setup: en el resumen un número sólo mueve el cursor; guarda recién con Enter", async (t) => {
+	const f = await fixture(t); f.uiControl.questions = batches(BUILD, NODE_TEST, ALL_ASK, ["1"]);
+	await f.start();
+	assert.equal(saves(f.kb), 0, "un «1» suelto no guarda en la KB");
+	assert.match(f.asked[3]!.at(-1)!, /› 1\. Guardar en la KB/, "el cursor quedó en Guardar");
+	assert.match(f.asked[3]!.at(-1)!, /1–3 moverse · Enter confirmar/, "la ayuda lo dice");
+});
+
 test("foundations_setup: «Cambiar respuestas» vuelve a las preguntas con lo elegido y guarda lo nuevo", async (t) => {
 	const f = await fixture(t);
-	f.uiControl.questions = batches(BUILD, [KEYS.enter], ALL_ASK, ["2"], NODE_TEST, [KEYS.enter, KEYS.enter], SAVE);
+	f.uiControl.questions = batches(BUILD, [KEYS.enter], ALL_ASK, ["2", KEYS.enter], NODE_TEST, [KEYS.enter, KEYS.enter], SAVE);
 	await f.start();
 	assert.equal(f.asked.length, 7);
 	assert.match(f.asked[5]![0]!, /■ Arranque/, "las políticas vuelven respondidas");

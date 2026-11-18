@@ -78,7 +78,8 @@ export class QuestionBatchPrompt implements Component, Focusable {
 		const free = question.freeText ? question.options.length : -1;
 		if (matchesKey(data, "up")) draft.cursor = Math.max(0, draft.cursor - 1);
 		else if (matchesKey(data, "down")) draft.cursor = Math.min(rows - 1, draft.cursor + 1);
-		else if (/^[1-9]$/.test(data) && Number(data) <= rows) { draft.cursor = Number(data) - 1; this.pick(question, draft, draft.cursor, free); }
+		// Sin recomendada (un sí sensible), un número sólo lleva el cursor: elegir siempre pide Enter.
+		else if (/^[1-9]$/.test(data) && Number(data) <= rows) { draft.cursor = Number(data) - 1; if (question.multiSelect || question.recommended) this.pick(question, draft, draft.cursor, free); }
 		else if (matchesKey(data, "space") && question.multiSelect && draft.cursor >= 0) this.pick(question, draft, draft.cursor, free);
 		// Multi-selección: Espacio actúa sobre la fila (también abre el texto) y Enter confirma lo marcado, aunque sea nada.
 		else if (matchesKey(data, "enter")) {

@@ -26,6 +26,7 @@ test("preguntas: una pregunta numera las opciones, marca la recomendada primero,
 	assert.equal(screen.split(RECOMMENDED_TAG).length - 1, 1, "sólo la primera lleva la marca");
 	assert.doesNotMatch(screen, /Enviar/, "una sola pregunta no tiene pestañas ni paso final");
 	assert.match(screen, /Esc cancelar/);
+	assert.match(screen, /1–3 eligen y siguen · Enter confirmar/, "la ayuda dice que un número elige y avanza");
 	assert.doesNotMatch(screen, /✓/, "nada elegido antes de una tecla");
 	assert.equal(q.result(), undefined);
 });
@@ -50,6 +51,13 @@ test("preguntas: sin recomendada no hay cursor de entrada: Enter solo no elige n
 	assert.equal(q.result(), undefined, "Enter sin elegir no guarda");
 	q.press(KEYS.down, KEYS.down, KEYS.enter);
 	assert.deepEqual(firstAnswer(q.result())?.options, ["Cancelar"]);
+	const digit = mountQuestions(one(save));
+	assert.match(digit.screen(), /↑↓ o 1–2 moverse · Enter confirmar/);
+	digit.press("1");
+	assert.equal(digit.result(), undefined, "un número sólo mueve el cursor en un sí sensible");
+	assert.match(digit.screen(), /› 1\. Guardar en la KB/);
+	digit.press("2", KEYS.enter);
+	assert.deepEqual(firstAnswer(digit.result())?.options, ["Cancelar"]);
 });
 
 test("preguntas: en una tanda, la fila de pestañas muestra cada encabezado y Enviar; Tab/→ y ←/Shift+Tab se mueven", () => {

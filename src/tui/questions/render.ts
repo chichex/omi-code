@@ -49,7 +49,9 @@ function helpLine(theme: Theme, view: PromptView, width: number): string[] {
 		const short = `Enter${many ? " · Tab" : ""} · Esc cancelar`;
 		variants = question.multiSelect
 			? [`↑↓ moverse · Espacio/${keys} marcar · Enter confirmar${tabs} · Esc cancelar`, `Espacio/${keys} marcar · Enter confirmar${tabs} · Esc cancelar`, `Espacio · ${short}`, short]
-			: [`↑↓ o ${keys} elegir · Enter confirmar${tabs} · Esc cancelar`, `${keys} elegir · Enter confirmar${tabs} · Esc cancelar`, `↑↓ ${keys} · ${short}`, short];
+			: question.recommended
+				? [`↑↓ moverse · ${keys} eligen y siguen · Enter confirmar${tabs} · Esc cancelar`, `${keys} eligen y siguen · Enter confirmar${tabs} · Esc cancelar`, `${keys} eligen · ${short}`, short]
+				: [`↑↓ o ${keys} moverse · Enter confirmar${tabs} · Esc cancelar`, `${keys} moverse · Enter confirmar${tabs} · Esc cancelar`, `↑↓ ${keys} · ${short}`, short];
 	}
 	const fitting = variants.find((line) => visibleWidth(line) <= width) ?? variants.at(-1)!;
 	return wrapTextWithAnsi(theme.fg("dim", fitting), width);
