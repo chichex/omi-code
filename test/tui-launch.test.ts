@@ -3,6 +3,7 @@ import { lstat, mkdir, readFile, stat, symlink, writeFile } from "node:fs/promis
 import { join } from "node:path";
 import { test } from "node:test";
 import { agentDir, sourcePiAgentDir as piAgentDir } from "../src/core/paths.ts";
+import { childEnvironment } from "../src/core/process-environment.ts";
 import { USER_SKILLS_EXCLUSION } from "../src/tui/isolation.ts";
 import { launchTui, type PiMain } from "../src/tui/launch.ts";
 import { CATALOG } from "../src/tools/catalog.ts";
@@ -226,6 +227,26 @@ test("launchTui_no invita a actualizar Pi separado de OMI, sin apagar la red ni 
 	assert.equal(process.env.PI_SKIP_VERSION_CHECK, undefined);
 	assert.equal(JSON.parse(await readFile(join(agentDir(home), "settings.json"), "utf8")).quietStartup, undefined);
 	await launchTui([], testIo({ homeDir: home, env: { OMI_TUI: "classic" } }), { piMain: async () => { assert.equal(process.env.PI_SKIP_VERSION_CHECK, undefined); } });
+});
+
+test("launchTui_apaga la telemetría de Pi en el host aunque el shell la pida, y la devuelve al salir", async (t) => {
+	const previous = process.env.PI_TELEMETRY;
+	t.after(() => { if (previous === undefined) delete process.env.PI_TELEMETRY; else process.env.PI_TELEMETRY = previous; });
+	const home = await tempDir(t);
+	for (const user of ["1", undefined]) {
+		if (user === undefined) delete process.env.PI_TELEMETRY; else process.env.PI_TELEMETRY = user;
+		for (const env of [{}, { OMI_TUI: "classic" }]) {
+			await launchTui([], testIo({ homeDir: home, env }), { piMain: async () => {
+				assert.equal(process.env.PI_TELEMETRY, "0");
+				assert.equal(childEnvironment(process.env).PI_TELEMETRY, user, "los comandos del usuario ven su valor");
+			} });
+			assert.equal(process.env.PI_TELEMETRY, user);
+		}
+	}
+	process.env.PI_TELEMETRY = "1";
+	assert.equal(childEnvironment(process.env).PI_TELEMETRY, "1", "al salir no queda nada fijado por omi");
+	await assert.rejects(launchTui([], testIo({ homeDir: home }), { piMain: async () => { throw new Error("prueba de fallo"); } }), /prueba de fallo/);
+	assert.equal(process.env.PI_TELEMETRY, "1");
 });
 
 test("launchTui_un --tui-mode explícito gana sobre el default de OMI", async (t) => {

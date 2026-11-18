@@ -10,6 +10,8 @@ import { exists } from "../src/core/files.ts";
 import { agentDir } from "../src/core/paths.ts";
 import { PI_MARKS, rpc, requestSeenByModel, seedPi, type OmiProcess } from "./helpers/foreign-config.ts";
 import { tempDir, testIo } from "./helpers/io.ts";
+import { SENTINEL, SENTINEL_CONNECT, startupNetwork } from "./helpers/startup-network.ts";
+import { plainTerminal } from "./helpers/workspace-pty.ts";
 
 const bin = fileURLToPath(new URL("../bin/omi.ts", import.meta.url));
 
@@ -73,4 +75,19 @@ test("importar no se lleva el historial ni las decisiones de Pi", async (t) => {
 	for (const name of ["sessions", "backups", "trust.json", "settings.json.bak-1"]) {
 		assert.equal(await exists(join(agentDir(home), name)), false, name);
 	}
+});
+
+test("instalación nueva_el TUI no le reporta la instalación a pi.dev", { skip: process.platform === "win32", timeout: 40000 }, async (t) => {
+	const home = await tempDir(t);
+	// Sin --offline: Pi sólo omite la telemetría con red apagada. --no-mcp deja afuera la KB real.
+	const seen = await startupNetwork(process.execPath, [bin, "--no-mcp", "--no-context-files", "--no-skills"], home, { HOME: home, PATH: process.env.PATH, OMI_HOME: "" });
+	assert.ok(seen.requests.includes(SENTINEL) && seen.connects.includes(SENTINEL_CONNECT), `la sonda no llegó a la sesión:\n${plainTerminal(seen.output)}`);
+	assert.deepEqual(seen.requests.filter((url) => new URL(url).hostname === "pi.dev"), [], "pedidos a pi.dev");
+	assert.ok(!seen.connects.includes("pi.dev:443"), `conexiones: ${seen.connects.join(", ")}`);
+});
+
+for (const [user, expected] of [[undefined, "unset"], ["yes", "yes"]] as const) test(`instalación nueva_los comandos ven el PI_TELEMETRY del usuario (${user ?? "sin definir"}), no el de omi`, async (t) => {
+	const home = await tempDir(t);
+	const data = await rpc(omi(home, home, user === undefined ? {} : { PI_TELEMETRY: user }), { id: "1", type: "bash", command: 'printf "%s" "${PI_TELEMETRY-unset}"' }) as { output: string };
+	assert.equal(data.output, expected);
 });

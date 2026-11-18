@@ -127,6 +127,10 @@ La configuración del repo (`.pi/`, `.agents/skills`) sigue valiendo, con la con
 
 Las API keys del shell no le dan un modelo a omi. Por ejemplo, con `GEMINI_API_KEY` exportada, omi arranca igual sin modelo. Los comandos que corre el agente sí la ven, como cualquier comando de tu shell.
 
+omi apaga la telemetría de Pi, aunque el shell diga `PI_TELEMETRY=1` o los ajustes `enableInstallTelemetry: true`. Por ejemplo, la primera sesión no avisa a pi.dev de la instalación. Los comandos que corre el agente ven tu `PI_TELEMETRY`.
+
+Si no tenés `fd` o `rg` (ripgrep), Pi todavía los descarga de GitHub a `~/.omi/agent/bin` al arrancar. Para evitarlo, instalalos antes: `brew install fd ripgrep` o `apt install fd-find ripgrep`.
+
 ### Workspace de terminal
 
 `omi` arranca con un layout fullscreen propio: cabecera con **1 Chat / 2 Issues / 3 PRs / 4 Cambios / 5 OMI**, conversación y editor,

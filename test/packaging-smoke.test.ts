@@ -13,6 +13,7 @@ import pkg from "../package.json" with { type: "json" };
 import { assetNames, currentPlatform } from "../src/upgrade/release.ts";
 import { FOREIGN, OWN, PI_MARKS, requestSeenByModel, seedConfig, seedPi } from "./helpers/foreign-config.ts";
 import { tempDir } from "./helpers/io.ts";
+import { SENTINEL_CONNECT, startupNetwork } from "./helpers/startup-network.ts";
 import { exerciseWorkspace, plainTerminal } from "./helpers/workspace-pty.ts";
 import { exerciseSubagentRuntime } from "./helpers/subagent-runtime.ts";
 import { exerciseSubagentBackgroundRuntime } from "./helpers/subagent-background-runtime.ts";
@@ -69,6 +70,12 @@ test("release real_compila, instala y arranca sin Node ni repo", { skip: !enable
 	await assert.rejects(stat(join(installRoot, "runtime/skills")));
 	assert.equal((await stat(join(installRoot, "runtime/theme/dark.json"))).isFile(), true);
 	assert.equal((await stat(join(installRoot, "runtime/claude-bridge/src/index.js"))).isFile(), true, "el bundle se distribuye aunque no haya ejecutable externo");
+
+	// Primer arranque interactivo: es el que Pi reporta como instalación nueva. El fetch de bun sólo
+	// deja ver el destino del CONNECT; sin credenciales, el único a pi.dev es la telemetría.
+	const seen = await startupNetwork(binary, ["--no-mcp", "--no-context-files", "--no-skills"], home, { HOME: home, PATH: "/usr/bin:/bin", OMI_HOME: installRoot });
+	assert.ok(seen.connects.includes(SENTINEL_CONNECT), `la sonda no llegó a la sesión:\n${plainTerminal(seen.output)}`);
+	assert.ok(!seen.connects.includes("pi.dev:443"), `conexiones: ${seen.connects.join(", ")}`);
 
 	// El workspace también debe funcionar compilado, sin Node ni el repo en PATH.
 	const terminal = await exerciseWorkspace(binary, ["--no-extensions", "--no-context-files", "--no-skills", "--offline"], home, { HOME: home, PATH: "/usr/bin:/bin", OMI_HOME: installRoot });
