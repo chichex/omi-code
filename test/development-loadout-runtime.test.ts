@@ -13,16 +13,12 @@ import { developmentHarnessExtension } from "../src/tui/development.ts";
 import { LOADOUT_ENTRY } from "../src/tui/development-loadout.ts";
 import { issueDevelopmentTicket } from "../src/tui/development-tickets.ts";
 import { developmentFixture } from "./helpers/development.ts";
+import { completion } from "./helpers/foreign-config.ts";
 import { testIo } from "./helpers/io.ts";
 
 const sorted = (names: readonly string[]) => [...names].sort();
 // Las que el harness quita y la persona tiene que recuperar al salir.
 const WITHHELD = ["bash", "edit", "write", "codemode"];
-
-function reply(): string {
-	const chunk = (delta: unknown, finish: string | null) => `data: ${JSON.stringify({ id: "1", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
-	return `${chunk({ role: "assistant", content: "ok" }, null)}${chunk({}, "stop")}data: [DONE]\n\n`;
-}
 
 async function harnessRuntime(t: TestContext) {
 	const f = await developmentFixture(t);
@@ -32,7 +28,7 @@ async function harnessRuntime(t: TestContext) {
 		let body = ""; request.on("data", (chunk: Buffer) => { body += chunk.toString("utf8"); });
 		request.on("end", () => {
 			requests.push(((JSON.parse(body) as { tools?: { function: { name: string } }[] }).tools ?? []).map((tool) => tool.function.name));
-			response.writeHead(200, { "content-type": "text/event-stream" }); response.end(reply());
+			response.writeHead(200, { "content-type": "text/event-stream" }); response.end(completion());
 		});
 	});
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
