@@ -33,6 +33,25 @@ test("only markers alone on their own line count; mentions in the request are hu
 	}
 });
 
+test("markers inside a fenced code block are human text: never overwritten, excluded or blocking", () => {
+	const example = `Así se ve la sección:\n\n\`\`\`md\n${block("ejemplo del pedido")}\n\`\`\`\n\nFin del pedido.\n`;
+	const parts = parseIssueBody(example);
+	assert.equal(parts.section, null); assert.equal(parts.human, example, "el ejemplo sigue en el pedido que se contrasta");
+	const body = withIssueSection(example, parts, "SECCION REAL");
+	assert.ok(body.startsWith(example), "la sección va al final, fuera de la cerca del pedido");
+	assert.equal(parseIssueBody(body).section, "\nSECCION REAL\n"); assert.equal(parseIssueBody(body).human, example);
+	const rewritten = withIssueSection(body, parseIssueBody(body), "OTRA");
+	assert.equal(parseIssueBody(rewritten).human, example); assert.equal(parseIssueBody(rewritten).section, "\nOTRA\n");
+	// Un marcador suelto dentro de una cerca no bloquea; la cerca cierra sólo con su carácter y al menos su largo.
+	for (const human of [`~~~\n${SECTION_START}\n~~~\n`, `\`\`\`\`\n\`\`\`\n${SECTION_END}\n~~~\n\`\`\`\`\n`, `\`\`\`html\r\n${SECTION_START}\r\n\`\`\`\r\n`]) {
+		assert.deepEqual(parseIssueBody(human), { human, before: human, after: "", section: null }, JSON.stringify(human));
+		assert.equal(parseIssueBody(withIssueSection(human, parseIssueBody(human), "x")).human, human);
+	}
+	// Una cerca sin cerrar no esconde marcadores: la sección que OMI agrega después se sigue encontrando.
+	const open = "Pedido\n```\nsin cerrar"; const appended = withIssueSection(open, parseIssueBody(open), "x");
+	assert.equal(parseIssueBody(appended).section, "\nx\n"); assert.equal(parseIssueBody(appended).human, open);
+});
+
 test("duplicate, unpaired, reversed or unknown markers are refused instead of guessed", () => {
 	const good = block("x");
 	for (const body of [SECTION_START, SECTION_END, `${good}\n${good}`, `${SECTION_END}\n${SECTION_START}`, `${SECTION_START}\n${SECTION_START}\n${SECTION_END}`, "<!-- omi:harness:otro -->", `${SECTION_START} extra\n${SECTION_END}`, `<!--omi:harness:start-->\n${SECTION_END}`]) {

@@ -4,13 +4,19 @@ import type { Evidence, Lens, Workflow } from "./model.ts";
 import { PHASE_LABELS } from "./phases.ts";
 import { expectedFailure, isApproved } from "./state.ts";
 import { lensStatuses } from "./lenses.ts";
+import { fences } from "./fences.ts";
 export const SECTION_START = "<!-- omi:harness:start -->";
 export const SECTION_END = "<!-- omi:harness:end -->";
 // Lo que OMI agrega entre el pedido y la sección; se descuenta al leer el pedido.
 const SEPARATOR = "\n\n";
-// Sólo cuenta un marcador solo en su línea, desde la primera columna: una mención en el pedido
-// (en línea, entre backticks o indentada) es texto humano.
+// Sólo cuenta un marcador solo en su línea, desde la primera columna y fuera de un bloque de código: una
+// mención en el pedido (en línea, entre backticks, indentada o dentro de una cerca ``` o ~~~) es texto humano.
+// Una cerca sin cerrar no esconde marcadores: la sección que OMI agrega después de ella se sigue encontrando.
 const MARKER_LINE = /^<!--\s*omi:harness:[^\n]*$/gm;
+function markerLines(body: string): RegExpExecArray[] {
+	const code = fences(body).filter((fence) => fence.closed);
+	return [...body.matchAll(MARKER_LINE)].filter((match) => !code.some((fence) => match.index >= fence.contentStart && match.index < fence.contentEnd));
+}
 
 export interface IssueBody {
 	/** El pedido: todo lo que no es la sección ni el separador que agregó OMI. */
@@ -24,7 +30,7 @@ export class IssueSectionError extends Error {
 	constructor() { super("Los marcadores de la sección del harness en el issue están repetidos o rotos. No se adivina cuál es el pedido: dejá un solo par <!-- omi:harness:start --> / <!-- omi:harness:end --> (o borrá la sección entera) y reintentá."); this.name = "IssueSectionError"; }
 }
 export function parseIssueBody(body: string): IssueBody {
-	const markers = [...body.matchAll(MARKER_LINE)];
+	const markers = markerLines(body);
 	if (!markers.length) return { human: body, before: body, after: "", section: null };
 	const line = (match: RegExpMatchArray) => match[0].replace(/\r$/, "");
 	const [start, end] = markers;

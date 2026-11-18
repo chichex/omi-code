@@ -59,6 +59,14 @@ test("the request contrast ignores the managed harness section and whatever is w
  await assert.rejects(readIssueSource(f.workflow.checkout, 42, f.runner), /marcadores/i);
 });
 
+test("markers shown inside a code block of the request are request text and do not block the checkpoints", async (t) => {
+ const f = await fixture(t);
+ f.state.issue.body = "Original\n\n```md\n<!-- omi:harness:start -->\nejemplo del pedido\n<!-- omi:harness:end -->\n```\n";
+ assert.equal((await readIssueSource(f.workflow.checkout, 42, f.runner)).body, f.state.issue.body, "el ejemplo sigue en el pedido que se contrasta");
+ f.state.issue.body = "Original\n\n~~~\n<!-- omi:harness:end -->\n~~~\n";
+ assert.equal((await readIssueSource(f.workflow.checkout, 42, f.runner)).body, f.state.issue.body, "un marcador suelto citado no frena fresh()");
+});
+
 test("the harness section goes below the request, byte for byte, and is rewritten in place without comments", async (t) => {
  const f = await fixture(t); f.workflow.phase = "verify";
  await syncIssueSection(f.workflow, f.runner);

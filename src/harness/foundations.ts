@@ -3,6 +3,7 @@
 import { createHash } from "node:crypto";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
+import { fences, type Fence } from "./fences.ts";
 
 const Mode = Type.Union([Type.Literal("ask"), Type.Literal("auto")]);
 const PolicySchema = Type.Object({ arranque: Mode, receta: Mode, fuera_de_catalogo: Mode, push_pr: Mode }, { additionalProperties: false });
@@ -41,32 +42,6 @@ export function checkBlock(value: unknown): { block: FoundationsBlock } | { reas
 	if (new Set(value.comandos).size !== value.comandos.length) return { reason: "hay comandos repetidos" };
 	const bad = value.comandos.find((command) => HIDDEN.test(command) || /^\s|\s$/.test(command));
 	return bad === undefined ? { block: value } : { reason: "un comando tiene espacios al borde, saltos de línea o caracteres de control o invisibles" };
-}
-
-interface Fence { info: string; contentStart: number; contentEnd: number; start: number; end: number; closed: boolean }
-// Cercas al estilo CommonMark, en la columna 0. Lo que está dentro de una cerca no abre otra.
-function fences(body: string): Fence[] {
-	const result: Fence[] = [];
-	let open: { char: string; length: number; info: string; start: number; contentStart: number } | undefined;
-	let offset = 0;
-	for (const raw of body.split("\n")) {
-		const start = offset; offset += raw.length + 1;
-		const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
-		if (!open) {
-			const match = /^(?<marks>`{3,}|~{3,})(?<info>.*)$/.exec(line);
-			const marks = match?.groups?.marks; const info = match?.groups?.info ?? "";
-			if (!marks || (marks.startsWith("`") && info.includes("`"))) continue;
-			open = { char: marks.charAt(0), length: marks.length, info: info.trim(), start, contentStart: Math.min(offset, body.length) };
-			continue;
-		}
-		const close = /^(`{3,}|~{3,})[ \t]*$/.exec(line)?.[1];
-		if (close?.startsWith(open.char) && close.length >= open.length) {
-			result.push({ info: open.info, start: open.start, contentStart: open.contentStart, contentEnd: start, end: start + line.length, closed: true });
-			open = undefined;
-		}
-	}
-	if (open) result.push({ info: open.info, start: open.start, contentStart: open.contentStart, contentEnd: body.length, end: body.length, closed: false });
-	return result;
 }
 
 /** El bloque de `repo` en el cuerpo de las perillas. Cualquier ambigüedad es inválida. */
