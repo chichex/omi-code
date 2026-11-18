@@ -10,13 +10,14 @@ import { processRunner, type Runner } from "../../src/core/exec.ts";
 import { developmentHarnessExtension } from "../../src/tui/development.ts";
 import { tempDir, testIo } from "./io.ts";
 import { emitLikePi } from "./pi-events.ts";
+import type { KbClient } from "../../src/tui/kb-client.ts";
 
 type Handler = (event: unknown, ctx: ExtensionCommandContext) => unknown;
 interface Sent { text: string; options?: { expandPromptTemplates?: boolean } }
 export interface Instance { stale: boolean; manager: SessionManager; ctx: ExtensionCommandContext; tools: Map<string, ToolDefinition>; commands: Map<string, { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }>; events: Map<string, Handler[]>; activeTools: string[]; sent: Sent[]; notices: string[]; levels: (string | undefined)[]; send: (text: string, options?: Sent["options"]) => void }
 const TRIAGE = JSON.stringify({ type: "fix", summary: "Corregir el valor", rationale: "Describe un bug", scope: [], acceptanceCriteria: [], questions: [] });
 
-export async function beginFixture(t: TestContext, options: { args?: readonly string[]; trusted?: boolean; authenticated?: boolean; persistent?: boolean; busy?: boolean; noMain?: boolean } = {}) {
+export async function beginFixture(t: TestContext, options: { args?: readonly string[]; trusted?: boolean; authenticated?: boolean; persistent?: boolean; busy?: boolean; noMain?: boolean; kb?: KbClient } = {}) {
 	const home = await realpath(await tempDir(t)); const root = join(home, "repo"); await mkdir(root); const sessions = join(home, "sessions");
 	const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 	git("init", "-b", options.noMain ? "trunk" : "main"); git("config", "user.email", "test@example.test"); git("config", "user.name", "Test"); git("config", "commit.gpgsign", "false"); git("config", "core.hooksPath", "/dev/null"); git("remote", "add", "origin", "https://github.com/test/repo.git");
@@ -82,7 +83,7 @@ export async function beginFixture(t: TestContext, options: { args?: readonly st
 				return { cancelled: false };
 			},
 		} as unknown as ExtensionCommandContext;
-		const extension = developmentHarnessExtension(testIo({ homeDir: home, cwd: manager.getCwd() }), [...(options.args ?? []), "--session-dir", sessions], { runner, loader: async (_ctx, _title, work) => work(new AbortController().signal) });
+		const extension = developmentHarnessExtension(testIo({ homeDir: home, cwd: manager.getCwd() }), [...(options.args ?? []), "--session-dir", sessions], { runner, loader: async (_ctx, _title, work) => work(new AbortController().signal), ...(options.kb ? { kb: options.kb } : {}) });
 		if (typeof extension === "function") await extension(pi); else await extension.factory(pi);
 		for (const handler of events.get("session_start") ?? []) await handler({}, instance.ctx);
 		return instance;

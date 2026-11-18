@@ -16,6 +16,7 @@ import { beginDevelopment, borderedLoader, registerBeginTool } from "./developme
 import { beginCommand, BEGIN_SUBCOMMAND, holdSessionSwitch, revokeDevelopmentTicket, sessionSwitchOwner, takeDevelopmentTicket } from "./development-tickets.ts";
 import { restoreIssueTriage } from "./workspace/issue-triage.ts";
 import { IssuePreparationBusyError } from "./workspace/issue-registry.ts";
+import { foundationsLines } from "./development-foundations.ts";
 
 const KICKOFF = "Continuá el harness de desarrollo activo desde su etapa persistida. Respetá sus bloqueos y pedí los permisos pendientes; no saltees etapas.";
 const USAGE = "Uso: /omi-work resume | approve | pause | refresh | pr | status | stop";
@@ -83,7 +84,9 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 				const { parseArgs } = await import("@earendil-works/pi-coding-agent");
 				await beginDevelopment(ctx, { origin: ticket.origin, request: ticket.request }, {
 					runner: session.runner, offline: session.offline, signal: session.lifecycle.signal, now: session.now, loader: deps.loader ?? borderedLoader,
-					sessionDir: parseArgs([...args]).sessionDir, confirm: (context, title, description) => session.confirm(context, title, description), startHere: () => startHere(ctx),
+					sessionDir: parseArgs([...args]).sessionDir, startHere: () => startHere(ctx),
+					// Foundations se decide recién acá: después de las guardas sin efectos y antes del sí del arranque.
+					confirm: async (context, title, description) => { await session.foundations.pin(context); return session.confirm(context, title, description); },
 				});
 			} finally { release(); }
 		}
@@ -100,10 +103,11 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 			handler: async (input, ctx) => {
 				try {
 					const command = input.trim() || "status";
-					if (command === "status") { ctx.ui.notify(session.status(), "info"); return; }
+					if (command === "status") { ctx.ui.notify([session.status(), ...foundationsLines(session.foundations.current(ctx))].join("\n"), "info"); return; }
 					if (!ctx.isIdle() || ctx.hasPendingMessages()) throw new Error("Esperá a que termine el turno antes de cambiar el trabajo");
 					const [verb, ...rest] = command.split(/\s+/);
 					if (verb === BEGIN_SUBCOMMAND) { await begin(rest.join(" "), ctx); return; }
+					if (["resume", "approve", "pr"].includes(command)) await session.foundations.pin(ctx);
 					if (command === "resume") {
 						await session.restore(ctx, true); session.current(ctx);
 						if (!session.offline && !(await session.fresh(ctx))) { loadout(); return; }
@@ -120,7 +124,7 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 				} catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "No se pudo ejecutar el harness", busy(error) ? "warning" : "error"); }
 			},
 		});
-		pi.on("session_start", async (_event, ctx) => { await session.restore(ctx); loadout(); });
+		pi.on("session_start", async (_event, ctx) => { session.foundations.load(ctx); await session.restore(ctx); loadout(); });
 		pi.on("session_tree", async (_event, ctx) => { await session.restore(ctx); loadout(); });
 		pi.on("session_shutdown", () => { readsInFlight.clear(); session.shutdown(); });
 		pi.on("before_agent_start", (event) => {

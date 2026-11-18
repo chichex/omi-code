@@ -7,7 +7,7 @@ import { workflowStages } from "../harness/progress.ts";
 import { lensWarningLine, lensWarnings } from "../harness/lenses.ts";
 export { PHASE_LABELS } from "../harness/phases.ts";
 const ROUTES = { direct: "Directa", diagnostic: "Diagnóstico", spec: "Con spec" };
-export function developmentProgress(state: Workflow, activity = state.activity): WorkflowProgress {
+export function developmentProgress(state: Workflow, activity = state.activity, foundations: string[] = []): WorkflowProgress {
 	const fingerprint = state.evidence.findLast((e) => e.kind === "verification")?.fingerprint;
 	const passed = new Set(state.recipe?.cases.filter((c) => {
 		const latest = state.evidence.findLast((e) => e.kind === "verification" && e.caseId === c.id);
@@ -22,7 +22,7 @@ export function developmentProgress(state: Workflow, activity = state.activity):
 		passedChecks: state.recipe?.cases.filter((c) => passed.has(c.id)).length ?? 0, totalChecks: state.recipe?.cases.length ?? 0,
 		blockedReason: state.blockedReason, warnings: lensWarnings(state).map(lensWarningLine),
 		details: [
-			`Issue #${state.source.number} · ${state.source.title}`, `Etapa: ${PHASE_LABELS[state.phase]} · ${state.status}`, `Ruta: ${route}`, `Actividad: ${activity}`,
+			`Issue #${state.source.number} · ${state.source.title}`, `Etapa: ${PHASE_LABELS[state.phase]} · ${state.status}`, `Ruta: ${route}`, ...foundations, `Actividad: ${activity}`,
 			...state.steps.map((s) => `${s.id} · ${s.status} · ${s.title}`), ...state.inferences.filter((i) => i.resolution === "pending").map((i) => `${i.id} · pregunta: ${i.question}`),
 			...state.evidence.slice(-20).map((e) => `${e.kind} · ${e.caseId ?? e.stepId ?? "—"} · ${e.outcome} · exit ${e.exitCode ?? "—"}`),
 			...state.reviews.map((r) => `Lente ${r.lens}: ${r.verdict}`),

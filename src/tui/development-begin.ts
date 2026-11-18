@@ -17,6 +17,7 @@ import { prepareIssue, type IssueClassification } from "./workspace/issue-prepar
 import { assertIssueIdentity, discoverLegacyPreparations, readIssuePreparation, verifyIssuePreparation, type IssuePreparation } from "./workspace/issue-registry.ts";
 import { PHASE_LABELS } from "./development-view.ts";
 import { checkIssueWorktree, mainBaseCommit } from "./workspace/issue-worktree.ts";
+import { carryFoundationsPin } from "./development-foundations.ts";
 
 /** Muestra un trabajo largo con opción de cancelar; undefined si la persona canceló. */
 export type BeginLoader = <T>(ctx: ExtensionContext, title: string, work: (signal: AbortSignal) => Promise<T>) => Promise<T | undefined>;
@@ -169,6 +170,8 @@ async function prepareAndSwitch(ctx: ExtensionCommandContext, git: GitSnapshot, 
 	const { record } = prepared; const sessionFile = record.sessionFile!;
 	if (resolve(sessionFile) === resolve(origin)) { await options.startHere(); return; }
 	// switchSession sólo existe en comandos: el sí viaja como un token de un solo uso ligado a la sesión destino.
+	// Foundations ya se decidió acá: la sesión del worktree no relee la KB ni vuelve a preguntar.
+	carryFoundationsPin(origin, sessionFile);
 	const token = issueDevelopmentTicket({ kind: "start", sessionFile, issue: issueNumber });
 	let switched = false;
 	try {

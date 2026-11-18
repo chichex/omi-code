@@ -24,6 +24,8 @@ import { developmentOffline } from "./development-tickets.ts";
 import { approvalDocument, approvalText } from "./development-approval.ts";
 import { showApprovalReview } from "./development-approval-view.ts";
 import type { KbClient } from "./kb-client.ts";
+import { FoundationsGate, foundationsLines } from "./development-foundations.ts";
+import { foundationsDir } from "../harness/foundations-trust.ts";
 
 export const DEVELOPMENT_ANCHOR = "omi-development-workflow";
 const AnchorSchema = Type.Object({ id: Type.String(), root: Type.String(), issue: Type.Integer({ minimum: 1 }), revision: Type.Integer({ minimum: 0 }), disabled: Type.Optional(Type.Boolean()) });
@@ -70,10 +72,13 @@ export class DevelopmentSession {
 	offline: boolean;
 	readonly pi: ExtensionAPI;
 	readonly io: Io;
+	/** Foundations fijo de esta sesión: decide qué corre o avanza sin preguntar. */
+	readonly foundations: FoundationsGate;
 	constructor(pi: ExtensionAPI, io: Io, args: readonly string[], deps: DevelopmentDeps = {}) {
 		this.pi = pi; this.io = io;
 		this.runner = deps.runner ?? processRunner; this.now = deps.now ?? (() => new Date().toISOString());
 		this.offline = developmentOffline(args, io.env);
+		this.foundations = new FoundationsGate({ kb: deps.kb, runner: this.runner, trustDir: foundationsDir(io.homeDir), now: this.now, confirm: (ctx, title, description) => this.confirm(ctx, title, description) });
 	}
 	private anchor(): void {
 		const s = this.state;
@@ -81,7 +86,7 @@ export class DevelopmentSession {
 	}
 	emit(activity?: string, waiting = false): void {
 		if (!this.alive) return;
-		const progress = this.state ? developmentProgress(this.state, activity) : undefined;
+		const progress = this.state ? developmentProgress(this.state, activity, foundationsLines(this.context && this.foundations.current(this.context))) : undefined;
 		if (progress && (this.lockedReason || waiting)) {
 			progress.status = "waiting"; progress.blockedReason = this.lockedReason;
 			if (progress.stages) progress.stages = progress.stages.map(s => s.current ? { ...s, status: "waiting" } : s);
