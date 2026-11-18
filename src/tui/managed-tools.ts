@@ -24,6 +24,10 @@ async function userHas(names: readonly string[], dirs: readonly string[]): Promi
 	return false;
 }
 
+function ignore(code: string): (error: NodeJS.ErrnoException) => void {
+	return (error) => { if (error.code !== code) throw error; };
+}
+
 /** `undefined` si no hay nada; `null` si es un archivo (por ejemplo, uno que Pi ya bajó). */
 async function linkTarget(path: string): Promise<string | null | undefined> {
 	const entry = await lstat(path).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return undefined; throw error; });
@@ -43,12 +47,12 @@ export async function linkBundledTools(agentBin: string, toolsDir: string, path:
 		const current = await linkTarget(managed);
 		if (current === null || (current !== undefined && current !== own)) continue;
 		const wanted = !(await userHas(names, dirs)) && await isExecutableFile(join(toolsDir, name));
+		// Dos omi que arrancan a la vez crean o sacan el mismo enlace.
 		if (wanted && current === undefined) {
 			await mkdir(agentBin, { recursive: true });
-			// Dos omi que arrancan a la vez crean el mismo enlace.
-			await symlink(own, managed).catch((error: NodeJS.ErrnoException) => { if (error.code !== "EEXIST") throw error; });
+			await symlink(own, managed).catch(ignore("EEXIST"));
 		} else if (!wanted && current === own) {
-			await unlink(managed);
+			await unlink(managed).catch(ignore("ENOENT"));
 		}
 	}
 }

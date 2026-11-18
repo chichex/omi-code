@@ -83,3 +83,12 @@ test("linkBundledTools_sin el binario en el runtime no deja un enlace roto", asy
 	await assert.rejects(lstat(join(bin, "rg")), { code: "ENOENT" });
 	assert.equal(await link(bin, "fd"), join("..", "..", "runtime", "bin", "fd"));
 });
+
+test("linkBundledTools_dos omi que arrancan a la vez sacan el mismo enlace sin fallar", async (t) => {
+	const { bin, tools, user } = await layout(t);
+	await linkBundledTools(bin, tools, user);
+	for (const name of ["fd", "rg"]) await writeFile(join(user, name), "#!/bin/sh\n", { mode: 0o755 });
+	const results = await Promise.allSettled([linkBundledTools(bin, tools, user), linkBundledTools(bin, tools, user)]);
+	assert.deepEqual(results.map((result) => result.status), ["fulfilled", "fulfilled"], JSON.stringify(results));
+	for (const name of ["fd", "rg"]) await assert.rejects(lstat(join(bin, name)), { code: "ENOENT" });
+});
