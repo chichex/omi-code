@@ -35,7 +35,8 @@ function rpcLines(args: string[], home: string, input: unknown[]): Promise<Recor
 
 test("omi_arranca el Pi real usando ~/.omi/agent y sin crear ~/.pi", async (t) => {
 	const home = await tempDir(t);
-	const lines = await rpcLines(["--mode", "rpc", "--no-session"], home, [{ id: "1", type: "get_state" }]);
+	// --offline: un test no sale a la red (ni a la KB real ni a catálogos remotos).
+	const lines = await rpcLines(["--mode", "rpc", "--no-session", "--offline"], home, [{ id: "1", type: "get_state" }]);
 	const state = lines.find((line) => line.id === "1");
 	assert.equal(state?.success, true);
 	assert.equal(existsSync(join(home, ".omi", "agent", "auth.json")), true);

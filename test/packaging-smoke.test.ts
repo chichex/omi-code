@@ -40,7 +40,8 @@ async function buildAndInstall(t: TestContext, custom = false): Promise<Install>
 
 function rpc(binary: string, home: string, command: unknown, extraArgs: string[] = [], env: NodeJS.ProcessEnv = {}): Promise<Record<string, unknown>[]> {
 	return new Promise((resolve, reject) => {
-		const child = spawn(binary, ["--mode", "rpc", "--no-session", ...extraArgs], { env: { ...process.env, HOME: home, OMI_HOME: "", ...env }, stdio: ["pipe", "pipe", "ignore"] });
+		// --offline: un test no sale a la red (ni a la KB real ni a catálogos remotos).
+		const child = spawn(binary, ["--mode", "rpc", "--no-session", "--offline", ...extraArgs], { env: { ...process.env, HOME: home, OMI_HOME: "", ...env }, stdio: ["pipe", "pipe", "ignore"] });
 		let output = "";
 		const timeout = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("RPC no respondió")); }, 10000);
 		child.stdout.on("data", (chunk: Buffer) => {
@@ -105,7 +106,7 @@ test("release real_compila, instala y arranca sin Node ni repo", { skip: !enable
 	await exerciseSubagentRuntime({ command: binary, cwd: home, agent, env: { HOME: home, PATH: "/usr/bin:/bin", OMI_HOME: "" } });
 	await exerciseSubagentBackgroundRuntime({ command: binary, cwd: home, agent, env: { HOME: home, PATH: "/usr/bin:/bin", OMI_HOME: "" } });
 	const seededCwd = await seedConfig(home, agent);
-	const body = await requestSeenByModel({ command: binary, cwd: seededCwd, agent, env: { HOME: home, PATH: "/usr/bin:/bin", OMI_HOME: "" } });
+	const body = await requestSeenByModel({ command: binary, args: ["--offline"], cwd: seededCwd, agent, env: { HOME: home, PATH: "/usr/bin:/bin", OMI_HOME: "" } });
 	assert.ok(body.length > 0, "el proveedor no recibió nada");
 	for (const mark of Object.values(FOREIGN)) assert.ok(!body.includes(mark), `llegó al modelo: ${mark}`);
 	for (const mark of Object.values(OWN)) assert.ok(body.includes(mark), `no llegó al modelo: ${mark}`);
