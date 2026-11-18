@@ -101,7 +101,7 @@ export default function(pi) { pi.on('session_start', async (_event, ctx) => { if
 	const binary = fileURLToPath(new URL("../bin/omi.ts", import.meta.url));
 	const result = await new Promise<{ code: number | null; output: string }>((resolve, reject) => {
 		const child = spawn("python3", ["-I", "-c", driver, process.execPath, binary, "--provider", "mock", "--model", "begin", "--no-extensions", "--extension", extension, "--no-context-files", "--no-skills", "--approve"], {
-			cwd: root, env: { ...process.env, HOME: home, OMI_HOME: "", TERM: "xterm-256color", HERDR_ENV: "0", PATH: bin + delimiter + process.env.PATH, BEGIN_CONFIRMED: confirmed, BEGIN_READY: ready, BEGIN_REPLY: reply }, stdio: ["ignore", "pipe", "pipe"],
+			cwd: root, env: { ...process.env, HOME: home, OMI_HOME: "", TERM: "xterm-256color", HERDR_ENV: "0", PI_TELEMETRY: "0", PATH: bin + delimiter + process.env.PATH, BEGIN_CONFIRMED: confirmed, BEGIN_READY: ready, BEGIN_REPLY: reply }, stdio: ["ignore", "pipe", "pipe"],
 		});
 		let output = ""; child.stdout.on("data", (data: Buffer) => { output += data; }); child.stderr.on("data", (data: Buffer) => { output += data; }); child.on("error", reject); child.on("close", (code) => resolve({ code, output }));
 	});
