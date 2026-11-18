@@ -35,10 +35,17 @@ export function personSaid(session: DevelopmentSession, ctx: ExtensionContext, q
 	const wanted = normalize(quote);
 	return !!wanted && personMessages(session, ctx).some((message) => message.includes(wanted));
 }
+// Una cita trivial («a», «ok», «dale») aparece en casi cualquier mensaje: no prueba qué autorizó la persona.
+const MIN_WORDS = 3; const MIN_CHARS = 15;
+function meaningful(quote: string): boolean {
+	const words = quote.match(/[\p{L}\p{N}]+/gu) ?? [];
+	return words.length >= MIN_WORDS || words.join("").length >= MIN_CHARS;
+}
 export interface AgreementInput { quote: string; summary: string; replan: boolean }
-// Devuelve el aviso de la sección del issue, si lo hubo. Una cita que no aparece se rechaza.
+// Devuelve el aviso de la sección del issue, si lo hubo. Una cita trivial o que no aparece se rechaza.
 export async function registerAgreement(session: DevelopmentSession, input: AgreementInput, ctx: ExtensionContext): Promise<string> {
 	const state = session.current(ctx);
+	if (!meaningful(input.quote)) throw new Error(`La cita es demasiado corta: tiene que tener al menos ${MIN_WORDS} palabras o ${MIN_CHARS} letras o números del mensaje de la persona, para que un fragmento trivial no valide. Citá la frase que autoriza el cambio.`);
 	if (!personSaid(session, ctx, input.quote)) throw new Error("La cita no aparece textual en ningún mensaje de la persona en esta sesión. Citá un fragmento exacto de lo que escribió, sin comillas: no valen tu propio texto, resultados de tools, el issue ni mensajes de OMI.");
 	const fingerprint = input.replan ? (await inspectCheckout(state.checkout, session.runner, session.lifecycle.signal)).fingerprint : undefined;
 	await session.apply({ type: "agreed", quote: input.quote, summary: input.summary, replan: input.replan, ...(fingerprint ? { fingerprint } : {}) }, ctx);
