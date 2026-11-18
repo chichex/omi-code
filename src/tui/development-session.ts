@@ -23,10 +23,11 @@ import type { BeginLoader } from "./development-begin.ts";
 import { developmentOffline } from "./development-tickets.ts";
 import { approvalDocument, approvalText } from "./development-approval.ts";
 import { showApprovalReview } from "./development-approval-view.ts";
+import type { KbClient } from "./kb-client.ts";
 
 export const DEVELOPMENT_ANCHOR = "omi-development-workflow";
 const AnchorSchema = Type.Object({ id: Type.String(), root: Type.String(), issue: Type.Integer({ minimum: 1 }), revision: Type.Integer({ minimum: 0 }), disabled: Type.Optional(Type.Boolean()) });
-export interface DevelopmentDeps { runner?: Runner; now?: () => string; loader?: BeginLoader }
+export interface DevelopmentDeps { runner?: Runner; now?: () => string; loader?: BeginLoader; kb?: KbClient }
 // El preflight y el documento íntegro se comparten con la revisión TUI y RPC.
 export function approvalPreview(state: Workflow): string { return approvalText(approvalDocument(state)); }
 export class DevelopmentSession {

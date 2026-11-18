@@ -1,5 +1,6 @@
 // Integraciones del producto: se distribuyen con OMI, sin instalaciones de npm al arrancar.
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
+import { createKbClient, type KbHost } from "./kb-client.ts";
 
 export const HARNESS_KB_URL = "https://kb-prod-chiche.ohmyinfra.com/mcp";
 
@@ -19,7 +20,11 @@ export async function codemodeDefaultExtension(args: readonly string[]): Promise
 	} };
 }
 
-export async function defaultExtensions(args: readonly string[], env: NodeJS.ProcessEnv): Promise<InlineExtension[]> {
+const kbOffline = (args: readonly string[], env: NodeJS.ProcessEnv) => args.includes("--no-mcp") || args.includes("--offline") || /^(1|true|yes)$/i.test(env.PI_OFFLINE ?? "");
+/** Una sola instancia por proceso: la comparten el builtin:mcp y el harness, que lee Foundations. */
+export const harnessKb = (args: readonly string[], env: NodeJS.ProcessEnv, agentDir: string): KbHost => createKbClient({ url: HARNESS_KB_URL, agentDir, enabled: !kbOffline(args, env) });
+
+export async function defaultExtensions(args: readonly string[], env: NodeJS.ProcessEnv, kb: KbHost = harnessKb(args, env, "")): Promise<InlineExtension[]> {
 	// Pi lee sus rutas al importarse; launch ya fijó PI_CODING_AGENT_DIR y PI_PACKAGE_DIR.
 	const { subagentsExtension } = await import("./subagents.ts");
 	const extensions: InlineExtension[] = [subagentsExtension(), {
@@ -30,8 +35,7 @@ export async function defaultExtensions(args: readonly string[], env: NodeJS.Pro
 		},
 	}];
 	// Pi no conecta registros si builtin:mcp está desactivado. Tampoco hacer red con --offline.
-	const offline = args.includes("--offline") || /^(1|true|yes)$/i.test(env.PI_OFFLINE ?? "");
-	if (!args.includes("--no-mcp") && !offline) extensions.push({
+	if (!kbOffline(args, env)) extensions.push({
 		name: "omi-kb", builtin: true,
 		factory(pi) {
 			pi.on("session_start", () => {
@@ -43,6 +47,6 @@ export async function defaultExtensions(args: readonly string[], env: NodeJS.Pro
 				});
 			});
 		},
-	});
+	}, kb.extension());
 	return extensions;
 }

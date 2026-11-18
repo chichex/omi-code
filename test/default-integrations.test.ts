@@ -15,7 +15,9 @@ const bin = fileURLToPath(new URL("../bin/omi.ts", import.meta.url));
 
 test("defaults: subagentes, KB y Claude bridge incluidos como builtins configurables, sin paquetes descargados", async () => {
 	const extensions = await defaultExtensions([], {});
-	assert.deepEqual(extensions.map((e) => typeof e === "function" ? "" : [e.name, e.builtin]), [["omi-subagents", true], ["omi-claude-bridge", true], ["omi-kb", true]]);
+	assert.deepEqual(extensions.map((e) => typeof e === "function" ? "" : [e.name, e.builtin]), [["omi-subagents", true], ["omi-claude-bridge", true], ["omi-kb", true], ["mcp", true]]);
+	// El MCP de Pi, envuelto: mismo nombre, así -builtin:mcp, --no-mcp y --no-extensions lo siguen apagando.
+	const mcp = extensions[3]!; assert.ok(typeof mcp !== "function" && mcp.replaceable === true);
 	const kb = extensions[2]!; const servers: unknown[] = [];
 	if (typeof kb === "function") throw new Error("expected builtin");
 	kb.factory({ on: (_event: string, handler: () => void) => handler(), getSettings: () => ({}), registerMcpServer: (name: string, config: unknown) => servers.push({ name, config }) } as never);
