@@ -1,11 +1,25 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { composePerillas, foundationsDiff, foundationsHash, parseFoundations, renderFoundationsBlock, STRICT_POLICY, type FoundationsBlock } from "../src/harness/foundations.ts";
+import { checkBlock, composePerillas, foundationsDiff, foundationsHash, parseFoundations, readFoundationsText, renderFoundationsBlock, STRICT_POLICY, type FoundationsBlock } from "../src/harness/foundations.ts";
 
 const REPO = "chichex/omi-code";
 const block = (overrides: Partial<FoundationsBlock> = {}): FoundationsBlock => ({ version: 1, repo: REPO, comandos: ["npm ci", "npm run typecheck", "npm test"], politica: { arranque: "ask", receta: "ask", fuera_de_catalogo: "ask", push_pr: "ask" }, ...overrides });
 const fenced = (value: unknown, fence = "```") => `${fence}omi-foundations\n${typeof value === "string" ? value : JSON.stringify(value, null, 2)}\n${fence}`;
 const doc = (...parts: string[]) => ["# Perillas de omi-code", "Otras perillas: tono formal.", ...parts, "## Cierre", "Texto humano final."].join("\n\n");
+
+// El validador devuelve el valor validado: quien lo usa no castea JSON, red ni disco.
+test("foundations: checkBlock devuelve el mismo valor validado o el motivo, nunca los dos", () => {
+	const value: unknown = JSON.parse(JSON.stringify(block()));
+	const checked = checkBlock(value);
+	assert.ok("block" in checked); assert.equal(checked.block, value, "el valor validado, no una copia ni un cast");
+	for (const [bad, reason] of [[{ ...block(), extra: 1 }, /esquema/], [{ ...block(), version: 2 }, /esquema/], [{ ...block(), repo: "Chichex/Omi" }, /esquema/], [null, /esquema/], ["texto", /esquema/],
+		[block({ comandos: ["npm test", "npm test"] }), /repetidos/], [block({ comandos: [" npm test"] }), /espacios al borde/], [block({ comandos: ["npm\u202etest"] }), /invisibles/]] as const) {
+		const result = checkBlock(bad);
+		assert.ok("reason" in result && !("block" in result), JSON.stringify(bad)); assert.match(result.reason, reason);
+	}
+	assert.deepEqual(readFoundationsText(JSON.stringify(block()), REPO), { block: block() });
+	assert.match(String((readFoundationsText(JSON.stringify(block({ repo: "acme/otro" })), REPO) as { reason: string }).reason), /declara acme\/otro/);
+});
 
 test("foundations: un bloque válido trae el bloque, su hash y el span exacto", () => {
 	const raw = fenced(block());

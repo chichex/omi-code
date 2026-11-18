@@ -17,6 +17,10 @@ export type KbDoc = Static<typeof DocSchema>;
 const ProductsSchema = Type.Object({ productos: Type.Array(Type.String(), { maxItems: 1000 }) });
 const SearchSchema = Type.Object({ resultados: Type.Array(Type.Object({ id: Type.String({ minLength: 1, maxLength: 200 }), tipo: Type.Optional(Type.String()) }), { maxItems: 50 }) });
 const SavedSchema = Type.Object({ id: Type.String({ minLength: 1, maxLength: 200 }) });
+// Lo que deja Pi en structuredContent de una tool MCP: el CallToolResult del servidor (tools.js convertMcpResult).
+const EnvelopeSchema = Type.Object({ isError: Type.Optional(Type.Boolean()), content: Type.Optional(Type.Array(Type.Unknown())), structuredContent: Type.Optional(Type.Unknown()) });
+const TextPartSchema = Type.Object({ type: Type.Literal("text"), text: Type.String() });
+type TextPart = Static<typeof TextPartSchema>;
 
 export class KbUnavailableError extends Error {
 	constructor(reason: string) { super(`KB no disponible: ${reason}`); this.name = "KbUnavailableError"; }
@@ -61,16 +65,19 @@ export function createKbClient(options: KbClientOptions): KbHost {
 	async function call<S extends TSchema>(tool: string, args: Record<string, unknown>, schema: S, signal: AbortSignal): Promise<Static<S>> {
 		const definition = usable(tool);
 		if (!definition) throw new KbUnavailableError(`${KB_SERVER}/${tool} no está conectada`);
-		let result: { structuredContent?: unknown };
+		let result: unknown;
 		try {
-			// El execute de una tool MCP usa la conexión vigente de Pi y no mira el ctx (pi tools.js createMcpToolDefinition).
-			result = await definition.execute(`omi-foundations-${randomUUID()}`, args as never, AbortSignal.any([signal, AbortSignal.timeout(callTimeoutMs)]), undefined, undefined as never) as typeof result;
+			// Pi declara un contexto obligatorio, pero el execute de una tool MCP no lo recibe (tools.js
+			// createMcpToolDefinition: execute(_toolCallId, params, signal, onUpdate)) y Pi mismo llama así a una
+			// definición sin fábrica de contexto (wrapToolDefinition). Se llama sin inventar un contexto: la
+			// respuesta es unknown y se valida abajo.
+			result = await Reflect.apply(definition.execute, definition, [`omi-foundations-${randomUUID()}`, args, AbortSignal.any([signal, AbortSignal.timeout(callTimeoutMs)]), undefined, undefined]);
 		} catch (error) { throw new KbUnavailableError(error instanceof Error ? error.message : "falló la llamada"); }
-		const structured = result.structuredContent as { isError?: unknown; content?: unknown; structuredContent?: unknown } | undefined;
-		if (!structured || structured.isError) throw new KbUnavailableError(`${tool} respondió un error`);
+		const structured = result && typeof result === "object" && "structuredContent" in result ? result.structuredContent : undefined;
+		if (!Value.Check(EnvelopeSchema, structured) || structured.isError) throw new KbUnavailableError(`${tool} respondió un error`);
 		let value: unknown = structured.structuredContent;
 		if (!value || typeof value !== "object") {
-			const text = Array.isArray(structured.content) ? structured.content.find((part: unknown) => !!part && typeof part === "object" && "type" in part && part.type === "text" && "text" in part && typeof part.text === "string") as { text: string } | undefined : undefined;
+			const text = structured.content?.find((part): part is TextPart => Value.Check(TextPartSchema, part));
 			try { value = JSON.parse(text?.text ?? ""); } catch { throw new KbUnavailableError(`${tool} no devolvió JSON`); }
 		}
 		if (!Value.Check(schema, value)) throw new KbUnavailableError(`${tool} devolvió un formato inesperado`);

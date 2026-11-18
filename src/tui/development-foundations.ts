@@ -106,7 +106,10 @@ export function foundationsLines(pin: FoundationsPin | undefined): string[] {
 // Por archivo de sesión y en memoria del proceso: sobrevive /reload y el cambio de sesión. Reabrir OMI vuelve a leer.
 interface Entry { reading: Promise<FoundationsReading>; pin?: FoundationsPin | undefined; deciding?: Promise<FoundationsPin> | undefined }
 const sessions = new Map<string, Entry>();
-const remember = (file: string, entry: Entry) => { sessions.set(file, entry); while (sessions.size > MAX_SESSIONS) sessions.delete(sessions.keys().next().value!); };
+function remember(file: string, entry: Entry): void {
+	sessions.set(file, entry);
+	for (const oldest of sessions.keys()) { if (sessions.size <= MAX_SESSIONS) break; sessions.delete(oldest); }
+}
 /** El arranque lleva el pin de la sesión de origen a la del worktree, antes de cambiar. */
 export function carryFoundationsPin(from: string, to: string): void {
 	const entry = sessions.get(resolve(from));

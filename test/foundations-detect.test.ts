@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { detectFoundationsCommands, proposeFoundations } from "../src/harness/foundations-detect.ts";
-import { blockProblem } from "../src/harness/foundations.ts";
+import { checkBlock } from "../src/harness/foundations.ts";
 import { tempDir } from "./helpers/io.ts";
 
 const scripts = { omi: "node bin/omi.ts", test: "node --test", typecheck: "tsc", lint: "eslint .", "lint:fix": "eslint --fix .", "test:e2e": "playwright", deploy: "rm -rf /", postinstall: "touch pwned", "test; rm -rf /": "x", "format:check": "prettier --check .", "format": "prettier -w ." };
@@ -52,6 +52,6 @@ test("foundations_detect: este repo propone sus cuatro comandos y todo en ask", 
 	const commands = await detectFoundationsCommands(root);
 	assert.deepEqual([...commands].sort(), ["npm ci", "npm run test:packaging", "npm run typecheck", "npm test"]);
 	const block = proposeFoundations("chichex/omi-code", commands);
-	assert.equal(blockProblem(block), "");
+	assert.deepEqual(checkBlock(block), { block });
 	assert.deepEqual(block.politica, { arranque: "ask", receta: "ask", fuera_de_catalogo: "ask", push_pr: "ask" });
 });

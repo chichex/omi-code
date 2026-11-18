@@ -35,12 +35,12 @@ const POINTS: PolicyPoint[] = ["arranque", "receta", "fuera_de_catalogo", "push_
 // Lo que se ve distinto de lo que corre: controles, saltos y formato invisible (bidi, ancho cero, tags).
 const HIDDEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u{E0100}-\u{E01EF}]/u;
 
-/** Motivo por el que el valor no es un bloque válido, o "" si lo es. */
-export function blockProblem(value: unknown): string {
-	if (!Value.Check(BlockSchema, value)) return "no cumple el esquema (version 1, repo owner/name en minúsculas, comandos y las cuatro políticas ask|auto, sin otros campos)";
-	if (new Set(value.comandos).size !== value.comandos.length) return "hay comandos repetidos";
+/** El mismo valor, ya validado como bloque, o el motivo por el que no lo es. */
+export function checkBlock(value: unknown): { block: FoundationsBlock } | { reason: string } {
+	if (!Value.Check(BlockSchema, value)) return { reason: "no cumple el esquema (version 1, repo owner/name en minúsculas, comandos y las cuatro políticas ask|auto, sin otros campos)" };
+	if (new Set(value.comandos).size !== value.comandos.length) return { reason: "hay comandos repetidos" };
 	const bad = value.comandos.find((command) => HIDDEN.test(command) || /^\s|\s$/.test(command));
-	return bad === undefined ? "" : "un comando tiene espacios al borde, saltos de línea o caracteres de control o invisibles";
+	return bad === undefined ? { block: value } : { reason: "un comando tiene espacios al borde, saltos de línea o caracteres de control o invisibles" };
 }
 
 interface Fence { info: string; contentStart: number; contentEnd: number; start: number; end: number; closed: boolean }
@@ -53,13 +53,14 @@ function fences(body: string): Fence[] {
 		const start = offset; offset += raw.length + 1;
 		const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
 		if (!open) {
-			const match = /^(`{3,}|~{3,})(.*)$/.exec(line);
-			if (!match || (match[1]![0] === "`" && match[2]!.includes("`"))) continue;
-			open = { char: match[1]![0]!, length: match[1]!.length, info: match[2]!.trim(), start, contentStart: Math.min(offset, body.length) };
+			const match = /^(?<marks>`{3,}|~{3,})(?<info>.*)$/.exec(line);
+			const marks = match?.groups?.marks; const info = match?.groups?.info ?? "";
+			if (!marks || (marks.startsWith("`") && info.includes("`"))) continue;
+			open = { char: marks.charAt(0), length: marks.length, info: info.trim(), start, contentStart: Math.min(offset, body.length) };
 			continue;
 		}
-		const close = /^(`{3,}|~{3,})[ \t]*$/.exec(line);
-		if (close && close[1]![0] === open.char && close[1]!.length >= open.length) {
+		const close = /^(`{3,}|~{3,})[ \t]*$/.exec(line)?.[1];
+		if (close?.startsWith(open.char) && close.length >= open.length) {
 			result.push({ info: open.info, start: open.start, contentStart: open.contentStart, contentEnd: start, end: start + line.length, closed: true });
 			open = undefined;
 		}
@@ -84,10 +85,9 @@ export function parseFoundations(body: string, repo: string): ParsedFoundations 
 		found = { fence, value };
 	}
 	if (!found) return { status: "missing" };
-	const problem = blockProblem(found.value);
-	if (problem) return { status: "invalid", reason: problem };
-	const block = found.value as FoundationsBlock;
-	return { status: "valid", block, hash: foundationsHash(block), span: [found.fence.start, found.fence.end] };
+	const checked = checkBlock(found.value);
+	if ("reason" in checked) return { status: "invalid", reason: checked.reason };
+	return { status: "valid", block: checked.block, hash: foundationsHash(checked.block), span: [found.fence.start, found.fence.end] };
 }
 
 /** Lo que escribe una persona en el editor: el JSON del bloque, con o sin cerca. */
@@ -98,10 +98,9 @@ export function readFoundationsText(text: string, repo: string): { block: Founda
 	}
 	let value: unknown;
 	try { value = JSON.parse(text); } catch { return { reason: "no es JSON válido" }; }
-	const problem = blockProblem(value);
-	if (problem) return { reason: problem };
-	const block = value as FoundationsBlock;
-	return block.repo === repo.toLowerCase() ? { block } : { reason: `el bloque declara ${block.repo}, no ${repo.toLowerCase()}` };
+	const checked = checkBlock(value);
+	if ("reason" in checked) return checked;
+	return checked.block.repo === repo.toLowerCase() ? checked : { reason: `el bloque declara ${checked.block.repo}, no ${repo.toLowerCase()}` };
 }
 
 const canonical = (block: FoundationsBlock, sort: boolean): FoundationsBlock => ({
@@ -122,7 +121,8 @@ export function renderFoundationsBlock(block: FoundationsBlock): string {
 
 /** Cuerpo nuevo de las perillas: sólo cambia el bloque de este repo; el resto se conserva tal cual. */
 export function composePerillas(current: string | undefined, product: string, repo: string, block: FoundationsBlock): string {
-	const problem = blockProblem(block) || (block.repo !== repo.toLowerCase() ? `el bloque declara ${block.repo}, no ${repo.toLowerCase()}` : "");
+	const checked = checkBlock(block);
+	const problem = "reason" in checked ? checked.reason : block.repo !== repo.toLowerCase() ? `el bloque declara ${block.repo}, no ${repo.toLowerCase()}` : "";
 	if (problem) throw new Error(`Bloque omi-foundations inválido: ${problem}`);
 	const rendered = renderFoundationsBlock(block);
 	const section = `## Foundations de omi · ${block.repo}\n\n${rendered}\n`;

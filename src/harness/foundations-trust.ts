@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { agentDir } from "../core/paths.ts";
-import { blockProblem, foundationsHash, type FoundationsBlock } from "./foundations.ts";
+import { checkBlock, foundationsHash, type FoundationsBlock } from "./foundations.ts";
 
 const MAX_BYTES = 1024 * 1024;
 const Text = (max = 2000) => Type.String({ maxLength: max });
@@ -52,9 +52,10 @@ export async function readTrust(dir: string, key: TrustKey): Promise<TrustRecord
 		} finally { await file.close(); }
 		const value: unknown = JSON.parse(raw);
 		if (!Value.Check(RecordSchema, value) || value.kbUrl !== key.kbUrl || value.product !== key.product || value.repo !== key.repo) return undefined;
-		const accepted = value.accepted;
-		if (accepted && (blockProblem(accepted.block) || foundationsHash(accepted.block as FoundationsBlock) !== accepted.blockHash || (accepted.block as FoundationsBlock).repo !== key.repo)) return undefined;
-		return value as TrustRecord;
+		if (!value.accepted) return { ...value, accepted: null };
+		const checked = checkBlock(value.accepted.block);
+		if ("reason" in checked || foundationsHash(checked.block) !== value.accepted.blockHash || checked.block.repo !== key.repo) return undefined;
+		return { ...value, accepted: { ...value.accepted, block: checked.block } };
 	} catch { return undefined; }
 }
 
