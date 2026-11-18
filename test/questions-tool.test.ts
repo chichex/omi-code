@@ -126,6 +126,19 @@ test("omi_ask: rechaza la respuesta libre como opción, opciones repetidas y car
 	assert.equal(customs(), 0);
 });
 
+test("omi_ask: tabulaciones y CRLF se normalizan; un control que queda nombra el campo y su índice", async () => {
+	const tool = await askTool(); const { ctx, screens } = context(() => ["1"]);
+	const question = input.questions[0]!;
+	const result = await run(tool, { questions: [{ ...question, header: "Alc\tance", question: "¿Seguimos?\r\nCon cuidado", options: [{ label: "Sólo\tel bug", description: "Arregla\tel cálculo\r\nsin más" }, question.options[1]] }] }, ctx);
+	assert.deepEqual(result.details, { status: "answered", answers: [{ id: "q1", question: "¿Seguimos?\nCon cuidado", options: ["Sólo el bug"], text: null }] });
+	assert.match(screens[0]![0]!, /1\. Sólo el bug \(Recomendada\)/); assert.match(screens[0]![0]!, /Arregla el cálculo/);
+	for (const [bad, path] of [
+		[[question, { ...question, options: [question.options[0], { label: "No\x1b[2J", description: "x" }] }], /questions\[1\]\.options\[1\]\.label/],
+		[[{ ...question, header: "Al\ncance" }], /questions\[0\]\.header/],
+		[[{ ...question, options: [question.options[0], { label: "No", description: "uno\rdos" }] }], /questions\[0\]\.options\[1\]\.description/],
+	] as const) await assert.rejects(run(tool, { questions: bad }, ctx), path);
+});
+
 test("omi_ask: es una tool interactiva del modelo, que ni codemode ni un subagente pueden llamar, y guía cuándo usarla", async () => {
 	const tool = await askTool();
 	assert.equal(tool.exposure, "model-only");
