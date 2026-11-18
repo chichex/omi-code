@@ -146,6 +146,14 @@ test("harness real · moverse por el árbol a una rama con otro loadout deja el 
 	assert.deepEqual(session.getActiveToolNames(), ["read"]);
 });
 
+test("harness real · moverse por el árbol a antes del primer request devuelve las tools de la persona", { timeout: 30000 }, async (t) => {
+	const r = await started(t);
+	// Sin loadout en esa rama Pi conserva las tools actuales, que son las restringidas.
+	const request = r.f.manager.getEntries().find((entry) => entry.type === "message" && entry.message.role === "user")!;
+	await r.first.navigateTree(request.id);
+	assert.deepEqual(sorted(r.first.getActiveToolNames()), sorted(r.normal));
+});
+
 test("harness real · retomar con otra lista explícita de --tools y salir deja la nueva", { timeout: 30000 }, async (t) => {
 	const r = await harnessRuntime(t);
 	const first = await r.open(r.f.manager, ["--tools", "read,bash"]); await r.begin(first); first.dispose();
