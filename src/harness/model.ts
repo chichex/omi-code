@@ -81,6 +81,8 @@ export const WorkflowSchema = Type.Object({
 	attempts: Type.Optional(Type.Array(Type.Object({ sourceHash: text(128), round: Type.Integer({ minimum: 0 }), reason: text(), at: text(100), evidence: Type.Array(EvidenceSchema, { maxItems: 1000 }), reviews: Type.Array(ReviewSchema, { maxItems: 100 }) }, { additionalProperties: false }), { maxItems: MAX_ATTEMPTS })),
 	approval: Type.Union([Type.Object({ sourceHash: text(128), recipeHash: text(128), at: text(100) }, { additionalProperties: false }), Type.Null()]),
 	publication: PublicationSchema,
+	// Sólo hechos de ejecución, nunca inputs/outputs privados. Opcional para estados previos.
+	observations: Type.Optional(Type.Array(Type.Object({ phase: PhaseSchema, round: Type.Integer({ minimum: 0, maximum: 10 }), inline: Type.Boolean(), subagent: Type.Boolean(), lens: Type.Boolean() }, { additionalProperties: false }), { maxItems: 121 })),
 	history: Type.Array(Type.Object({ at: text(100), phase: PhaseSchema, activity: text() }, { additionalProperties: false }), { maxItems: MAX_HISTORY }),
 }, { additionalProperties: false });
 export type Workflow = Omit<Static<typeof WorkflowSchema>, "inferences"> & { inferences: Inference[] };

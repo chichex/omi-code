@@ -54,9 +54,14 @@ export async function developmentFixture(t: TestContext) {
 	} };
 	const events = new Map<string, ((event: unknown, context: ExtensionContext) => unknown)[]>(); const tools = new Map<string, ToolDefinition>();
 	const commands = new Map<string, { handler: (args: string, ctx: ExtensionContext) => Promise<void> }>(); let activeTools = ["read", "bash", "write", "edit"];
+	const busHandlers = new Map<string, Set<(event: unknown) => unknown>>();
+	const emitBus = async (name: string, event: unknown) => {
+		if (name === "omi:workflow") progress.push(event);
+		await Promise.all([...(busHandlers.get(name) ?? [])].map(handler => handler(event)));
+	};
 	const pi = { registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool), registerCommand: (name: string, command: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => commands.set(name, command),
 		on: (name: string, handler: (event: unknown, context: ExtensionContext) => unknown) => { const list = events.get(name) ?? []; list.push(handler); events.set(name, list); },
-		events: { emit: (name: string, event: unknown) => { if (name === "omi:workflow") progress.push(event); } },
+		events: { emit: emitBus, on: (name: string, handler: (event: unknown) => unknown) => { const list = busHandlers.get(name) ?? new Set(); list.add(handler); busHandlers.set(name, list); return () => list.delete(handler); } },
 		getActiveTools: () => activeTools, setActiveTools: (names: string[]) => { activeTools = names; }, getAllTools: () => [],
 		appendEntry: (name: string, data: unknown) => manager.appendCustomEntry(name, data), sendUserMessage: (text: string) => messages.push(text),
 	} as unknown as ExtensionAPI;
@@ -91,7 +96,7 @@ export async function developmentFixture(t: TestContext) {
 		modelRegistry: { hasConfiguredAuth: () => true, streamSimple: (_model: unknown, input: unknown) => { modelCalls.push(input); return { result: async () => { modelControl.onResult(); return { stopReason: modelControl.stopReason, content: [{ type: "text", text: '{"verdict":"pass","findings":[]}' }], usage: { input: 1, output: 2, totalTokens: 3, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }; } }; } },
 	} as unknown as ExtensionContext;
 	const emit = async (name: string, event: unknown = {}) => { let result: unknown; for (const handler of events.get(name) ?? []) result = await handler(event, context); return result; };
-	const attach = async () => { events.clear(); tools.clear(); commands.clear(); const extension = developmentHarnessExtension(testIo({ homeDir: home, cwd: checkout.root }), [], { runner }); if (typeof extension === "function") await extension(pi); else await extension.factory(pi); await emit("session_start"); };
+	const attach = async () => { busHandlers.clear(); events.clear(); tools.clear(); commands.clear(); const extension = developmentHarnessExtension(testIo({ homeDir: home, cwd: checkout.root }), [], { runner }); if (typeof extension === "function") await extension(pi); else await extension.factory(pi); await emit("session_start"); };
 	await attach();
 	const invoke = async (name: string, input: unknown, signal = new AbortController().signal) => {
 		const tool = tools.get(name); if (!tool || !Value.Check(tool.parameters, input)) throw new Error("Argumentos de tool inválidos");
@@ -103,7 +108,7 @@ export async function developmentFixture(t: TestContext) {
 	const readReference = async () => { await emit("tool_execution_start", { toolName: "read", toolCallId: "read", args: { path: "value.cjs" } }); await emit("tool_call", { toolName: "read", toolCallId: "read", input: { path: "value.cjs" } }); await emit("tool_execution_end", { toolName: "read", toolCallId: "read", result: { content: [{ type: "text", text: "module.exports = 1;" }] }, isError: false }); };
 	const explore = async () => { await readReference(); await action({ action: "explored", exploration: { references: [{ path: "value.cjs", line: 1, detail: "Valor actual" }], findings: ["Devuelve 1"], approach: "Corregir el valor", missingFoundation: [], dependencies: [], disposition: "continue", reason: "Existe" } }); await action({ action: "inferences", inferences: [] }); };
 	const plan = (size: "small" | "large" = "small", causeKnown = true): Plan => ({ classification: { type: "fix", size, risk: "low", riskAreas: [], causeKnown }, objective: "Devolver 2", approach: "Corregir el valor exportado", scope: ["valor"], outOfScope: ["infra"], cases: [{ id: "D1", description: "Devuelve 2", command: "node test.cjs" }, ...(size === "large" ? [{ id: "D2", description: "Otro devuelve 2", command: "node other-test.cjs" }] : [])], lenses: ["quality"], executor: { mode: "inline", writers: 0 } });
-	return { home, checkout, manager, remote, calls, statuses, prompts, confirmationDetails, messages, progress, modelCalls, modelControl, uiControl, reviewScreens, reviews: () => reviews, tools, context, emit, attach, invoke, action, state, readReference, explore, plan, command: (input: string) => commands.get("omi-work")!.handler(input, context),
+	return { home, checkout, manager, remote, calls, statuses, prompts, confirmationDetails, messages, progress, modelCalls, modelControl, uiControl, reviewScreens, reviews: () => reviews, tools, context, emit, emitBus, attach, invoke, action, state, readReference, explore, plan, command: (input: string) => commands.get("omi-work")!.handler(input, context),
 		// Lo que hace el panel de Issues o la tool del agente estando ya en el worktree del issue: un pedido de un solo uso y su sí.
 		start: () => commands.get("omi-work")!.handler(`begin ${issueDevelopmentTicket({ kind: "request", origin: "panel", sessionFile: manager.getSessionFile()!, request: { issue: 42 } })}`, context), write: (path: string, body: string) => writeFile(join(checkout.root, path), body) };
 }

@@ -8,6 +8,7 @@ import { isInside } from "../core/files.ts";
 import { workflowToolAllowed, workflowWritePath, WORKFLOW_TOOLS } from "../harness/permissions.ts";
 import { referenceDigest } from "../harness/references.ts";
 import { developmentInstructions } from "./development-view.ts";
+import { observeDevelopment } from "./development-observation.ts";
 import { DevelopmentSession, type DevelopmentDeps } from "./development-session.ts";
 import { registerDevelopmentTools } from "./development-tools.ts";
 import { beginDevelopment, borderedLoader, registerBeginTool } from "./development-begin.ts";
@@ -180,5 +181,6 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 			if (!session.state && !session.lockedReason) return;
 			return { result: { output: "Harness activo: usá omi_workflow_check para comandos observados y autorizados, o /omi-work stop para salir explícitamente del flujo.", exitCode: 1, cancelled: false, truncated: false } };
 		});
+		observeDevelopment(pi, session);
 	} };
 }

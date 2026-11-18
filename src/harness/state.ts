@@ -236,6 +236,7 @@ function sourceChanged(state: Workflow, source: Workflow["source"], at: string):
  requireCondition(source.number === state.source.number && source.url === state.source.url, "no se puede cambiar la identidad del issue");
  archiveAttempt(state, "Cambió el pedido o se volvió a explorar", at);
  state.source = { ...source, hash: sourceHash(source.title, source.body) };
+ state.observations = [];
  state.exploration = null; state.inferences = []; state.recipe = null; state.diagnosis = null; state.spec = null;
  state.steps = []; state.evidence = []; state.reviews = []; state.approval = null; state.round = 0;
  state.publication = { status: "none" }; state.phase = "explore"; setBlock(state, "");

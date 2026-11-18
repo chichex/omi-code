@@ -3,7 +3,7 @@ import type { Workflow } from "./model.ts";
 import { PHASES, recipeNextPhase, type Phase } from "./phases.ts";
 import { expectedFailure, isApproved, successful } from "./state.ts";
 export const STAGE_STATUSES = ["pending", "conditional", "active", "done", "not-applicable", "waiting", "paused", "failed", "interrupted"] as const;
-export const OBSERVED_MODES = ["unknown", "inline", "subagent", "mixed", "isolated-lens", "inline+lens", "mixed+lens"] as const;
+export const OBSERVED_MODES = ["unknown", "inline", "subagent", "mixed", "isolated-lens", "inline+lens", "subagent+lens", "mixed+lens"] as const;
 export interface StageProgress {
  id: Phase; label: string; status: typeof STAGE_STATUSES[number]; current: boolean;
  planned: "unknown" | "inline" | "subagents"; observed: typeof OBSERVED_MODES[number];
@@ -48,8 +48,16 @@ function currentStatus(s: Workflow): StageProgress["status"] {
  }
  return s.status === "complete" ? "done" : "active";
 }
+function observed(s: Workflow, phase: Phase): StageProgress["observed"] {
+ const observations = s.observations?.filter(o => o.phase === phase && (o.round === s.round || !["implement", "verify", "pr"].includes(phase))) ?? [];
+ const inline = observations.some(o => o.inline), subagent = observations.some(o => o.subagent), lens = observations.some(o => o.lens);
+ if (inline && subagent) return lens ? "mixed+lens" : "mixed";
+ if (inline) return lens ? "inline+lens" : "inline";
+ if (subagent) return lens ? "subagent+lens" : "subagent";
+ return lens ? "isolated-lens" : "unknown";
+}
 export function workflowStages(s: Workflow): StageProgress[] {
  return PHASES.map(({ id, label }) => ({ id, label, current: s.phase === id,
   status: s.phase === id ? currentStatus(s) : completed(s, id) ? "done" : applicability(s, id),
-  planned: id === "implement" ? s.recipe?.executor.mode ?? "unknown" : "unknown", observed: "unknown" }));
+  planned: id === "implement" ? s.recipe?.executor.mode ?? "unknown" : "unknown", observed: observed(s, id) }));
 }

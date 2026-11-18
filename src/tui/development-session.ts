@@ -7,7 +7,8 @@ import { Value } from "typebox/value";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Io } from "../cli/io.ts";
 import { processRunner, type Runner } from "../core/exec.ts";
-import type { Workflow } from "../harness/model.ts";
+import { parseWorkflow, type Workflow, type Phase } from "../harness/model.ts";
+export interface ObservationOrigin { id: string; source: string; epoch: number; phase: Phase; round: number }
 import { artifactHash } from "../harness/model.ts";
 import type { ReadReceipt } from "../harness/references.ts";
 import { createWorkflow, recipeApprovalHash, transition, type WorkflowEvent } from "../harness/state.ts";
@@ -40,6 +41,31 @@ export class DevelopmentSession {
 	// Último vínculo válido de la conversación: permite salir aunque el estado no se pueda leer.
 	private lastAnchor: { id: string; root: string; issue: number; revision: number } | undefined;
 	private alive = true;
+	private epoch = 0;
+	private mutations: Promise<unknown> = Promise.resolve();
+	private serialize<T>(work: () => Promise<T>): Promise<T> {
+		const result = this.mutations.then(work); this.mutations = result.catch(() => {}); return result;
+	}
+	observationOrigin(): ObservationOrigin | undefined {
+		const s = this.state;
+		return s && this.alive && !this.lockedReason ? { id: s.id, source: s.source.hash, epoch: this.epoch, phase: s.phase, round: s.round } : undefined;
+	}
+	observe(origin: ObservationOrigin | undefined, mode: "inline" | "subagent" | "lens", ctx: ExtensionContext): Promise<void> {
+		return this.serialize(async () => {
+			const s = this.state;
+			if (!origin || !s || !this.alive || this.lockedReason || origin.epoch !== this.epoch || origin.id !== s.id || origin.source !== s.source.hash || origin.round !== s.round) return;
+			const previous = s.observations?.find(o => o.phase === origin.phase && o.round === origin.round);
+			if (previous?.[mode]) return;
+			this.checkContext(ctx);
+			this.state = await updateWorkflow(s.checkout, s.source.number, s.revision, saved => {
+				if (!saved || saved.id !== s.id) throw new Error("El trabajo cambió");
+				const observations = (saved.observations ?? []).filter(o => o.phase !== origin.phase || o.round !== origin.round);
+				observations.push({ phase: origin.phase, round: origin.round, inline: false, subagent: false, lens: false, ...previous, [mode]: true });
+				return parseWorkflow(JSON.stringify({ ...saved, observations, revision: saved.revision + 1 }));
+			});
+			this.anchor(); this.emit();
+		}).catch(() => { ctx.ui.notify("No se pudo guardar una observación de ejecución; no se mostrará como confirmada.", "warning"); });
+	}
 	offline: boolean;
 	readonly pi: ExtensionAPI;
 	readonly io: Io;
@@ -54,7 +80,11 @@ export class DevelopmentSession {
 	}
 	emit(activity?: string, waiting = false): void {
 		if (!this.alive) return;
-		const progress = this.state ? { ...developmentProgress(this.state, activity), ...(this.lockedReason || waiting ? { status: "waiting" as const, blockedReason: this.lockedReason } : {}) } : undefined;
+		const progress = this.state ? developmentProgress(this.state, activity) : undefined;
+		if (progress && (this.lockedReason || waiting)) {
+			progress.status = "waiting"; progress.blockedReason = this.lockedReason;
+			if (progress.stages) progress.stages = progress.stages.map(s => s.current ? { ...s, status: "waiting" } : s);
+		}
 		this.onChange?.();
 		this.pi.events.emit("omi:workflow", { progress });
 		this.context?.ui.setStatus("omi-development", progress ? `Desarrollo · ${progress.phaseLabel}${progress.blockedReason ? " · bloqueado" : ""}` : this.lockedReason ? "Desarrollo · bloqueado · /omi-work stop para salir" : undefined);
@@ -77,6 +107,7 @@ export class DevelopmentSession {
 		return this.state;
 	}
 	async restore(ctx: ExtensionContext, adopt = false): Promise<void> {
+		await this.mutations; this.epoch++;
 		this.context = ctx; this.state = undefined; this.lockedReason = ""; this.lastAnchor = undefined; this.reads.clear(); this.approvedCommands.clear();
 		const entry = ctx.sessionManager.getBranch().findLast((e) => e.type === "custom" && e.customType === DEVELOPMENT_ANCHOR);
 		if (!entry && !adopt) { this.emit(); return; }
@@ -119,12 +150,15 @@ export class DevelopmentSession {
 		this.anchor(); this.emit();
 	}
 	async apply(event: WorkflowEvent, ctx: ExtensionContext): Promise<Workflow> {
-		const expected = this.current(ctx);
-		this.state = await updateWorkflow(expected.checkout, expected.source.number, expected.revision, (saved) => {
-			if (!saved || saved.id !== expected.id) throw new Error("El trabajo cambió o desapareció");
-			return transition(saved, event, this.now());
+		return this.serialize(async () => {
+			const expected = this.current(ctx);
+			this.state = await updateWorkflow(expected.checkout, expected.source.number, expected.revision, (saved) => {
+				if (!saved || saved.id !== expected.id) throw new Error("El trabajo cambió o desapareció");
+				return transition(saved, event, this.now());
+			});
+			if (event.type === "source_changed") this.epoch++;
+			this.anchor(); this.emit(); return this.state;
 		});
-		this.anchor(); this.emit(); return this.state;
 	}
 	async fresh(ctx: ExtensionContext): Promise<boolean> {
 		const state = this.current(ctx);
@@ -224,6 +258,6 @@ export class DevelopmentSession {
 		if (this.lastAnchor && this.alive) this.pi.appendEntry(DEVELOPMENT_ANCHOR, { ...this.lastAnchor, disabled: true });
 		this.state = undefined; this.lockedReason = ""; this.emit();
 	}
-	shutdown(): void { this.alive = false; this.lifecycle.abort(); }
+	shutdown(): void { this.alive = false; this.epoch++; this.lifecycle.abort(); }
 	status(): string { return this.lockedReason || (this.state ? `${PHASE_LABELS[this.state.phase]} · ${this.state.status}\n${this.state.activity}\n${this.state.blockedReason}\nDetalle: /omi-progress` : "Sin harness activo. Pedí un cambio en el chat o elegí un issue en Issues. /omi-work resume | approve | pause | refresh | pr | stop"); }
 }
