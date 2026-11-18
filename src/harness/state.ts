@@ -261,7 +261,7 @@ function agree(state: Workflow, event: Extract<WorkflowEvent, { type: "agreed" }
  // Los permisos de comandos (grants) se conservan: son por comando y por pedido, no por receta.
  if (!event.replan || !state.recipe) return;
  archiveAttempt(state, `Acuerdo del chat: ${event.summary}`, at);
- // Lo único que cambió el código desde Explorar son los pasos aprobados: es la base de la receta nueva.
+ // El host manda fingerprint sólo con el checkout limpio: lo que cambió desde Explorar son los pasos commiteados, base de la receta nueva.
  if (state.exploration && event.fingerprint && ["implement", "verify", "pr"].includes(state.phase)) state.exploration.fingerprint = event.fingerprint;
  state.observations = (state.observations ?? []).filter(o => !["implement", "verify", "pr"].includes(o.phase));
  state.approval = null; state.spec = null; state.steps = []; state.evidence = []; state.reviews = []; state.round = 0;

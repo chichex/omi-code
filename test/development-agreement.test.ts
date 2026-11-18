@@ -57,6 +57,32 @@ test("agreement: una cita trivial no valida, y lo acordado llega al issue sin im
 	assert.ok(!section.includes(` ${exfil}`), "la imagen no puede renderizarse ni cargarse");
 });
 
+// La base explorada pasa a ser el código actual sólo si el checkout está limpio: los cambios son de pasos commiteados.
+test("agreement: un replan con cambios sin commitear conserva la base explorada y la receta nueva los sigue detectando", async (t) => {
+	const f = await approved(t); await f.action({ action: "step", id: "C1" });
+	const base = (await f.state()).exploration?.fingerprint;
+	await f.write("value.cjs", "module.exports = 2;\n");
+	say(f, "Sumá también que other.cjs devuelva 2, por favor");
+	await f.action({ action: "agreed", quote: "Sumá también que other.cjs devuelva 2", agreement: "Ampliar el alcance a other.cjs", replan: true });
+	assert.equal((await f.state()).exploration?.fingerprint, base, "un cambio sin commitear no se adopta como base");
+	await assert.rejects(f.action({ action: "planned", plan: f.plan() }), /El código cambió desde Explorar/);
+	await assert.rejects(f.action({ action: "approve" }), /El código cambió desde Explorar/);
+	assert.ok(!isApproved(await f.state()));
+});
+
+test("agreement: un replan después de pasos commiteados toma el código actual como base", async (t) => {
+	const f = await approved(t); await f.action({ action: "step", id: "C1" });
+	await f.write("test.cjs", 'require("node:assert/strict").equal(require("./value.cjs"), 2);\n'); await f.invoke("omi_workflow_check", { kind: "red", command: "node test.cjs", stepId: "C1" });
+	await f.write("value.cjs", "module.exports = 2;\n"); await f.invoke("omi_workflow_check", { kind: "green", command: "node test.cjs", stepId: "C1" });
+	await f.invoke("omi_workflow_commit", { stepId: "C1", paths: ["test.cjs", "value.cjs"], message: "fix: devolver 2" });
+	const base = (await f.state()).exploration?.fingerprint;
+	say(f, "Sumá también que other.cjs devuelva 2, por favor");
+	await f.action({ action: "agreed", quote: "Sumá también que other.cjs devuelva 2", agreement: "Ampliar el alcance a other.cjs", replan: true });
+	assert.notEqual((await f.state()).exploration?.fingerprint, base);
+	await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" });
+	assert.ok(isApproved(await f.state()));
+});
+
 test("agreement: las instrucciones ya no piden editar el issue para autorizar y explican cómo registrar el acuerdo", async (t) => {
 	const f = await approved(t); const status = JSON.stringify((await f.action({ action: "status" })).content);
 	assert.doesNotMatch(status, /actualizar el issue|editar el issue|pedí actualizar/i); assert.match(status, /agreed/); assert.match(status, /cita textual/i);
