@@ -6,11 +6,11 @@ import { Value } from "typebox/value";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ExplorationSchema, InferenceInputSchema, LensSchema, PlanSchema, SpecSchema, text } from "../harness/model.ts";
 import { expectedFailure, successful, transition, type WorkflowEvent } from "../harness/state.ts";
-import { gitRead, inspectCheckout, readWorkflowDiff, validateReferences } from "../harness/git.ts";
+import { gitRead, inspectCheckout, validateReferences } from "../harness/git.ts";
 import { approvalPreview, DevelopmentSession } from "./development-session.ts";
 import { referenceDigest } from "../harness/references.ts";
 import { executeCheck, commitStep } from "./development-execution.ts";
-import { runLens } from "./development-review.ts";
+import { lensDiffParts, runLens } from "./development-review.ts";
 import { developmentInstructions } from "./development-view.ts";
 
 const ActionSchema = Type.Object({
@@ -119,7 +119,7 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 	});
 	pi.registerTool({
 		name: "omi_workflow_lens", label: "Desarrollo: lente de verificación", defaultActive: false, exposure: "model-only", executionMode: "sequential", parameters: Type.Object({ lens: LensSchema }, { additionalProperties: false }),
-		description: "Ejecuta un lente de Verificar en contexto aislado, sin tools ni conversación del implementador. Evalúa los casos D, la evidencia registrada por el harness y el diff completo; registra verdict pass/fail/unknown ligado al contenido. Asesora: unknown y fail quedan como aviso y no bloquean verified; sólo un fail de security bloquea. No es Review externa del PR. Conserva uso del modelo.",
+		description: "Ejecuta un lente de Verificar en contexto aislado, sin tools ni conversación del implementador. Evalúa los casos D, la evidencia registrada por el harness y el diff completo, por partes si no entra en una llamada; registra verdict pass/fail/unknown ligado al contenido. Asesora: unknown y fail quedan como aviso y no bloquean verified; sólo un fail de security bloquea. No es Review externa del PR. Conserva uso del modelo.",
 		async execute(_id, { lens }, signal, _update, ctx) {
 			const result = await runLens(session, lens, ctx, AbortSignal.any([signal ?? new AbortController().signal, session.lifecycle.signal]));
 			const blocking = result.review.lens === "security" && result.review.verdict === "fail";
@@ -128,11 +128,16 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 		},
 	});
 	pi.registerTool({
-		name: "omi_workflow_inspect", label: "Desarrollo: inspeccionar Git", defaultActive: false, parameters: Type.Object({ diff: Type.Optional(Type.Boolean()), history: Type.Optional(Type.Boolean()), related: Type.Optional(Type.Boolean()) }, { additionalProperties: false }), annotations: { readOnlyHint: true },
-		description: "Consulta identidad, HEAD, limpieza y fingerprint; diff opcional contra la base, history (20 commits) y related (hasta20 issues abiertos/cerrados del repo, búsqueda por título). Sólo lectura, sin shell. Falla si el diff excede 50.000 caracteres en vez de presentarlo incompleto.",
+		name: "omi_workflow_inspect", label: "Desarrollo: inspeccionar Git", defaultActive: false, parameters: Type.Object({ diff: Type.Optional(Type.Boolean()), diffPart: Type.Optional(Type.Integer({ minimum: 1 })), history: Type.Optional(Type.Boolean()), related: Type.Optional(Type.Boolean()) }, { additionalProperties: false }), annotations: { readOnlyHint: true },
+		description: "Consulta identidad, HEAD, limpieza y fingerprint; diff opcional contra la base, history (20 commits) y related (hasta20 issues abiertos/cerrados del repo, búsqueda por título). Sólo lectura, sin shell. El diff no se trunca: si es grande llega repartido por archivo en partes; la respuesta dice part y total, y diffPart (desde 1) pide otra parte.",
 		async execute(_id, input, signal, _update, ctx) {
 			const state = session.current(ctx); const snapshot = await inspectCheckout(state.checkout, session.runner, signal);
-			const diff = input.diff ? await readWorkflowDiff(state.checkout, session.runner, signal) : undefined;
+			let diff: { part: number; total: number; text: string } | undefined;
+			if (input.diff || input.diffPart) {
+				const parts = await lensDiffParts(state, session.runner, signal); const part = input.diffPart ?? 1;
+				if (part > parts.length) throw new Error(`El diff tiene ${parts.length} parte(s): pedí diffPart entre 1 y ${parts.length}`);
+				diff = { part, total: parts.length, text: parts[part - 1]! };
+			}
 			const history = input.history ? (await gitRead(state.checkout, ["log", "--max-count=20", "--no-notes", "--format=%h %s"], session.runner, signal)).slice(0, 20000) : undefined;
 			let related: unknown;
 			if (input.related) {

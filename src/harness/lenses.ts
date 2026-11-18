@@ -50,3 +50,49 @@ export function lensReport(state: Workflow): string {
 	return ["Los lentes asesoran: unknown y fail quedan como aviso y no bloquean Verificar ni este PR. Sólo un fail de seguridad bloquea.", "",
 		...statuses.flatMap((s) => [`- ${s.lens} · ${s.verdict === "not-run" ? "sin correr" : s.verdict}${s.blocking ? " · bloquea" : ""}`, ...s.findings.map((f) => `  - ${oneLine(f)}`)])].join("\n");
 }
+
+// Un diff que no entra en una llamada se reparte por archivo en partes de hasta `budget` caracteres.
+// Un archivo más grande se corta por líneas, y una línea enorme por caracteres sin partir un par
+// sustituto. Cada fragmento siguiente lleva una etiqueta: es lo único que se agrega; nada se omite.
+export const LENS_PART_BUDGET = 120_000; export const LENS_MIN_DIFF_BUDGET = 30_000;
+const cut = (value: string, size: number): number => /[\ud800-\udbff]/.test(value[size - 1] ?? "") ? size - 1 : size;
+function fragments(file: string, budget: number): string[] {
+	if (file.length <= budget) return [file];
+	const header = file.split("\n", 1)[0]!; const name = header.length > 200 ? `${header.slice(0, cut(header, 200))}…` : header;
+	const label = (index: number | string, total: number | string) => `[continúa ${name} · fragmento ${index}/${total}]\n`;
+	const room = Math.max(2, budget - label("99999", "99999").length);
+	const chunks: string[] = []; let current = "";
+	for (const line of file.split(/(?<=\n)/)) {
+		if (current.length + line.length <= room) { current += line; continue; }
+		if (current) chunks.push(current);
+		let rest = line;
+		while (rest.length > room) { const size = cut(rest, room); chunks.push(rest.slice(0, size)); rest = rest.slice(size); }
+		current = rest;
+	}
+	if (current) chunks.push(current);
+	return chunks.map((chunk, i) => i ? label(i + 1, chunks.length) + chunk : chunk);
+}
+export function lensParts(files: string[], budget: number): string[] {
+	const parts: string[] = []; let current = "";
+	for (const piece of files.flatMap((f) => fragments(f, budget))) {
+		if (current && current.length + piece.length > budget) { parts.push(current); current = ""; }
+		current += piece;
+	}
+	return [...parts, current];
+}
+// Se corre el lente por parte y se combina: el peor veredicto gana y se juntan los hallazgos con su parte.
+export interface LensResult { verdict: Review["verdict"]; findings: string[] }
+const SEVERITY: Record<Review["verdict"], number> = { pass: 0, unknown: 1, fail: 2 };
+const MAX_FINDINGS = 100; const MAX_FINDING = 4000;
+const prefixed = (prefix: string, finding: string): string => {
+	const value = prefix + finding;
+	return value.length <= MAX_FINDING ? value : `${value.slice(0, cut(value, MAX_FINDING - 1))}…`;
+};
+export function combineLensResults(results: LensResult[]): LensResult {
+	if (!results.length) return { verdict: "unknown", findings: ["No se revisó ninguna parte del cambio."] };
+	const verdict = results.reduce<Review["verdict"]>((worst, r) => SEVERITY[r.verdict] > SEVERITY[worst] ? r.verdict : worst, "pass");
+	const findings = results.flatMap((r, i) => r.findings.map((f) => results.length === 1 ? f : prefixed(`parte ${i + 1}/${results.length} · `, f)));
+	if (findings.length <= MAX_FINDINGS) return { verdict, findings };
+	const kept = findings.slice(0, MAX_FINDINGS - 1);
+	return { verdict, findings: [...kept, `… y ${findings.length - kept.length} hallazgos más de las partes no entran en el registro del lente (tope de ${MAX_FINDINGS}); volvé a correr el lente sobre un cambio más chico para verlos.`] };
+}
