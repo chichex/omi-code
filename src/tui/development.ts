@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { Io } from "../cli/io.ts";
 import { isInside } from "../core/files.ts";
-import { workflowToolAllowed, workflowWritePath, WORKFLOW_TOOLS } from "../harness/permissions.ts";
+import { ASK_TOOL, workflowToolAllowed, workflowWritePath, WORKFLOW_TOOLS } from "../harness/permissions.ts";
 import { referenceDigest } from "../harness/references.ts";
 import { developmentInstructions } from "./development-view.ts";
 import { observeDevelopment } from "./development-observation.ts";
@@ -48,8 +48,9 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 		const loadout = () => {
 			if (!session.state && !session.lockedReason) { held.release(); return; }
 			const originalTools = held.hold();
+			// omi_ask queda si la sesión la ofrece (sólo con TUI): el harness no la agrega por su cuenta.
 			const names = new Set([...originalTools, "read", "grep", "find", "ls", "subagent", ...WORKFLOW_TOOLS]);
-			pi.setActiveTools([...names].filter((name) => name === "subagent" || WORKFLOW_TOOLS.includes(name) || (session.state ? workflowToolAllowed(session.state, name, {}) : ["read", "grep", "find", "ls"].includes(name))));
+			pi.setActiveTools([...names].filter((name) => name === "subagent" || WORKFLOW_TOOLS.includes(name) || (session.state ? workflowToolAllowed(session.state, name, {}) : ["read", "grep", "find", "ls", ASK_TOOL].includes(name))));
 		};
 		session.onChange = loadout;
 		registerDevelopmentTools(pi, session);
@@ -146,7 +147,7 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 			// Hasta que la persona responda, el agente no sigue: ni en este lote ni en otro.
 			if (pendingBegin) return { block: true, reason: "Hay un pedido de desarrollo esperando la confirmación de la persona. Terminá el turno sin otras tools." };
 			if (!session.state && !session.lockedReason) return;
-			if (session.lockedReason && !["read", "grep", "find", "ls", ...WORKFLOW_TOOLS].includes(event.toolName)) return { block: true, reason: session.lockedReason };
+			if (session.lockedReason && !["read", "grep", "find", "ls", ASK_TOOL, ...WORKFLOW_TOOLS].includes(event.toolName)) return { block: true, reason: session.lockedReason };
 			if (session.state && !workflowToolAllowed(session.state, event.toolName, event.input)) return { block: true, reason: `Harness: ${event.toolName} no está habilitada en esta etapa. Usá omi_workflow y omi_workflow_check; no eludas la receta, evidencia ni permisos.` };
 			if (session.state && event.toolName === "read" && typeof event.input.path === "string") {
 				try {

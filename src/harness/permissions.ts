@@ -4,11 +4,13 @@ import type { Workflow } from "./model.ts";
 import { isApproved } from "./state.ts";
 
 export const WORKFLOW_TOOLS = ["omi_workflow", "omi_workflow_check", "omi_workflow_inspect", "omi_workflow_lens", "omi_workflow_commit"];
+/** Preguntarle a la persona no cambia nada: vale en toda etapa. Su respuesta no es un acuerdo ni un permiso. */
+export const ASK_TOOL = "omi_ask";
 const READ = new Set(["read", "grep", "find", "ls"]);
 const READ_ROLES = new Set(["scout", "planner", "reviewer"]);
 
 export function workflowToolAllowed(state: Workflow, name: string, input: Record<string, unknown>): boolean {
-	if (READ.has(name) || WORKFLOW_TOOLS.includes(name)) return true;
+	if (READ.has(name) || WORKFLOW_TOOLS.includes(name) || name === ASK_TOOL) return true;
 	const implementing = state.phase === "implement" && state.status === "active" && isApproved(state) && state.steps.some((step) => step.status === "active");
 	if (name === "write" || name === "edit") return implementing;
 	if (name !== "subagent") return false;

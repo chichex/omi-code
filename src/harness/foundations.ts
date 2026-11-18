@@ -5,12 +5,14 @@ import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 import { fences, type Fence } from "./fences.ts";
 
+export const MAX_COMMANDS = 100;
+const MAX_COMMAND_LENGTH = 2000;
 const Mode = Type.Union([Type.Literal("ask"), Type.Literal("auto")]);
 const PolicySchema = Type.Object({ arranque: Mode, receta: Mode, fuera_de_catalogo: Mode, push_pr: Mode }, { additionalProperties: false });
 const BlockSchema = Type.Object({
 	version: Type.Literal(1),
 	repo: Type.String({ pattern: "^[a-z0-9_.-]+/[a-z0-9_.-]+$", maxLength: 200 }),
-	comandos: Type.Array(Type.String({ minLength: 1, maxLength: 2000 }), { maxItems: 100 }),
+	comandos: Type.Array(Type.String({ minLength: 1, maxLength: MAX_COMMAND_LENGTH }), { maxItems: MAX_COMMANDS }),
 	politica: PolicySchema,
 }, { additionalProperties: false });
 export type PolicyMode = Static<typeof Mode>;
@@ -36,12 +38,18 @@ const POINTS: PolicyPoint[] = ["arranque", "receta", "fuera_de_catalogo", "push_
 // Lo que se ve distinto de lo que corre: controles, saltos y formato invisible (bidi, ancho cero, tags).
 const HIDDEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u{E0100}-\u{E01EF}]/u;
 
+/** El motivo por el que un comando no puede ir al catálogo, o `undefined`. El mismo criterio que el bloque. */
+export function commandProblem(command: string): string | undefined {
+	if (!command || command.length > MAX_COMMAND_LENGTH) return `un comando tiene que tener entre 1 y ${MAX_COMMAND_LENGTH} caracteres`;
+	return HIDDEN.test(command) || /^\s|\s$/.test(command) ? "un comando tiene espacios al borde, saltos de línea o caracteres de control o invisibles" : undefined;
+}
+
 /** El mismo valor, ya validado como bloque, o el motivo por el que no lo es. */
 export function checkBlock(value: unknown): { block: FoundationsBlock } | { reason: string } {
 	if (!Value.Check(BlockSchema, value)) return { reason: "no cumple el esquema (version 1, repo owner/name en minúsculas, comandos y las cuatro políticas ask|auto, sin otros campos)" };
 	if (new Set(value.comandos).size !== value.comandos.length) return { reason: "hay comandos repetidos" };
-	const bad = value.comandos.find((command) => HIDDEN.test(command) || /^\s|\s$/.test(command));
-	return bad === undefined ? { block: value } : { reason: "un comando tiene espacios al borde, saltos de línea o caracteres de control o invisibles" };
+	const bad = value.comandos.map(commandProblem).find((problem) => problem !== undefined);
+	return bad === undefined ? { block: value } : { reason: bad };
 }
 
 /** El bloque de `repo` en el cuerpo de las perillas. Cualquier ambigüedad es inválida. */
