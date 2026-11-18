@@ -228,6 +228,7 @@ el historial y la edición siguen usando el renderer de Pi; no hay un segundo pr
 | Ctrl 3 o `/omi-prs` | PRs abiertos de GitHub |
 | Ctrl 4 o `/omi-changes` | Cambios locales |
 | Ctrl 5 o `/omi-platform` | OMI: proyecto, servicios y ambientes |
+| Ctrl 6 o `/omi-workflow` | Progreso: recorrido completo del harness y modo previsto/real por etapa |
 | Ctrl K o `/omi` | Paleta de comandos (Ctrl K reemplaza borrar hasta fin de línea en el editor) |
 | F4 o `/omi-sidebar` | Mostrar / ocultar lateral |
 | `/omi-sidebar-settings` | Elegir qué bloques mostrar en la lateral |
@@ -241,7 +242,7 @@ el historial y la edición siguen usando el renderer de Pi; no hay un segundo pr
 | `/omi-context` | Detalle del contexto |
 
 Los atajos son **Control** también en Mac, no Option ni Command. **Esc** vuelve a Chat desde las vistas de consulta.
-Las pestañas también funcionan por clic; en panes angostos conservan los cinco números y el nombre de la vista activa.
+Las pestañas también funcionan por clic; en panes angostos conservan los seis números y el nombre de la vista activa.
 
 El pie muestra **`[ PR #123 ↗ ]`** como botón junto a la rama actual, incluso si debe recortar su nombre.
 Se resuelve con `gh pr status`, incluyendo el remoto y los forks, sin inferirlo de la lista de PRs del repo.
@@ -281,7 +282,7 @@ si cambia su contrato, conserva la vista base y avisa. No parchea archivos de `n
 
 Explora código, resuelve inferencias y deja una receta persistente. Tiene tres rutas: **Directa**, **Diagnóstico** para bugs sin causa confirmada y **Con spec** para trabajo grande. Antes de escribir pide aprobación humana de la receta completa. Registra rojo/verde reales, commits por paso, verificación por caso y lentes; sólo entonces puede pedir permiso separado para subir la rama y abrir un **PR draft**. No mergea, dispara workflows ni despliega.
 
-La lateral muestra **PROGRESO · #N** con ruta, etapa, actividad, pasos, checks y bloqueos. Clic o **`/omi-progress`** abre el detalle, también con la lateral oculta. El avance sale del estado y de resultados observados, no de frases del modelo. `/omi-work status`, `pause`, `resume`, `refresh`, `approve`, `pr` y `stop` permiten controlarlo; no hay un comando para empezar. Cargar una sesión no reejecuta efectos automáticamente.
+La lateral muestra **PROGRESO · #N** con ruta, etapa, actividad, pasos, checks y bloqueos, y el recorrido completo cuando hay altura. En compacto conserva los demás bloques y anuncia **Ctrl 6**: **6 · Progreso** (`/omi-workflow`) muestra todas las etapas, también pendientes, con estado textual y ejecución prevista separada de la real. Se desplaza con flechas, PgUp/PgDn o rueda; Esc vuelve a Chat. `?`/«sin observar» no atribuye una delegación: la receta sólo informa lo previsto; los lentes se identifican como llamadas aisladas, y los trabajos antiguos conservan modo desconocido. Clic o **`/omi-progress`** abre el detalle, también con la lateral oculta. El avance sale del estado y de resultados observados, no de frases del modelo. `/omi-work status`, `pause`, `resume`, `refresh`, `approve`, `pr` y `stop` permiten controlarlo; no hay un comando para empezar. Cargar una sesión no reejecuta efectos automáticamente.
 
 La descripción humana del issue se conserva: receta/spec y evidencia se agregan como **comentarios administrados append-only**, con recuperación de publicaciones ambiguas. El estado local vive bajo el Git common-dir, independiente del vínculo de infraestructura OMI. Este corte es para repos existentes; quedan afuera Fundación, prototipos, perfiles avanzados de modelos, Review externa, Land y Ship.
 

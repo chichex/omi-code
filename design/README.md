@@ -38,6 +38,14 @@ Abrí `omi-code-preview.html` directamente en el navegador. No requiere dependen
 - **`Personalizar lateral >`** queda al pie de la lateral; también se abre desde la paleta o **`/omi-sidebar-settings`**. El modal tiene un checkbox por bloque: **↑↓** navega, **Espacio / Enter** alterna, **Ctrl+S** guarda, **Esc** cancela y **r** restablece todos visibles en el borrador. Restablecer no guarda hasta confirmar con Ctrl+S. Las acciones también tienen alternativa por clic.
 - La maqueta guarda preferencias **sólo en el estado local en memoria**, sin `localStorage`: recargar restablece los bloques visibles. Cancelar no cambia lo guardado. Aun ocultando todos, queda el acceso para personalizar. Ocultar un bloque no desactiva su comando ni las verificaciones de seguridad del runtime.
 
+## Progreso del harness · contrato del runtime
+
+El runtime agrega **6 · Progreso**, accesible por Ctrl 6, pestaña/clic, paleta o `/omi-workflow`. Sigue el renderer y las superficies de las vistas de sólo lectura: título, ayuda, filas monospace y scroll con flechas/PgUp/PgDn/Home/End/rueda; Esc vuelve a Chat. No tiene botones de ejecutar, aprobar ni publicar. Muestra las etapas del catálogo real del harness, en orden, con `>` en la actual, símbolo y estado textual, **Previsto** y **Real** separados; desconocido/condicional/no aplicable no se confunden con cumplido. La combinación inline/subagente y los lentes aislados tienen etiquetas explícitas.
+
+El bloque lateral **PROGRESO · #N** reemplaza Issue activo y respeta su preferencia de visibilidad. Con altura suficiente muestra todas las etapas; al compactar conserva los otros bloques, bloqueo y contadores e indica **Ctrl6** para consultar la pantalla completa, sin scroll lateral ni quitar paneles inferiores. Clic y `/omi-progress` conservan el detalle. Ocultar la lateral no impide abrir la pantalla 6.
+
+El HTML revisión 03 conserva los cinco escenarios/vistas anteriores y **no simula el nuevo proceso**: este contrato describe la ampliación del runtime, no afirma paridad visual nueva ni mantiene otro catálogo de etapas en JavaScript. La validación automática usa el renderer real con temas claro/oscuro, resize y panes estrechos; no sustituye una revisión humana en terminal.
+
 ## Qué revisar
 
 1. **Inicio:** bienvenida breve y sin conversación inventada; Sesión no muestra consumo ni costo de ejemplo.

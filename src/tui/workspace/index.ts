@@ -17,7 +17,7 @@ import { changesViewLines, githubViewLines, omiViewLines, type GithubView } from
 import { WORKSPACE_VIEWS, type WorkspaceView } from "./navigation.ts";
 import { ACTION_GROUPS, readActionRuns, type ActionGroup, type ActionState } from "./github-actions.ts";
 import { workspaceSidebar } from "./sidebar.ts";
-import { WorkflowProgressMonitor, workflowProgressDetail } from "./workflow-progress.ts";
+import { WorkflowProgressMonitor, workflowProgressDetail, workflowProgressView } from "./workflow-progress.ts";
 import { GithubInspector } from "./github-inspector.ts";
 import { consumeSubagentEvent, SubagentMonitor } from "./subagents.ts";
 import { readBranchPullRequest, type BranchPullRequest } from "./pull-request.ts";
@@ -345,7 +345,12 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			if (data === "r") { void refreshRemote(); return true; }
 			return false;
 		}, changed, () => rows() - 6);
-		const readPanes = { issues: issuesPane, prs: prsPane, changes: changesPane, omi: omiPane };
+		const progressPane = new ReadView(width => workflowProgressView(theme(), gitError ? undefined : workflow.current(ctx.cwd, git), width), data => {
+			if (matchesKey(data, "escape")) { switchView("chat"); return true; }
+			if (matchesKey(data, "end")) { progressPane.offset = Number.MAX_SAFE_INTEGER; changed(); return true; }
+			return false;
+		}, changed, () => rows() - 6);
+		const readPanes = { issues: issuesPane, prs: prsPane, changes: changesPane, omi: omiPane, workflow: progressPane };
 
 		const welcome = workspaceWelcome(() => ({ theme: theme(), cwd: ctx.cwd, git, modelShortcut, visible: !working && !ctx.sessionManager.getBranch().some((entry) => entry.type === "message") }), { palette, showModel, switchView });
 		function buildRoot(): void {
@@ -374,7 +379,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			ctx = context; prefs = await loadWorkspacePreferences(io.homeDir); session = sessionStats(ctx.sessionManager.getBranch()); active = true;
 			unsubscribeSubagents?.(); subagents.clear();
 			unsubscribeWorkflow?.(); workflow.clear();
-			unsubscribeWorkflow = pi.events.on("omi:workflow", (event) => { if (active && workflow.consume(event)) changed(); });
+			unsubscribeWorkflow = pi.events.on("omi:workflow", (event) => { if (active && workflow.consume(event)) { if (!workflow.current(ctx.cwd, git)) progressPane.offset = 0; changed(); } });
 			unsubscribeSubagents = pi.events.on("omi:subagents", (event) => { if (active && consumeSubagentEvent(subagents, event)) changed(); });
 			issueTriage = restoreIssueTriage(ctx.sessionManager.getBranch(), ctx.cwd);
 			if (!parsed.useTheme && !pi.getSettings().theme) {
@@ -429,6 +434,6 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		const update = (_event: unknown, context: ExtensionContext): void => { ctx = context; session = sessionStats(ctx.sessionManager.getBranch()); changed(); };
 		pi.on("message_end", update); pi.on("session_compact", update); pi.on("session_compact_failed", update);
 		pi.on("model_select", update); pi.on("thinking_level_select", update);
-		pi.on("session_tree", (_event, context) => { workflow.clear(); subagents.clear(); issueTriage = restoreIssueTriage(context.sessionManager.getBranch(), context.cwd); update(_event, context); });
+		pi.on("session_tree", (_event, context) => { workflow.clear(); progressPane.offset = 0; subagents.clear(); issueTriage = restoreIssueTriage(context.sessionManager.getBranch(), context.cwd); update(_event, context); });
 	} };
 }
