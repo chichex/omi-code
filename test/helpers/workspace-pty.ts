@@ -106,7 +106,8 @@ sys.exit(os.waitstatus_to_exitcode(status))
 
 export function exerciseWorkspace(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<{ code: number | null; output: string }> {
 	return new Promise((resolve, reject) => {
-		const child = spawn("python3", ["-I", "-c", driver, command, ...args], { cwd, stdio: ["ignore", "pipe", "pipe"], env: { ...env, TERM: "xterm-256color", HERDR_ENV: "0" } });
+		// PI_TELEMETRY=0: Pi interactivo con un HOME nuevo reporta la instalación a pi.dev.
+		const child = spawn("python3", ["-I", "-c", driver, command, ...args], { cwd, stdio: ["ignore", "pipe", "pipe"], env: { ...env, TERM: "xterm-256color", HERDR_ENV: "0", PI_TELEMETRY: "0" } });
 		let output = ""; child.stdout.on("data", (chunk: Buffer) => { output += chunk; }); child.stderr.on("data", (chunk: Buffer) => { output += chunk; });
 		child.on("error", reject); child.on("close", (code) => resolve({ code, output }));
 	});
