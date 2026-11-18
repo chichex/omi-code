@@ -205,6 +205,16 @@ test("exhausted retries stay blocked through pause/resume", () => {
  assert.equal(resumed.status, "waiting"); assert.equal(resumed.blockedReason, exhausted.blockedReason);
  assert.throws(() => send(resumed, { type: "publishing", head: "head", bodyHash: "body" }));
 });
+test("a chat agreement never restarts exhausted retries: only a human refresh lifts the block", () => {
+ const exhausted = send({ ...pr(), round: 3 }, { type: "retry", reason: "again" });
+ assert.equal(exhausted.status, "waiting"); assert.match(exhausted.blockedReason, /agotaron/);
+ assert.throws(() => send(exhausted, { type: "agreed", quote: "hacé lo que pedí antes", summary: "Rehacer la receta", replan: true }), /agotaron.*sin replan/);
+ const noted = send(exhausted, { type: "agreed", quote: "dejá la documentación como está", summary: "La documentación queda fuera", replan: false });
+ assert.equal(noted.agreements?.length, 1, "el acuerdo queda registrado");
+ assert.equal(noted.status, "waiting"); assert.equal(noted.blockedReason, exhausted.blockedReason); assert.equal(noted.round, 3); assert.equal(noted.phase, exhausted.phase);
+ const refreshed = send(noted, { type: "source_changed", source });
+ assert.equal(refreshed.status, "active"); assert.equal(refreshed.round, 0);
+});
 test("a review outside the recipe or pass with findings cannot accredit verification", () => {
  const s = send(verifying(), { type: "evidence", evidence: evidence("verification") });
  assert.throws(() => send(s, { type: "reviewed", review: { lens: "security", fingerprint: "tree", verdict: "pass", findings: [], at } }));

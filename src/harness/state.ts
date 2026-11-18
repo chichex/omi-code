@@ -251,6 +251,8 @@ function sourceChanged(state: Workflow, source: Workflow["source"], at: string):
 // El chat vale como autorización: el host ya verificó la cita. Con un cambio de alcance (replan) la
 // receta se rehace y se vuelve a aprobar; exploración, respuestas, acuerdos y commits siguen valiendo.
 function agree(state: Workflow, event: Extract<WorkflowEvent, { type: "agreed" }>, at: string): void {
+ // Con las vueltas agotadas el acuerdo sólo se anota: rehacer la receta reiniciaría las vueltas sin una persona.
+ requireCondition(!event.replan || !retriesExhausted(state), "se agotaron las vueltas y un acuerdo del chat no las reinicia. Registralo sin replan; para seguir, una persona usa /omi-work refresh");
  const agreements = state.agreements ?? [];
  if (!agreements.some(a => a.quote === event.quote && a.summary === event.summary && a.replan === event.replan)) {
   requireCondition(agreements.length < MAX_AGREEMENTS, "se llegó al tope de acuerdos del chat; dividí el trabajo");
