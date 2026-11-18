@@ -1,5 +1,5 @@
-// El creador de Foundations por preguntas: qué comandos corren sin preguntar, una pregunta por política y un
-// resumen legible antes de guardar. Sin I/O: recibe lo detectado y quién pregunta; el bloque sale del validador
+// El creador de Foundations por preguntas: la oferta, qué comandos corren sin preguntar, una pregunta por
+// política y un resumen legible antes de guardar. Sin I/O: recibe lo detectado y quién pregunta; el bloque sale del validador
 // de siempre, así que se guarda con el mismo formato que uno escrito a mano.
 import { AUTO_WARNINGS, checkBlock, commandProblem, foundationsDiff, MAX_COMMANDS, type FoundationsBlock, type FoundationsMeta, type FoundationsPolicy, type PolicyPoint } from "../harness/foundations.ts";
 import { proposeFoundations, type DetectedCommand } from "../harness/foundations-detect.ts";
@@ -7,6 +7,8 @@ import type { AskResult, Question, QuestionAnswer, QuestionBatch } from "./quest
 
 /** Muestra una tanda y devuelve lo que respondió la persona. */
 export type Ask = (batch: QuestionBatch) => Promise<AskResult>;
+export const FOUNDATIONS_OFFER = ["Armar Foundations", "Ahora no", "No ofrecer más para este repo"] as const;
+export type OfferDecision = "build" | "later" | "never";
 export const SAVE_CHOICES = ["Guardar en la KB", "Cambiar respuestas", "Cancelar"] as const;
 export type SaveDecision = "save" | "change" | "cancel";
 
@@ -50,6 +52,22 @@ function policiesBatch(repo: string, previous: FoundationsPolicy | undefined): Q
 }
 
 const answerOf = (result: AskResult & { status: "answered" }, id: string): QuestionAnswer | undefined => result.answers.find((answer) => answer.id === id);
+
+/** La oferta: «Armar» es la recomendada pero nunca se elige sola. Esc es «Ahora no». */
+export async function chooseFoundationsOffer(ask: Ask, target: { repo: string; product: string }): Promise<OfferDecision> {
+	const result = await ask({ title: title(target.repo), questions: [{
+		id: "oferta", header: "Foundations", question: `¿Armar Foundations para ${target.repo.toLowerCase()}?`,
+		detail: `Foundations: comandos que corren sin preguntar y qué puntos piden un sí, en las perillas de ${target.product}.`,
+		options: [
+			{ label: FOUNDATIONS_OFFER[0], description: "Unas preguntas y un resumen; se guarda en la KB sólo con tu sí al final" },
+			{ label: FOUNDATIONS_OFFER[1], description: "No se guarda nada; se vuelve a ofrecer en otra sesión" },
+			{ label: FOUNDATIONS_OFFER[2], description: "Queda anotado en el registro local de este equipo y no se vuelve a ofrecer; la KB no cambia" },
+		],
+		multiSelect: false, recommended: true, freeText: false,
+	}] });
+	const choice = result.status === "answered" ? answerOf(result, "oferta")?.options[0] : undefined;
+	return choice === FOUNDATIONS_OFFER[0] ? "build" : choice === FOUNDATIONS_OFFER[2] ? "never" : "later";
+}
 
 /** El bloque que armó la persona, o `undefined` si canceló. Con `previous`, vuelve con lo que ya había elegido. */
 export async function composeFoundations(ask: Ask, input: { repo: string; detected: readonly DetectedCommand[]; previous?: FoundationsBlock }): Promise<FoundationsBlock | undefined> {

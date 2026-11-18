@@ -6,12 +6,12 @@ import { composePerillas, foundationsHash, type FoundationsBlock } from "../harn
 import { detectFoundationsCandidates } from "../harness/foundations-detect.ts";
 import { foundationsDir, readTrust, writeTrust, type TrustKey, type TrustRecord } from "../harness/foundations-trust.ts";
 import type { FoundationsPin } from "./development-foundations.ts";
-import { composeFoundations, confirmFoundationsSave, type Ask } from "./development-foundations-wizard.ts";
+import { chooseFoundationsOffer, composeFoundations, confirmFoundationsSave, type Ask } from "./development-foundations-wizard.ts";
 import type { DevelopmentSession } from "./development-session.ts";
 import type { KbClient, KbDoc } from "./kb-client.ts";
 import { askQuestions } from "./questions/ask.ts";
 
-export const FOUNDATIONS_OFFER = ["Armar Foundations", "Ahora no", "No ofrecer más para este repo"] as const;
+export { FOUNDATIONS_OFFER } from "./development-foundations-wizard.ts";
 const SAVE_TIMEOUT_MS = 30_000;
 // Una vez por sesión, en memoria del proceso como el pin: /reload no vuelve a ofrecer.
 const offered = new Set<string>();
@@ -71,14 +71,14 @@ export async function offerFoundations(ctx: ExtensionContext, session: Developme
 	// Las tandas son un componente de la TUI: en RPC no hay dónde mostrarlas.
 	if (!shouldOfferFoundations(pin, await readTrust(trustDir, key), ctx.hasUI && ctx.mode === "tui")) return;
 	offered.add(file);
-	const choice = await ctx.ui.select(`Foundations para ${key.repo}: comandos que corren sin preguntar y qué puntos piden un sí, en las perillas de ${key.product}`, [...FOUNDATIONS_OFFER]);
-	if (choice === FOUNDATIONS_OFFER[2]) {
+	const ask = asker(ctx, session);
+	const choice = await chooseFoundationsOffer(ask, key);
+	if (choice === "never") {
 		const record = await readTrust(trustDir, key) ?? { version: 1 as const, ...key, accepted: null, offerDeclined: false };
 		await writeTrust(trustDir, { ...record, offerDeclined: true }); return;
 	}
-	if (choice !== FOUNDATIONS_OFFER[0]) return;
+	if (choice !== "build") return;
 	const detected = await detectFoundationsCandidates(session.state.checkout.root);
-	const ask = asker(ctx, session);
 	try {
 		// «Cambiar respuestas» vuelve a las preguntas con lo elegido; cancelar en cualquier tanda no guarda nada.
 		for (let previous: FoundationsBlock | undefined; ;) {
