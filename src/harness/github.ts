@@ -4,6 +4,7 @@ import { processRunner, type CommandOptions, type Runner } from "../core/exec.ts
 import { gitRead, inspectCheckout } from "./git.ts";
 import { artifactHash, sourceHash, type Workflow } from "./model.ts";
 import { lensReport } from "./lenses.ts";
+import { parseIssueBody } from "./issue-section.ts";
 
 const START = "<!-- omi-development:start -->";
 const END = "<!-- omi-development:end -->";
@@ -37,7 +38,8 @@ export async function readIssueSource(checkout: Checkout, number: number, runner
  if (!Number.isSafeInteger(number) || number < 1) throw new Error("Número de issue inválido");
  const data = object(JSON.parse(await gh(checkout, ["issue", "view", String(number), "--json", "number,title,body,url"], runner, signal)));
  if (data.number !== number || typeof data.title !== "string" || !data.title.trim() || data.title.length > 2000 || typeof data.body !== "string" || data.body.length > 200000 || typeof data.url !== "string") throw new Error("Fuente del issue inválida; no se infieren campos");
- issueRepo(data.url, number); const body = originalBody(data.body);
+ // La sección administrada del harness no es parte del pedido: escribirla no invalida el trabajo.
+ issueRepo(data.url, number); const body = originalBody(parseIssueBody(data.body).human);
  if (body.length > 100000) throw new Error("Pedido original demasiado grande");
  return { number, title: data.title, body, url: data.url, hash: sourceHash(data.title, body) };
 }

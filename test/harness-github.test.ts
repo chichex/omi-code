@@ -54,6 +54,18 @@ test("issue source preserves original bytes and ignores only one well-formed leg
  }
 });
 
+test("the request contrast ignores the managed harness section and whatever is written inside it", async (t) => {
+ const f = await fixture(t); const first = await readIssueSource(f.workflow.checkout, 42, f.runner);
+ f.state.issue.body = `${first.body}\n\n<!-- omi:harness:start -->\n## Harness · #42\nReceta vieja\n<!-- omi:harness:end -->`;
+ assert.deepEqual(await readIssueSource(f.workflow.checkout, 42, f.runner), first, "escribir la sección no invalida el trabajo");
+ f.state.issue.body = f.state.issue.body.replace("Receta vieja", "Una persona tocó la sección");
+ assert.deepEqual(await readIssueSource(f.workflow.checkout, 42, f.runner), first);
+ f.state.issue.body = f.state.issue.body.replace("Original", "Original editado");
+ assert.notEqual((await readIssueSource(f.workflow.checkout, 42, f.runner)).hash, first.hash, "un cambio del pedido de arriba sí cuenta");
+ f.state.issue.body = `${first.body}\n\n<!-- omi:harness:start -->\nsin cierre`;
+ await assert.rejects(readIssueSource(f.workflow.checkout, 42, f.runner), /marcadores/i);
+});
+
 test("issue artifact appends an owned comment, deduplicates exact body and never mutates issue", async (t) => {
  const f = await fixture(t); const original = structuredClone(f.workflow.source); await syncIssueArtifact(f.workflow, f.runner); await syncIssueArtifact(f.workflow, f.runner);
  assert.equal(posts(f).length, 1); assert.equal(f.state.comments.length, 1); assert.equal(f.state.issue.body, original.body); assert.deepEqual(f.workflow.source, original);
