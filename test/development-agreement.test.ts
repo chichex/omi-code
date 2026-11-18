@@ -57,17 +57,20 @@ test("agreement: una cita trivial no valida, y lo acordado llega al issue sin im
 	assert.ok(!section.includes(` ${exfil}`), "la imagen no puede renderizarse ni cargarse");
 });
 
-// La base explorada pasa a ser el código actual sólo si el checkout está limpio: los cambios son de pasos commiteados.
-test("agreement: un replan con cambios sin commitear conserva la base explorada y la receta nueva los sigue detectando", async (t) => {
+// Un replan rehace la receta sobre el código commiteado: con cambios sin commitear no hay base y, en Preparar
+// receta, el agente ya no podría commitearlos. Se rechaza antes de tocar nada y dice cómo seguir.
+test("agreement: un replan con cambios sin commitear se rechaza sin cambiar nada y dice cómo seguir", async (t) => {
 	const f = await approved(t); await f.action({ action: "step", id: "C1" });
-	const base = (await f.state()).exploration?.fingerprint;
+	const before = await f.state(); const issue = f.remote.body;
 	await f.write("value.cjs", "module.exports = 2;\n");
 	say(f, "Sumá también que other.cjs devuelva 2, por favor");
-	await f.action({ action: "agreed", quote: "Sumá también que other.cjs devuelva 2", agreement: "Ampliar el alcance a other.cjs", replan: true });
-	assert.equal((await f.state()).exploration?.fingerprint, base, "un cambio sin commitear no se adopta como base");
-	await assert.rejects(f.action({ action: "planned", plan: f.plan() }), /El código cambió desde Explorar/);
-	await assert.rejects(f.action({ action: "approve" }), /El código cambió desde Explorar/);
-	assert.ok(!isApproved(await f.state()));
+	await assert.rejects(f.action({ action: "agreed", quote: "Sumá también que other.cjs devuelva 2", agreement: "Ampliar el alcance a other.cjs", replan: true }),
+		/sin commitear.*[Tt]erminá y commiteá el paso activo, o registrá el acuerdo sin replan/);
+	assert.deepEqual(await f.state(), before, "ni la fase, ni la receta, ni la base explorada, ni los acuerdos cambian");
+	assert.equal(f.remote.body, issue, "la sección del issue no se toca");
+	await f.action({ action: "agreed", quote: "Sumá también que other.cjs devuelva 2", agreement: "Ampliar el alcance a other.cjs", replan: false });
+	const noted = await f.state();
+	assert.equal(noted.agreements?.length, 1, "sin replan se anota"); assert.equal(noted.phase, "implement"); assert.ok(isApproved(noted));
 });
 
 test("agreement: un replan después de pasos commiteados toma el código actual como base", async (t) => {
