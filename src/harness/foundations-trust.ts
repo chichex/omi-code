@@ -14,13 +14,11 @@ const Text = (max = 2000) => Type.String({ maxLength: max });
 const RecordSchema = Type.Object({
 	version: Type.Literal(1), kbUrl: Text(), product: Text(200), repo: Text(200),
 	accepted: Type.Union([Type.Object({ docId: Text(200), blockHash: Type.String({ pattern: "^[0-9a-f]{64}$" }), block: Type.Unknown(), author: Text(400), date: Text(100), acceptedAt: Text(100) }, { additionalProperties: false }), Type.Null()]),
-	pendingSave: Type.Union([Type.Object({ clave: Text(200), previousDocId: Text(200), bodyHash: Text(128), at: Text(100) }, { additionalProperties: false }), Type.Null()]),
 	offerDeclined: Type.Boolean(),
 }, { additionalProperties: false });
 export interface TrustKey { kbUrl: string; product: string; repo: string }
 export interface AcceptedRevision { docId: string; blockHash: string; block: FoundationsBlock; author: string; date: string; acceptedAt: string }
-export interface PendingSave { clave: string; previousDocId: string; bodyHash: string; at: string }
-export interface TrustRecord extends TrustKey { version: 1; accepted: AcceptedRevision | null; pendingSave: PendingSave | null; offerDeclined: boolean }
+export interface TrustRecord extends TrustKey { version: 1; accepted: AcceptedRevision | null; offerDeclined: boolean }
 
 export const foundationsDir = (homeDir: string): string => join(agentDir(homeDir), "foundations");
 export function trustPath(dir: string, key: TrustKey): string {

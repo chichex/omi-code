@@ -9,7 +9,7 @@ import { tempDir } from "./helpers/io.ts";
 
 const key = { kbUrl: "https://kb.example.test/mcp", product: "omi-code", repo: "chichex/omi-code" };
 const block: FoundationsBlock = { version: 1, repo: "chichex/omi-code", comandos: ["npm test"], politica: { arranque: "ask", receta: "ask", fuera_de_catalogo: "ask", push_pr: "ask" } };
-const record = (overrides: Partial<TrustRecord> = {}): TrustRecord => ({ version: 1, ...key, accepted: { docId: "doc-1", blockHash: foundationsHash(block), block, author: "ana@example.test", date: "2026-11-18T00:00:00Z", acceptedAt: "2026-11-18T01:00:00Z" }, pendingSave: null, offerDeclined: false, ...overrides });
+const record = (overrides: Partial<TrustRecord> = {}): TrustRecord => ({ version: 1, ...key, accepted: { docId: "doc-1", blockHash: foundationsHash(block), block, author: "ana@example.test", date: "2026-11-18T00:00:00Z", acceptedAt: "2026-11-18T01:00:00Z" }, offerDeclined: false, ...overrides });
 
 test("foundations_trust: ida y vuelta bajo <OMI_HOME>/agent/foundations con 0700 y 0600", async (t) => {
 	const home = await tempDir(t); const dir = foundationsDir(home);
@@ -56,12 +56,9 @@ test("foundations_trust: rechaza symlinks y hardlinks", async (t) => {
 	await assert.rejects(writeTrust(aliased, record()), /inseguro|symlink/i);
 });
 
-test("foundations_trust: un guardado pendiente sobrevive un corte", async (t) => {
+test("foundations_trust: «no ofrecer más» y nada aceptado sobreviven un corte", async (t) => {
 	const dir = foundationsDir(await tempDir(t));
-	const pending = { clave: "omi-foundations|chichex/omi-code|doc-1|abc", previousDocId: "doc-1", bodyHash: "a".repeat(64), at: "2026-11-18T02:00:00Z" };
-	await writeTrust(dir, record({ pendingSave: pending, offerDeclined: true }));
+	await writeTrust(dir, record({ accepted: null, offerDeclined: true }));
 	const read = await readTrust(dir, key);
-	assert.deepEqual(read?.pendingSave, pending); assert.equal(read?.offerDeclined, true);
-	await writeTrust(dir, record({ accepted: null }));
-	assert.equal((await readTrust(dir, key))?.accepted, null);
+	assert.equal(read?.offerDeclined, true); assert.equal(read?.accepted, null);
 });

@@ -29,10 +29,8 @@ export async function prepareFoundationsSave(kb: KbClient, key: TrustKey, block:
 	return { previous, body, clave: `omi-foundations|${key.repo.slice(0, 80)}|${previous?.id ?? "none"}|${sha256(body).slice(0, 40)}` };
 }
 
-/** Guarda sin pisar a otro: la clave se registra antes, se relee el vigente y se verifica lo guardado. */
+/** Guarda sin pisar a otro: se relee el vigente y se verifica lo guardado. La clave determinista recupera una respuesta perdida. */
 export async function commitFoundationsSave(kb: KbClient, key: TrustKey, block: FoundationsBlock, prepared: PreparedSave, deps: { trustDir: string; now: () => string; signal: AbortSignal }): Promise<FoundationsPin> {
-	const record: TrustRecord = await readTrust(deps.trustDir, key) ?? { version: 1, ...key, accepted: null, pendingSave: null, offerDeclined: false };
-	await writeTrust(deps.trustDir, { ...record, pendingSave: { clave: prepared.clave, previousDocId: prepared.previous?.id ?? "none", bodyHash: sha256(prepared.body), at: deps.now() } });
 	const current = await kb.currentPerillas(key.product, deps.signal);
 	if ((current?.id ?? null) !== (prepared.previous?.id ?? null)) throw new Error("Las perillas cambiaron en la KB mientras armabas Foundations; no se guardó nada. Volvé a intentarlo en otra sesión.");
 	const input = { product: key.product, titulo: prepared.previous?.titulo || `Perillas de ${key.product}`, cuerpo: prepared.body, clave: prepared.clave };
@@ -42,7 +40,8 @@ export async function commitFoundationsSave(kb: KbClient, key: TrustKey, block: 
 	if (stored.cuerpo !== prepared.body || stored.producto !== key.product) throw new Error("La KB guardó otro contenido; revisá las perillas antes de seguir.");
 	const latest = await kb.currentPerillas(key.product, deps.signal);
 	const hash = foundationsHash(block);
-	await writeTrust(deps.trustDir, { ...record, pendingSave: null, accepted: { docId: stored.id, blockHash: hash, block, author: stored.autor ?? "", date: stored.fecha ?? "", acceptedAt: deps.now() } });
+	const record: TrustRecord = await readTrust(deps.trustDir, key) ?? { version: 1, ...key, accepted: null, offerDeclined: false };
+	await writeTrust(deps.trustDir, { ...record, accepted: { docId: stored.id, blockHash: hash, block, author: stored.autor ?? "", date: stored.fecha ?? "", acceptedAt: deps.now() } });
 	return {
 		origin: "kb", block, hash, docId: stored.id, author: stored.autor ?? "", date: stored.fecha ?? "",
 		notice: latest?.id === stored.id ? "" : "La KB guardó Foundations, pero ya hay perillas más nuevas: la próxima sesión muestra la diferencia.",
@@ -74,7 +73,7 @@ export async function offerFoundations(ctx: ExtensionContext, session: Developme
 	offered.add(file);
 	const choice = await ctx.ui.select(`Foundations para ${key.repo}: comandos que corren sin preguntar y qué puntos piden un sí, en las perillas de ${key.product}`, [...FOUNDATIONS_OFFER]);
 	if (choice === FOUNDATIONS_OFFER[2]) {
-		const record = await readTrust(trustDir, key) ?? { version: 1 as const, ...key, accepted: null, pendingSave: null, offerDeclined: false };
+		const record = await readTrust(trustDir, key) ?? { version: 1 as const, ...key, accepted: null, offerDeclined: false };
 		await writeTrust(trustDir, { ...record, offerDeclined: true }); return;
 	}
 	if (choice !== FOUNDATIONS_OFFER[0]) return;

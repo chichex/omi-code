@@ -1,12 +1,12 @@
 // Sin Foundations, el harness ofrece armarlo y lo guarda en la KB sólo con el sí. Nunca la KB real.
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { parseFoundations, foundationsHash, type FoundationsBlock } from "../src/harness/foundations.ts";
-import { foundationsDir, readTrust } from "../src/harness/foundations-trust.ts";
+import { foundationsDir, readTrust, trustPath } from "../src/harness/foundations-trust.ts";
 import { commitFoundationsSave, prepareFoundationsSave, shouldOfferFoundations, FOUNDATIONS_OFFER } from "../src/tui/development-foundations-setup.ts";
 import { createKbClient } from "../src/tui/kb-client.ts";
 import { developmentFixture } from "./helpers/development.ts";
@@ -120,6 +120,19 @@ test("foundations_setup: una respuesta perdida se reintenta con la misma clave y
 	assert.equal(claves.length, 2); assert.equal(claves[0], claves[1]);
 	assert.equal(kb.documents.filter((d) => d.cuerpo.includes("omi-foundations")).length, 1);
 	assert.equal(pin.origin, "kb");
+});
+
+// La clave es determinista (repo, perillas previas y cuerpo): reintentar no necesita nada guardado en disco.
+test("foundations_setup: un guardado que falla no deja nada en el registro, y uno exitoso no guarda la clave", async (t) => {
+	const kb = memoryKb({ products: ["repo"] }); kb.perillas("repo", HUMAN);
+	const dir = foundationsDir(await tempDir(t)); const key = { kbUrl: kb.url, product: "repo", repo: REPO };
+	kb.hook = (tool) => tool === "guardar" ? "error" : undefined;
+	await assert.rejects(save(kb, dir), /KB no disponible/);
+	assert.equal(await readTrust(dir, key), undefined, "nada aceptado ni pendiente");
+	kb.hook = () => {};
+	await save(kb, dir);
+	const stored: unknown = JSON.parse(await readFile(trustPath(dir, key), "utf8"));
+	assert.deepEqual(Object.keys(stored && typeof stored === "object" ? stored : {}).sort(), ["accepted", "kbUrl", "offerDeclined", "product", "repo", "version"]);
 });
 
 // Mismo camino con el MCP real de Pi por HTTP: transporte, clave y error de la respuesta.

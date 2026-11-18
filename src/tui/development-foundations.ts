@@ -70,7 +70,7 @@ export async function decideFoundations(reading: FoundationsReading, ctx: Extens
 	const doc = reading.perillas;
 	const pin: FoundationsPin = { origin: "kb", block: reading.block, hash: reading.hash, docId: doc.id, author: doc.autor ?? "", date: doc.fecha ?? "", notice: "", reading };
 	const save = (next: TrustRecord) => writeTrust(deps.trustDir, next);
-	const base: TrustRecord = record ?? { version: 1, ...reading.key, accepted: null, pendingSave: null, offerDeclined: false };
+	const base: TrustRecord = record ?? { version: 1, ...reading.key, accepted: null, offerDeclined: false };
 	const revision = { docId: doc.id, blockHash: reading.hash, block: reading.block, author: doc.autor ?? "", date: doc.fecha ?? "" };
 	if (accepted?.blockHash === reading.hash) {
 		// Alguien editó otra parte de las perillas: es la misma revisión de Foundations.

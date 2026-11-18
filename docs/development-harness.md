@@ -198,7 +198,7 @@ Sólo una cosa, y sólo con tu sí: armar Foundations cuando falta.
 - OMI propone los comandos que detecta leyendo archivos, sin ejecutar nada: scripts de `package.json` como `test`, `typecheck`, `lint`, `check`, `build`, `test:*`, con el gestor de su lockfile (`npm ci`, `pnpm install --frozen-lockfile`…), o `go test ./...` y `go vet ./...`. Las cuatro políticas empiezan en `ask`.
 - Lo editás en un editor; un texto inválido vuelve al editor con el motivo.
 - El sí muestra la diferencia y el destino. Se guarda una revisión nueva de las perillas: el resto del documento queda byte a byte, o se crea `Perillas de <producto>` si no había.
-- Si las perillas cambiaron durante el diálogo, no se guarda. Una respuesta perdida se reintenta con la misma clave, sin duplicar el documento.
+- Si las perillas cambiaron durante el diálogo, no se guarda. Una respuesta perdida se reintenta con la misma clave, sin duplicar el documento. La clave es determinista (repo, perillas previas y cuerpo), así que no se guarda en el registro local: un guardado que falla no deja nada ahí.
 - Lo guardado queda aceptado y vale en esa sesión.
 
 Para cambiarlo después, editá las perillas en la KB (o pedíselo al agente fuera del harness). No hay un comando para eso. `/omi-work status` y el detalle del progreso muestran la revisión vigente, su origen (KB, local o estricta), las cuatro políticas, el catálogo y los avisos.
