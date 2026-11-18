@@ -73,6 +73,9 @@ export function checkManifest(tools: ToolManifest): void {
 			if (asset === undefined) throw new Error(`bundled_tools: ${name} no fija un asset para ${platform}`);
 			if (!asset.url.startsWith(origin) || !asset.url.endsWith(ARCHIVE_SUFFIX)) throw new Error(`bundled_tools: ${name} ${platform} tiene que bajar un ${ARCHIVE_SUFFIX} de ${origin}`);
 			if (!/^[0-9a-f]{64}$/.test(asset.sha256)) throw new Error(`bundled_tools: ${name} ${platform} no fija un SHA-256 válido`);
+			// El tag (`v10.5.2` o `15.2.0`) y el nombre del asset llevan la versión declarada.
+			const [tag = "", file = ""] = new URL(asset.url).pathname.split("/").slice(-2);
+			if (tag.replace(/^v/, "") !== tool.version || !file.includes(`${tool.version}-`)) throw new Error(`bundled_tools: ${name} ${platform} baja ${tag}/${file}, no la versión ${tool.version}`);
 		}
 	}
 }

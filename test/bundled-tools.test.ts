@@ -52,6 +52,13 @@ test("manifiesto_rechaza una plataforma sin asset, un origen fuera del repo y un
 	assert.throws(() => checkManifest(variant((tool) => { tool.licenses = []; })), /licencia/);
 });
 
+test("manifiesto_rechaza un asset de otra versión que la declarada", () => {
+	// Un bump que edita la versión y no una URL, o al revés.
+	assert.throws(() => checkManifest(variant((tool) => { tool.version = "10.5.3"; })), /10\.5\.3/);
+	assert.throws(() => checkManifest(variant((tool) => { tool.assets["linux-arm64"].url = tool.assets["linux-arm64"].url.replaceAll(tool.version, "10.5.1"); })), /linux-arm64.*10\.5\.2/);
+	assert.throws(() => checkManifest(variant((tool) => { tool.assets["darwin-x64"].url = tool.assets["darwin-x64"].url.replace(`/v${tool.version}/`, "/v10.5.1/"); })), /darwin-x64/);
+});
+
 const ASSET = { url: "https://github.com/sharkdp/fd/releases/download/v1.0.0/fd-v1.0.0-x86_64-unknown-linux-musl.tar.gz", sha256: sha256("bueno") };
 
 test("fetchVerified_un SHA-256 que no coincide falla y no deja nada en el cache", async (t) => {
