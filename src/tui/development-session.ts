@@ -193,13 +193,15 @@ export class DevelopmentSession {
 		};
 		await assertExplored();
 		const document = approvalDocument(state);
-		if (!ctx.hasUI || !["tui", "rpc"].includes(ctx.mode)) throw new Error("Aprobar receta: requiere confirmación humana interactiva");
+		// receta: auto aprueba sin la revisión humana; se revalida igual y sus comandos no quedan autorizados.
+		const foundations = await this.foundations.policy(ctx, state); const auto = foundations.politica.receta === "auto";
+		if (!auto && (!ctx.hasUI || !["tui", "rpc"].includes(ctx.mode))) throw new Error("Aprobar receta: requiere confirmación humana interactiva");
 		const cancellation = AbortSignal.any([this.lifecycle.signal, ...((signal ?? ctx.signal) ? [signal ?? ctx.signal!] : [])]);
-		this.emit("Esperando revisión de receta", true);
+		this.emit(auto ? "Foundations · receta auto" : "Esperando revisión de receta", !auto);
 		let approved: boolean;
 		try {
-			approved = ctx.mode === "tui" ? await showApprovalReview(ctx, document, cancellation)
-				: await ctx.ui.confirm(document.title, approvalText(document), { signal: cancellation }) === true;
+			approved = auto || (ctx.mode === "tui" ? await showApprovalReview(ctx, document, cancellation)
+				: await ctx.ui.confirm(document.title, approvalText(document), { signal: cancellation }) === true);
 		} finally { this.emit(); }
 		if (!approved || cancellation.aborted) return false;
 		// Una revisión larga no puede autorizar una receta distinta ni un estado adoptado por otra ventana.
@@ -208,8 +210,10 @@ export class DevelopmentSession {
 		if (!(await this.fresh(ctx))) return false;
 		await assertExplored();
 		cancellation.throwIfAborted();
-		await this.apply({ type: "approved" }, ctx);
+		await this.apply({ type: "approved", ...(auto ? { by: "foundations" as const, ...(foundations.hash ? { foundations: foundations.hash } : {}) } : {}) }, ctx);
+		// También con receta: auto la sección del issue muestra la receta aprobada.
 		await updateIssueSection(this, ctx);
+		if (auto) ctx.ui.notify("Foundations · receta auto: la receta se aprobó sin revisión humana. Sus comandos fuera del catálogo siguen pidiendo permiso.", "info");
 		return true;
 	}
 	// Volver a explorar descarta receta, aprobación y pruebas; también las lecturas y comandos autorizados.
@@ -226,7 +230,9 @@ export class DevelopmentSession {
 		// Revalidar evidencia con el fingerprint actual, también al recuperar una publicación pendiente.
 		transition({ ...state, phase: "verify", publication: { status: "none" } }, { type: "verified", fingerprint: snapshot.fingerprint }, this.now());
 		renderWorkflowArtifact(state); // Falla antes del sí si el artefacto no entra en GitHub.
-		if (!(await this.confirm(ctx, "Subir rama y abrir PR draft", `${state.checkout.branch} → main\nCommit ${snapshot.head}\nIssue #${state.source.number}\n\nHace push normal sólo de esta rama, crea o recupera su PR draft y actualiza la sección del harness en el cuerpo del issue con la evidencia. No mergea, no fuerza pushes ni ejecuta workflows.`))) return;
+		const remote = `${state.checkout.branch} → main\nCommit ${snapshot.head}\nIssue #${state.source.number}\n\nHace push normal sólo de esta rama, crea o recupera su PR draft y actualiza la sección del harness en el cuerpo del issue con la evidencia. No mergea, no fuerza pushes ni ejecuta workflows.`;
+		if ((await this.foundations.policy(ctx, state)).politica.push_pr === "auto") ctx.ui.notify(`Foundations · push + PR draft auto: sin preguntar.\n${remote}`, "info");
+		else if (!(await this.confirm(ctx, "Subir rama y abrir PR draft", remote))) return;
 		if (state.publication.status === "none") state = await this.apply({ type: "publishing", head: snapshot.head, bodyHash: artifactHash(renderWorkflowArtifact(state)) }, ctx);
 		const receipt = await publishDraft(state, this.runner, this.lifecycle.signal);
 		await this.apply({ type: "published", ...receipt }, ctx);

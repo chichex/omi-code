@@ -87,7 +87,10 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 					runner: session.runner, offline: session.offline, signal: session.lifecycle.signal, now: session.now, loader: deps.loader ?? borderedLoader,
 					sessionDir: parseArgs([...args]).sessionDir, startHere: () => startHere(ctx),
 					// Foundations se decide recién acá: después de las guardas sin efectos y antes del sí del arranque.
-					confirm: async (context, title, description) => { await session.foundations.pin(context); return session.confirm(context, title, description); },
+					confirm: async (context, title, description) => {
+						if ((await session.foundations.policy(context)).politica.arranque !== "auto") return session.confirm(context, title, description);
+						context.ui.notify(`Foundations · arranque auto: ${title}, sin preguntar.\n\n${description}`, "info"); return true;
+					},
 				});
 			} finally { release(); }
 		}

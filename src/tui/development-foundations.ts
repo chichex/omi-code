@@ -86,9 +86,9 @@ export async function decideFoundations(reading: FoundationsReading, ctx: Extens
 }
 
 /** Política vigente para un trabajo: la del pin, si el issue es del mismo repo; si no, la estricta. */
-export function effectivePolicy(pin: FoundationsPin | undefined, state?: Workflow): { politica: FoundationsPolicy; command: CommandPolicy } {
+export function effectivePolicy(pin: FoundationsPin | undefined, state?: Workflow): { politica: FoundationsPolicy; command: CommandPolicy; hash: string | null } {
 	const block = pin?.block && (!state || issueRepo(state.source.url) === pin.block.repo) ? pin.block : null;
-	return { politica: block?.politica ?? STRICT_POLICY, command: { catalog: block?.comandos ?? [], outside: block?.politica.fuera_de_catalogo ?? "ask" } };
+	return { politica: block?.politica ?? STRICT_POLICY, command: { catalog: block?.comandos ?? [], outside: block?.politica.fuera_de_catalogo ?? "ask" }, hash: block ? pin?.hash ?? null : null };
 }
 const ORIGINS = { kb: "KB", local: "local (última aceptada)", strict: "estricta" };
 /** Para /omi-work status y el detalle del progreso. Sin I/O. */
