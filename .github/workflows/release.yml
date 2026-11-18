@@ -83,7 +83,7 @@ jobs:
       - run: npm version "$VERSION" --no-git-tag-version --allow-same-version
       - run: npm run typecheck
       # Pi baja fd y rg de github.com si no están en el PATH; npm test no sale a la red.
-      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ripgrep fd-find
+      - run: sudo apt-get -o Acquire::Retries=3 update -qq && sudo apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends ripgrep fd-find
       - run: npm test
       - run: npm run test:packaging
       - run: node scripts/build-release.ts --out dist/release
