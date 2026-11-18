@@ -35,7 +35,6 @@ export class DevelopmentSession {
 	onChange: (() => void) | undefined;
 	lockedReason = "";
 	readonly reads = new Map<string, ReadReceipt>();
-	readonly approvedCommands = new Set<string>();
 	readonly runner: Runner;
 	readonly now: () => string;
 	readonly lifecycle = new AbortController();
@@ -110,7 +109,7 @@ export class DevelopmentSession {
 	}
 	async restore(ctx: ExtensionContext, adopt = false): Promise<void> {
 		await this.mutations; this.epoch++;
-		this.context = ctx; this.state = undefined; this.lockedReason = ""; this.lastAnchor = undefined; this.reads.clear(); this.approvedCommands.clear();
+		this.context = ctx; this.state = undefined; this.lockedReason = ""; this.lastAnchor = undefined; this.reads.clear();
 		const entry = ctx.sessionManager.getBranch().findLast((e) => e.type === "custom" && e.customType === DEVELOPMENT_ANCHOR);
 		if (!entry && !adopt) { this.emit(); return; }
 		try {
@@ -168,7 +167,7 @@ export class DevelopmentSession {
 		const source = await readIssueSource(state.checkout, state.source.number, this.runner, this.lifecycle.signal);
 		if (source.url !== state.source.url) throw new Error("Cambió la identidad del issue; no se reutiliza el trabajo");
 		if (source.hash === state.source.hash) return true;
-		await this.apply({ type: "source_changed", source }, ctx); this.reads.clear(); this.approvedCommands.clear();
+		await this.apply({ type: "source_changed", source }, ctx); this.reads.clear();
 		ctx.ui.notify("El pedido cambió. Receta, aprobaciones y verificaciones se invalidaron; vuelve a Explorar.", "warning"); return false;
 	}
 	async confirm(ctx: ExtensionContext, title: string, description: string): Promise<boolean> {
@@ -211,7 +210,7 @@ export class DevelopmentSession {
 	// Volver a explorar descarta receta, aprobación y pruebas; también las lecturas y comandos autorizados.
 	async refresh(ctx: ExtensionContext): Promise<void> {
 		if (await this.fresh(ctx)) await this.apply({ type: "source_changed", source: this.current(ctx).source }, ctx);
-		this.reads.clear(); this.approvedCommands.clear();
+		this.reads.clear();
 	}
 	async publish(ctx: ExtensionContext): Promise<void> {
 		if (!(await this.fresh(ctx))) return;

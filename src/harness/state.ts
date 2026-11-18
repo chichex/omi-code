@@ -1,4 +1,4 @@
-import { artifactHash, MAX_AGREEMENTS, MAX_ATTEMPTS, MAX_EVIDENCE, MAX_HISTORY, MAX_REVIEWS, MAX_STEPS, parseWorkflow, sourceHash, type Workflow, type Exploration, type InferenceInput, type Plan, type Spec, type Evidence, type Review, type Step } from "./model.ts";
+import { artifactHash, MAX_AGREEMENTS, MAX_ATTEMPTS, MAX_EVIDENCE, MAX_GRANTS, MAX_HISTORY, MAX_REVIEWS, MAX_STEPS, parseWorkflow, sourceHash, type Workflow, type Exploration, type InferenceInput, type Plan, type Spec, type Evidence, type Review, type Step } from "./model.ts";
 
 import { recipeNextPhase, recipeRoute } from "./phases.ts";
 
@@ -9,7 +9,8 @@ export type WorkflowEvent =
  | { type: "planned"; plan: Plan }
  | { type: "diagnosed"; cause: string; reproduction: string; size: "small" | "large" }
  | { type: "specified"; spec: Spec }
- | { type: "approved" }
+ | { type: "approved"; by?: "person" | "foundations"; foundations?: string }
+ | { type: "command_granted"; key: string; command: string }
  | { type: "step_started"; id: string }
  | { type: "evidence"; evidence: Evidence }
  | { type: "check_failed"; evidence: Evidence }
@@ -244,7 +245,7 @@ function sourceChanged(state: Workflow, source: Workflow["source"], at: string):
  state.source = { ...source, hash: sourceHash(source.title, source.body) };
  state.observations = [];
  state.exploration = null; state.inferences = []; state.recipe = null; state.diagnosis = null; state.spec = null;
- state.steps = []; state.evidence = []; state.reviews = []; state.approval = null; state.round = 0;
+ state.steps = []; state.evidence = []; state.reviews = []; state.approval = null; state.round = 0; state.grants = [];
  state.publication = { status: "none" }; state.phase = "explore"; setBlock(state, "");
 }
 // El chat vale como autorización: el host ya verificó la cita. Con un cambio de alcance (replan) la
@@ -290,7 +291,7 @@ export function transition(original: Workflow, event: WorkflowEvent, at: string)
  // Un cierre sin cambio lo decide el modelo; volver a leer el pedido es la salida humana.
  requireCondition(state.status !== "complete" || state.phase === "closed" && event.type === "source_changed", "el trabajo ya está cerrado");
  requireCondition(state.status !== "paused" || event.type === "resume" || event.type === "source_changed", "el trabajo está pausado");
- if (state.status === "waiting" && retriesExhausted(state)) requireCondition(["pause", "resume", "source_changed", "agreed"].includes(event.type), "se agotaron las vueltas");
+ if (state.status === "waiting" && retriesExhausted(state)) requireCondition(["pause", "resume", "source_changed", "agreed", "command_granted"].includes(event.type), "se agotaron las vueltas");
  applyEvent(state, event, at);
  state.revision++;
  state.activity = (event.type === "pause" || event.type === "retry" ? `${event.type}: ${event.reason}` : event.type).slice(0, 4000);
@@ -335,7 +336,12 @@ function applyEvent(state: Workflow, event: WorkflowEvent, at: string): void {
   case "approved":
    requirePhase(state, "approve"); requireCondition(!decisionBlock(state) && state.recipe && state.steps.length, "faltan decisiones, receta o pasos");
    requireCondition(state.recipe.route !== "spec" || state.spec, "falta spec");
-   state.approval = { sourceHash: state.source.hash, recipeHash: recipeApprovalHash(state), at }; state.phase = "implement"; setBlock(state, ""); return;
+   state.approval = { sourceHash: state.source.hash, recipeHash: recipeApprovalHash(state), at, ...(event.by === "foundations" ? { by: "foundations" as const, ...(event.foundations ? { foundations: event.foundations } : {}) } : {}) };
+   state.phase = "implement"; setBlock(state, ""); return;
+  case "command_granted":
+   requireCondition(nonempty(event.key) && nonempty(event.command), "falta el comando autorizado");
+   if (!state.grants?.some(g => g.key === event.key)) state.grants = [...(state.grants ?? []), { key: event.key, command: event.command, at }].slice(-MAX_GRANTS);
+   return;
   case "step_started": startStep(state, event.id); return;
   case "evidence": recordEvidence(state, event.evidence); return;
   case "check_failed": recordFailedCheck(state, event.evidence); return;

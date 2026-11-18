@@ -5,7 +5,7 @@ import { Value } from "typebox/value";
 import { PHASES } from "./phases.ts";
 
 // Topes compartidos por el esquema y el reducer: el reducer los respeta antes de validar.
-export const MAX_HISTORY = 1000; export const MAX_STEPS = 50; export const MAX_ATTEMPTS = 100; export const MAX_EVIDENCE = 1000; export const MAX_REVIEWS = 100; export const MAX_AGREEMENTS = 50;
+export const MAX_HISTORY = 1000; export const MAX_STEPS = 50; export const MAX_ATTEMPTS = 100; export const MAX_EVIDENCE = 1000; export const MAX_REVIEWS = 100; export const MAX_AGREEMENTS = 50; export const MAX_GRANTS = 200;
 export const text = (maxLength = 4000) => Type.String({ minLength: 1, maxLength, pattern: "\\S" });
 const list = () => Type.Array(text(), { maxItems: 100 });
 const nullableText = () => Type.Union([text(8192), Type.Null()]);
@@ -82,7 +82,10 @@ export const WorkflowSchema = Type.Object({
 	spec: Type.Union([SpecSchema, Type.Null()]), steps: Type.Array(StepSchema, { maxItems: MAX_STEPS }), evidence: Type.Array(EvidenceSchema, { maxItems: MAX_EVIDENCE }), reviews: Type.Array(ReviewSchema, { maxItems: MAX_REVIEWS }),
 	round: Type.Integer({ minimum: 0 }), maxRounds: Type.Integer({ minimum: 1, maximum: 10 }),
 	attempts: Type.Optional(Type.Array(Type.Object({ sourceHash: text(128), round: Type.Integer({ minimum: 0 }), reason: text(), at: text(100), evidence: Type.Array(EvidenceSchema, { maxItems: 1000 }), reviews: Type.Array(ReviewSchema, { maxItems: 100 }) }, { additionalProperties: false }), { maxItems: MAX_ATTEMPTS })),
-	approval: Type.Union([Type.Object({ sourceHash: text(128), recipeHash: text(128), at: text(100) }, { additionalProperties: false }), Type.Null()]),
+	// by ausente es una persona: todo estado anterior lo es. foundations es el hash de la revisión que aprobó sola.
+	approval: Type.Union([Type.Object({ sourceHash: text(128), recipeHash: text(128), at: text(100), by: Type.Optional(Type.Union([Type.Literal("person"), Type.Literal("foundations")])), foundations: Type.Optional(text(128)) }, { additionalProperties: false }), Type.Null()]),
+	// Comandos que la persona autorizó para este pedido, con cualquier etiqueta. Sobreviven a resume.
+	grants: Type.Optional(Type.Array(Type.Object({ key: text(128), command: text(8192), at: text(100) }, { additionalProperties: false }), { maxItems: MAX_GRANTS })),
 	publication: PublicationSchema,
 	// Opcional para estados previos. Sobrevive a refresh: son palabras de la persona, no del pedido.
 	agreements: Type.Optional(Type.Array(AgreementSchema, { maxItems: MAX_AGREEMENTS })),

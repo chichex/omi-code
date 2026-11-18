@@ -4,7 +4,8 @@ import { realpath } from "node:fs/promises";
 import { dirname, relative } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isInside } from "../core/files.ts";
-import { artifactHash, type Evidence, type EvidenceKind } from "../harness/model.ts";
+import type { Evidence, EvidenceKind } from "../harness/model.ts";
+import { commandAuthorization, grantKey } from "../harness/authorization.ts";
 import { expectedFailure, isApproved, recipeApprovalHash, successful } from "../harness/state.ts";
 import { inspectCheckout, assertStepCommit } from "../harness/git.ts";
 import { runWorkflowCommand, type WorkflowCommandResult } from "../harness/commands.ts";
@@ -29,11 +30,10 @@ export async function executeCheck(session: DevelopmentSession, input: CheckInpu
 		if (input.kind === "green" && (!red || red.command !== input.command)) throw new Error("El verde debe ejecutar el mismo comando que el rojo observado");
 	}
 	if (input.kind === "verification" && !state.recipe?.cases.some((c) => c.id === input.caseId && c.command === input.command)) throw new Error("La verificación debe usar el caso D y comando exactos de la receta aprobada");
-	const commandKey = artifactHash({ id: state.id, source: state.source.hash, approval: state.approval, command: input.command });
-	const included = input.kind !== "reproduction" && input.kind !== "setup" && state.recipe?.cases.some((c) => c.command === input.command) && isApproved(state);
-	if (!included && !session.approvedCommands.has(commandKey)) {
-		if (!(await session.confirm(ctx, "Autorizar comando del proyecto", `${input.kind} · ${state.checkout.root}\n\n${input.command}\n\nEjecuta código del proyecto con permisos de tu usuario. No es una operación de sólo lectura ni un sandbox. No autoriza otros comandos.`))) throw new Error("Comando no autorizado; no se ejecutó");
-		session.approvedCommands.add(commandKey);
+	// La etiqueta no pide otro sí: un D aprobado corre igual como setup, y un permiso se guarda en el trabajo.
+	if (commandAuthorization(state, input.command) === "ask") {
+		if (!(await session.confirm(ctx, "Autorizar comando del proyecto", `${input.kind} · ${state.checkout.root}\n\n${input.command}\n\nEjecuta código del proyecto con permisos de tu usuario. No es una operación de sólo lectura ni un sandbox. No autoriza otros comandos. El permiso queda guardado para este trabajo, también al retomarlo, hasta que cambie el pedido.`))) throw new Error("Comando no autorizado; no se ejecutó");
+		await session.apply({ type: "command_granted", key: grantKey(state, input.command), command: input.command }, ctx);
 	}
 	const before = await inspectCheckout(state.checkout, session.runner, signal);
 	const startedAt = session.now(); session.emit(`${input.kind} · ${input.caseId ?? input.stepId ?? "comando"} · ${input.command}`);
