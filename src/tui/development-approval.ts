@@ -49,9 +49,7 @@ export function commandDisplayLines(value: string, width = Number.POSITIVE_INFIN
 export function approvalDocument(state: Workflow): ApprovalDocument {
 	const recipe = state.recipe;
 	if (!recipe) throw new Error("Falta receta para revisar");
-	// Mismo límite del payload anterior; no sustituirlo por un resumen más pequeño.
-	const payload = { source: { number: state.source.number, title: state.source.title, url: state.source.url, hash: state.source.hash }, recipe, spec: state.spec, inferences: state.inferences };
-	if (JSON.stringify(payload, null, 2).length > 50000) throw new Error("La receta es demasiado grande para aprobarla completa; acotá el trabajo con planned o specified");
+	// Sin tope propio: la revisión navega por secciones. Sólo se comprueba que el artefacto entre en GitHub.
 	renderWorkflowArtifact(state);
 	const { classification: c, executor } = recipe;
 	const sections: ApprovalSection[] = [

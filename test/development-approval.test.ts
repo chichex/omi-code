@@ -52,9 +52,10 @@ test("aprobación: conserva todos los campos, respuestas y sentinels sin truncad
 	assert.equal(doc.sections[0]?.id, "summary");
 });
 
-test("aprobación: preflight conserva límites locales y GitHub antes del sí", () => {
-	const oversized = proposal(); oversized.recipe!.scope = Array.from({ length: 15 }, () => "x".repeat(3900));
-	assert.throws(() => approvalDocument(oversized), /grande|divid|acotá/i);
+test("aprobación: una receta de más de 50.000 caracteres se revisa completa; antes del sí sólo frena el límite de GitHub", () => {
+	const large = proposal(); large.recipe!.scope = [...Array.from({ length: 14 }, () => "x".repeat(3900)), "FINAL_LARGE_SCOPE"];
+	assert.ok(JSON.stringify({ recipe: large.recipe }, null, 2).length > 50000);
+	assert.match(approvalText(approvalDocument(large)), /FINAL_LARGE_SCOPE/, "la receta navegable se revisa por secciones, sin tope propio");
 	const remoteOversized = proposal(); remoteOversized.source.body = "x".repeat(70000);
 	assert.throws(() => approvalDocument(remoteOversized), /GitHub|límite|grande/i);
 });
