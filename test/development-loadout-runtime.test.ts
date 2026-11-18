@@ -8,7 +8,9 @@ import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { createAgentSession, createCodemodeExtension, DefaultResourceLoader, parseArgs, SessionManager, SettingsManager, type AgentSession, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { codemodeDefaultExtension } from "../src/tui/defaults.ts";
+import { updateWorkflow } from "../src/harness/store.ts";
 import { developmentHarnessExtension } from "../src/tui/development.ts";
+import { LOADOUT_ENTRY } from "../src/tui/development-loadout.ts";
 import { issueDevelopmentTicket } from "../src/tui/development-tickets.ts";
 import { developmentFixture } from "./helpers/development.ts";
 import { testIo } from "./helpers/io.ts";
@@ -51,7 +53,9 @@ async function harnessRuntime(t: TestContext) {
 			extensionFactories: [{ name: "codemode", factory: createCodemodeExtension(), builtin: true, replaceable: true }, await codemodeDefaultExtension(args), developmentHarnessExtension(testIo({ homeDir: f.home, cwd }), args, { runner: f.runner })] });
 		await resourceLoader.reload();
 		const cli = parseArgs(args);
-		const { session } = await createAgentSession({ cwd, agentDir, resourceLoader, settingsManager, sessionManager: manager, ...(cli.tools ? { tools: cli.tools } : {}), ...(cli.excludeTools ? { excludeTools: cli.excludeTools } : {}) });
+		// Como main() de Pi: --no-tools es "all" y --no-builtin-tools, "builtin".
+		const noTools = cli.noTools ? "all" as const : cli.noBuiltinTools ? "builtin" as const : undefined;
+		const { session } = await createAgentSession({ cwd, agentDir, resourceLoader, settingsManager, sessionManager: manager, ...(cli.tools ? { tools: cli.tools } : {}), ...(cli.excludeTools ? { excludeTools: cli.excludeTools } : {}), ...(noTools ? { noTools } : {}) });
 		t.after(() => session.dispose());
 		await session.bindExtensions({ uiContext: ui });
 		return session;
@@ -69,7 +73,7 @@ async function harnessRuntime(t: TestContext) {
 	};
 	const stop = async (session: AgentSession) => { await session.prompt("/omi-work stop"); assert.match(notices.at(-1) ?? "", /Sin harness activo/); };
 	const resume = () => open(SessionManager.open(f.manager.getSessionFile()!));
-	return { f, requests, open, run, begin, stop, resume };
+	return { f, requests, notices, open, run, begin, stop, resume };
 }
 
 async function started(t: TestContext) {
@@ -150,11 +154,34 @@ test("harness real · retomar con otra lista explícita de --tools y salir deja 
 	assert.deepEqual(sorted(resumed.getActiveToolNames()), ["bash", "edit", "read"]);
 });
 
+test("harness real · una entrada de loadout inválida no se aplica: quedan las tools que restauró Pi", { timeout: 30000 }, async (t) => {
+	const r = await started(t); r.first.dispose();
+	SessionManager.open(r.f.manager.getSessionFile()!).appendCustomEntry(LOADOUT_ENTRY, { tools: "bash", selection: 1 });
+	const resumed = await r.resume();
+	await r.stop(resumed);
+	assert.ok(resumed.getActiveToolNames().includes("read"));
+	for (const name of ["bash", "edit", "write"]) assert.ok(!resumed.getActiveToolNames().includes(name), `no se inventa ${name}`);
+});
+
+test("harness real · salir de un harness bloqueado al retomar devuelve las tools de la persona", { timeout: 30000 }, async (t) => {
+	const r = await started(t); r.first.dispose();
+	// Otra ventana avanzó el trabajo: esta rama queda atrasada y el harness, bloqueado.
+	await updateWorkflow(r.f.checkout, 42, (await r.f.state()).revision, (saved) => ({ ...saved!, revision: saved!.revision + 1 }));
+	const resumed = await r.resume();
+	assert.ok(r.notices.some((notice) => notice.includes("avanzó en otra rama")), "el harness quedó bloqueado");
+	assert.ok(!resumed.getActiveToolNames().includes("bash"), "bloqueado, sigue restringido");
+	await r.stop(resumed);
+	assert.deepEqual(sorted(resumed.getActiveToolNames()), sorted(r.normal));
+});
+
 // Lo que la persona elige al volver a abrir prevalece sobre lo guardado, con las reglas de Pi.
 for (const [label, args, settings, expected] of [
 	["--tools read,bash", ["--tools", "read,bash"], {}, (_normal: string[]) => ["read", "bash"]],
 	["--tools -codemode", ["--tools", "-codemode"], {}, (normal: string[]) => normal.filter((name) => name !== "codemode")],
+	["--tools +grep", ["--tools", "+grep"], {}, (normal: string[]) => [...normal, "grep"]],
 	["--exclude-tools edit", ["--exclude-tools", "edit"], {}, (normal: string[]) => normal.filter((name) => name !== "edit")],
+	// Sin builtins sólo quedan las tools de extensión activas por defecto; OMI tampoco suma codemode.
+	["--no-builtin-tools", ["--no-builtin-tools"], {}, (_normal: string[]) => ["omi_work_begin"]],
 	["extensions: -builtin:codemode", [], { extensions: ["-builtin:codemode"] }, (normal: string[]) => normal.filter((name) => name !== "codemode")],
 ] as const) test(`harness real · retomar con ${label} y salir respeta la nueva selección`, { timeout: 30000 }, async (t) => {
 	const r = await started(t); r.first.dispose();
