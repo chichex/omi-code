@@ -59,13 +59,6 @@ test("kb_client: guardar usa la clave y repetirla recupera el original", async (
 	assert.equal((await client.read(first.id, signal())).cuerpo, "cuerpo");
 });
 
-test("kb_client: los nombres de escritura salen de lo que registró Pi", async (t) => {
-	const kb = await mockKb(t); const { client, cwd, tools } = await host(t, kb);
-	await client.ready(cwd, signal());
-	assert.ok(tools.has("mcp__harness_kb__guardar"), "Pi cambió cómo nombra las tools MCP");
-	assert.deepEqual([...client.writeToolNames()].sort(), ["mcp__harness_kb__borrar", "mcp__harness_kb__guardar"]);
-});
-
 test("kb_client: sin login (401) da no disponible dentro del tope y sin llamar tools", async (t) => {
 	const kb = await mockKb(t); kb.unauthorized = true;
 	const { client, cwd } = await host(t, kb, { readyTimeoutMs: 400 });

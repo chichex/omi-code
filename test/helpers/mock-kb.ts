@@ -117,6 +117,5 @@ export function memoryKb(options: { products?: string[] } = {}): MemoryKb {
 		return found[0] ? kb.read(found[0].id, AbortSignal.timeout(1000)) : null;
 	};
 	kb.save = async (input) => await call("guardar", { producto: input.product, tipo: "perillas", titulo: input.titulo, cuerpo: input.cuerpo, clave: input.clave }) as { id: string };
-	kb.writeToolNames = () => ["mcp__harness_kb__guardar", "mcp__harness_kb__borrar"];
 	return kb;
 }

@@ -10,7 +10,6 @@ import type { ExtensionAPI, InlineExtension, ToolDefinition } from "@earendil-wo
 
 export const KB_SERVER = "harness-kb";
 const READ_TOOLS = ["mis_productos", "buscar", "leer"];
-const WRITE_TOOLS = ["guardar", "borrar"];
 const POLL_MS = 50;
 const DocSchema = Type.Object({ id: Type.String({ minLength: 1, maxLength: 200 }), producto: Type.String(), tipo: Type.String(), titulo: Type.String(), cuerpo: Type.String({ maxLength: 400_000 }), autor: Type.Optional(Type.String()), fecha: Type.Optional(Type.String()) });
 export type KbDoc = Static<typeof DocSchema>;
@@ -35,8 +34,6 @@ export interface KbClient {
 	currentPerillas(product: string, signal: AbortSignal): Promise<KbDoc | null>;
 	read(id: string, signal: AbortSignal): Promise<KbDoc>;
 	save(input: { product: string; titulo: string; cuerpo: string; clave: string }, signal: AbortSignal): Promise<{ id: string }>;
-	/** Nombres reales de guardar y borrar en Pi, para bloquearlos al agente. */
-	writeToolNames(): string[];
 }
 export type KbExtension = Extract<InlineExtension, { factory: unknown }>;
 export interface KbHost extends KbClient { extension(): KbExtension }
@@ -129,10 +126,5 @@ export function createKbClient(options: KbClientOptions): KbHost {
 		},
 		read,
 		save: async (input, signal) => call("guardar", { producto: input.product, tipo: "perillas", titulo: input.titulo, cuerpo: input.cuerpo, clave: input.clave }, SavedSchema, signal),
-		writeToolNames() {
-			const names = new Set(WRITE_TOOLS.map((tool) => `mcp__${KB_SERVER.replace(/-/g, "_")}__${tool}`));
-			for (const tool of WRITE_TOOLS) { const name = captured.get(tool)?.name; if (name) names.add(name); }
-			return [...names];
-		},
 	};
 }

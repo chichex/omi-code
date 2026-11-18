@@ -69,13 +69,15 @@ test("foundations_policy: un issue de otro repo no usa el Foundations de este", 
 	assert.deepEqual(effectivePolicy(pin, foreign), { politica: ASK, command: { catalog: [], outside: "ask" }, hash: null });
 });
 
+// Las bloquea workflowToolAllowed, como a toda tool fuera de las del flujo: también implementando, con receta aprobada.
 for (const nested of [false, true]) test(`foundations_policy: con el harness activo el agente no guarda ni borra perillas${nested ? " (llamada anidada)" : ""}`, async (t) => {
 	const f = await fixture(t, block([]));
 	assert.equal(await f.emit("tool_call", { toolName: "mcp__harness_kb__guardar", toolCallId: "g0", input: {} }), undefined, "fuera del harness no se bloquea");
-	await f.start();
+	await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" }); await f.action({ action: "step", id: "C1" });
+	assert.equal((await f.state()).phase, "implement");
 	for (const toolName of ["mcp__harness_kb__guardar", "mcp__harness_kb__borrar"]) {
 		const result = await f.emit("tool_call", { toolName, toolCallId: "g1", input: { producto: "repo", tipo: "perillas", titulo: "x", cuerpo: "x" }, ...(nested ? { parentToolCallId: "worker-1" } : {}) }) as { block?: boolean; reason?: string } | undefined;
-		assert.equal(result?.block, true); assert.match(result?.reason ?? "", /perillas/);
+		assert.equal(result?.block, true); assert.equal(result?.reason, `Harness: ${toolName} no está habilitada en esta etapa. Usá omi_workflow y omi_workflow_check; no eludas la receta, evidencia ni permisos.`);
 	}
 });
 

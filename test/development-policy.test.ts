@@ -27,6 +27,7 @@ test("development_policy los escritores no superan el tope de la receta aunque e
 	assert.equal(workflowToolAllowed(state, "subagent", { chain: [{ agent: "worker" }, { agent: "worker" }] }), true);
 	assert.equal(workflowToolAllowed(state, "write", {}), true);
 	assert.equal(workflowToolAllowed({ ...state, approval: null }, "write", {}), false);
+	for (const name of ["mcp__harness_kb__guardar", "mcp__harness_kb__borrar"]) assert.equal(workflowToolAllowed(state, name, { producto: "repo", tipo: "perillas" }), false, `${name}: Foundations lo edita una persona`);
 });
 
 test("development_policy las rutas de escritura no pueden escapar del checkout ni tocar metadata/secretos", () => {

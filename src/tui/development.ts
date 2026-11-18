@@ -20,7 +20,6 @@ import { effectivePolicy, foundationsLines } from "./development-foundations.ts"
 import { offerFoundations } from "./development-foundations-setup.ts";
 
 const KICKOFF = "Continuá el harness de desarrollo activo desde su etapa persistida. Respetá sus bloqueos y pedí los permisos pendientes; no saltees etapas.";
-const KB_WRITES = ["mcp__harness_kb__guardar", "mcp__harness_kb__borrar"];
 const USAGE = "Uso: /omi-work resume | approve | pause | refresh | pr | status | stop";
 // Otra ventana preparando el mismo issue es una espera, no un error; también envuelto en un aviso.
 const busy = (error: unknown): boolean => error instanceof IssuePreparationBusyError || (error instanceof Error && error.cause instanceof IssuePreparationBusyError);
@@ -147,8 +146,6 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 			// Hasta que la persona responda, el agente no sigue: ni en este lote ni en otro.
 			if (pendingBegin) return { block: true, reason: "Hay un pedido de desarrollo esperando la confirmación de la persona. Terminá el turno sin otras tools." };
 			if (!session.state && !session.lockedReason) return;
-			// Foundations cambia qué corre sin preguntar: mientras el harness trabaja, sólo una persona edita las perillas.
-			if ((deps.kb?.writeToolNames() ?? KB_WRITES).includes(event.toolName)) return { block: true, reason: "Harness activo: no se modifican las perillas de la KB (Foundations). Una persona las cambia fuera del harness; la próxima sesión muestra la diferencia." };
 			if (session.lockedReason && !["read", "grep", "find", "ls", ...WORKFLOW_TOOLS].includes(event.toolName)) return { block: true, reason: session.lockedReason };
 			if (session.state && !workflowToolAllowed(session.state, event.toolName, event.input)) return { block: true, reason: `Harness: ${event.toolName} no está habilitada en esta etapa. Usá omi_workflow y omi_workflow_check; no eludas la receta, evidencia ni permisos.` };
 			if (session.state && event.toolName === "read" && typeof event.input.path === "string") {
