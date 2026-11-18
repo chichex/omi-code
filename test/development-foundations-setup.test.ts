@@ -1,5 +1,6 @@
 // Sin Foundations, el harness ofrece armarlo y lo guarda en la KB sólo con el sí. Nunca la KB real.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +13,7 @@ import { createKbClient } from "../src/tui/kb-client.ts";
 import { developmentFixture } from "./helpers/development.ts";
 import { memoryKb, mockKb, type MemoryKb } from "./helpers/mock-kb.ts";
 import { tempDir } from "./helpers/io.ts";
+import { KEYS, typed } from "./helpers/questions.ts";
 
 process.env.PI_CODING_AGENT_DIR = await mkdtemp(join(tmpdir(), "omi-kb-agent-"));
 const REPO = "test/repo";
@@ -25,6 +27,11 @@ async function fixture(t: TestContext, options: { products?: string[]; body?: st
 	return Object.assign(f, { kb });
 }
 const choose = (option: string) => (_title: string, options: string[]) => options.find((o) => o.startsWith(option));
+// Las teclas de cada tanda del creador, en orden: comandos, políticas y resumen.
+const batches = (...keys: string[][]) => () => keys.shift();
+const NODE_TEST = [KEYS.space, ...typed("node test.cjs"), KEYS.enter, KEYS.enter];
+const ALL_ASK = ["1", "1", "1", "1", KEYS.enter];
+const SAVE = ["1"];
 
 test("foundations_setup: se ofrece una vez por sesión y «Ahora no» no guarda nada", async (t) => {
 	const f = await fixture(t); await f.start();
@@ -51,14 +58,18 @@ test("foundations_setup: «No ofrecer más» queda registrado y no vuelve", asyn
 
 test("foundations_setup: el sí guarda una vez, conserva el resto de las perillas y vale en la sesión", async (t) => {
 	const f = await fixture(t); f.uiControl.select = choose("Armar");
-	f.uiControl.editor = () => JSON.stringify(block());
+	f.uiControl.questions = batches(NODE_TEST, ALL_ASK, [KEYS.pageDown, KEYS.pageDown, ...SAVE]);
 	await f.start();
+	assert.equal(f.editors.length, 0, "sin editor de JSON");
+	assert.equal(f.asked.length, 3);
 	assert.equal(saves(f.kb), 1);
 	const saved = f.kb.documents.at(-1)!;
 	assert.ok(saved.cuerpo.startsWith(HUMAN), "el resto del documento queda byte por byte");
 	const parsed = parseFoundations(saved.cuerpo, REPO);
 	assert.equal(parsed.status === "valid" && parsed.hash, foundationsHash(block()));
-	assert.match(f.confirmationDetails.find((d) => d.includes("Se guarda en la KB"))!, /producto repo/);
+	const summary = f.asked[2]!.join("\n");
+	assert.match(summary, /¿Guardar Foundations en la KB\?/); assert.match(summary, /\+ node test\.cjs/);
+	assert.match(summary, /Se guarda en la KB, producto repo/);
 	assert.equal((await readTrust(foundationsDir(f.home), { kbUrl: f.kb.url, product: "repo", repo: REPO }))?.accepted?.docId, saved.id);
 	await f.command("status");
 	assert.match(f.messages.at(-1)!, /Foundations: KB · revisión/);
@@ -67,33 +78,64 @@ test("foundations_setup: el sí guarda una vez, conserva el resto de las perilla
 });
 
 test("foundations_setup: sin perillas crea el documento del producto", async (t) => {
-	const f = await fixture(t, { body: null }); f.uiControl.select = choose("Armar"); f.uiControl.editor = () => JSON.stringify(block([]));
+	const f = await fixture(t, { body: null }); f.uiControl.select = choose("Armar"); f.uiControl.questions = batches([KEYS.enter], ALL_ASK, SAVE);
 	await f.start();
 	assert.equal(saves(f.kb), 1);
 	assert.ok(f.kb.documents.at(-1)!.cuerpo.startsWith("# Perillas de repo\n\n## Foundations de omi · test/repo\n"));
 });
 
-test("foundations_setup: un texto inválido vuelve al editor con el motivo", async (t) => {
+test("foundations_setup: un comando libre inválido vuelve al texto con el motivo", async (t) => {
 	const f = await fixture(t); f.uiControl.select = choose("Armar");
-	const answers = ["{ roto", JSON.stringify({ ...block(), repo: "acme/otro" }), JSON.stringify(block())];
-	f.uiControl.editor = () => answers.shift();
+	f.uiControl.questions = batches([KEYS.space, ...typed("node test.cjs"), KEYS.newLine, ...typed("  npm x"), KEYS.enter, KEYS.esc, ...NODE_TEST], ALL_ASK, SAVE);
 	await f.start();
-	assert.equal(f.editors.length, 3); assert.equal(f.editors[1], "{ roto", "vuelve con lo que escribió");
-	assert.ok(f.messages.some((m) => /no es JSON válido/.test(m)));
+	assert.ok(f.asked[0]!.some((screen) => /Línea 2: un comando tiene espacios al borde/.test(screen)), "muestra el motivo");
 	assert.equal(saves(f.kb), 1);
+	const parsed = parseFoundations(f.kb.documents.at(-1)!.cuerpo, REPO);
+	assert.deepEqual(parsed.status === "valid" && parsed.block.comandos, ["node test.cjs"]);
 });
 
-test("foundations_setup: un no en la confirmación no guarda", async (t) => {
+test("foundations_setup: «Cancelar» o Esc en el resumen, o Esc en una pregunta, no guardan", async (t) => {
+	for (const keys of [[NODE_TEST, ALL_ASK, ["3"]], [NODE_TEST, ALL_ASK, [KEYS.esc]], [NODE_TEST, [KEYS.esc]], [[KEYS.esc]]]) {
+		const f = await fixture(t); f.uiControl.select = choose("Armar"); f.uiControl.questions = batches(...keys);
+		await f.start();
+		assert.equal(saves(f.kb), 0, JSON.stringify(keys));
+		assert.equal(f.asked.length, keys.length);
+	}
+});
+
+test("foundations_setup: «Cambiar respuestas» vuelve a las preguntas con lo elegido y guarda lo nuevo", async (t) => {
 	const f = await fixture(t); f.uiControl.select = choose("Armar");
-	const original = f.remote.confirmations;
-	f.uiControl.editor = () => { f.remote.confirmations = false; return JSON.stringify(block()); };
+	f.uiControl.questions = batches([KEYS.enter], ALL_ASK, ["2"], NODE_TEST, [KEYS.enter, KEYS.enter], SAVE);
 	await f.start();
-	f.remote.confirmations = original;
-	assert.equal(saves(f.kb), 0);
+	assert.equal(f.asked.length, 6);
+	assert.match(f.asked[4]![0]!, /■ Arranque/, "las políticas vuelven respondidas");
+	assert.equal(saves(f.kb), 1);
+	const parsed = parseFoundations(f.kb.documents.at(-1)!.cuerpo, REPO);
+	assert.equal(parsed.status === "valid" && parsed.hash, foundationsHash(block()));
+});
+
+test("foundations_setup: los comandos detectados del repo son opciones a marcar, con su origen", async (t) => {
+	const f = await fixture(t);
+	await f.write("package.json", JSON.stringify({ scripts: { test: "node test.cjs", deploy: "x" } })); await f.write("package-lock.json", "{}");
+	for (const args of [["add", "."], ["commit", "-m", "chore: scripts"]]) execFileSync("git", args, { cwd: f.checkout.root, stdio: "ignore" });
+	await f.attach(); f.uiControl.select = choose("Armar"); f.uiControl.questions = batches(["2", KEYS.enter], ALL_ASK, SAVE);
+	await f.start();
+	const screen = f.asked[0]![0]!;
+	assert.match(screen, /1\. \[ \] npm ci/); assert.match(screen, /Instala las dependencias según package-lock\.json/);
+	assert.match(screen, /2\. \[ \] npm test/); assert.match(screen, /Script «test» de package\.json/);
+	assert.doesNotMatch(screen, /deploy/);
+	const parsed = parseFoundations(f.kb.documents.at(-1)!.cuerpo, REPO);
+	assert.deepEqual(parsed.status === "valid" && parsed.block.comandos, ["npm test"]);
+});
+
+test("foundations_setup: sin la TUI interactiva (RPC) no se ofrece", async (t) => {
+	const f = await fixture(t); Reflect.set(f.context, "mode", "rpc"); f.uiControl.select = choose("Armar");
+	await f.start();
+	assert.equal(f.selects.length, 0); assert.equal(f.asked.length, 0); assert.equal(saves(f.kb), 0);
 });
 
 test("foundations_setup: si las perillas cambian durante el diálogo no se guarda", async (t) => {
-	const f = await fixture(t); f.uiControl.select = choose("Armar"); f.uiControl.editor = () => JSON.stringify(block());
+	const f = await fixture(t); f.uiControl.select = choose("Armar"); f.uiControl.questions = batches(NODE_TEST, ALL_ASK, SAVE);
 	let searches = 0;
 	f.kb.hook = (tool) => { if (tool === "buscar" && ++searches === 3) f.kb.perillas("repo", "Otra persona guardó."); };
 	await f.start();

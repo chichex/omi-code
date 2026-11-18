@@ -29,18 +29,27 @@ async function scripts(root: string): Promise<string[] | undefined> {
 	} catch { return undefined; }
 }
 
-/** Comandos exactos que se proponen para el catálogo, en el orden en que aparecen. */
-export async function detectFoundationsCommands(root: string): Promise<string[]> {
-	const commands: string[] = [];
+/** Un comando propuesto y de dónde sale, para mostrarlo junto a la opción. */
+export interface DetectedCommand { command: string; source: string }
+
+/** Comandos exactos que se proponen para el catálogo, en el orden en que aparecen, con su origen. */
+export async function detectFoundationsCandidates(root: string): Promise<DetectedCommand[]> {
+	const found: DetectedCommand[] = [];
 	const names = await scripts(root);
 	if (names?.length) {
-		let manager = { install: "", run: "npm run", test: "npm test" };
+		let manager = { lock: "", install: "", run: "npm run", test: "npm test" };
 		for (const candidate of MANAGERS) if (await regularFile(join(root, candidate.lock))) { manager = candidate; break; }
-		if (manager.install) commands.push(manager.install);
-		for (const name of names) commands.push(name === "test" ? manager.test : `${manager.run} ${name}`);
+		if (manager.install) found.push({ command: manager.install, source: `Instala las dependencias según ${manager.lock}` });
+		for (const name of names) found.push({ command: name === "test" ? manager.test : `${manager.run} ${name}`, source: `Script «${name}» de package.json` });
 	}
-	if (await regularFile(join(root, "go.mod"))) commands.push("go test ./...", "go vet ./...");
-	return [...new Set(commands)].slice(0, 100);
+	if (await regularFile(join(root, "go.mod"))) found.push({ command: "go test ./...", source: "Tests del módulo de go.mod" }, { command: "go vet ./...", source: "Análisis estático del módulo de go.mod" });
+	const seen = new Set<string>();
+	return found.filter((entry) => !seen.has(entry.command) && !!seen.add(entry.command)).slice(0, 100);
+}
+
+/** Sólo los comandos de `detectFoundationsCandidates`. */
+export async function detectFoundationsCommands(root: string): Promise<string[]> {
+	return (await detectFoundationsCandidates(root)).map((entry) => entry.command);
 }
 
 /** Primera propuesta: los comandos detectados y los cuatro puntos en ask. */

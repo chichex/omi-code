@@ -1,21 +1,22 @@
-// Sin Foundations para el repo, el harness ofrece armarlo: detecta comandos, los muestra y los guarda en la
-// KB sólo con el sí. Es la única escritura en la KB y conserva el resto del documento de perillas.
+// Sin Foundations para el repo, el harness ofrece armarlo: detecta comandos, los pregunta en tandas y los
+// guarda en la KB sólo con el sí. Es la única escritura en la KB y conserva el resto del documento de perillas.
 import { createHash } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { composePerillas, foundationsDiff, foundationsHash, readFoundationsText, type FoundationsBlock } from "../harness/foundations.ts";
-import { detectFoundationsCommands, proposeFoundations } from "../harness/foundations-detect.ts";
+import { composePerillas, foundationsHash, type FoundationsBlock } from "../harness/foundations.ts";
+import { detectFoundationsCandidates } from "../harness/foundations-detect.ts";
 import { foundationsDir, readTrust, writeTrust, type TrustKey, type TrustRecord } from "../harness/foundations-trust.ts";
 import type { FoundationsPin } from "./development-foundations.ts";
+import { composeFoundations, confirmFoundationsSave, type Ask } from "./development-foundations-wizard.ts";
 import type { DevelopmentSession } from "./development-session.ts";
 import type { KbClient, KbDoc } from "./kb-client.ts";
+import { askQuestions } from "./questions/ask.ts";
 
 export const FOUNDATIONS_OFFER = ["Armar Foundations", "Ahora no", "No ofrecer más para este repo"] as const;
-const MAX_EDITS = 3;
 const SAVE_TIMEOUT_MS = 30_000;
 // Una vez por sesión, en memoria del proceso como el pin: /reload no vuelve a ofrecer.
 const offered = new Set<string>();
 
-/** Sólo si la KB respondió, el producto existe, no hay bloque, nada aceptado, la persona no lo descartó y hay UI. */
+/** Sólo si la KB respondió, el producto existe, no hay bloque, nada aceptado, la persona no lo descartó y hay TUI interactiva. */
 export function shouldOfferFoundations(pin: FoundationsPin | undefined, record: TrustRecord | undefined, hasUI: boolean): boolean {
 	return hasUI && pin?.reading.kind === "missing" && pin.origin === "strict" && !record?.accepted && !record?.offerDeclined;
 }
@@ -49,18 +50,16 @@ export async function commitFoundationsSave(kb: KbClient, key: TrustKey, block: 
 	};
 }
 
-async function edit(ctx: ExtensionContext, repo: string, proposal: FoundationsBlock): Promise<FoundationsBlock | undefined> {
-	let text = JSON.stringify(proposal, null, 2);
-	for (let attempt = 0; attempt < MAX_EDITS; attempt++) {
-		const answer = await ctx.ui.editor(`Foundations · ${repo} · JSON del bloque omi-foundations`, text);
-		if (answer === undefined) return undefined;
-		const read = readFoundationsText(answer, repo);
-		if ("block" in read) return read.block;
-		ctx.ui.notify(`Foundations inválido: ${read.reason}. Corregilo y volvé a guardar.`, "warning"); text = answer;
-	}
-	ctx.ui.notify("Foundations no se guardó: el texto siguió inválido.", "warning");
-	return undefined;
+/** Cada tanda del creador, con el progreso en espera como cualquier otra decisión del harness. */
+function asker(ctx: ExtensionContext, session: DevelopmentSession): Ask {
+	return async (batch) => {
+		session.checkContext(ctx);
+		session.emit(`Esperando respuesta · ${batch.title}`, true);
+		try { return await askQuestions(ctx, batch, { signal: session.lifecycle.signal }); }
+		finally { session.emit(); }
+	};
 }
+const saveSignal = (session: DevelopmentSession) => AbortSignal.any([session.lifecycle.signal, AbortSignal.timeout(SAVE_TIMEOUT_MS)]);
 
 /** En la sesión del worktree, al empezar el harness. Un no o un error nunca guardan nada en la KB. */
 export async function offerFoundations(ctx: ExtensionContext, session: DevelopmentSession, kb: KbClient | undefined): Promise<void> {
@@ -69,7 +68,8 @@ export async function offerFoundations(ctx: ExtensionContext, session: Developme
 	const pin = await session.foundations.pin(ctx);
 	if (pin.reading.kind !== "missing") return;
 	const key = pin.reading.key; const trustDir = foundationsDir(session.io.homeDir);
-	if (!shouldOfferFoundations(pin, await readTrust(trustDir, key), ctx.hasUI)) return;
+	// Las tandas son un componente de la TUI: en RPC no hay dónde mostrarlas.
+	if (!shouldOfferFoundations(pin, await readTrust(trustDir, key), ctx.hasUI && ctx.mode === "tui")) return;
 	offered.add(file);
 	const choice = await ctx.ui.select(`Foundations para ${key.repo}: comandos que corren sin preguntar y qué puntos piden un sí, en las perillas de ${key.product}`, [...FOUNDATIONS_OFFER]);
 	if (choice === FOUNDATIONS_OFFER[2]) {
@@ -77,15 +77,23 @@ export async function offerFoundations(ctx: ExtensionContext, session: Developme
 		await writeTrust(trustDir, { ...record, offerDeclined: true }); return;
 	}
 	if (choice !== FOUNDATIONS_OFFER[0]) return;
-	const block = await edit(ctx, key.repo, proposeFoundations(key.repo, await detectFoundationsCommands(session.state.checkout.root)));
-	if (!block) return;
-	const signal = AbortSignal.any([session.lifecycle.signal, AbortSignal.timeout(SAVE_TIMEOUT_MS)]);
+	const detected = await detectFoundationsCandidates(session.state.checkout.root);
+	const ask = asker(ctx, session);
 	try {
-		const prepared = await prepareFoundationsSave(kb, key, block, signal);
-		const where = `Se guarda en la KB, producto ${key.product}, como una revisión nueva de las perillas${prepared.previous ? "" : " (documento nuevo)"}. Se conserva el resto del documento. Con el sí, también queda aceptada para este repo.`;
-		if (!(await session.confirm(ctx, "Guardar Foundations en la KB", `${foundationsDiff(undefined, block, { product: key.product, kbUrl: key.kbUrl })}\n\n${where}`))) return;
-		const next = await commitFoundationsSave(kb, key, block, prepared, { trustDir, now: session.now, signal });
-		session.foundations.replace(ctx, next); session.emit();
-		ctx.ui.notify(`Foundations guardado en la KB (perillas ${next.docId?.slice(0, 8)}) y aceptado para esta sesión.${next.notice ? ` ${next.notice}` : ""}`, "info");
+		// «Cambiar respuestas» vuelve a las preguntas con lo elegido; cancelar en cualquier tanda no guarda nada.
+		for (let previous: FoundationsBlock | undefined; ;) {
+			const block = await composeFoundations(ask, { repo: key.repo, detected, ...(previous ? { previous } : {}) });
+			if (!block) return;
+			// Cada tramo con la KB tiene su propio tope: lo que tarde la persona en el resumen no lo consume.
+			const prepared = await prepareFoundationsSave(kb, key, block, saveSignal(session));
+			const where = `Se guarda en la KB, producto ${key.product}, como una revisión nueva de las perillas${prepared.previous ? "" : " (documento nuevo)"}. Se conserva el resto del documento. Con el sí, también queda aceptada para este repo.`;
+			const decision = await confirmFoundationsSave(ask, block, { product: key.product, kbUrl: key.kbUrl, where });
+			if (decision === "change") { previous = block; continue; }
+			if (decision === "cancel") return;
+			const next = await commitFoundationsSave(kb, key, block, prepared, { trustDir, now: session.now, signal: saveSignal(session) });
+			session.foundations.replace(ctx, next); session.emit();
+			ctx.ui.notify(`Foundations guardado en la KB (perillas ${next.docId?.slice(0, 8)}) y aceptado para esta sesión.${next.notice ? ` ${next.notice}` : ""}`, "info");
+			return;
+		}
 	} catch (error) { ctx.ui.notify(`Foundations no se guardó: ${error instanceof Error ? error.message : "error"}`, "warning"); }
 }
