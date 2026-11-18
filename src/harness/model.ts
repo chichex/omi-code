@@ -5,7 +5,7 @@ import { Value } from "typebox/value";
 import { PHASES } from "./phases.ts";
 
 // Topes compartidos por el esquema y el reducer: el reducer los respeta antes de validar.
-export const MAX_HISTORY = 1000; export const MAX_STEPS = 50; export const MAX_ATTEMPTS = 100; export const MAX_EVIDENCE = 1000; export const MAX_REVIEWS = 100;
+export const MAX_HISTORY = 1000; export const MAX_STEPS = 50; export const MAX_ATTEMPTS = 100; export const MAX_EVIDENCE = 1000; export const MAX_REVIEWS = 100; export const MAX_AGREEMENTS = 50;
 export const text = (maxLength = 4000) => Type.String({ minLength: 1, maxLength, pattern: "\\S" });
 const list = () => Type.Array(text(), { maxItems: 100 });
 const nullableText = () => Type.Union([text(8192), Type.Null()]);
@@ -63,6 +63,9 @@ export const EvidenceSchema = Type.Object({
 export type Evidence = Static<typeof EvidenceSchema>;
 export const ReviewSchema = Type.Object({ lens: LensSchema, fingerprint: text(128), verdict: Type.Union([Type.Literal("pass"), Type.Literal("fail"), Type.Literal("unknown")]), findings: list(), at: text(100) }, { additionalProperties: false });
 export type Review = Static<typeof ReviewSchema>;
+// Un acuerdo de alcance dicho por la persona en el chat: su cita textual (verificada por el host) y lo acordado.
+export const AgreementSchema = Type.Object({ quote: text(2000), summary: text(2000), replan: Type.Boolean(), phase: PhaseSchema, at: text(100) }, { additionalProperties: false });
+export type Agreement = Static<typeof AgreementSchema>;
 export const PublicationSchema = Type.Union([
 	Type.Object({ status: Type.Literal("none") }, { additionalProperties: false }),
 	Type.Object({ status: Type.Literal("pending"), head: text(128), bodyHash: text(128), at: text(100) }, { additionalProperties: false }),
@@ -81,6 +84,8 @@ export const WorkflowSchema = Type.Object({
 	attempts: Type.Optional(Type.Array(Type.Object({ sourceHash: text(128), round: Type.Integer({ minimum: 0 }), reason: text(), at: text(100), evidence: Type.Array(EvidenceSchema, { maxItems: 1000 }), reviews: Type.Array(ReviewSchema, { maxItems: 100 }) }, { additionalProperties: false }), { maxItems: MAX_ATTEMPTS })),
 	approval: Type.Union([Type.Object({ sourceHash: text(128), recipeHash: text(128), at: text(100) }, { additionalProperties: false }), Type.Null()]),
 	publication: PublicationSchema,
+	// Opcional para estados previos. Sobrevive a refresh: son palabras de la persona, no del pedido.
+	agreements: Type.Optional(Type.Array(AgreementSchema, { maxItems: MAX_AGREEMENTS })),
 	// Sólo hechos de ejecución, nunca inputs/outputs privados. Opcional para estados previos.
 	observations: Type.Optional(Type.Array(Type.Object({ phase: PhaseSchema, round: Type.Integer({ minimum: 0, maximum: 10 }), inline: Type.Boolean(), subagent: Type.Boolean(), lens: Type.Boolean() }, { additionalProperties: false }), { maxItems: 121 })),
 	history: Type.Array(Type.Object({ at: text(100), phase: PhaseSchema, activity: text() }, { additionalProperties: false }), { maxItems: MAX_HISTORY }),

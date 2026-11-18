@@ -11,6 +11,7 @@ import { developmentInstructions } from "./development-view.ts";
 import { observeDevelopment } from "./development-observation.ts";
 import { DevelopmentSession, type DevelopmentDeps } from "./development-session.ts";
 import { registerDevelopmentTools } from "./development-tools.ts";
+import { trackExtensionMessages } from "./development-agreement.ts";
 import { beginDevelopment, borderedLoader, registerBeginTool } from "./development-begin.ts";
 import { beginCommand, BEGIN_SUBCOMMAND, holdSessionSwitch, revokeDevelopmentTicket, sessionSwitchOwner, takeDevelopmentTicket } from "./development-tickets.ts";
 import { restoreIssueTriage } from "./workspace/issue-triage.ts";
@@ -50,6 +51,8 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 		};
 		session.onChange = loadout;
 		registerDevelopmentTools(pi, session);
+		// El arranque del harness también queda guardado como mensaje "user": no es una cita de la persona.
+		trackExtensionMessages(pi, session, [KICKOFF]);
 		let pendingBegin: string | undefined;
 		registerBeginTool(pi, { offline: session.offline, busy: () => !!session.state || !!session.lockedReason, onRequest: (token) => { pendingBegin = token; } });
 		// Sin el sí humano no se llama al modelo: un trabajo pausado o terminado sólo informa su estado.

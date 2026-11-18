@@ -12,11 +12,13 @@ import { referenceDigest } from "../harness/references.ts";
 import { executeCheck, commitStep } from "./development-execution.ts";
 import { lensDiffParts, runLens } from "./development-review.ts";
 import { developmentInstructions } from "./development-view.ts";
+import { registerAgreement } from "./development-agreement.ts";
 
 const ActionSchema = Type.Object({
-	action: Type.Union([Type.Literal("status"), Type.Literal("explored"), Type.Literal("inferences"), Type.Literal("ask"), Type.Literal("planned"), Type.Literal("diagnosed"), Type.Literal("specified"), Type.Literal("approve"), Type.Literal("step"), Type.Literal("verified"), Type.Literal("retry"), Type.Literal("pause"), Type.Literal("refresh"), Type.Literal("publish")]),
+	action: Type.Union([Type.Literal("status"), Type.Literal("explored"), Type.Literal("inferences"), Type.Literal("ask"), Type.Literal("planned"), Type.Literal("diagnosed"), Type.Literal("specified"), Type.Literal("approve"), Type.Literal("step"), Type.Literal("verified"), Type.Literal("retry"), Type.Literal("pause"), Type.Literal("refresh"), Type.Literal("publish"), Type.Literal("agreed")]),
 	exploration: Type.Optional(ExplorationSchema), inferences: Type.Optional(Type.Array(InferenceInputSchema, { maxItems: 100 })), plan: Type.Optional(PlanSchema), spec: Type.Optional(SpecSchema),
 	id: Type.Optional(text(100)), cause: Type.Optional(text()), reproduction: Type.Optional(text(100)), size: Type.Optional(Type.Union([Type.Literal("small"), Type.Literal("large")])), reason: Type.Optional(text()),
+	quote: Type.Optional(text(2000)), agreement: Type.Optional(text(2000)), replan: Type.Optional(Type.Boolean()),
 }, { additionalProperties: false });
 const CheckSchema = Type.Object({ kind: Type.Union([Type.Literal("setup"), Type.Literal("reproduction"), Type.Literal("red"), Type.Literal("green"), Type.Literal("verification"), Type.Literal("gate")]), command: text(8192), stepId: Type.Optional(text(32)), caseId: Type.Optional(text(32)), timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 1800 })) }, { additionalProperties: false });
 const CommitSchema = Type.Object({ stepId: text(32), message: text(300), paths: Type.Array(text(8192), { maxItems: 100 }) }, { additionalProperties: false });
@@ -49,12 +51,12 @@ async function currentExploration(session: DevelopmentSession, ctx: ExtensionCon
 export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentSession): void {
 	pi.registerTool({
 		name: "omi_workflow", label: "Desarrollo: flujo", defaultActive: false, exposure: "model-only", executionMode: "sequential", parameters: ActionSchema,
-		description: "Avanza el harness de desarrollo activo. Explorar, resolver inferencias, receta, diagnóstico/spec, aprobación humana, pasos, verificar y PR draft. No acepta evidencia ni aprobaciones declaradas por el modelo. status consulta; pause bloquea. start/resume son comandos humanos /omi-work.",
+		description: "Avanza el harness de desarrollo activo. Explorar, resolver inferencias, receta, diagnóstico/spec, aprobación humana, pasos, verificar y PR draft. No acepta evidencia ni aprobaciones declaradas por el modelo. status consulta; pause bloquea. agreed registra un acuerdo de alcance dicho por la persona en el chat, con la cita textual de su mensaje (OMI la verifica). start/resume son comandos humanos /omi-work.",
 		promptSnippet: "Registrar el trabajo de desarrollo y su receta; pedir decisiones y permisos humanos",
 		async execute(_id, input, signal, _onUpdate, ctx) {
 			if (input.action === "status") return result(session);
 			session.current(ctx); signal?.throwIfAborted();
-			let terminate = false;
+			let terminate = false; let note = "";
 			switch (input.action) {
 				case "explored": {
 					const exploration = checked(ExplorationSchema, input.exploration);
@@ -95,8 +97,11 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 					if (!(await session.confirm(ctx, "Volver a explorar", "Se descartan exploración, receta, aprobación, pasos y evidencia de este trabajo, y los comandos autorizados. No borra archivos ni commits."))) { terminate = true; break; }
 					await session.refresh(ctx); break;
 				case "publish": await session.publish(ctx); terminate = true; break;
+				case "agreed": note = await registerAgreement(session, { quote: checked(text(2000), input.quote), summary: checked(text(2000), input.agreement), replan: input.replan === true }, ctx); break;
 			}
-			return { ...result(session), terminate };
+			const output = result(session);
+			if (note) output.content.push({ type: "text", text: note });
+			return { ...output, terminate };
 		},
 	});
 	pi.registerTool({

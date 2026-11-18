@@ -90,6 +90,10 @@ function decisions(w: Workflow): string[] {
 	const resolution = { pending: "pendiente", assumed: "asumida", answered: "respondida" };
 	return w.inferences.length ? ["", "### Decisiones", ...w.inferences.map((i) => `- **${text(i.id)}** ${text(i.question)} → ${i.answer === null ? "_sin respuesta_" : text(i.answer)} _(${resolution[i.resolution]})_`)] : [];
 }
+function agreements(w: Workflow): string[] {
+	const all = w.agreements ?? [];
+	return all.length ? ["", "### Acuerdos del chat", ...all.map((a) => `- «${text(a.quote)}» → ${text(a.summary)} _(${PHASE_LABELS[a.phase]}${a.replan ? "; rehízo la receta" : ""})_`)] : [];
+}
 function result(e: Evidence): string {
 	if (e.outcome === "interrupted") return "⚠️ interrumpido";
 	if (e.outcome === "passed") return `✅ exit ${e.exitCode}`;
@@ -110,7 +114,7 @@ function lenses(w: Workflow): string[] {
 }
 const FOOTER = "<sub>Sección administrada por OMI: se reescribe entera y lo que se edite acá se pierde. El pedido es el texto de arriba.</sub>";
 export function renderIssueSection(w: Workflow): string {
-	return [`## Harness · #${w.source.number}`, stage(w), ...recipe(w), ...steps(w), ...decisions(w), ...evidence(w), ...lenses(w),
+	return [`## Harness · #${w.source.number}`, stage(w), ...recipe(w), ...steps(w), ...decisions(w), ...agreements(w), ...evidence(w), ...lenses(w),
 		...(w.publication.status === "opened" ? ["", `**PR draft:** ${text(w.publication.url)}`] : []), "", FOOTER].join("\n");
 }
 // Si la sección completa no entra junto al pedido, va una mínima que lo dice: nunca una receta cortada.

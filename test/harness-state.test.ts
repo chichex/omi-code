@@ -316,3 +316,24 @@ test("the evidence cap explains the exit available in the current phase", () => 
  const full = activeStep(); full.evidence = Array.from({ length: 1000 }, (_, i) => evidence("reproduction", { id: `old${i}` }));
  assert.throws(() => send(full, { type: "evidence", evidence: evidence("red") }), (error: unknown) => error instanceof Error && /refresh/.test(error.message) && !/retry/.test(error.message));
 });
+test("a chat agreement is recorded once; without replan it keeps the approval", () => {
+ const approved = send(ready(), { type: "approved" });
+ let s = send(approved, { type: "agreed", quote: "no hace falta tocar la doc", summary: "La documentación queda fuera", replan: false });
+ s = send(s, { type: "agreed", quote: "no hace falta tocar la doc", summary: "La documentación queda fuera", replan: false });
+ assert.equal(s.agreements?.length, 1); assert.equal(s.agreements?.[0]?.phase, "implement"); assert.equal(s.phase, "implement"); assert.equal(isApproved(s), true);
+ assert.throws(() => send(approved, { type: "agreed", quote: " ", summary: "x", replan: false }));
+ assert.throws(() => send(send(approved, { type: "pause", reason: "later" }), { type: "agreed", quote: "q", summary: "s", replan: false }), /pausado/);
+});
+test("a chat agreement that changes the scope reopens the recipe and keeps what still holds", () => {
+ const before = verifying();
+ const s = send(before, { type: "agreed", quote: "sumá también el caso de borde", summary: "Ampliar al caso de borde", replan: true, fingerprint: "after-commits" });
+ assert.equal(s.phase, "recipe"); assert.equal(s.status, "active"); assert.equal(s.approval, null); assert.equal(s.round, 0);
+ assert.deepEqual(s.inferences, before.inferences); assert.equal(s.exploration?.approach, before.exploration?.approach);
+ assert.equal(s.exploration?.fingerprint, "after-commits", "lo commiteado por el harness es la base de la receta nueva");
+ assert.deepEqual(s.recipe, before.recipe, "la receta anterior queda como borrador para rehacerla");
+ assert.deepEqual(s.steps, []); assert.deepEqual(s.evidence, []); assert.ok(s.attempts?.at(-1)?.evidence.length, "las pruebas viejas quedan como intento anterior");
+ const replanned = send(s, { type: "planned", plan: { ...plan, cases: [...plan.cases, { id: "D2", description: "borde", command: "npm test -- borde" }] } });
+ assert.equal(replanned.phase, "approve"); assert.equal(replanned.agreements?.length, 1);
+ const early = send(send(fresh(), { type: "explored", exploration }), { type: "agreed", quote: "q", summary: "s", replan: true, fingerprint: "x" });
+ assert.equal(early.phase, "decide", "antes de la receta, el acuerdo sólo se anota"); assert.equal(early.exploration?.fingerprint, undefined);
+});

@@ -1,4 +1,4 @@
-import { artifactHash, MAX_ATTEMPTS, MAX_EVIDENCE, MAX_HISTORY, MAX_REVIEWS, MAX_STEPS, parseWorkflow, sourceHash, type Workflow, type Exploration, type InferenceInput, type Plan, type Spec, type Evidence, type Review, type Step } from "./model.ts";
+import { artifactHash, MAX_AGREEMENTS, MAX_ATTEMPTS, MAX_EVIDENCE, MAX_HISTORY, MAX_REVIEWS, MAX_STEPS, parseWorkflow, sourceHash, type Workflow, type Exploration, type InferenceInput, type Plan, type Spec, type Evidence, type Review, type Step } from "./model.ts";
 
 import { recipeNextPhase, recipeRoute } from "./phases.ts";
 
@@ -20,6 +20,7 @@ export type WorkflowEvent =
  | { type: "pause"; reason: string }
  | { type: "resume" }
  | { type: "source_changed"; source: Workflow["source"] }
+ | { type: "agreed"; quote: string; summary: string; replan: boolean; fingerprint?: string }
  | { type: "publishing"; head: string; bodyHash: string }
  | { type: "published"; head: string; url: string; number: number };
 
@@ -33,7 +34,7 @@ export function createWorkflow(source: Workflow["source"], checkout: Workflow["c
  requireCondition(nonempty(at), "falta fecha");
  return validate({ version: 1, id, revision: 0, source: { ...source, hash: sourceHash(source.title, source.body) }, checkout: { ...checkout },
   phase: "explore", status: "active", blockedReason: "", activity: "Explorar el issue", exploration: null, inferences: [], recipe: null,
-  diagnosis: null, spec: null, steps: [], evidence: [], reviews: [], round: 0, maxRounds: 3, approval: null, publication: { status: "none" }, attempts: [], history: [] });
+  diagnosis: null, spec: null, steps: [], evidence: [], reviews: [], round: 0, maxRounds: 3, approval: null, publication: { status: "none" }, attempts: [], agreements: [], history: [] });
 }
 
 export function recipeApprovalHash(state: Workflow): string {
@@ -246,6 +247,24 @@ function sourceChanged(state: Workflow, source: Workflow["source"], at: string):
  state.steps = []; state.evidence = []; state.reviews = []; state.approval = null; state.round = 0;
  state.publication = { status: "none" }; state.phase = "explore"; setBlock(state, "");
 }
+// El chat vale como autorización: el host ya verificó la cita. Con un cambio de alcance (replan) la
+// receta se rehace y se vuelve a aprobar; exploración, respuestas, acuerdos y commits siguen valiendo.
+function agree(state: Workflow, event: Extract<WorkflowEvent, { type: "agreed" }>, at: string): void {
+ const agreements = state.agreements ?? [];
+ if (!agreements.some(a => a.quote === event.quote && a.summary === event.summary && a.replan === event.replan)) {
+  requireCondition(agreements.length < MAX_AGREEMENTS, "se llegó al tope de acuerdos del chat; dividí el trabajo");
+  agreements.push({ quote: event.quote, summary: event.summary, replan: event.replan, phase: state.phase, at });
+ }
+ state.agreements = agreements;
+ // Sin receta todavía, el agente la arma con el acuerdo: no hay nada que rehacer.
+ if (!event.replan || !state.recipe) return;
+ archiveAttempt(state, `Acuerdo del chat: ${event.summary}`, at);
+ // Lo único que cambió el código desde Explorar son los pasos aprobados: es la base de la receta nueva.
+ if (state.exploration && event.fingerprint && ["implement", "verify", "pr"].includes(state.phase)) state.exploration.fingerprint = event.fingerprint;
+ state.observations = (state.observations ?? []).filter(o => !["implement", "verify", "pr"].includes(o.phase));
+ state.approval = null; state.spec = null; state.steps = []; state.evidence = []; state.reviews = []; state.round = 0;
+ state.publication = { status: "none" }; state.phase = "recipe"; setBlock(state, "");
+}
 // El bloqueo de vueltas agotadas vive en el estado, no en el historial: el historial es una ventana acotada.
 function retriesExhausted(state: Workflow): boolean {
  return state.round >= state.maxRounds && state.blockedReason === EXHAUSTED;
@@ -271,7 +290,7 @@ export function transition(original: Workflow, event: WorkflowEvent, at: string)
  // Un cierre sin cambio lo decide el modelo; volver a leer el pedido es la salida humana.
  requireCondition(state.status !== "complete" || state.phase === "closed" && event.type === "source_changed", "el trabajo ya está cerrado");
  requireCondition(state.status !== "paused" || event.type === "resume" || event.type === "source_changed", "el trabajo está pausado");
- if (state.status === "waiting" && retriesExhausted(state)) requireCondition(["pause", "resume", "source_changed"].includes(event.type), "se agotaron las vueltas");
+ if (state.status === "waiting" && retriesExhausted(state)) requireCondition(["pause", "resume", "source_changed", "agreed"].includes(event.type), "se agotaron las vueltas");
  applyEvent(state, event, at);
  state.revision++;
  state.activity = (event.type === "pause" || event.type === "retry" ? `${event.type}: ${event.reason}` : event.type).slice(0, 4000);
@@ -333,6 +352,7 @@ function applyEvent(state: Workflow, event: WorkflowEvent, at: string): void {
    requireCondition(state.status === "paused", "el trabajo no está pausado");
    setBlock(state, resumeBlock(state)); return;
   case "source_changed": sourceChanged(state, event.source, at); return;
+  case "agreed": agree(state, event, at); return;
   case "publishing": {
    requirePhase(state, "pr"); const latest = state.evidence.findLast(e => e.kind === "verification");
    requireCondition(latest, "falta verificación"); verifiedEvidence(state, latest.fingerprint, event.head);
