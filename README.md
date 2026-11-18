@@ -129,7 +129,7 @@ Las API keys del shell no le dan un modelo a omi. Por ejemplo, con `GEMINI_API_K
 
 omi apaga la telemetría de Pi, aunque el shell diga `PI_TELEMETRY=1` o los ajustes `enableInstallTelemetry: true`. Por ejemplo, la primera sesión no avisa a pi.dev de la instalación. Los comandos que corre el agente ven tu `PI_TELEMETRY`.
 
-Si no tenés `fd` o `rg` (ripgrep), Pi todavía los descarga de GitHub a `~/.omi/agent/bin` al arrancar. Para evitarlo, instalalos antes: `brew install fd ripgrep` o `apt install fd-find ripgrep`.
+omi trae `fd` y `rg` (ripgrep) en `~/.omi/runtime/bin`, con sus licencias en `~/.omi/runtime/licenses`: Pi ya no los descarga de GitHub al arrancar. Si tenés los tuyos en el `PATH`, se usan los tuyos. Por ejemplo, con `brew install ripgrep`, el agente usa ese `rg` y el `fd` de omi.
 
 ### Workspace de terminal
 
