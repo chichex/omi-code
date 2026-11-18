@@ -176,3 +176,19 @@ test("lens warnings stay visible in the sidebar, screen 6 and the detail, saniti
  const detail = plain(workflowProgressDetail(p).map(e => typeof e === "string" ? e : JSON.stringify(e)));
  assert.match(detail, /compliance · unknown/);
 });
+
+test("sidebar journey stays all or nothing with a lens warnings row, and the warnings come before the stages", async () => {
+ const { createWorkflow } = await import("../src/harness/state.ts");
+ const { developmentProgress } = await import("../src/tui/development-view.ts");
+ const base = developmentProgress(createWorkflow({ number: 42, title: "Feature", body: "Details", url: "https://example.test/42", hash: "old" }, { root: "/repo/issue-42", commonDir: "/git", branch: "feat/issue-42", baseCommit: "base" }, "work", "now"));
+ const labels = base.stages!.map(s => s.label); let journeys = 0;
+ for (const blockedReason of ["", "Falta aprobación"]) for (let height = 20; height <= 64; height++) {
+  const monitor = new SubagentMonitor();
+  const state = { theme: getThemeByName("dark")!, cwd: "/repo/issue-42", height, git: git(), gitError: false, actions: { reviews: {}, releases: {} }, context: { label: "100 / 200", percent: 50, limit: 200 }, subagents: monitor, workflowProgress: { ...base, blockedReason, warnings: ["Lente compliance · unknown · sin historial"] } };
+  const text = plain(workspaceSidebar(state, 33).lines);
+  const shown = labels.filter(label => text.includes(`${label} ·`));
+  assert.ok(shown.length === 0 || shown.length === labels.length, `altura ${height}: ${shown.length}/${labels.length} etapas`);
+  if (shown.length) { journeys++; assert.match(text, /Avisos de lentes: 1/, `altura ${height}`); }
+ }
+ assert.ok(journeys > 0, "some height shows the whole journey");
+});

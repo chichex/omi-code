@@ -133,9 +133,11 @@ function expandPanels(state: SidebarState, current: Panel[], normal: Panel[], wi
 	const progress = matchingWorkflow(state.workflowProgress, state.cwd, state.git);
 	const fullProgress = normal.find((panel) => panel.id === "issue" && panel.target === "progress");
 	if (joined && progress && fullProgress) {
-		const first = progress.blockedReason ? 5 : 4; const stages = progress.stages?.length ?? 0;
+		// Filas del panel: estado, ruta, actividad, contadores, bloqueo y avisos de lentes si hay, etapas y pie.
+		const warnings = progress.warnings?.length ? progress.blockedReason ? 5 : 4 : undefined;
+		const first = 4 + (progress.blockedReason ? 1 : 0) + (warnings === undefined ? 0 : 1); const stages = progress.stages?.length ?? 0;
 		const selected = new Set([progress.blockedReason ? 4 : 2]);
-		const groups = [[3], [0], [1], [2], ...(progress.blockedReason ? [[4]] : []), Array.from({ length: stages }, (_, i) => first + i), [first + stages]];
+		const groups = [[3], [0], [1], [2], ...(progress.blockedReason ? [[4]] : []), ...(warnings === undefined ? [] : [[warnings]]), Array.from({ length: stages }, (_, i) => first + i), [first + stages]];
 		for (const group of groups) {
 			const added = group.filter((index) => index < fullProgress.rows.length && !selected.has(index));
 			if (!added.length) continue;
