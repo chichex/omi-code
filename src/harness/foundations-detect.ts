@@ -47,11 +47,6 @@ export async function detectFoundationsCandidates(root: string): Promise<Detecte
 	return found.filter((entry) => !seen.has(entry.command) && !!seen.add(entry.command)).slice(0, 100);
 }
 
-/** Sólo los comandos de `detectFoundationsCandidates`. */
-export async function detectFoundationsCommands(root: string): Promise<string[]> {
-	return (await detectFoundationsCandidates(root)).map((entry) => entry.command);
-}
-
 /** Primera propuesta: los comandos detectados y los cuatro puntos en ask. */
 export function proposeFoundations(repo: string, commands: string[]): FoundationsBlock {
 	return { version: 1, repo: repo.toLowerCase(), comandos: [...commands], politica: { ...STRICT_POLICY } };

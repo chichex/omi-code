@@ -3,11 +3,13 @@ import { access, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { detectFoundationsCommands, proposeFoundations } from "../src/harness/foundations-detect.ts";
+import { detectFoundationsCandidates, proposeFoundations } from "../src/harness/foundations-detect.ts";
 import { checkBlock } from "../src/harness/foundations.ts";
 import { tempDir } from "./helpers/io.ts";
 
 const scripts = { omi: "node bin/omi.ts", test: "node --test", typecheck: "tsc", lint: "eslint .", "lint:fix": "eslint --fix .", "test:e2e": "playwright", deploy: "rm -rf /", postinstall: "touch pwned", "test; rm -rf /": "x", "format:check": "prettier --check .", "format": "prettier -w ." };
+/** Sólo los comandos, en el orden en que se proponen. */
+const detectFoundationsCommands = async (root: string) => (await detectFoundationsCandidates(root)).map((entry) => entry.command);
 async function project(t: import("node:test").TestContext, files: Record<string, string>): Promise<string> {
 	const root = await tempDir(t);
 	for (const [name, body] of Object.entries(files)) { await mkdir(join(root, name, ".."), { recursive: true }); await writeFile(join(root, name), body); }
@@ -31,7 +33,21 @@ test("foundations_detect: sin lockfile usa npm sin instalar", async (t) => {
 
 test("foundations_detect: Go", async (t) => {
 	const root = await project(t, { "go.mod": "module example.test/x\n" });
-	assert.deepEqual(await detectFoundationsCommands(root), ["go test ./...", "go vet ./..."]);
+	assert.deepEqual(await detectFoundationsCandidates(root), [
+		{ command: "go test ./...", source: "Tests del módulo de go.mod" },
+		{ command: "go vet ./...", source: "Análisis estático del módulo de go.mod" },
+	]);
+});
+
+test("foundations_detect: cada comando dice de dónde sale: el lockfile o el script de package.json", async (t) => {
+	const root = await project(t, { "package.json": JSON.stringify({ scripts: { test: "x", "test:e2e": "y", deploy: "z" } }), "pnpm-lock.yaml": "" });
+	assert.deepEqual(await detectFoundationsCandidates(root), [
+		{ command: "pnpm install --frozen-lockfile", source: "Instala las dependencias según pnpm-lock.yaml" },
+		{ command: "pnpm test", source: "Script «test» de package.json" },
+		{ command: "pnpm run test:e2e", source: "Script «test:e2e» de package.json" },
+	]);
+	const both = await project(t, { "package.json": JSON.stringify({ scripts: { lint: "x" } }), "go.mod": "module x\n" });
+	assert.deepEqual((await detectFoundationsCandidates(both)).map((entry) => entry.source), ["Script «lint» de package.json", "Tests del módulo de go.mod", "Análisis estático del módulo de go.mod"], "sin lockfile no se propone instalar");
 });
 
 test("foundations_detect: nada que detectar, package.json roto o enorme no proponen comandos", async (t) => {
