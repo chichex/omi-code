@@ -82,7 +82,8 @@ export async function seedPi(home: string): Promise<void> {
 	await put(join(pi, "settings.json.bak-1"), "{}");
 }
 
-function completion(): string {
+/** Respuesta SSE de openai-completions: "ok" y fin. */
+export function completion(): string {
 	const chunk = (delta: unknown, finish: string | null): string =>
 		`data: ${JSON.stringify({ id: "1", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
 	return `${chunk({ role: "assistant", content: "ok" }, null)}${chunk({}, "stop")}data: [DONE]\n\n`;
