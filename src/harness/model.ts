@@ -2,13 +2,14 @@
 import { createHash } from "node:crypto";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
+import { PHASES } from "./phases.ts";
 
 // Topes compartidos por el esquema y el reducer: el reducer los respeta antes de validar.
 export const MAX_HISTORY = 1000; export const MAX_STEPS = 50; export const MAX_ATTEMPTS = 100; export const MAX_EVIDENCE = 1000; export const MAX_REVIEWS = 100;
 export const text = (maxLength = 4000) => Type.String({ minLength: 1, maxLength, pattern: "\\S" });
 const list = () => Type.Array(text(), { maxItems: 100 });
 const nullableText = () => Type.Union([text(8192), Type.Null()]);
-export const PhaseSchema = Type.Union([Type.Literal("explore"), Type.Literal("decide"), Type.Literal("recipe"), Type.Literal("diagnose"), Type.Literal("spec"), Type.Literal("approve"), Type.Literal("implement"), Type.Literal("verify"), Type.Literal("pr"), Type.Literal("done"), Type.Literal("closed")]);
+export const PhaseSchema = Type.Enum(PHASES.map(p => p.id));
 export type Phase = Static<typeof PhaseSchema>;
 export const LensSchema = Type.Union([Type.Literal("compliance"), Type.Literal("security"), Type.Literal("reliability"), Type.Literal("quality"), Type.Literal("resilience"), Type.Literal("refuter")]);
 export type Lens = Static<typeof LensSchema>;

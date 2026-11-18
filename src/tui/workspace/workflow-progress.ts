@@ -3,6 +3,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import type { GitSnapshot } from "./data.ts";
+import type { StageProgress } from "../../harness/progress.ts";
 import { field, notice, section, type ModalEntry } from "./modals.ts";
 import { fit, sidebarSection } from "./presentation.ts";
 
@@ -13,6 +14,7 @@ export interface WorkflowProgress {
  status: "active" | "waiting" | "paused" | "complete";
  completedSteps: number; totalSteps: number; passedChecks: number; totalChecks: number;
  blockedReason: string; details: string[];
+ stages?: StageProgress[];
 }
 const clean = (value: string): string => {
  const plain = stripTerminalSequences(value).replace(/[\x00-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "");

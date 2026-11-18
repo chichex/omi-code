@@ -2,10 +2,9 @@
 import type { Workflow, Phase } from "../harness/model.ts";
 import type { WorkflowProgress } from "./workspace/workflow-progress.ts";
 
-export const PHASE_LABELS: Record<Phase, string> = {
-	explore: "Explorar", decide: "Resolver inferencias", recipe: "Preparar receta", diagnose: "Diagnóstico", spec: "Escribir spec",
-	approve: "Aprobar receta", implement: "Implementar", verify: "Verificar", pr: "Abrir PR draft", done: "PR draft abierto", closed: "Cerrado sin cambio",
-};
+import { PHASE_LABELS } from "../harness/phases.ts";
+import { workflowStages } from "../harness/progress.ts";
+export { PHASE_LABELS } from "../harness/phases.ts";
 const ROUTES = { direct: "Directa", diagnostic: "Diagnóstico", spec: "Con spec" };
 export function developmentProgress(state: Workflow, activity = state.activity): WorkflowProgress {
 	const fingerprint = state.evidence.findLast((e) => e.kind === "verification")?.fingerprint;
@@ -17,6 +16,7 @@ export function developmentProgress(state: Workflow, activity = state.activity):
 	return {
 		id: state.id, issueNumber: state.source.number, worktree: state.checkout.root, branch: state.checkout.branch,
 		phaseLabel: PHASE_LABELS[state.phase], routeLabel: state.diagnosis && state.recipe?.route !== "diagnostic" ? `Diagnóstico → ${route}` : route,
+		stages: workflowStages(state),
 		activity, status: state.status, completedSteps: state.steps.filter((s) => s.status === "done").length, totalSteps: state.steps.length,
 		passedChecks: state.recipe?.cases.filter((c) => passed.has(c.id)).length ?? 0, totalChecks: state.recipe?.cases.length ?? 0,
 		blockedReason: state.blockedReason,

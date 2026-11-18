@@ -1,5 +1,7 @@
 import { artifactHash, MAX_ATTEMPTS, MAX_EVIDENCE, MAX_HISTORY, MAX_REVIEWS, MAX_STEPS, parseWorkflow, sourceHash, type Workflow, type Exploration, type InferenceInput, type Plan, type Spec, type Evidence, type Review, type Step } from "./model.ts";
 
+import { recipeNextPhase, recipeRoute } from "./phases.ts";
+
 export type WorkflowEvent =
  | { type: "explored"; exploration: Exploration }
  | { type: "inferences"; inferences: InferenceInput[] }
@@ -64,8 +66,8 @@ function stepsFor(state: Workflow): void {
  requireCondition(recipe, "falta receta");
  if (recipe.route === "direct") {
   state.steps = [{ id: "C1", title: recipe.objective, cases: recipe.cases.map(c => c.id), status: "pending", red: null, green: null, commit: null }];
-  state.phase = "approve";
- } else state.phase = recipe.route === "diagnostic" ? "diagnose" : "spec";
+ }
+ state.phase = recipeNextPhase(recipe.route);
 }
 // Una receta sin aprobar se puede rehacer: si la persona dice que no, se ajusta sin perder
 // exploración ni respuestas. Aprobada, sólo cambia con refresh.
@@ -79,7 +81,7 @@ function planWorkflow(state: Workflow, plan: Plan): void {
  if (classification.risk === "high") {
   for (const lens of ["compliance", "security"] as const) if (!lenses.includes(lens)) lenses.push(lens);
  }
- const route = classification.type === "fix" && !classification.causeKnown ? "diagnostic" : classification.size === "small" ? "direct" : "spec";
+ const route = recipeRoute(classification);
  state.recipe = { ...plan, classification, lenses, route };
  state.spec = null; state.diagnosis = null; state.approval = null; state.steps = [];
  stepsFor(state);
@@ -302,7 +304,7 @@ function applyEvent(state: Workflow, event: WorkflowEvent, at: string): void {
    requireCondition(reproduction && (successful(reproduction) || expectedFailure(reproduction)), "falta reproducción confirmada");
    state.diagnosis = { cause: event.cause, reproduction: event.reproduction, size: event.size };
    state.recipe.classification.causeKnown = true; state.recipe.classification.size = event.size;
-   state.recipe.route = event.size === "small" ? "direct" : "spec"; stepsFor(state); return;
+   state.recipe.route = recipeRoute(state.recipe.classification); stepsFor(state); return;
   }
   case "specified": specify(state, event.spec); return;
   case "approved":
