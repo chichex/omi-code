@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { createWorkflow } from "../src/harness/state.ts";
 import type { Workflow } from "../src/harness/model.ts";
 import { approvalPreview } from "../src/tui/development-session.ts";
-import { approvalDocument, approvalDisplayText } from "../src/tui/development-approval.ts";
+import { approvalDocument, approvalDisplayText, approvalText } from "../src/tui/development-approval.ts";
 import { ApprovalReview, reviewLines } from "../src/tui/development-approval-view.ts";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { getThemeByName } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
@@ -65,6 +65,23 @@ test("aprobación: controles externos son visibles, no ANSI ejecutable ni texto 
 	assert.doesNotMatch(displayed, /[\x00-\x09\x0b-\x1f\x7f-\x9f\u202e]/);
 	assert.match(displayed, /\\t/); assert.match(displayed, /\\u001b\[2J/); assert.match(displayed, /\\r/); assert.match(displayed, /\\u202e/);
 	assert.match(displayed, /\\\\u001b/); assert.ok(displayed.endsWith("\n  fin  "));
+});
+
+test("aprobación: la leyenda de escapes describe lo que se ve, en TUI y en RPC", () => {
+	const state = proposal(); const command = "printf 'a\\nb'\tX​\n  echo FIN  ";
+	state.recipe!.cases = [{ id: "D1", description: "Escapes", command }, { id: "D2", description: "Siguiente", command: "true" }];
+	const doc = approvalDocument(state); const section = doc.sections.find((s) => s.id === "commands")!;
+	const rpc = approvalText(doc).split("\n");
+	for (const [where, lines] of [["TUI", reviewLines(section.lines, 400)], ["RPC", rpc]] as const) {
+		const legend = lines.find((l) => /backslash/.test(l)) ?? "";
+		// Cada escape nombrado se escribe igual que en el comando, sin otra capa de escape.
+		assert.ok(legend.includes(`${approvalDisplayText("\\")} = backslash`), `${where}: ${legend}`);
+		assert.match(legend, /(?<!\\)\\\\ = backslash/, where); assert.match(legend, /(?<!\\)\\t = tab/, where); assert.match(legend, /(?<!\\)\\uXXXX = /, where);
+		// El comando usa los marcadores que la leyenda anuncia: se recupera exacto y termina antes del caso siguiente.
+		const start = lines.indexOf("D1 · Escapes") + 1; const end = lines.indexOf("D2 · Siguiente");
+		assert.ok(start > 0 && end > start, where);
+		assert.equal(lines.slice(start, end).map((l) => l.replace(/^[│↳] /, "").replace(/↵$/, "\n")).join(""), approvalDisplayText(command), where);
+	}
 });
 
 test("aprobación: comandos se envuelven sin perder espacios, saltos ni tokens largos", () => {

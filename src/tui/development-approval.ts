@@ -1,8 +1,10 @@
 // Documento de consentimiento: datos íntegros, sin ANSI ni efectos de navegación.
 import type { Lens, Workflow } from "../harness/model.ts";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { renderWorkflowArtifact } from "../harness/github.ts";
 
-export interface ApprovalLine { kind: "heading" | "text" | "command"; text: string }
+// legend: texto propio de OMI ya escrito como se ve; nunca datos de la receta.
+export interface ApprovalLine { kind: "heading" | "text" | "command" | "legend"; text: string }
 export interface ApprovalSection { id: string; title: string; lines: ApprovalLine[] }
 export interface ApprovalDocument { title: string; sections: ApprovalSection[] }
 const TYPES = { add: "Nueva capacidad", fix: "Corrección", improve: "Mejora", chore: "Mantenimiento" };
@@ -23,6 +25,26 @@ export function approvalDisplayText(value: string): string {
 		const code = c.codePointAt(0)!;
 		return code <= 0xffff ? `\\u${code.toString(16).padStart(4, "0")}` : `\\u{${code.toString(16)}}`;
 	});
+}
+// La leyenda muestra cada escape tal como aparece en los comandos, sin escaparla otra vez.
+const COMMAND_LEGEND = `│ inicia línea; ↳ continúa visualmente; ↵ es un salto real. Se muestran escapes literales: ${approvalDisplayText("\\")} = backslash, ${approvalDisplayText("\t")} = tab, ${approvalDisplayText("\r")} = retorno, \\uXXXX = control/invisible.`;
+export function approvalLineText(l: ApprovalLine): string { return l.kind === "legend" ? l.text : approvalDisplayText(l.text); }
+// Sin trim ni word-wrap: espacios finales y saltos siguen inspeccionables. Sin ancho (RPC), una fila por línea lógica.
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+export function commandDisplayLines(value: string, width = Number.POSITIVE_INFINITY): string[] {
+	const logical = approvalDisplayText(value).split("\n"); const result: string[] = [];
+	for (const [index, original] of logical.entries()) {
+		let current = "│ "; let columns = 2;
+		const value = original + (index < logical.length - 1 ? "↵" : "");
+		for (const { segment } of graphemes.segment(value)) {
+			const size = visibleWidth(segment);
+			if (columns + size > width) { result.push(current); current = "↳ "; columns = 2; }
+			current += segment; columns += size;
+		}
+		// Un salto final no agrega una línea lógica vacía con un prefijo espurio.
+		if (original || index < logical.length - 1 || !index) result.push(current);
+	}
+	return result;
 }
 export function approvalDocument(state: Workflow): ApprovalDocument {
 	const recipe = state.recipe;
@@ -45,7 +67,7 @@ export function approvalDocument(state: Workflow): ApprovalDocument {
 		{ id: "scope", title: "Alcance", lines: [heading("Dentro del alcance"), ...bullets(recipe.scope), heading("Fuera de alcance"), ...bullets(recipe.outOfScope)] },
 		{ id: "steps", title: "Pasos C / casos D", lines: state.steps.flatMap((s) => [heading(`${s.id} · ${s.title}`), line(`Casos cubiertos: ${s.cases.join(", ")}`)]) },
 		{ id: "commands", title: "Pruebas y comandos exactos", lines: [line("Estos comandos quedan autorizados sin volver a preguntar. Revisarlos no los ejecuta."),
-			line("│ inicia línea; ↳ continúa visualmente; ↵ es un salto real. Se muestran escapes literales: \\\\ = backslash, \\t = tab, \\uXXXX = control/invisible."),
+			{ kind: "legend" as const, text: COMMAND_LEGEND },
 			...recipe.cases.flatMap((d) => [heading(`${d.id} · ${d.description}`), { kind: "command" as const, text: d.command }])] },
 		{ id: "inferences", title: "Inferencias y respuestas", lines: state.inferences.length ? state.inferences.flatMap((i) => [heading(`${i.id} · ${i.kind === "what" ? "Qué" : "Cómo"} · ${i.question}`),
 			line(`Recomendada: ${i.recommended}`), line(`Confianza estimada: ${i.confidence}/100 · Irreversible: ${i.irreversible ? "sí" : "no"}`),
@@ -58,5 +80,5 @@ export function approvalDocument(state: Workflow): ApprovalDocument {
 	return { title: "Aprobar receta y sincronizar issue", sections };
 }
 export function approvalText(document: ApprovalDocument): string {
-	return document.sections.map((s) => `${s.title}\n${s.lines.map((l) => approvalDisplayText(l.text)).join("\n")}`).join("\n\n");
+	return document.sections.map((s) => `${s.title}\n${s.lines.map((l) => l.kind === "command" ? commandDisplayLines(l.text).join("\n") : approvalLineText(l)).join("\n")}`).join("\n\n");
 }

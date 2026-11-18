@@ -1,29 +1,12 @@
 // Revisión dedicada: el cuerpo puede crecer, las decisiones nunca se desplazan con él.
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import { matchesKey, visibleWidth, wrapTextWithAnsi, type Component, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
+import { matchesKey, wrapTextWithAnsi, type Component, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { modalBodyRows, modalHint, modalLines } from "./workspace/presentation.ts";
-import { approvalDisplayText, type ApprovalDocument, type ApprovalLine } from "./development-approval.ts";
+import { approvalLineText, commandDisplayLines, type ApprovalDocument, type ApprovalLine } from "./development-approval.ts";
 
-// wrapTextWithAnsi hace word-wrap y elimina whitespace de borde. Para comandos usamos
-// segmentación/anchos de Pi sin trim: incluso espacios finales y saltos siguen inspeccionables.
-const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
-function commandLines(value: string, width: number): string[] {
-	const logical = approvalDisplayText(value).split("\n"); const result: string[] = [];
-	for (const [index, original] of logical.entries()) {
-		let current = "│ "; let columns = 2;
-		const value = original + (index < logical.length - 1 ? "↵" : "");
-		for (const { segment } of graphemes.segment(value)) {
-			const size = visibleWidth(segment);
-			if (columns + size > width) { result.push(current); current = "↳ "; columns = 2; }
-			current += segment; columns += size;
-		}
-		// Un salto final no agrega una línea lógica vacía con un prefijo espurio.
-		if (original || index < logical.length - 1 || !index) result.push(current);
-	}
-	return result;
-}
+// wrapTextWithAnsi hace word-wrap y recorta bordes: sirve para prosa, no para comandos.
 function reviewRows(lines: ApprovalLine[], width: number): ApprovalLine[] {
-	return lines.flatMap((l) => (l.kind === "command" ? commandLines(l.text, width) : wrapTextWithAnsi(approvalDisplayText(l.text), width)).map((text) => ({ kind: l.kind, text })));
+	return lines.flatMap((l) => (l.kind === "command" ? commandDisplayLines(l.text, width) : wrapTextWithAnsi(approvalLineText(l), width)).map((text) => ({ kind: l.kind, text })));
 }
 export function reviewLines(lines: ApprovalLine[], width: number): string[] { return reviewRows(lines, width).map((l) => l.text); }
 interface ReviewOptions {
