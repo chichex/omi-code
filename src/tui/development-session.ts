@@ -19,19 +19,13 @@ import { readGit } from "./workspace/data.ts";
 import { developmentProgress, PHASE_LABELS } from "./development-view.ts";
 import type { BeginLoader } from "./development-begin.ts";
 import { developmentOffline } from "./development-tickets.ts";
+import { approvalDocument, approvalText } from "./development-approval.ts";
 
 export const DEVELOPMENT_ANCHOR = "omi-development-workflow";
 const AnchorSchema = Type.Object({ id: Type.String(), root: Type.String(), issue: Type.Integer({ minimum: 1 }), revision: Type.Integer({ minimum: 0 }), disabled: Type.Optional(Type.Boolean()) });
 export interface DevelopmentDeps { runner?: Runner; now?: () => string; loader?: BeginLoader }
-// Lo que la persona aprueba. Falla antes de pedir el sí si no entra en el diálogo o en GitHub.
-// Lo que se ejecuta sin volver a preguntar va primero y legible, no enterrado en el JSON.
-export function approvalPreview(state: Workflow): string {
-	const commands = `Comandos que quedan autorizados y se ejecutan sin volver a preguntar:\n${(state.recipe?.cases ?? []).map((c) => `- ${c.id} · ${c.command}`).join("\n")}`;
-	const preview = JSON.stringify({ source: { number: state.source.number, title: state.source.title, url: state.source.url, hash: state.source.hash }, recipe: state.recipe, spec: state.spec, inferences: state.inferences }, null, 2);
-	if (preview.length > 50000) throw new Error("La receta es demasiado grande para aprobarla completa; acotá el trabajo con planned o specified");
-	renderWorkflowArtifact(state);
-	return `${commands}\n\n${preview}`;
-}
+// El preflight y el documento íntegro se comparten con la revisión TUI y RPC.
+export function approvalPreview(state: Workflow): string { return approvalText(approvalDocument(state)); }
 export class DevelopmentSession {
 	state: Workflow | undefined;
 	onChange: (() => void) | undefined;
