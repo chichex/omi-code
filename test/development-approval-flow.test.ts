@@ -10,14 +10,14 @@ async function ready(t: import("node:test").TestContext): Promise<Fixture> {
 }
 function noWrites(f: Fixture): void {
 	assert.equal(f.remote.comments.length, 0);
-	assert.ok(!f.calls.some((c) => c.command === "gh" && c.args.includes("POST")));
+	assert.ok(!f.calls.some((c) => c.command === "gh" && (c.args.includes("POST") || c.args[1] === "edit")));
 	assert.ok(!f.calls.some((c) => c.command === "git" && ["commit", "push"].some((a) => c.args.includes(a))));
 }
 test("approval_flow: TUI usa revisión dedicada y sólo el sí explícito publica/vincula", async (t) => {
 	const f = await ready(t); await f.action({ action: "approve" });
 	assert.equal(f.reviews(), 1, "TUI no usa confirm genérico para la receta");
 	assert.match(f.reviewScreens[0]!, /1\/9 Resumen/); assert.match(f.reviewScreens[0]!, /Objetivo/);
-	assert.equal(isApproved(await f.state()), true); assert.equal(f.remote.comments.length, 1);
+	assert.equal(isApproved(await f.state()), true); assert.match(f.remote.body, /## Harness · #42/); assert.equal(f.remote.comments.length, 0);
 	assert.ok(!f.calls.some((c) => c.command === "git" && c.args.includes("push")));
 });
 for (const kind of ["escape", "ctrl-c", "close", "undefined", "error", "abort"] as const) test(`approval_flow: navegar/Enter/${kind} no aprueba ni publica`, async (t) => {

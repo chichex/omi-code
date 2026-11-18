@@ -50,10 +50,10 @@ export function assertCanBegin(ctx: ExtensionContext, offline: boolean): void {
 	if (!ctx.model || !ctx.modelRegistry.hasConfiguredAuth(ctx.model)) throw new Error("Elegí un modelo autenticado con /omi-model o /login antes de empezar un trabajo.");
 }
 const placeholder = (git: GitSnapshot): Workflow["checkout"] => ({ root: git.root, commonDir: git.commonDir, branch: "main", baseCommit: "preview" });
-// El pedido se cita en los comentarios del issue: si no entra, nunca se podrá aprobar.
+// El pedido se cita en el PR draft: si no entra, nunca se podrá publicar.
 function assertQuotable(source: Workflow["source"], git: GitSnapshot, now: string): void {
 	try { renderWorkflowArtifact(createWorkflow(source, placeholder(git), "preview", now)); }
-	catch { throw new Error("El pedido es demasiado grande para citarlo en un comentario de GitHub; acotalo antes de empezar."); }
+	catch { throw new Error("El pedido es demasiado grande para citarlo en el PR draft de GitHub; acotalo antes de empezar."); }
 }
 async function gh(git: GitSnapshot, args: string[], options: BeginOptions, input?: string): Promise<string> {
 	const result = await options.runner.run("gh", args, { cwd: git.root, env: { GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", GH_PAGER: "cat" }, signal: options.signal, ...(input === undefined ? {} : { input }) });

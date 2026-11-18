@@ -1,4 +1,4 @@
-// Pi y PTY reales; fuente/comentarios falsos y HOME temporal. No es revisión visual humana.
+// Pi y PTY reales; issue de GitHub falso y HOME temporal. No es revisión visual humana.
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
@@ -75,15 +75,13 @@ import {processRunner} from ${JSON.stringify(source("src/core/exec.ts"))};
 import {testIo} from ${JSON.stringify(source("test/helpers/io.ts"))};
 import {stripTerminalSequences, visibleWidth} from '@earendil-works/pi-tui';
 export default function(pi) {
- let session, comments=[];
+ let session, edits=0;
  const issue={number:44,title:'Revisar aprobación',body:'Pedido de prueba',url:'https://github.com/test/repo/issues/44',hash:'unused'};
  const runner={async run(command,args,options){
   if(command!=='gh') return processRunner.run(command,args,options);
   let value;
-  if(args[0]==='issue') value=issue;
-  else if(args.includes('user')) value={login:'test'};
-  else if(args.includes('POST')) {const body=JSON.parse(options.input).body; comments.push({body,user:{login:'test'}}); value={};}
-  else if(args.includes('--paginate')) value=[comments];
+  if(args[0]==='issue'&&args[1]==='edit') {issue.body=options.input; edits++; value={};}
+  else if(args[0]==='issue'&&args[1]==='view') value=issue;
   else throw Error('remote no previsto');
   return {code:0,stdout:JSON.stringify(value),stderr:''};
  }};
@@ -104,7 +102,7 @@ export default function(pi) {
    return component;
   },options)};
   const approved=await session.approve({...ctx,ui});
-  appendFileSync(${JSON.stringify(resultsPath)},JSON.stringify({approved,comments:comments.length,phase:session.state.phase})+'\\n');
+  appendFileSync(${JSON.stringify(resultsPath)},JSON.stringify({approved,edits,phase:session.state.phase})+'\\n');
   ctx.ui.notify(approved?'PROBE_TRUE':'PROBE_FALSE','info');
  }});
  pi.on('session_shutdown',()=>session?.shutdown());
@@ -118,7 +116,7 @@ export default function(pi) {
 	const plainOutput = result.output.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
 	assert.equal(result.code, 0, plainOutput); assert.match(plainOutput, /APPROVAL_DRIVER_PHASE=9\b/, plainOutput);
 	const results = (await readFile(resultsPath, "utf8")).trim().split("\n").map((l) => JSON.parse(l));
-	assert.deepEqual(results, [{ approved: false, comments: 0, phase: "approve" }, { approved: true, comments: 1, phase: "implement" }]);
+	assert.deepEqual(results, [{ approved: false, edits: 0, phase: "approve" }, { approved: true, edits: 1, phase: "implement" }]);
 	const frames = (await readFile(framesPath, "utf8")).trim().split("\n").map((l) => JSON.parse(l) as { width: number; columns: number; rows: number; widths: number[]; lines: string[] });
 	assert.ok(frames.some((f) => f.columns === 80 && f.rows === 24)); assert.ok(frames.some((f) => f.columns === 132 && f.rows === 40));
 	for (const frame of frames) { assert.ok(frame.lines.length <= Math.floor(frame.rows * .9)); assert.ok(frame.widths.every((w) => w <= frame.width)); assert.match(frame.lines.slice(-4).join("\n"), /Ctrl\+S.*aprobar.*Esc.*volver/); }

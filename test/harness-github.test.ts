@@ -5,9 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Runner, CommandOptions } from "../src/core/exec.ts";
 import { artifactHash, sourceHash, type Workflow } from "../src/harness/model.ts";
-import { readIssueSource, renderWorkflowArtifact, renderPullRequestBody, syncIssueArtifact, publishDraft } from "../src/harness/github.ts";
+import { readIssueSource, renderWorkflowArtifact, renderPullRequestBody, syncIssueSection, publishDraft } from "../src/harness/github.ts";
+import { parseIssueBody, renderIssueSection } from "../src/harness/issue-section.ts";
 
-type Comment = { id: number; body: string; user: { login: string }; html_url: string };
 async function fixture(t: import("node:test").TestContext) {
  const root = await mkdtemp(join(tmpdir(), "omi-harness-gh-")); await mkdir(join(root, ".git")); t.after(() => rm(root, { recursive: true, force: true }));
  const head = "b".repeat(40); const checkout = { root, commonDir: join(root, ".git"), branch: "feat/task", baseCommit: "a".repeat(40) };
@@ -15,7 +15,7 @@ async function fixture(t: import("node:test").TestContext) {
  const workflow: Workflow = { version: 1, id: "w", revision: 0, source, checkout, phase: "pr", status: "active", blockedReason: "", activity: "testing", exploration: null, inferences: [], recipe: null, diagnosis: null, spec: null, steps: [], evidence: [], reviews: [], round: 0, maxRounds: 3, approval: { sourceHash: source.hash, recipeHash: "approved", at: "now" }, publication: { status: "pending", head, bodyHash: "body", at: "now" }, history: [] };
  if (workflow.publication.status === "pending") workflow.publication.bodyHash = artifactHash(renderWorkflowArtifact(workflow));
  const calls: { command: string; args: string[]; options?: CommandOptions }[] = [];
- const state = { issue: { number: 42, title: source.title, body: source.body, url: source.url }, prs: [] as unknown[], comments: [] as Comment[], createError: false, postError: false, storePost: true, remote: "git@github.com:acme/repo.git", head, changeHeadOnList: false, changeHeadOnPush: false, editHumanOnComments: false, pushError: false };
+ const state = { issue: { number: 42, title: source.title, body: source.body, url: source.url }, prs: [] as unknown[], createError: false, dropEdit: false, remote: "git@github.com:acme/repo.git", head, changeHeadOnList: false, changeHeadOnPush: false, pushError: false };
  const pr = { number: 3, url: "https://github.com/acme/repo/pull/3", state: "OPEN", isDraft: true, isCrossRepository: false, headRefName: checkout.branch, baseRefName: "main", headRefOid: head, body: "" };
  const runner: Runner = { async run(command, args, options) {
   calls.push({ command, args, ...(options ? { options } : {}) }); let stdout = "";
@@ -27,23 +27,16 @@ async function fixture(t: import("node:test").TestContext) {
    if (a[0] === "push" && state.changeHeadOnPush) state.head = "c".repeat(40);
    if (a[0] === "push" && state.pushError) return { code: 1, stdout: "", stderr: "! [rejected] feat/task (non-fast-forward)" };
   } else if (args[0] === "issue" && args[1] === "view") stdout = JSON.stringify(state.issue);
+  else if (args.join(" ") === "issue edit 42 --repo acme/repo --body-file -") { if (!state.dropEdit) state.issue.body = options?.input ?? ""; }
   else if (args[0] === "repo") stdout = JSON.stringify({ nameWithOwner: "acme/repo", url: "https://github.com/acme/repo" });
   else if (args[0] === "pr" && args[1] === "list") { stdout = JSON.stringify(state.prs); if (state.changeHeadOnList) state.head = "c".repeat(40); }
   else if (args[0] === "pr" && args[1] === "create") { pr.body = options?.input ?? ""; state.prs = [pr]; if (state.createError) return { code: 1, stdout: "", stderr: "ambiguous" }; stdout = pr.url; }
-  else if (args.join(" ") === "api user") stdout = JSON.stringify({ login: "test" });
-  else if (args.join(" ") === "api --paginate --slurp repos/acme/repo/issues/42/comments?per_page=100") { stdout = JSON.stringify([[], state.comments]); if (state.editHumanOnComments) state.issue.body = "human concurrent edit"; }
-  else if (args.join(" ") === "api repos/acme/repo/issues/42/comments --method POST --input -") {
-   const body = JSON.parse(options?.input ?? "{}").body; assert.equal(typeof body, "string");
-   const comment = { id: state.comments.length + 1, body, user: { login: "test" }, html_url: `${source.url}#issuecomment-${state.comments.length + 1}` };
-   if (state.storePost) state.comments.push(comment);
-   if (state.postError) return { code: 1, stdout: "", stderr: "secret must not leak" };
-   stdout = JSON.stringify(comment);
-  } else throw new Error(`Unexpected remote call: ${args.join(" ")}`);
+  else throw new Error(`Unexpected remote call: ${args.join(" ")}`);
   return { code: 0, stdout, stderr: "" };
  } };
  return { workflow, state, calls, runner, pr };
 }
-const posts = (f: Awaited<ReturnType<typeof fixture>>) => f.calls.filter(c => c.args.includes("POST"));
+const edits = (f: Awaited<ReturnType<typeof fixture>>) => f.calls.filter(c => c.args[0] === "issue" && c.args[1] === "edit");
 
 test("issue source preserves original bytes and ignores only one well-formed legacy owned block", async (t) => {
  const f = await fixture(t); const first = await readIssueSource(f.workflow.checkout, 42, f.runner);
@@ -66,26 +59,40 @@ test("the request contrast ignores the managed harness section and whatever is w
  await assert.rejects(readIssueSource(f.workflow.checkout, 42, f.runner), /marcadores/i);
 });
 
-test("issue artifact appends an owned comment, deduplicates exact body and never mutates issue", async (t) => {
- const f = await fixture(t); const original = structuredClone(f.workflow.source); await syncIssueArtifact(f.workflow, f.runner); await syncIssueArtifact(f.workflow, f.runner);
- assert.equal(posts(f).length, 1); assert.equal(f.state.comments.length, 1); assert.equal(f.state.issue.body, original.body); assert.deepEqual(f.workflow.source, original);
- const body = f.state.comments[0]!.body; assert.ok(body.includes(renderWorkflowArtifact(f.workflow))); assert.ok(body.includes(f.workflow.id)); assert.ok(body.includes(artifactHash(renderWorkflowArtifact(f.workflow))));
- assert.ok(!f.calls.some(c => c.args.includes("edit") || c.args.includes("PATCH") || c.args.includes("DELETE")));
- f.state.comments[0]!.user.login = "someone-else"; await syncIssueArtifact(f.workflow, f.runner); assert.equal(posts(f).length, 2);
- f.state.comments[1]!.body += "human change"; await syncIssueArtifact(f.workflow, f.runner); assert.equal(posts(f).length, 3);
+test("the harness section goes below the request, byte for byte, and is rewritten in place without comments", async (t) => {
+ const f = await fixture(t); f.workflow.phase = "verify";
+ await syncIssueSection(f.workflow, f.runner);
+ const first = f.state.issue.body; const parts = parseIssueBody(first);
+ assert.ok(first.startsWith("Original\n")); assert.equal(parts.human, "Original\n"); assert.match(parts.section ?? "", /^\n## Harness · #42\n/);
+ const edit = edits(f)[0]; assert.equal(edit?.options?.input, first, "el cuerpo viaja por stdin, nunca como argumento");
+ await syncIssueSection(f.workflow, f.runner); assert.equal(edits(f).length, 1, "una sección igual no se vuelve a escribir");
+ f.state.issue.body += "\n\nNota humana debajo"; f.workflow.phase = "pr";
+ // Lo que agrega una persona debajo de la sección es pedido: un punto de control lo contrasta antes de reescribir.
+ await assert.rejects(syncIssueSection(f.workflow, f.runner), /pedido/i); assert.equal(edits(f).length, 1);
+ f.workflow.source = await readIssueSource(f.workflow.checkout, 42, f.runner);
+ await syncIssueSection(f.workflow, f.runner);
+ assert.equal(edits(f).length, 2); assert.ok(f.state.issue.body.startsWith("Original\n")); assert.ok(f.state.issue.body.endsWith("\n\nNota humana debajo"), "lo de fuera de los marcadores no se toca");
+ assert.equal(f.state.issue.body.split("<!-- omi:harness:start -->").length, 2, "una sola sección");
+ assert.equal((await readIssueSource(f.workflow.checkout, 42, f.runner)).hash, sourceHash(f.workflow.source.title, "Original\n\n\nNota humana debajo"));
+ assert.ok(!f.calls.some(c => c.args.includes("POST") || c.args.includes("comment") || c.args.join(" ") === "api user"), "no se crean comentarios");
 });
 
-test("issue sync checks fresh source but concurrent human edits cannot be overwritten", async (t) => {
- const f = await fixture(t); f.state.issue.body = "human edited"; await assert.rejects(syncIssueArtifact(f.workflow, f.runner)); assert.equal(posts(f).length, 0);
- f.state.issue.body = f.workflow.source.body; f.state.editHumanOnComments = true; await syncIssueArtifact(f.workflow, f.runner);
- assert.equal(f.state.issue.body, "human concurrent edit"); assert.equal(posts(f).length, 1);
+test("the section is not written when the request changed, the markers are broken or GitHub does not confirm", async (t) => {
+ const f = await fixture(t); f.state.issue.body = "human edited";
+ await assert.rejects(syncIssueSection(f.workflow, f.runner), /pedido/i); assert.equal(edits(f).length, 0);
+ f.state.issue.body = "Original\n\n<!-- omi:harness:start -->\nsin cierre";
+ await assert.rejects(syncIssueSection(f.workflow, f.runner), /marcadores/i); assert.equal(edits(f).length, 0);
+ f.state.issue.body = "Original\n"; f.state.dropEdit = true;
+ await assert.rejects(syncIssueSection(f.workflow, f.runner), /confirmar/i); assert.equal(edits(f).length, 1, "no se reintenta solo");
 });
 
-test("ambiguous comment POST recovers exact owned comment before any retry", async (t) => {
- const f = await fixture(t); f.state.postError = true; await syncIssueArtifact(f.workflow, f.runner); await syncIssueArtifact(f.workflow, f.runner);
- assert.equal(posts(f).length, 1); assert.equal(f.state.comments.length, 1);
- const failed = await fixture(t); failed.state.postError = true; failed.state.storePost = false;
- await assert.rejects(syncIssueArtifact(failed.workflow, failed.runner), error => error instanceof Error && !error.message.includes("secret")); assert.equal(posts(failed).length, 1);
+test("a section that does not fit next to the request is compacted, never truncated silently", async (t) => {
+ const f = await fixture(t); const human = "x".repeat(60000); f.state.issue.body = human; f.workflow.source.body = human; f.workflow.source.hash = sourceHash(f.workflow.source.title, human);
+ f.workflow.recipe = { route: "direct", classification: { type: "fix", size: "small", risk: "low", riskAreas: [], causeKnown: true }, objective: "o".repeat(8000), approach: "Fix", scope: [], outOfScope: [], cases: [{ id: "D1", description: "Test", command: "npm test" }], lenses: [], executor: { mode: "inline", writers: 0 } };
+ await syncIssueSection(f.workflow, f.runner);
+ assert.ok(f.state.issue.body.length <= 65536); assert.equal(parseIssueBody(f.state.issue.body).human, human); assert.match(f.state.issue.body, /no entra/);
+ const full = "y".repeat(65500); f.state.issue.body = full; f.workflow.source.body = full; f.workflow.source.hash = sourceHash(f.workflow.source.title, full);
+ await assert.rejects(syncIssueSection(f.workflow, f.runner), /límite/i); assert.equal(f.state.issue.body, full);
 });
 
 test("publication creates draft with immutable SHA/stdin and recovers ambiguous create without duplicate", async (t) => {
@@ -128,11 +135,11 @@ test("artifact hashing ignores publishing activity but preserves phase and statu
  f.workflow.status = "active"; f.workflow.phase = "verify"; assert.notEqual(renderWorkflowArtifact(f.workflow), before);
 });
 
-test("mandatory spec/inferences are complete or fail asking to divide; oversized bodies never POST", async (t) => {
+test("mandatory spec/inferences are complete or fail asking to divide; oversized PR bodies never push", async (t) => {
  const f = await fixture(t); const long = "x".repeat(13000) + "MANDATORY-END"; f.workflow.spec = { why: long, steps: [], playbook: [] };
  assert.ok(renderWorkflowArtifact(f.workflow).includes(long));
  f.workflow.inferences = [{ id: "I1", kind: "what", question: "Q", recommended: "R", confidence: 90, irreversible: false, references: [], resolution: "answered", answer: "y".repeat(70000) }];
- assert.throws(() => renderWorkflowArtifact(f.workflow), /dividir/i); await assert.rejects(syncIssueArtifact(f.workflow, f.runner), /dividir/i); assert.equal(posts(f).length, 0);
+ assert.throws(() => renderWorkflowArtifact(f.workflow), /dividir/i);
  await assert.rejects(publishDraft(f.workflow, f.runner), /dividir/i); assert.equal(f.calls.some(c => c.args.includes("push") || c.args.includes("create")), false);
 });
 
@@ -141,15 +148,14 @@ test("mandatory recipe and inferences are never silently bounded by presentation
  f.workflow.recipe = { route: "direct", classification: { type: "fix", size: "small", risk: "low", riskAreas: [], causeKnown: true }, objective, approach: "Fix", scope: [], outOfScope: [], cases: [{ id: "D1", description: "Test", command: "npm test" }], lenses: [], executor: { mode: "inline", writers: 0 } };
  f.workflow.inferences = [{ id: "I1", kind: "what", question: "Q", recommended: "R", confidence: 90, irreversible: false, references: [], resolution: "answered", answer }];
  const body = renderWorkflowArtifact(f.workflow); assert.ok(body.includes(objective)); assert.ok(body.includes(answer));
- await syncIssueArtifact(f.workflow, f.runner); assert.ok(f.state.comments[0]?.body.includes(objective)); assert.ok(f.state.comments[0]?.body.includes(answer));
 });
 
-test("GitHub body limit includes comment and PR ownership wrappers before any remote write", async (t) => {
+test("GitHub body limit includes the PR ownership wrapper before any remote write", async (t) => {
  const f = await fixture(t); f.workflow.source.body = "";
  const base = Buffer.byteLength(renderWorkflowArtifact(f.workflow)); f.workflow.source.body = "x".repeat(65530 - base);
  assert.equal(Buffer.byteLength(renderWorkflowArtifact(f.workflow)), 65530);
  if (f.workflow.publication.status === "pending") f.workflow.publication.bodyHash = artifactHash(renderWorkflowArtifact(f.workflow));
- await assert.rejects(syncIssueArtifact(f.workflow, f.runner), /dividir/i); await assert.rejects(publishDraft(f.workflow, f.runner), /dividir/i);
+ await assert.rejects(publishDraft(f.workflow, f.runner), /dividir/i);
  assert.equal(f.calls.length, 0);
 });
 
@@ -158,10 +164,11 @@ test("large evidence lists may be summarized explicitly without losing mandatory
  const body = renderWorkflowArtifact(f.workflow); assert.ok(body.includes("estado local completo")); assert.ok(body.includes("npm test")); assert.ok(body.length < 65536);
 });
 
-test("command output never leaves the machine: issue comments and PR carry exit codes, not output", async (t) => {
+test("command output never leaves the machine: the issue section and the PR carry exit codes, not output", async (t) => {
  const f = await fixture(t); f.workflow.evidence = [{ id: "E1", kind: "verification", command: "npm test", stepId: null, caseId: "D1", exitCode: 0, outcome: "passed", output: "GITHUB_TOKEN=ghp_PRINTED_BY_A_TEST\nok", fingerprint: "fp", head: "b".repeat(40), startedAt: "now", finishedAt: "now" }];
  const body = renderWorkflowArtifact(f.workflow);
  assert.ok(body.includes("npm test")); assert.match(body, /"exitCode": 0/); assert.doesNotMatch(body, /ghp_PRINTED_BY_A_TEST|"output"/);
+ const section = renderIssueSection(f.workflow); assert.match(section, /\| D1 \| ✅ exit 0 \|/); assert.doesNotMatch(section, /ghp_PRINTED_BY_A_TEST/);
 });
 
 test("a rejected push explains the likely cause instead of a generic Git verification error", async (t) => {

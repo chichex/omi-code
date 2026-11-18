@@ -14,7 +14,8 @@ import type { ReadReceipt } from "../harness/references.ts";
 import { createWorkflow, recipeApprovalHash, transition, type WorkflowEvent } from "../harness/state.ts";
 import { readWorkflow, updateWorkflow } from "../harness/store.ts";
 import { inspectCheckout } from "../harness/git.ts";
-import { publishDraft, readIssueSource, renderWorkflowArtifact, syncIssueArtifact } from "../harness/github.ts";
+import { publishDraft, readIssueSource, renderWorkflowArtifact } from "../harness/github.ts";
+import { updateIssueSection } from "./development-issue.ts";
 import { restoreIssueTriage } from "./workspace/issue-triage.ts";
 import { readGit } from "./workspace/data.ts";
 import { developmentProgress, PHASE_LABELS } from "./development-view.ts";
@@ -143,9 +144,9 @@ export class DevelopmentSession {
 		if (!snapshot.clean) throw new Error("Iniciá el harness con el worktree limpio; no se adoptan cambios ajenos a la receta");
 		const source = await readIssueSource(checkout, prepared.issue.number, this.runner, this.lifecycle.signal);
 		if (source.url.replace(/\/$/, "") !== prepared.issue.url.replace(/\/$/, "")) throw new Error("GitHub devolvió otro issue/repositorio");
-		// El pedido se cita en los comentarios del issue: si no entra, nunca se podrá aprobar.
+		// El pedido se cita en el PR draft: si no entra, nunca se podrá publicar.
 		try { renderWorkflowArtifact(createWorkflow(source, checkout, "preview", this.now())); }
-		catch { throw new Error("El pedido es demasiado grande para citarlo en un comentario de GitHub; acotá el issue antes de iniciar"); }
+		catch { throw new Error("El pedido es demasiado grande para citarlo en el PR draft de GitHub; acotá el issue antes de iniciar"); }
 		this.state = await updateWorkflow(checkout, source.number, undefined, () => createWorkflow(source, checkout, randomUUID(), this.now()));
 		this.anchor(); this.emit();
 	}
@@ -202,9 +203,8 @@ export class DevelopmentSession {
 		if (!(await this.fresh(ctx))) return false;
 		await assertExplored();
 		cancellation.throwIfAborted();
-		await syncIssueArtifact(state, this.runner, cancellation);
-		await assertExplored();
 		await this.apply({ type: "approved" }, ctx);
+		await updateIssueSection(this, ctx);
 		return true;
 	}
 	// Volver a explorar descarta receta, aprobación y pruebas; también las lecturas y comandos autorizados.
@@ -221,11 +221,11 @@ export class DevelopmentSession {
 		// Revalidar evidencia con el fingerprint actual, también al recuperar una publicación pendiente.
 		transition({ ...state, phase: "verify", publication: { status: "none" } }, { type: "verified", fingerprint: snapshot.fingerprint }, this.now());
 		renderWorkflowArtifact(state); // Falla antes del sí si el artefacto no entra en GitHub.
-		if (!(await this.confirm(ctx, "Subir rama y abrir PR draft", `${state.checkout.branch} → main\nCommit ${snapshot.head}\nIssue #${state.source.number}\n\nAgrega evidencia en un comentario administrado del issue, hace push normal sólo de esta rama y crea o recupera su PR draft. No mergea, no fuerza pushes ni ejecuta workflows.`))) return;
-		await syncIssueArtifact(state, this.runner, this.lifecycle.signal);
+		if (!(await this.confirm(ctx, "Subir rama y abrir PR draft", `${state.checkout.branch} → main\nCommit ${snapshot.head}\nIssue #${state.source.number}\n\nHace push normal sólo de esta rama, crea o recupera su PR draft y actualiza la sección del harness en el cuerpo del issue con la evidencia. No mergea, no fuerza pushes ni ejecuta workflows.`))) return;
 		if (state.publication.status === "none") state = await this.apply({ type: "publishing", head: snapshot.head, bodyHash: artifactHash(renderWorkflowArtifact(state)) }, ctx);
 		const receipt = await publishDraft(state, this.runner, this.lifecycle.signal);
 		await this.apply({ type: "published", ...receipt }, ctx);
+		await updateIssueSection(this, ctx);
 	}
 	async answer(id: string, ctx: ExtensionContext): Promise<boolean> {
 		const state = this.current(ctx); const inference = state.inferences.find((i) => i.id === id && i.resolution === "pending");

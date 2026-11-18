@@ -1,5 +1,8 @@
 // Sección administrada del harness al final del cuerpo del issue. El pedido humano queda arriba,
 // intacto byte a byte; la sección se reescribe entera y nunca se toca texto fuera de sus marcadores.
+import type { Evidence, Lens, Workflow } from "./model.ts";
+import { PHASE_LABELS } from "./phases.ts";
+import { expectedFailure, isApproved } from "./state.ts";
 export const SECTION_START = "<!-- omi:harness:start -->";
 export const SECTION_END = "<!-- omi:harness:end -->";
 // Lo que OMI agrega entre el pedido y la sección; se descuenta al leer el pedido.
@@ -32,4 +35,85 @@ export function parseIssueBody(body: string): IssueBody {
 export function withIssueSection(body: string, parts: IssueBody, content: string): string {
 	const block = `${SECTION_START}\n${content}\n${SECTION_END}`;
 	return parts.section === null ? `${body}${SEPARATOR}${block}` : `${parts.before}${block}${parts.after}`;
+}
+
+// --- Presentación. Todo dato (modelo, receta, persona) pasa por text/code/cell: ninguna línea
+// de contenido empieza en la primera columna, así que nunca puede imitar un marcador.
+const TYPES = { add: "Nueva capacidad", fix: "Corrección", improve: "Mejora", chore: "Mantenimiento" };
+const ROUTES = { direct: "Directa", diagnostic: "Diagnóstico", spec: "Con spec" };
+const LENSES: Record<Lens, string> = { quality: "Calidad", reliability: "Confiabilidad", security: "Seguridad", compliance: "Cumplimiento", resilience: "Resiliencia", refuter: "Refutador" };
+const MAX_ROWS = 40;
+// Controles, bidi e invisibles se ven como escapes; nunca se publican crudos.
+const visible = (value: string) => value.replace(/\r\n?/g, "\n").replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}]/gu, (c) => c === "\n" || c === "\t" ? c : `\\u${c.codePointAt(0)!.toString(16).padStart(4, "0")}`);
+// Texto en línea: sin HTML ni comentarios, y los saltos no abren bloques nuevos.
+const text = (value: string) => visible(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>");
+// Código en línea con una cerca más larga que cualquier racha de backticks del contenido.
+function code(value: string): string {
+	const content = visible(value).replace(/\n/g, " ↵ ");
+	const fence = "`".repeat(Math.max(0, ...[...content.matchAll(/`+/g)].map((m) => m[0].length)) + 1);
+	const pad = /^[` ]|[` ]$/.test(content) ? " " : "";
+	return `${fence}${pad}${content}${pad}${fence}`;
+}
+// En una tabla de GFM el pipe separa celdas incluso dentro del código: se escapa siempre.
+const cell = (value: string) => value.replace(/\|/g, "\\|");
+function codeBlock(value: string): string[] {
+	const content = visible(value).split("\n");
+	const fence = "`".repeat(Math.max(3, ...content.flatMap((l) => [...l.matchAll(/`+/g)].map((m) => m[0].length + 1))));
+	return [fence, ...content, fence].map((l) => `  ${l}`.trimEnd() || "  ");
+}
+const list = (label: string, values: string[]) => values.length ? [`- **${label}:**`, ...values.map((v) => `  - ${text(v)}`)] : [];
+function stage(w: Workflow): string {
+	const step = w.steps.find((s) => s.status === "active") ?? w.steps.find((s) => s.status === "pending");
+	const detail = w.phase === "implement" && step ? ` (${step.id} de ${w.steps.length})` : "";
+	const status = w.status === "paused" ? " · **Pausado**" : w.status === "waiting" ? ` · **En espera:** ${text(w.blockedReason || "intervención humana")}` : "";
+	return `**Ruta:** ${w.recipe ? ROUTES[w.recipe.route] : "pendiente"} · **Etapa:** ${PHASE_LABELS[w.phase]}${detail}${status}`;
+}
+function recipe(w: Workflow): string[] {
+	const r = w.recipe; if (!r) return [];
+	const c = r.classification;
+	return ["", "### Receta", `- **Objetivo:** ${text(r.objective)}`, `- **Enfoque:** ${text(r.approach)}`,
+		`- **Tipo:** ${TYPES[c.type]} · **Tamaño:** ${c.size === "small" ? "chico" : "grande"} · **Riesgo:** ${c.risk === "high" ? "alto" : "bajo"}`,
+		...(c.riskAreas.length ? [`- **Áreas de riesgo:** ${c.riskAreas.map(text).join("; ")}`] : []),
+		...(w.diagnosis ? [`- **Causa:** ${text(w.diagnosis.cause)}`] : []), ...(w.spec ? [`- **Por qué:** ${text(w.spec.why)}`] : []),
+		...list("Alcance", r.scope), ...list("Fuera de alcance", r.outOfScope),
+		...r.cases.flatMap((d) => d.command.includes("\n") ? [`- **${text(d.id)}** ${text(d.description)}`, ...codeBlock(d.command)] : [`- **${text(d.id)}** ${code(d.command)} · ${text(d.description)}`]),
+		...(r.lenses.length ? [`- **Lentes:** ${r.lenses.map((l) => LENSES[l]).join(", ")}`] : []),
+		`- **Aprobación:** ${w.approval && isApproved(w) ? "aprobada por la persona en OMI" : "pendiente"}`];
+}
+function steps(w: Workflow): string[] {
+	if (!w.steps.length) return [];
+	const mark = { done: "✅", active: "▶️", pending: "⬜" };
+	return ["", "### Pasos", ...w.steps.map((s) => `- ${mark[s.status]} **${text(s.id)}** ${text(s.title)}${s.commit ? ` · ${code(s.commit.slice(0, 7))}` : ""}`),
+		...(w.spec?.playbook.length ? ["", "**Playbook humano**", ...w.spec.playbook.map((p, i) => `${i + 1}. ${text(p)}`)] : [])];
+}
+function decisions(w: Workflow): string[] {
+	const resolution = { pending: "pendiente", assumed: "asumida", answered: "respondida" };
+	return w.inferences.length ? ["", "### Decisiones", ...w.inferences.map((i) => `- **${text(i.id)}** ${text(i.question)} → ${i.answer === null ? "_sin respuesta_" : text(i.answer)} _(${resolution[i.resolution]})_`)] : [];
+}
+function result(e: Evidence): string {
+	if (e.outcome === "interrupted") return "⚠️ interrumpido";
+	if (e.outcome === "passed") return `✅ exit ${e.exitCode}`;
+	return e.kind === "red" && expectedFailure(e) ? `🔴 exit ${e.exitCode} · rojo esperado` : `❌ exit ${e.exitCode ?? "—"}`;
+}
+function evidence(w: Workflow): string[] {
+	// Último resultado por prueba: un intento viejo no se muestra como el estado actual.
+	const latest = w.evidence.filter((e, i) => !w.evidence.slice(i + 1).some((n) => n.kind === e.kind && n.stepId === e.stepId && n.caseId === e.caseId && n.command === e.command));
+	if (!latest.length) return ["", "### Evidencia", "Sin pruebas ejecutadas todavía."];
+	const label = (e: Evidence) => e.kind === "verification" ? text(e.caseId ?? "Verificación") : e.kind === "gate" ? `Gate ${code(e.command)}` : e.kind === "reproduction" ? "Reproducción" : `${text(e.stepId ?? "—")} · ${e.kind === "red" ? "rojo" : "verde"}`;
+	const rows = latest.slice(-MAX_ROWS).map((e) => `| ${cell(label(e))} | ${result(e)} | ${cell(text(e.head.slice(0, 7)))} |`);
+	return ["", "### Evidencia", "| Caso | Resultado | HEAD |", "|---|---|---|", ...rows, ...(latest.length > MAX_ROWS ? ["", `_${latest.length - MAX_ROWS} pruebas anteriores en el estado local._`] : [])];
+}
+function lenses(w: Workflow): string[] {
+	const latest = w.reviews.filter((r, i) => !w.reviews.slice(i + 1).some((n) => n.lens === r.lens));
+	const verdict = { pass: "✅ pass", fail: "❌ fail", unknown: "⚠️ unknown" };
+	return latest.length ? ["", "### Lentes", ...latest.flatMap((r) => [`- **${LENSES[r.lens]}:** ${verdict[r.verdict]}`, ...r.findings.slice(0, 5).map((f) => `  - ${text(f.length > 500 ? `${f.slice(0, 500)}…` : f)}`)])] : [];
+}
+const FOOTER = "<sub>Sección administrada por OMI: se reescribe entera y lo que se edite acá se pierde. El pedido es el texto de arriba.</sub>";
+export function renderIssueSection(w: Workflow): string {
+	return [`## Harness · #${w.source.number}`, stage(w), ...recipe(w), ...steps(w), ...decisions(w), ...evidence(w), ...lenses(w),
+		...(w.publication.status === "opened" ? ["", `**PR draft:** ${text(w.publication.url)}`] : []), "", FOOTER].join("\n");
+}
+// Si la sección completa no entra junto al pedido, va una mínima que lo dice: nunca una receta cortada.
+export function compactIssueSection(w: Workflow): string {
+	return [`## Harness · #${w.source.number}`, stage(w), "", "La sección completa no entra en el cuerpo del issue (límite de GitHub). El detalle está en OMI (`/omi-progress`) y en el PR draft.", "", FOOTER].join("\n");
 }
