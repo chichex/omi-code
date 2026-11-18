@@ -17,6 +17,7 @@ import { beginCommand, BEGIN_SUBCOMMAND, holdSessionSwitch, revokeDevelopmentTic
 import { restoreIssueTriage } from "./workspace/issue-triage.ts";
 import { IssuePreparationBusyError } from "./workspace/issue-registry.ts";
 import { effectivePolicy, foundationsLines } from "./development-foundations.ts";
+import { offerFoundations } from "./development-foundations-setup.ts";
 
 const KICKOFF = "Continuá el harness de desarrollo activo desde su etapa persistida. Respetá sus bloqueos y pedí los permisos pendientes; no saltees etapas.";
 const KB_WRITES = ["mcp__harness_kb__guardar", "mcp__harness_kb__borrar"];
@@ -67,6 +68,8 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 		const startHere = async (ctx: ExtensionContext) => {
 			await session.start(ctx);
 			if (session.state?.status === "paused") await session.apply({ type: "resume" }, ctx);
+			// Sin Foundations para el repo, se ofrece armarlo una vez por sesión; sólo se guarda con el sí.
+			await offerFoundations(ctx, session, deps.kb).catch((error: unknown) => ctx.ui.notify(`Foundations: ${error instanceof Error ? error.message : "no se pudo ofrecer"}`, "warning"));
 			loadout(); proceed(ctx);
 		};
 		async function begin(token: string, ctx: ExtensionCommandContext): Promise<void> {
