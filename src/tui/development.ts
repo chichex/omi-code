@@ -16,9 +16,10 @@ import { beginDevelopment, borderedLoader, registerBeginTool } from "./developme
 import { beginCommand, BEGIN_SUBCOMMAND, holdSessionSwitch, revokeDevelopmentTicket, sessionSwitchOwner, takeDevelopmentTicket } from "./development-tickets.ts";
 import { restoreIssueTriage } from "./workspace/issue-triage.ts";
 import { IssuePreparationBusyError } from "./workspace/issue-registry.ts";
-import { foundationsLines } from "./development-foundations.ts";
+import { effectivePolicy, foundationsLines } from "./development-foundations.ts";
 
 const KICKOFF = "Continuá el harness de desarrollo activo desde su etapa persistida. Respetá sus bloqueos y pedí los permisos pendientes; no saltees etapas.";
+const KB_WRITES = ["mcp__harness_kb__guardar", "mcp__harness_kb__borrar"];
 const USAGE = "Uso: /omi-work resume | approve | pause | refresh | pr | status | stop";
 // Otra ventana preparando el mismo issue es una espera, no un error; también envuelto en un aviso.
 const busy = (error: unknown): boolean => error instanceof IssuePreparationBusyError || (error instanceof Error && error.cause instanceof IssuePreparationBusyError);
@@ -127,19 +128,21 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 		pi.on("session_start", async (_event, ctx) => { session.foundations.load(ctx); await session.restore(ctx); loadout(); });
 		pi.on("session_tree", async (_event, ctx) => { await session.restore(ctx); loadout(); });
 		pi.on("session_shutdown", () => { readsInFlight.clear(); session.shutdown(); });
-		pi.on("before_agent_start", (event) => {
+		pi.on("before_agent_start", (event, ctx) => {
 			if (session.lockedReason) {
 				event.systemPromptOptions.sections ??= {};
 				event.systemPromptOptions.sections.omi_development = `Harness bloqueado: ${session.lockedReason}. No cambiar archivos ni ejecutar comandos. Pedí recuperación humana con /omi-work resume.`;
 			} else if (session.state) {
 				event.systemPromptOptions.sections ??= {};
-				event.systemPromptOptions.sections.omi_development = developmentInstructions(session.state);
+				event.systemPromptOptions.sections.omi_development = developmentInstructions(session.state, effectivePolicy(session.foundations.current(ctx), session.state).command.catalog);
 			}
 		});
 		pi.on("tool_call", async (event, ctx) => {
 			// Hasta que la persona responda, el agente no sigue: ni en este lote ni en otro.
 			if (pendingBegin) return { block: true, reason: "Hay un pedido de desarrollo esperando la confirmación de la persona. Terminá el turno sin otras tools." };
 			if (!session.state && !session.lockedReason) return;
+			// Foundations cambia qué corre sin preguntar: mientras el harness trabaja, sólo una persona edita las perillas.
+			if ((deps.kb?.writeToolNames() ?? KB_WRITES).includes(event.toolName)) return { block: true, reason: "Harness activo: no se modifican las perillas de la KB (Foundations). Una persona las cambia fuera del harness; la próxima sesión muestra la diferencia." };
 			if (session.lockedReason && !["read", "grep", "find", "ls", ...WORKFLOW_TOOLS].includes(event.toolName)) return { block: true, reason: session.lockedReason };
 			if (session.state && !workflowToolAllowed(session.state, event.toolName, event.input)) return { block: true, reason: `Harness: ${event.toolName} no está habilitada en esta etapa. Usá omi_workflow y omi_workflow_check; no eludas la receta, evidencia ni permisos.` };
 			if (session.state && event.toolName === "read" && typeof event.input.path === "string") {

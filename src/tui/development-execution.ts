@@ -31,7 +31,7 @@ export async function executeCheck(session: DevelopmentSession, input: CheckInpu
 	}
 	if (input.kind === "verification" && !state.recipe?.cases.some((c) => c.id === input.caseId && c.command === input.command)) throw new Error("La verificación debe usar el caso D y comando exactos de la receta aprobada");
 	// La etiqueta no pide otro sí: un D aprobado corre igual como setup, y un permiso se guarda en el trabajo.
-	if (commandAuthorization(state, input.command) === "ask") {
+	if (commandAuthorization(state, input.command, (await session.foundations.policy(ctx, state)).command) === "ask") {
 		if (!(await session.confirm(ctx, "Autorizar comando del proyecto", `${input.kind} · ${state.checkout.root}\n\n${input.command}\n\nEjecuta código del proyecto con permisos de tu usuario. No es una operación de sólo lectura ni un sandbox. No autoriza otros comandos. El permiso queda guardado para este trabajo, también al retomarlo, hasta que cambie el pedido.`))) throw new Error("Comando no autorizado; no se ejecutó");
 		await session.apply({ type: "command_granted", key: grantKey(state, input.command), command: input.command }, ctx);
 	}
