@@ -1,7 +1,7 @@
 // Las tools de la persona mientras el harness las restringe. Pi guarda en el transcript las que declaró en
 // cada request y, al retomar, recargar o moverse por el árbol, restaura las últimas: con el harness activo,
 // las restringidas. La rama registra las de la persona para devolverlas al salir, también en otra ventana.
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 import type { Args, ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
 
@@ -10,15 +10,18 @@ const HeldSchema = Type.Object({ tools: Type.Array(Type.String()), selection: Ty
 /** Los flags de la CLI que eligen las tools, como los devuelve `parseArgs` de Pi. */
 type ToolSelectionArgs = Pick<Args, "tools" | "noTools" | "noBuiltinTools">;
 
+/** De dónde vienen las tools que Pi restauró: el transcript al arrancar o al moverse por el árbol; las activas, al recargar. */
+type RestoreSource = "start" | "reload" | "tree";
+/** Libres, o retenidas por el harness: las de la persona y si la rama ya lo registra. */
+type Held = { kind: "free" } | { kind: "held"; tools: string[]; recorded: boolean };
+const FREE: Held = { kind: "free" };
+
 const isModifier = (entry: string) => entry.startsWith("+") || entry.startsWith("-");
 const systemMessage = (entry: SessionEntry) => entry.type === "message" && entry.message.role === "system";
 const declaresTools = (entry: SessionEntry) => entry.type === "message" && entry.message.role === "system" && !!(entry.message.toolsAdded?.length || entry.message.toolsRemoved?.length);
 
 export class HeldLoadout {
-	/** Las de la persona, mientras el harness las retiene. */
-	private tools: string[] | undefined;
-	/** La rama ya registra que el harness las retiene. */
-	private open = false;
+	private state: Held = FREE;
 	private readonly pi: Pick<ExtensionAPI, "appendEntry" | "getActiveTools" | "setActiveTools">;
 	private readonly selection: string;
 	private readonly explicit: boolean;
@@ -30,30 +33,41 @@ export class HeldLoadout {
 		this.modifiers = flags.tools?.some(isModifier) ? flags.tools : [];
 		this.explicit = !!flags.noTools || !!flags.noBuiltinTools || (flags.tools !== undefined && this.modifiers.length === 0);
 	}
-	/** Lee la rama después de que Pi restauró sus tools: al arrancar, al recargar o al moverse por el árbol. */
-	recall(branch: readonly SessionEntry[], source: "start" | "reload" | "tree"): void {
-		const launch = source !== "tree";
+	/** Lee la rama después de que Pi restauró sus tools. */
+	recall(branch: readonly SessionEntry[], source: RestoreSource): void {
 		const at = branch.findLastIndex((entry) => entry.type === "custom" && entry.customType === LOADOUT_ENTRY);
 		const entry = branch[at]; const data: unknown = entry?.type === "custom" ? entry.data : undefined;
 		const saved = Value.Check(HeldSchema, data) ? data : undefined;
-		// Soltadas, el próximo request declara las de la persona, y /reload conserva las activas. Una lista explícita nueva gana, como en Pi.
-		const valid = saved && !(saved.released && (source === "reload" || branch.slice(at + 1).some(declaresTools))) && !(launch && this.explicit && saved.selection !== this.selection);
-		this.open = !!valid && !saved.released;
-		// Sin loadout en el transcript Pi conserva las tools actuales: lo retenido sigue valiendo.
-		this.tools = valid ? (launch ? this.modifiers : []).reduce(apply, saved.tools) : branch.some(systemMessage) ? undefined : this.tools;
+		if (saved && this.stillApplies(saved, branch.slice(at + 1), source)) {
+			this.state = { kind: "held", tools: source === "tree" ? saved.tools : this.modifiers.reduce(apply, saved.tools), recorded: !saved.released };
+		} else if (branch.some(systemMessage)) this.state = FREE;
+		// Sin loadout en el transcript Pi conserva las tools actuales: lo retenido sigue valiendo, sin registro en esta rama.
+		else if (this.state.kind === "held") this.state = { ...this.state, recorded: false };
 	}
 	/** Las de la persona, que el harness restringe desde ahora. */
 	hold(): string[] {
-		const tools = this.tools ??= this.pi.getActiveTools();
-		if (!this.open) { this.pi.appendEntry(LOADOUT_ENTRY, { tools, selection: this.selection }); this.open = true; }
-		return tools;
+		const held = this.state.kind === "held" ? this.state : { kind: "held" as const, tools: this.pi.getActiveTools(), recorded: false };
+		if (!held.recorded) this.pi.appendEntry(LOADOUT_ENTRY, { tools: held.tools, selection: this.selection });
+		this.state = { ...held, recorded: true };
+		return held.tools;
 	}
 	/** Devuelve las de la persona, si el harness las retenía. */
 	release(): void {
-		if (!this.tools) return;
-		this.pi.setActiveTools(this.tools);
-		if (this.open) this.pi.appendEntry(LOADOUT_ENTRY, { tools: this.tools, selection: this.selection, released: true });
-		this.tools = undefined; this.open = false;
+		if (this.state.kind === "free") return;
+		const { tools, recorded } = this.state;
+		this.pi.setActiveTools(tools);
+		if (recorded) this.pi.appendEntry(LOADOUT_ENTRY, { tools, selection: this.selection, released: true });
+		this.state = FREE;
+	}
+	/** Si lo guardado sigue siendo de la persona frente a lo que restauró Pi. */
+	private stillApplies(saved: Static<typeof HeldSchema>, after: readonly SessionEntry[], source: RestoreSource): boolean {
+		// Soltadas, el próximo request vuelve a declarar las de la persona.
+		const declaredSinceRelease = !!saved.released && after.some(declaresTools);
+		// En /reload Pi conserva las activas, que desde que se soltaron son las de la persona.
+		const keptByReload = !!saved.released && source === "reload";
+		// Al arrancar, una lista explícita distinta reemplaza lo guardado, como reemplaza al transcript.
+		const replacedBySelection = source !== "tree" && this.explicit && saved.selection !== this.selection;
+		return !declaredSinceRelease && !keptByReload && !replacedBySelection;
 	}
 }
 
