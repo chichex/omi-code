@@ -44,7 +44,12 @@ export async function launchTui(args: string[], io: Io, deps: LaunchDeps = {}): 
 	const runtime = await resolveRuntime(io.homeDir, deps.compiled);
 	if (runtime.packageDir !== undefined) process.env.PI_PACKAGE_DIR = runtime.packageDir;
 	// Instalación limpia: Pi no baja fd ni rg de GitHub; usa los del runtime si el PATH no los trae.
-	if (runtime.toolsDir !== undefined) await linkBundledTools(join(dir, "bin"), runtime.toolsDir, process.env.PATH);
+	// Si no se puede enlazar (un FAT sin symlinks, <agent>/bin que es un archivo), Pi sigue como antes.
+	if (runtime.toolsDir !== undefined) {
+		await linkBundledTools(join(dir, "bin"), runtime.toolsDir, process.env.PATH).catch((error: unknown) => {
+			io.err(`aviso: no se pudieron enlazar fd y rg del runtime en ${join(dir, "bin")} (${error instanceof Error ? error.message : String(error)}); Pi usa los del PATH o los baja`);
+		});
+	}
 	const piMain = deps.piMain ?? (await import("@earendil-works/pi-coding-agent")).main;
 
 	const isolation = await isolatePi(args, dir, io);

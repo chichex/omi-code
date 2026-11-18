@@ -476,3 +476,18 @@ test("launchTui_en desarrollo no toca <agent>/bin: Pi sigue con fd y rg del sist
 	await launchTui([], testIo({ homeDir: home }), { compiled: false, piMain: fakePi([]) });
 	await assert.rejects(lstat(join(agentDir(home), "bin/fd")), { code: "ENOENT" });
 });
+
+test("launchTui_si no puede enlazar fd y rg arranca igual, con un aviso", async (t) => {
+	restorePackageDir(t);
+	restorePath(t);
+	const home = await tempDir(t);
+	await runtimeWithTools(t, home);
+	// Por ejemplo, <agent>/bin es un archivo: lstat da ENOTDIR y mkdir, EEXIST.
+	await mkdir(agentDir(home), { recursive: true });
+	await writeFile(join(agentDir(home), "bin"), "no es un directorio\n");
+	const io = testIo({ homeDir: home });
+	const calls: Call[] = [];
+	assert.equal(await launchTui([], io, { compiled: true, piMain: fakePi(calls) }), 0);
+	assert.equal(calls.length, 1, "Pi arrancó");
+	assert.match(io.errors(), /aviso: no se pudieron enlazar fd y rg .*ENOTDIR/);
+});
