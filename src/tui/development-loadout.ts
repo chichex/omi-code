@@ -3,12 +3,12 @@
 // las restringidas. La rama registra las de la persona para devolverlas al salir, también en otra ventana.
 import { Type } from "typebox";
 import { Value } from "typebox/value";
-import type { ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { Args, ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
 
 export const LOADOUT_ENTRY = "omi-development-loadout";
 const HeldSchema = Type.Object({ tools: Type.Array(Type.String()), selection: Type.String(), released: Type.Optional(Type.Literal(true)) });
-/** Los flags de tools de la CLI, como los devuelve `parseArgs` de Pi. */
-export interface ToolFlags { tools?: string[]; noTools?: boolean; noBuiltinTools?: boolean }
+/** Los flags de la CLI que eligen las tools, como los devuelve `parseArgs` de Pi. */
+type ToolSelectionArgs = Pick<Args, "tools" | "noTools" | "noBuiltinTools">;
 
 const isModifier = (entry: string) => entry.startsWith("+") || entry.startsWith("-");
 const systemMessage = (entry: SessionEntry) => entry.type === "message" && entry.message.role === "system";
@@ -23,7 +23,7 @@ export class HeldLoadout {
 	private readonly selection: string;
 	private readonly explicit: boolean;
 	private readonly modifiers: readonly string[];
-	constructor(pi: Pick<ExtensionAPI, "appendEntry" | "getActiveTools" | "setActiveTools">, flags: ToolFlags) {
+	constructor(pi: Pick<ExtensionAPI, "appendEntry" | "getActiveTools" | "setActiveTools">, flags: ToolSelectionArgs) {
 		this.pi = pi;
 		this.selection = JSON.stringify([flags.tools ?? null, !!flags.noTools, !!flags.noBuiltinTools]);
 		// Reglas de Pi: una lista explícita reemplaza al transcript al arrancar; una de +name/-name lo modifica.
