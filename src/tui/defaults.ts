@@ -1,9 +1,30 @@
 // Integraciones del producto: se distribuyen con OMI, sin instalaciones de npm al arrancar.
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
+import { createKbClient, type KbHost } from "./kb-client.ts";
 
 export const HARNESS_KB_URL = "https://kb-prod-chiche.ohmyinfra.com/mcp";
 
-export async function defaultExtensions(args: readonly string[], env: NodeJS.ProcessEnv): Promise<InlineExtension[]> {
+/** Codemode activo por defecto, como un `defaultTools: ["+codemode"]` debajo de los ajustes y la CLI. */
+export async function codemodeDefaultExtension(args: readonly string[]): Promise<InlineExtension> {
+	const { parseArgs } = await import("@earendil-works/pi-coding-agent");
+	const cli = parseArgs([...args]);
+	// Reglas de Pi: una lista sólo de +name/-name hereda el default; con nombres, o vacía, lo reemplaza.
+	const inherits = (list?: readonly string[]) => list === undefined
+		|| (list.length > 0 && list.every((entry) => /^[+-]/.test(entry)) && list.findLast((entry) => entry.slice(1) === "codemode") !== "-codemode");
+	return { name: "omi-codemode", factory(pi) {
+		pi.on("session_start", () => {
+			if (cli.noTools || cli.noBuiltinTools || !inherits(cli.tools) || !inherits(pi.getSettings().defaultTools)) return;
+			// Pi ignora nombres sin registrar: -builtin:codemode, --no-extensions o --exclude-tools lo dejan afuera.
+			pi.setActiveTools([...new Set([...pi.getActiveTools(), "codemode"])]);
+		});
+	} };
+}
+
+const kbOffline = (args: readonly string[], env: NodeJS.ProcessEnv) => args.includes("--no-mcp") || args.includes("--offline") || /^(1|true|yes)$/i.test(env.PI_OFFLINE ?? "");
+/** Una sola instancia por proceso: la comparten el builtin:mcp y el harness, que lee Foundations. */
+export const harnessKb = (args: readonly string[], env: NodeJS.ProcessEnv, agentDir: string): KbHost => createKbClient({ url: HARNESS_KB_URL, agentDir, enabled: !kbOffline(args, env) });
+
+export async function defaultExtensions(args: readonly string[], env: NodeJS.ProcessEnv, kb: KbHost = harnessKb(args, env, "")): Promise<InlineExtension[]> {
 	// Pi lee sus rutas al importarse; launch ya fijó PI_CODING_AGENT_DIR y PI_PACKAGE_DIR.
 	const { subagentsExtension } = await import("./subagents.ts");
 	const extensions: InlineExtension[] = [subagentsExtension(), {
@@ -14,8 +35,7 @@ export async function defaultExtensions(args: readonly string[], env: NodeJS.Pro
 		},
 	}];
 	// Pi no conecta registros si builtin:mcp está desactivado. Tampoco hacer red con --offline.
-	const offline = args.includes("--offline") || /^(1|true|yes)$/i.test(env.PI_OFFLINE ?? "");
-	if (!args.includes("--no-mcp") && !offline) extensions.push({
+	if (!kbOffline(args, env)) extensions.push({
 		name: "omi-kb", builtin: true,
 		factory(pi) {
 			pi.on("session_start", () => {
@@ -27,6 +47,6 @@ export async function defaultExtensions(args: readonly string[], env: NodeJS.Pro
 				});
 			});
 		},
-	});
+	}, kb.extension());
 	return extensions;
 }

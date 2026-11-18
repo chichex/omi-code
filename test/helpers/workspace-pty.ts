@@ -10,23 +10,36 @@ def size(columns, rows):
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', rows, columns, 0, 0))
     os.kill(pid, signal.SIGWINCH)
 size(125, 42)
-actions = [(2.0, b'\\x0c'), (2.7, b'\\x1b'), (3.0, b'\\x1b[50;5u'), (3.2, b'\\x1b[51;5u'), (3.4, b'\\x1b[52;5u'), (3.6, b'\\x1b[53;5u'), (3.8, b'\\x1b[49;5u'),
- (4.0, b'/omi\\r'), (4.2, b'\\x1b[B' * 8 + b'\\r'), (4.7, b'\\x1b'),
- (5.1, b'/omi-workspace\\r'), (5.8, b'\\x1b'), (6.1, b'/settings\\r'), (6.8, b'\\x1b'),
- (7.1, b'/reload\\r'), (8.0, b'/omi-resources\\r'), (8.7, b'\\x1b'), (9.2, b'\\x04')]
+# Recorrido por defecto: (pausa mínima desde el paso anterior, teclas, lo que la TUI pinta al procesarlas).
+# Un paso sale cuando pasó la pausa y apareció lo que pintó el anterior: un arranque o un /reload lentos
+# no hacen perder teclas. Las pausas son las de siempre y separan un Esc de lo que sigue.
+steps = [(0, b'', b'Enter enviar'), (0, b'\\x0c', b'Elegir modelo \\xc2\\xb7 OMI'), (0.7, b'\\x1b', None),
+ (0.3, b'\\x1b[50;5u', b'Issues abiertos'), (0.2, b'\\x1b[51;5u', b'PRs abiertos'), (0.2, b'\\x1b[52;5u', b'Cambios locales'),
+ (0.2, b'\\x1b[53;5u', b'PROYECTO OMI'), (0.2, b'\\x1b[49;5u', b'\\xc2\\xbfQu\\xc3\\xa9 hacemos en'),
+ (0.2, b'/omi\\r', b'OMI \\xc2\\xb7 Comandos'), (0.2, b'\\x1b[B' * 8 + b'\\r', None), (0.5, b'\\x1b', None),
+ (0.4, b'/omi-workspace\\r', b'Ubicaci\\xc3\\xb3n de trabajo'), (0.7, b'\\x1b', None), (0.3, b'/settings\\r', b'Auto-compact'), (0.7, b'\\x1b', None),
+ (0.3, b'/reload\\r', b'Reloaded'), (0.9, b'/omi-resources\\r', b'Recursos \\xc2\\xb7 equipo donde corre OMI'),
+ (0.3, 'resize', b'Recursos \\xc2\\xb7 equipo donde corre OMI'), (0.4, b'\\x1b', None), (0.5, b'\\x04', None)]
 turn = os.environ.get('OMI_TEST_TURN') == '1'
 preview = os.environ.get('OMI_TEST_PREVIEW') == '1'
 pr_click = os.environ.get('OMI_TEST_PR_CLICK') == '1'
 if turn or preview or pr_click:
-    actions = []
+    steps = []
+def painted(text, since):
+    return text in re.sub(rb'\\x1b\\[[0-?]*[ -/]*[@-~]', b'', output[since:])
 start = time.monotonic()
 output = b''
-resized = False
+step, sent_at, since, waiting = 0, 0, 0, None
 phase, phase_at = 0, 0
 while time.monotonic() - start < 16:
     elapsed = time.monotonic() - start
-    while actions and elapsed >= actions[0][0]:
-        os.write(fd, actions.pop(0)[1])
+    if step < len(steps) and elapsed - sent_at >= steps[step][0] and (waiting is None or painted(waiting, since)):
+        _, keys, waiting = steps[step]
+        if keys == 'resize':
+            size(72, 22)
+        elif keys:
+            os.write(fd, keys)
+        step, sent_at, since = step + 1, elapsed, len(output)
     if turn:
         if phase == 0 and b'Test model' in output and elapsed > 1:
             os.write(fd, b'hola\\r')
@@ -74,9 +87,6 @@ while time.monotonic() - start < 16:
         elif phase == 2 and elapsed - phase_at > 0.3:
             os.write(fd, b'\\x04')
             phase = 3
-    if elapsed > 8.3 and not resized and not turn and not preview and not pr_click:
-        size(72, 22)
-        resized = True
     if select.select([fd], [], [], 0.1)[0]:
         try:
             chunk = os.read(fd, 65536)
@@ -85,7 +95,7 @@ while time.monotonic() - start < 16:
         if not chunk:
             break
         output += chunk
-    if elapsed > 14 or (not turn and elapsed > 10):
+    if elapsed > 14 or ((preview or pr_click) and elapsed > 10):
         os.write(fd, b'\\x04')
 else:
     os.kill(pid, signal.SIGKILL)

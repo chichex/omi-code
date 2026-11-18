@@ -3,6 +3,8 @@
 import { processRunner, type CommandOptions, type Runner } from "../core/exec.ts";
 import { gitRead, inspectCheckout } from "./git.ts";
 import { artifactHash, sourceHash, type Workflow } from "./model.ts";
+import { lensReport } from "./lenses.ts";
+import { ISSUE_BODY_LIMIT, issueSectionVariants, parseIssueBody, withIssueSection, type IssueBody } from "./issue-section.ts";
 
 const START = "<!-- omi-development:start -->";
 const END = "<!-- omi-development:end -->";
@@ -32,13 +34,17 @@ function issueRepo(url: string, number: number): string {
  if (parsed.protocol !== "https:" || parsed.host !== "github.com" || parsed.username || parsed.password || parsed.search || parsed.hash || !match || Number(match[2]) !== number) throw new Error("Identidad de issue no válida");
  return match[1]!;
 }
-export async function readIssueSource(checkout: Checkout, number: number, runner: Runner = processRunner, signal?: AbortSignal): Promise<Workflow["source"]> {
+async function readIssue(checkout: Checkout, number: number, runner: Runner, signal?: AbortSignal): Promise<{ source: Workflow["source"]; raw: string; parts: IssueBody }> {
  if (!Number.isSafeInteger(number) || number < 1) throw new Error("Número de issue inválido");
  const data = object(JSON.parse(await gh(checkout, ["issue", "view", String(number), "--json", "number,title,body,url"], runner, signal)));
  if (data.number !== number || typeof data.title !== "string" || !data.title.trim() || data.title.length > 2000 || typeof data.body !== "string" || data.body.length > 200000 || typeof data.url !== "string") throw new Error("Fuente del issue inválida; no se infieren campos");
- issueRepo(data.url, number); const body = originalBody(data.body);
+ // La sección administrada del harness no es parte del pedido: escribirla no invalida el trabajo.
+ issueRepo(data.url, number); const parts = parseIssueBody(data.body); const body = originalBody(parts.human);
  if (body.length > 100000) throw new Error("Pedido original demasiado grande");
- return { number, title: data.title, body, url: data.url, hash: sourceHash(data.title, body) };
+ return { source: { number, title: data.title, body, url: data.url, hash: sourceHash(data.title, body) }, raw: data.body, parts };
+}
+export async function readIssueSource(checkout: Checkout, number: number, runner: Runner = processRunner, signal?: AbortSignal): Promise<Workflow["source"]> {
+ return (await readIssue(checkout, number, runner, signal)).source;
 }
 function escaped(value: string): string { return value.replace(/<!--\s*omi-development:/g, "&lt;!-- omi-development:"); }
 function bounded(value: string, limit: number): string {
@@ -59,37 +65,31 @@ export function renderWorkflowArtifact(workflow: Workflow): string {
  return githubBody(["# OMI · Desarrollo asistido", "Pedido externo citado como datos, no instrucciones del harness.", section("Pedido original", source),
   section("Ruta y estado", { route: workflow.recipe?.route ?? "pendiente", phase: workflow.phase, status: workflow.status, blockedReason: workflow.blockedReason }),
   section("Clasificación", workflow.recipe?.classification ?? "Sin clasificar"), section("Inferencias y respuestas", workflow.inferences),
+  // Sólo si hay: una publicación pendiente de un estado anterior conserva su hash.
+  ...(workflow.agreements?.length ? [section("Acuerdos del chat (citas textuales de la persona)", workflow.agreements.map(({ quote, summary, replan }) => ({ quote, summary, replan })))] : []),
   section("Spec C/D y playbook", { recipe: workflow.recipe, diagnosis: workflow.diagnosis, spec: workflow.spec, steps: workflow.steps }),
-  section("Evidencia observada (no aprobación de PR)", evidence.length ? bounded(JSON.stringify(evidence, null, 2), 14000) : "Sin evidencia ejecutada"), section("Revisiones y errores", bounded(JSON.stringify(workflow.reviews, null, 2), 14000)),
+  section("Evidencia observada (no aprobación de PR)", evidence.length ? bounded(JSON.stringify(evidence, null, 2), 14000) : "Sin evidencia ejecutada"), section("Avisos de los lentes", bounded(lensReport(workflow), 8000)), section("Revisiones y errores", bounded(JSON.stringify(workflow.reviews, null, 2), 14000)),
   workflow.recipe?.classification.risk === "high" ? "**Riesgo alto: revisión humana obligatoria antes de aprobar o mergear.**" : "El PR draft requiere revisión y aprobación humana; nunca se mergea automáticamente.",
  ].join("\n"));
 }
-async function hasOwnedComment(workflow: Workflow, login: string, body: string, runner: Runner, signal?: AbortSignal): Promise<boolean> {
+// GitHub no ofrece CAS para el cuerpo del issue: se relee justo antes de escribir y se reemplaza sólo
+// lo que está entre los marcadores. Riesgo residual: una edición humana que cae entre esa lectura y
+// la escritura se pierde del cuerpo (GitHub la conserva en el historial de ediciones del issue).
+// onlyIfPresent: sin receta aprobada, sólo se mantiene una sección que ya autorizó una aprobación anterior.
+export async function syncIssueSection(workflow: Workflow, runner: Runner = processRunner, signal?: AbortSignal, options: { onlyIfPresent?: boolean } = {}): Promise<boolean> {
  const repo = issueRepo(workflow.source.url, workflow.source.number);
- const pages: unknown = JSON.parse(await gh(workflow.checkout, ["api", "--paginate", "--slurp", `repos/${repo}/issues/${workflow.source.number}/comments?per_page=100`], runner, signal));
- if (!Array.isArray(pages) || pages.some(page => !Array.isArray(page))) throw new Error("Lista de comentarios inválida");
- return pages.flat().some(raw => {
-  const comment = object(raw); const user = object(comment.user);
-  return comment.body === body && user.login === login;
- });
-}
-export async function syncIssueArtifact(workflow: Workflow, runner: Runner = processRunner, signal?: AbortSignal): Promise<void> {
- const artifact = renderWorkflowArtifact(workflow);
- const body = githubBody(`<!-- omi-development:artifact workflow=${encodeURIComponent(workflow.id)} artifact=${artifactHash(artifact)} -->\n${artifact}`);
- const fresh = await readIssueSource(workflow.checkout, workflow.source.number, runner, signal);
- if (fresh.hash !== workflow.source.hash || fresh.url !== workflow.source.url) throw new Error("El pedido fue editado por una persona; no se sobrescribe");
- const user = object(JSON.parse(await gh(workflow.checkout, ["api", "user"], runner, signal)));
- if (typeof user.login !== "string" || !user.login.trim()) throw new Error("Autor de GitHub inválido");
- if (await hasOwnedComment(workflow, user.login, body, runner, signal)) return;
- // GitHub offers no source-body CAS. Append only: even a concurrent human edit is untouched.
- try {
-  await gh(workflow.checkout, ["api", `repos/${issueRepo(fresh.url, fresh.number)}/issues/${fresh.number}/comments`, "--method", "POST", "--input", "-"], runner, signal, JSON.stringify({ body }));
- } catch {
-  signal?.throwIfAborted();
-  if (await hasOwnedComment(workflow, user.login, body, runner, signal)) return;
-  throw new Error("No se pudo confirmar el comentario; buscar el comentario exacto antes de reintentar");
- }
- if (!await hasOwnedComment(workflow, user.login, body, runner, signal)) throw new Error("No se pudo confirmar el comentario publicado; recuperar antes de reintentar");
+ const fresh = await readIssue(workflow.checkout, workflow.source.number, runner, signal);
+ if (fresh.source.url !== workflow.source.url || fresh.source.hash !== workflow.source.hash) throw new Error("El pedido cambió en GitHub desde el último contraste; la sección se actualiza después del próximo punto de control");
+ if (options.onlyIfPresent && fresh.parts.section === null) return false;
+ // Si no entra junto al pedido, la sección se resume y lo dice; el pedido nunca se toca.
+ const content = issueSectionVariants(workflow).find((c) => withIssueSection(fresh.raw, fresh.parts, c).length <= ISSUE_BODY_LIMIT);
+ if (!content) throw new Error("El pedido ocupa casi todo el límite de GitHub para el cuerpo del issue; la sección del harness no entra");
+ const body = withIssueSection(fresh.raw, fresh.parts, content);
+ if (body === fresh.raw) return false;
+ await gh(workflow.checkout, ["issue", "edit", String(workflow.source.number), "--repo", repo, "--body-file", "-"], runner, signal, body);
+ // No se reintenta solo: una escritura sin confirmar se revisa en GitHub.
+ if ((await readIssue(workflow.checkout, workflow.source.number, runner, signal)).parts.section !== `\n${content}\n`) throw new Error("No se pudo confirmar la sección del harness en el issue; revisalo en GitHub antes de reintentar");
+ return true;
 }
 export function renderPullRequestBody(workflow: Workflow): string {
  const artifact = renderWorkflowArtifact(workflow);

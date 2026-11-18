@@ -101,18 +101,19 @@ export async function validateReferences(checkout: Checkout, references: Explora
   if (!Number.isSafeInteger(reference.line) || reference.line < 1 || reference.line > lines) throw new Error(`Línea inexistente en ${reference.path}`);
  }
 }
-export async function readWorkflowDiff(checkout: Checkout, runner: Runner = processRunner, signal?: AbortSignal): Promise<string> {
+// El diff completo contra la base, una entrada por archivo y sin tope: quien lo presenta lo reparte
+// en partes (ver lensParts) en vez de truncarlo. Las líneas de contenido de un diff empiezan con
+// " ", "+", "-", una barra invertida o "@", así que "diff --git " sólo puede abrir el encabezado de un archivo.
+export async function readWorkflowDiffFiles(checkout: Checkout, runner: Runner = processRunner, signal?: AbortSignal): Promise<string[]> {
  await inspectCheckout(checkout, runner, signal);
- let diff = await gitRead(checkout, ["diff", ...diffFlags, checkout.baseCommit, "--"], runner, signal);
- const ensureLimit = () => { if (diff.length > 50000) throw new Error("Diff excede 50000 caracteres: achicar el cambio o solicitar revisión humana; no hay revisión completa"); };
- ensureLimit();
+ const files = (await gitRead(checkout, ["diff", ...diffFlags, checkout.baseCommit, "--"], runner, signal)).split(/^(?=diff --git )/m).filter(Boolean);
  const root = await realpath(checkout.root);
  for (const path of paths(await gitRead(checkout, ["ls-files", "--others", "--exclude-standard", "-z"], runner, signal)).sort()) {
   const target = await localPath(root, path); const entry = await lstat(target);
   const body = entry.isSymbolicLink() ? await readlink(target) : await readLocal(root, path, 200000, signal);
-  diff += `\nArchivo nuevo ${JSON.stringify(path)}\n${body}\n`; ensureLimit();
+  files.push(`Archivo nuevo ${JSON.stringify(path)}\n${body}\n`);
  }
- return diff;
+ return files;
 }
 export async function assertStepCommit(checkout: Checkout, evidence: Evidence, commit: string, runner: Runner = processRunner, signal?: AbortSignal): Promise<void> {
  const snapshot = await inspectCheckout(checkout, runner, signal);

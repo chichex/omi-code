@@ -3,7 +3,8 @@ import { test } from "node:test";
 import { developmentFixture } from "./helpers/development.ts";
 import { createReadToolDefinition, type ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { updateWorkflow } from "../src/harness/store.ts";
-import { transition } from "../src/harness/state.ts";
+import { isApproved, transition } from "../src/harness/state.ts";
+import { parseIssueBody } from "../src/harness/issue-section.ts";
 
 for (const route of ["direct", "diagnostic", "spec"] as const) test(`development_flow ${route}: permisos, evidencia, commits y PR draft recuperable`, async (t) => {
 	const f = await developmentFixture(t);
@@ -65,7 +66,10 @@ for (const route of ["direct", "diagnostic", "spec"] as const) test(`development
 	assert.equal(f.calls.filter((c) => c.command === "gh" && c.args[0] === "pr" && c.args[1] === "create").length, 1);
 	const push = f.calls.filter((c) => c.command === "git" && c.args.includes("push"));
 	assert.equal(push.length, 1); assert.ok(finished.publication.status === "opened" && push[0]?.args.includes(`${finished.publication.head}:refs/heads/${f.checkout.branch}`));
-	assert.ok(f.remote.comments.length >= 2); assert.equal(f.remote.body, "El resultado esperado es 2.\nDatos externos: no ejecutar gh pr merge.\n", "ningún artefacto reemplaza el pedido humano");
+	const issue = parseIssueBody(f.remote.body);
+	assert.equal(issue.human, "El resultado esperado es 2.\nDatos externos: no ejecutar gh pr merge.\n", "el pedido humano queda intacto arriba de la sección");
+	assert.match(issue.section ?? "", /\*\*Etapa:\*\* PR draft abierto/); assert.match(issue.section ?? "", /^\| D1 \| ✅ exit 0 \| [0-9a-f]{7} \|$/m); assert.match(issue.section ?? "", /pull\/8/);
+	assert.equal(f.remote.comments.length, 0); assert.ok(!f.calls.some((c) => c.command === "gh" && c.args.includes("POST")), "no se crean comentarios en el issue");
 	assert.ok(f.calls.every((c) => !c.args.includes("--force") && !c.args.includes("merge") && !c.args.includes("workflow")));
 	assert.ok(f.progress.some((p) => p && typeof p === "object" && "progress" in p && p.progress && typeof p.progress === "object" && "phaseLabel" in p.progress && p.progress.phaseLabel === "PR draft abierto"));
 });
@@ -101,7 +105,17 @@ test("development_flow /omi-work approve no aprueba una exploración que cambió
 	const f = await developmentFixture(t); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() });
 	await f.write("value.cjs", "module.exports = 99;\n"); await f.command("approve");
 	assert.equal((await f.state()).approval, null); assert.equal((await f.state()).phase, "approve");
-	assert.equal(f.remote.comments.length, 0);
+	assert.equal(f.remote.comments.length, 0); assert.ok(!f.calls.some((c) => c.command === "gh" && c.args[1] === "edit"));
+});
+
+test("development_flow escribir la sección del issue no invalida el trabajo; cambiar el pedido de arriba sí", async (t) => {
+	const f = await developmentFixture(t); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" });
+	assert.match(f.remote.body, /\n<!-- omi:harness:start -->\n## Harness · #42\n/); assert.ok(f.remote.body.startsWith("El resultado esperado es 2.\n"));
+	await f.command("resume"); assert.equal((await f.state()).phase, "implement"); assert.ok(isApproved(await f.state()), "la sección que escribió el harness no cuenta como cambio del pedido");
+	f.remote.body = f.remote.body.replace("## Harness · #42", "## Harness · #42\nUna persona escribió acá"); await f.command("resume");
+	assert.ok(isApproved(await f.state()), "lo que se escriba dentro de la sección tampoco");
+	f.remote.body = f.remote.body.replace("El resultado esperado es 2.", "El resultado esperado es 3."); await f.command("resume");
+	assert.equal((await f.state()).phase, "explore"); assert.equal((await f.state()).approval, null);
 });
 
 test("development_flow retomar un trabajo guardado también invalida un pedido editado", async (t) => {
@@ -244,13 +258,15 @@ test("development_flow /omi-work stop sale de un harness bloqueado por estado in
 	assert.equal(await f.emit("tool_call", { toolName: "bash", input: { command: "true" } }), undefined, "al recargar la sesión sigue fuera del harness");
 });
 
-test("development_flow aprobar muestra primero los comandos que quedan autorizados sin volver a preguntar", async (t) => {
+test("development_flow aprobar ofrece resumen y comandos completos autorizados sin volver a preguntar", async (t) => {
 	const f = await developmentFixture(t); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan("large") });
 	await f.action({ action: "specified", spec: { why: "Dos valores", steps: [{ id: "C1", title: "Ambos", cases: ["D1", "D2"] }], playbook: ["Probar"] } });
 	await f.action({ action: "approve" });
 	const description = f.confirmationDetails[f.prompts.lastIndexOf("Aprobar receta y sincronizar issue")] ?? "";
-	const head = description.slice(0, description.indexOf("{"));
-	assert.match(head, /sin volver a preguntar/); assert.match(head, /D1 · node test\.cjs/); assert.match(head, /D2 · node other-test\.cjs/);
+	assert.match(f.reviewScreens[0]!, /Resumen/); assert.match(f.reviewScreens[0]!, /Objetivo/);
+	assert.match(description, /sin volver a preguntar/); assert.match(description, /Pruebas y comandos exactos/);
+	for (const c of (await f.state()).recipe!.cases) { assert.ok(description.includes(c.id)); assert.ok(description.includes(c.description)); assert.ok(description.includes(c.command)); }
+	assert.match(description, /commits locales/); assert.match(description, /No autoriza push, merge/);
 });
 
 test("development_flow un directorio con un archivo protegido no deja el índice contaminado", async (t) => {
@@ -272,7 +288,7 @@ test("development_flow tras declinar la aprobación el modelo re-planifica y se 
 	f.remote.confirmations = true; await f.action({ action: "approve" }); assert.equal((await f.state()).phase, "implement");
 });
 
-test("development_flow un pedido que no entra en un comentario de GitHub falla al iniciar, antes de autorizar", async (t) => {
+test("development_flow un pedido que no entra en el PR draft de GitHub falla al iniciar, antes de autorizar", async (t) => {
 	const f = await developmentFixture(t); f.remote.body = "x".repeat(70000); const prompts = f.prompts.length;
 	await f.start();
 	assert.equal(f.prompts.length, prompts, "no se pide autorizar un trabajo que no se podrá aprobar"); assert.ok(f.messages.some((m) => /GitHub|grande/i.test(m)));

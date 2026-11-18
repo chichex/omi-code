@@ -40,6 +40,7 @@ Una instalación nueva trae estas integraciones **en la distribución de OMI**, 
 |---|---|---|
 | Subagentes | Tool `subagent` con `scout`, `planner`, `reviewer` y `worker`; background, espera explícita y panel `SUBAGENTES` | El modelo y razonamiento elegidos en la sesión |
 | Desarrollo | Harness que arranca ante un pedido de desarrollo, con un sí humano; Directa, Diagnóstico y Con spec, evidencia y progreso hasta PR draft | Modelo de la sesión y `gh` autenticado |
+| Codemode | Tool `codemode` de Pi activa junto a `read`, `bash`, `edit` y `write`; el harness de desarrollo y los subagentes la dejan afuera | No requiere |
 | Claude Bridge | Catálogo `claude-bridge/...` con `pi-claude-bridge@0.13.0` incluido; requiere ejecutable externo | Claude Code con `claude auth login` o `CLAUDE_CODE_OAUTH_TOKEN` |
 | KB de [Harness](https://github.com/chichex/harness/tree/main/kb) | MCP `harness-kb`, por Streamable HTTP en `https://kb-prod-chiche.ohmyinfra.com/mcp` | OAuth desde `/mcp login harness-kb` |
 | OMI | El mismo catálogo de `omi mcp`, integrado **nativamente** en el agente, con confirmaciones en la UI | `omi login` |
@@ -94,6 +95,8 @@ Se pueden desactivar en `~/.omi/agent/settings.json` (o `<OMI_HOME>/agent/settin
   "extensions": ["-builtin:omi-subagents", "-builtin:omi-kb", "-builtin:omi-claude-bridge"]
 }
 ```
+
+Codemode se apaga con `"defaultTools": ["-codemode"]` en esos ajustes o con `--tools -codemode` en una corrida. Una lista con nombres simples en `defaultTools` o `--tools` reemplaza la selección: sólo trae codemode si lo nombra.
 
 Una extensión del usuario que ya registre `subagent` reemplaza la incluida, sin duplicar la tool. `--no-extensions` omite las extensiones por defecto en esa corrida; `--no-mcp` omite la KB, no Claude Bridge ni las tools nativas de OMI. Con `--offline` o `PI_OFFLINE=1` no se registra la KB remota por defecto. Un servidor `harness-kb` en `~/.omi/agent/mcp.json` o en `.pi/mcp.json` (proyecto de confianza) prevalece sobre el default, sin ser modificado. Los cambios de exposición/activación hechos desde `/mcp` sobre el registro por defecto duran esa sesión; para persistirlos, usá los ajustes anteriores o una entrada propia en `mcp.json`.
 
@@ -225,6 +228,7 @@ el historial y la edición siguen usando el renderer de Pi; no hay un segundo pr
 | Ctrl 3 o `/omi-prs` | PRs abiertos de GitHub |
 | Ctrl 4 o `/omi-changes` | Cambios locales |
 | Ctrl 5 o `/omi-platform` | OMI: proyecto, servicios y ambientes |
+| Ctrl 6 o `/omi-workflow` | Progreso: recorrido completo del harness y modo previsto/real por etapa |
 | Ctrl K o `/omi` | Paleta de comandos (Ctrl K reemplaza borrar hasta fin de línea en el editor) |
 | F4 o `/omi-sidebar` | Mostrar / ocultar lateral |
 | `/omi-sidebar-settings` | Elegir qué bloques mostrar en la lateral |
@@ -238,7 +242,7 @@ el historial y la edición siguen usando el renderer de Pi; no hay un segundo pr
 | `/omi-context` | Detalle del contexto |
 
 Los atajos son **Control** también en Mac, no Option ni Command. **Esc** vuelve a Chat desde las vistas de consulta.
-Las pestañas también funcionan por clic; en panes angostos conservan los cinco números y el nombre de la vista activa.
+Las pestañas también funcionan por clic; en panes angostos conservan los seis números y el nombre de la vista activa.
 
 El pie muestra **`[ PR #123 ↗ ]`** como botón junto a la rama actual, incluso si debe recortar su nombre.
 Se resuelve con `gh pr status`, incluyendo el remoto y los forks, sin inferirlo de la lista de PRs del repo.
@@ -278,9 +282,11 @@ si cambia su contrato, conserva la vista base y avisa. No parchea archivos de `n
 
 Explora código, resuelve inferencias y deja una receta persistente. Tiene tres rutas: **Directa**, **Diagnóstico** para bugs sin causa confirmada y **Con spec** para trabajo grande. Antes de escribir pide aprobación humana de la receta completa. Registra rojo/verde reales, commits por paso, verificación por caso y lentes; sólo entonces puede pedir permiso separado para subir la rama y abrir un **PR draft**. No mergea, dispara workflows ni despliega.
 
-La lateral muestra **PROGRESO · #N** con ruta, etapa, actividad, pasos, checks y bloqueos. Clic o **`/omi-progress`** abre el detalle, también con la lateral oculta. El avance sale del estado y de resultados observados, no de frases del modelo. `/omi-work status`, `pause`, `resume`, `refresh`, `approve`, `pr` y `stop` permiten controlarlo; no hay un comando para empezar. Cargar una sesión no reejecuta efectos automáticamente.
+La lateral muestra **PROGRESO · #N** con ruta, etapa, actividad, pasos, checks y bloqueos, y el recorrido completo cuando hay altura. En compacto conserva los demás bloques y anuncia **Ctrl 6**: **6 · Progreso** (`/omi-workflow`) muestra todas las etapas, también pendientes, con estado textual y ejecución prevista separada de la real. Se desplaza con flechas, PgUp/PgDn o rueda; Esc vuelve a Chat. `?`/«sin observar» no atribuye una delegación: la receta sólo informa lo previsto; los lentes se identifican como llamadas aisladas, y los trabajos antiguos conservan modo desconocido. Clic o **`/omi-progress`** abre el detalle, también con la lateral oculta. El avance sale del estado y de resultados observados, no de frases del modelo. `/omi-work status`, `pause`, `resume`, `refresh`, `approve`, `pr` y `stop` permiten controlarlo; no hay un comando para empezar. Cargar una sesión no reejecuta efectos automáticamente.
 
-La descripción humana del issue se conserva: receta/spec y evidencia se agregan como **comentarios administrados append-only**, con recuperación de publicaciones ambiguas. El estado local vive bajo el Git common-dir, independiente del vínculo de infraestructura OMI. Este corte es para repos existentes; quedan afuera Fundación, prototipos, perfiles avanzados de modelos, Review externa, Land y Ship.
+**Foundations** decide por repo, en las perillas del producto en la KB de Harness, qué comandos corren sin preguntar y si el arranque, la receta, los comandos fuera del catálogo y el PR draft piden un sí (`ask`) o no (`auto`). Cada revisión nueva se acepta una vez y queda fija en la sesión; sin KB vale la última aceptada o la política de siempre. Si el repo no lo tiene, el harness ofrece armarlo y sólo lo guarda con tu sí. Un comando ya autorizado no vuelve a preguntar por cambiar de etiqueta (setup o caso D), ni al retomar.
+
+La descripción humana del issue se conserva: receta, evidencia y acuerdos van en una **sección administrada al final del cuerpo**, entre `<!-- omi:harness:start -->` y `<!-- omi:harness:end -->`, que el harness reescribe sin tocar el pedido. No crea comentarios. Lo que la persona dice en el chat vale como autorización de alcance: el agente lo registra con su cita textual, sin editar el issue. El estado local vive bajo el Git common-dir, independiente del vínculo de infraestructura OMI. Este corte es para repos existentes; quedan afuera la etapa Fundación, prototipos, perfiles avanzados de modelos, Review externa, Land y Ship.
 
 [Contrato, permisos, recuperación y límites del harness](docs/development-harness.md).
 

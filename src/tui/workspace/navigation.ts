@@ -6,6 +6,7 @@ export const WORKSPACE_VIEWS = [
 	{ id: "prs", label: "PRs", command: "omi-prs", key: "ctrl+3" },
 	{ id: "changes", label: "Cambios", command: "omi-changes", key: "ctrl+4" },
 	{ id: "omi", label: "OMI", command: "omi-platform", key: "ctrl+5" },
+	{ id: "workflow", label: "Progreso", command: "omi-workflow", key: "ctrl+6" },
 ] as const;
 export type WorkspaceView = typeof WORKSPACE_VIEWS[number]["id"];
 

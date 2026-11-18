@@ -100,7 +100,7 @@ test("development_begin la tool sólo se ofrece fuera del harness y valida el pe
 	await f.invoke("omi_work_begin", { title: "Emoji ❤️ y acentos ñ", body: "Texto común con emoji ✅", reason: "visible" }); await f.emit("agent_settled", { aborted: true }); await f.flush();
 	assert.deepEqual(f.calls, [], "validar no consulta GitHub");
 	await f.ask({ ...request, body: "é".repeat(40000) });
-	assert.equal(f.prompts.length, 0, "un pedido que no entra en un comentario de GitHub falla antes de preguntar");
+	assert.equal(f.prompts.length, 0, "un pedido que no entra en el PR draft de GitHub falla antes de preguntar");
 	assert.match(f.current().notices.join("\n"), /grande|GitHub/); assert.deepEqual(f.remote.created, []);
 });
 

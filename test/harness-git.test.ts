@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Runner } from "../src/core/exec.ts";
 import type { Evidence } from "../src/harness/model.ts";
-import { inspectCheckout, validateReferences, readWorkflowDiff, assertStepCommit } from "../src/harness/git.ts";
+import { inspectCheckout, validateReferences, readWorkflowDiffFiles, assertStepCommit } from "../src/harness/git.ts";
 
 async function fixture(t: import("node:test").TestContext) {
  const root = await mkdtemp(join(tmpdir(), "omi-harness-git-")); await mkdir(join(root, ".git"));
@@ -58,12 +58,21 @@ test("untracked content and symlink targets contribute without following externa
  await assert.rejects(validateReferences(f.checkout, [{ path: "link", line: 1, detail: "bad" }]));
 });
 
-test("references must point to real local lines; oversized review fails closed", async (t) => {
+test("references must point to real local lines", async (t) => {
  const f = await fixture(t); await writeFile(join(f.checkout.root, "a"), "one\ntwo\n");
  await validateReferences(f.checkout, [{ path: "a", line: 2, detail: "exists" }]);
  await assert.rejects(validateReferences(f.checkout, [{ path: "../secret", line: 1, detail: "bad" }]));
  await assert.rejects(validateReferences(f.checkout, [{ path: "a", line: 4, detail: "bad" }]));
- f.state.diff = "x".repeat(50001); await assert.rejects(readWorkflowDiff(f.checkout, f.runner), /humana|achicar/i);
+});
+test("a large diff is read complete, one entry per file, with no size cap", async (t) => {
+ const f = await fixture(t); await writeFile(join(f.checkout.root, "a"), "one");
+ const big = `diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1,3000 @@\n${"+" + "x".repeat(99) + "\n"}`.repeat(1) + ("+" + "y".repeat(99) + "\n").repeat(3000);
+ const small = "diff --git a/b b/b\n--- a/b\n+++ b/b\n@@ -1 +1 @@\n-old\n+new\n";
+ f.state.diff = big + small; f.state.untracked = "c\0"; await writeFile(join(f.checkout.root, "c"), "nuevo\n");
+ const files = await readWorkflowDiffFiles(f.checkout, f.runner);
+ assert.ok((big + small).length > 50000);
+ assert.deepEqual(files.slice(0, 2), [big, small]);
+ assert.equal(files[2], 'Archivo nuevo "c"\nnuevo\n\n');
 });
 
 test("step commits require green evidence of the same tree and immediate parent", async (t) => {

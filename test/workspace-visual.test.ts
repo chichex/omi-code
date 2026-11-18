@@ -193,7 +193,7 @@ test("workspace_geometría real: lateral de 41, sesión agrupada y círculos en 
 		assert.equal(side.filter((line) => /[●○]{10}/.test(line)).length, 4, "contexto, CPU, RAM y disco");
 		assert.doesNotMatch(side.join("\n"), /█|▌/);
 		assert.ok(side.some((line) => /^└─+┘$/.test(line))); assert.match(side.at(-1)!, /Personalizar lateral/);
-		assert.match(lines[height - 2]!, /Ctrl 1–5 vistas/); assert.doesNotMatch(lines.slice(-3).join("\n"), /Contexto|56k/);
+		assert.match(lines[height - 2]!, /Ctrl 1–6 vistas/); assert.doesNotMatch(lines.slice(-3).join("\n"), /Contexto|56k/);
 		assert.match(lines[height - 1]!, /Modelo: Modelo real.*proveedor-real.*Razonamiento: ●{4}○{2} high.*Ctrl L cambiar/);
 		assert.match(lines[height - 4]!, /Enter enviar/);
 	}
@@ -281,7 +281,7 @@ test("workspace_no tapa conversación ni diagnósticos y el clic abre el detalle
 	}
 });
 
-test("workspace_las cinco vistas funcionan por teclado, comandos, clic y Escape sin perder el chat", async (t) => {
+test("workspace_las seis vistas funcionan por teclado, comandos, clic y Escape sin perder el chat", async (t) => {
 	const ui = await visualHarness(await tempDir(t)); t.after(ui.stop); ui.messages();
 	assert.equal(ui.commands.has("omi-deliveries"), false);
 	for (const width of [132, 80, 40, 28]) for (const [index, item] of WORKSPACE_VIEWS.entries()) {
@@ -293,14 +293,14 @@ test("workspace_las cinco vistas funcionan por teclado, comandos, clic y Escape 
 		assert.doesNotMatch(lines.map((line) => sliceByColumn(line, 0, mainWidth)).join("\n"), /Entregas|ENTREGAS|GITHUB ACTIONS/);
 		if (item.id === "chat") assert.match(lines.join("\n"), /CONVERSACIÓN REAL/);
 		else assert.doesNotMatch(lines.slice(3, -3).join("\n"), /Enter enviar|CONVERSACIÓN REAL/);
-		const next = WORKSPACE_VIEWS[(index + 1) % 5]!; const tab = workspaceTabs(width, item.id).find((tab) => tab.view === next.id)!;
+		const next = WORKSPACE_VIEWS[(index + 1) % WORKSPACE_VIEWS.length]!; const tab = workspaceTabs(width, item.id).find((tab) => tab.view === next.id)!;
 		ui.click(tab.start, 1, width, 32);
-		lines = ui.frame(width, 32).lines.map(stripTerminalSequences); assert.ok(lines[1]!.includes(`${(index + 1) % 5 + 1} ${next.label}]`));
+		lines = ui.frame(width, 32).lines.map(stripTerminalSequences); assert.ok(lines[1]!.includes(`${(index + 1) % WORKSPACE_VIEWS.length + 1} ${next.label}]`));
 		await ui.command(item.command); ui.frame(width, 32); ui.click(width - 1, 1, width, 32);
 		assert.ok(ui.frame(width, 32).lines.map(stripTerminalSequences)[1]!.includes(`${index + 1} ${item.label}]`));
 		if (item.id !== "chat") { ui.input("\x1b"); assert.match(ui.frame(width, 32).lines.map(stripTerminalSequences)[1]!, /\[1 Chat\]/); }
 	}
-	await ui.command("omi"); assert.deepEqual(ui.paletteOptions.at(-1)?.slice(0, 5), ["Chat", "Issues", "PRs", "Cambios", "OMI"]);
+	await ui.command("omi"); assert.deepEqual(ui.paletteOptions.at(-1)?.slice(0, 6), ["Chat", "Issues", "PRs", "Cambios", "OMI", "Progreso"]);
 });
 
 test("workspace_Issues, PRs y OMI tienen datos independientes, detalle seleccionado y errores sin inventar vacíos", { skip: process.platform === "win32" }, async (t) => {

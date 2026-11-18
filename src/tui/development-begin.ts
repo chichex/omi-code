@@ -17,6 +17,7 @@ import { prepareIssue, type IssueClassification } from "./workspace/issue-prepar
 import { assertIssueIdentity, discoverLegacyPreparations, readIssuePreparation, verifyIssuePreparation, type IssuePreparation } from "./workspace/issue-registry.ts";
 import { PHASE_LABELS } from "./development-view.ts";
 import { checkIssueWorktree, mainBaseCommit } from "./workspace/issue-worktree.ts";
+import { carryFoundationsPin } from "./development-foundations.ts";
 
 /** Muestra un trabajo largo con opción de cancelar; undefined si la persona canceló. */
 export type BeginLoader = <T>(ctx: ExtensionContext, title: string, work: (signal: AbortSignal) => Promise<T>) => Promise<T | undefined>;
@@ -50,10 +51,10 @@ export function assertCanBegin(ctx: ExtensionContext, offline: boolean): void {
 	if (!ctx.model || !ctx.modelRegistry.hasConfiguredAuth(ctx.model)) throw new Error("Elegí un modelo autenticado con /omi-model o /login antes de empezar un trabajo.");
 }
 const placeholder = (git: GitSnapshot): Workflow["checkout"] => ({ root: git.root, commonDir: git.commonDir, branch: "main", baseCommit: "preview" });
-// El pedido se cita en los comentarios del issue: si no entra, nunca se podrá aprobar.
+// El pedido se cita en el PR draft: si no entra, nunca se podrá publicar.
 function assertQuotable(source: Workflow["source"], git: GitSnapshot, now: string): void {
 	try { renderWorkflowArtifact(createWorkflow(source, placeholder(git), "preview", now)); }
-	catch { throw new Error("El pedido es demasiado grande para citarlo en un comentario de GitHub; acotalo antes de empezar."); }
+	catch { throw new Error("El pedido es demasiado grande para citarlo en el PR draft de GitHub; acotalo antes de empezar."); }
 }
 async function gh(git: GitSnapshot, args: string[], options: BeginOptions, input?: string): Promise<string> {
 	const result = await options.runner.run("gh", args, { cwd: git.root, env: { GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", GH_PAGER: "cat" }, signal: options.signal, ...(input === undefined ? {} : { input }) });
@@ -169,6 +170,8 @@ async function prepareAndSwitch(ctx: ExtensionCommandContext, git: GitSnapshot, 
 	const { record } = prepared; const sessionFile = record.sessionFile!;
 	if (resolve(sessionFile) === resolve(origin)) { await options.startHere(); return; }
 	// switchSession sólo existe en comandos: el sí viaja como un token de un solo uso ligado a la sesión destino.
+	// Foundations ya se decidió acá: la sesión del worktree no relee la KB ni vuelve a preguntar.
+	carryFoundationsPin(origin, sessionFile);
 	const token = issueDevelopmentTicket({ kind: "start", sessionFile, issue: issueNumber });
 	let switched = false;
 	try {

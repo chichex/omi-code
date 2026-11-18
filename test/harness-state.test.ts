@@ -205,6 +205,16 @@ test("exhausted retries stay blocked through pause/resume", () => {
  assert.equal(resumed.status, "waiting"); assert.equal(resumed.blockedReason, exhausted.blockedReason);
  assert.throws(() => send(resumed, { type: "publishing", head: "head", bodyHash: "body" }));
 });
+test("a chat agreement never restarts exhausted retries: only a human refresh lifts the block", () => {
+ const exhausted = send({ ...pr(), round: 3 }, { type: "retry", reason: "again" });
+ assert.equal(exhausted.status, "waiting"); assert.match(exhausted.blockedReason, /agotaron/);
+ assert.throws(() => send(exhausted, { type: "agreed", quote: "hacé lo que pedí antes", summary: "Rehacer la receta", replan: true }), /agotaron.*sin replan/);
+ const noted = send(exhausted, { type: "agreed", quote: "dejá la documentación como está", summary: "La documentación queda fuera", replan: false });
+ assert.equal(noted.agreements?.length, 1, "el acuerdo queda registrado");
+ assert.equal(noted.status, "waiting"); assert.equal(noted.blockedReason, exhausted.blockedReason); assert.equal(noted.round, 3); assert.equal(noted.phase, exhausted.phase);
+ const refreshed = send(noted, { type: "source_changed", source });
+ assert.equal(refreshed.status, "active"); assert.equal(refreshed.round, 0);
+});
 test("a review outside the recipe or pass with findings cannot accredit verification", () => {
  const s = send(verifying(), { type: "evidence", evidence: evidence("verification") });
  assert.throws(() => send(s, { type: "reviewed", review: { lens: "security", fingerprint: "tree", verdict: "pass", findings: [], at } }));
@@ -223,8 +233,24 @@ test("verification considers the latest attempt for each case, not a filtered ol
  }
  const staleReview = send(s, { type: "reviewed", review: { lens: "quality", fingerprint: "stale", verdict: "fail", findings: ["old bug"], at } });
  assert.equal(send(staleReview, { type: "verified", fingerprint: "tree" }).phase, "pr");
+ // Un lente que no es de seguridad asesora: su fail queda como aviso y no frena Verificar.
  const failedReview = send(staleReview, { type: "reviewed", review: { lens: "quality", fingerprint: "tree", verdict: "fail", findings: ["current bug"], at } });
- assert.throws(() => send(failedReview, { type: "verified", fingerprint: "tree" }));
+ assert.equal(send(failedReview, { type: "verified", fingerprint: "tree" }).phase, "pr");
+});
+test("lenses advise: every requested lens must run, fail and unknown do not block, only a security fail does", () => {
+ const lenses = { ...plan, lenses: ["quality", "compliance", "security"] as Plan["lenses"] };
+ let s = send(ready(lenses), { type: "approved" }); s = send(s, { type: "step_started", id: "C1" }); s = send(s, { type: "evidence", evidence: evidence("red") }); s = send(s, { type: "evidence", evidence: evidence("green") }); s = send(s, { type: "step_completed", id: "C1", commit: "head", fingerprint: "tree" });
+ s = send(s, { type: "evidence", evidence: evidence("verification") });
+ const review = (lens: Plan["lenses"][number], verdict: "pass" | "fail" | "unknown", fingerprint = "tree") => ({ type: "reviewed" as const, review: { lens, fingerprint, verdict, findings: verdict === "pass" ? [] : ["src/a.ts:1 · finding"], at } });
+ s = send(send(s, review("quality", "fail")), review("compliance", "unknown"));
+ assert.throws(() => send(s, { type: "verified", fingerprint: "tree" }), /security/, "un lente pedido sin correr sobre este contenido no se saltea");
+ assert.throws(() => send(send(s, review("security", "pass", "stale")), { type: "verified", fingerprint: "tree" }), /security/);
+ assert.equal(send(send(s, review("security", "unknown")), { type: "verified", fingerprint: "tree" }).phase, "pr", "un unknown de seguridad es un aviso");
+ const insecure = send(s, review("security", "fail"));
+ assert.throws(() => send(insecure, { type: "verified", fingerprint: "tree" }), /seguridad/);
+ assert.throws(() => send(insecure, review("security", "pass")), /ya falló/, "un fail de seguridad no se borra volviendo a tirar el lente");
+ const published = send(send(s, review("security", "pass")), { type: "verified", fingerprint: "tree" });
+ assert.equal(send(published, { type: "publishing", head: "head", bodyHash: "body" }).publication.status, "pending", "los avisos tampoco frenan la publicación");
 });
 
 test("a wontfix closed by the model can be reopened by refreshing the request, and nothing else", () => {
@@ -299,4 +325,25 @@ test("long blockers are bounded instead of invalidating the saved state", () => 
 test("the evidence cap explains the exit available in the current phase", () => {
  const full = activeStep(); full.evidence = Array.from({ length: 1000 }, (_, i) => evidence("reproduction", { id: `old${i}` }));
  assert.throws(() => send(full, { type: "evidence", evidence: evidence("red") }), (error: unknown) => error instanceof Error && /refresh/.test(error.message) && !/retry/.test(error.message));
+});
+test("a chat agreement is recorded once; without replan it keeps the approval", () => {
+ const approved = send(ready(), { type: "approved" });
+ let s = send(approved, { type: "agreed", quote: "no hace falta tocar la doc", summary: "La documentación queda fuera", replan: false });
+ s = send(s, { type: "agreed", quote: "no hace falta tocar la doc", summary: "La documentación queda fuera", replan: false });
+ assert.equal(s.agreements?.length, 1); assert.equal(s.agreements?.[0]?.phase, "implement"); assert.equal(s.phase, "implement"); assert.equal(isApproved(s), true);
+ assert.throws(() => send(approved, { type: "agreed", quote: " ", summary: "x", replan: false }));
+ assert.throws(() => send(send(approved, { type: "pause", reason: "later" }), { type: "agreed", quote: "q", summary: "s", replan: false }), /pausado/);
+});
+test("a chat agreement that changes the scope reopens the recipe and keeps what still holds", () => {
+ const before = verifying();
+ const s = send(before, { type: "agreed", quote: "sumá también el caso de borde", summary: "Ampliar al caso de borde", replan: true, fingerprint: "after-commits" });
+ assert.equal(s.phase, "recipe"); assert.equal(s.status, "active"); assert.equal(s.approval, null); assert.equal(s.round, 0);
+ assert.deepEqual(s.inferences, before.inferences); assert.equal(s.exploration?.approach, before.exploration?.approach);
+ assert.equal(s.exploration?.fingerprint, "after-commits", "lo commiteado por el harness es la base de la receta nueva");
+ assert.deepEqual(s.recipe, before.recipe, "la receta anterior queda como borrador para rehacerla");
+ assert.deepEqual(s.steps, []); assert.deepEqual(s.evidence, []); assert.ok(s.attempts?.at(-1)?.evidence.length, "las pruebas viejas quedan como intento anterior");
+ const replanned = send(s, { type: "planned", plan: { ...plan, cases: [...plan.cases, { id: "D2", description: "borde", command: "npm test -- borde" }] } });
+ assert.equal(replanned.phase, "approve"); assert.equal(replanned.agreements?.length, 1);
+ const early = send(send(fresh(), { type: "explored", exploration }), { type: "agreed", quote: "q", summary: "s", replan: true, fingerprint: "x" });
+ assert.equal(early.phase, "decide", "antes de la receta, el acuerdo sólo se anota"); assert.equal(early.exploration?.fingerprint, undefined);
 });

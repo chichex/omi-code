@@ -8,12 +8,16 @@ import { isInside } from "../core/files.ts";
 import { workflowToolAllowed, workflowWritePath, WORKFLOW_TOOLS } from "../harness/permissions.ts";
 import { referenceDigest } from "../harness/references.ts";
 import { developmentInstructions } from "./development-view.ts";
+import { observeDevelopment } from "./development-observation.ts";
 import { DevelopmentSession, type DevelopmentDeps } from "./development-session.ts";
 import { registerDevelopmentTools } from "./development-tools.ts";
+import { trackExtensionMessages } from "./development-agreement.ts";
 import { beginDevelopment, borderedLoader, registerBeginTool } from "./development-begin.ts";
 import { beginCommand, BEGIN_SUBCOMMAND, holdSessionSwitch, revokeDevelopmentTicket, sessionSwitchOwner, takeDevelopmentTicket } from "./development-tickets.ts";
 import { restoreIssueTriage } from "./workspace/issue-triage.ts";
 import { IssuePreparationBusyError } from "./workspace/issue-registry.ts";
+import { effectivePolicy, foundationsLines } from "./development-foundations.ts";
+import { offerFoundations } from "./development-foundations-setup.ts";
 
 const KICKOFF = "Continuá el harness de desarrollo activo desde su etapa persistida. Respetá sus bloqueos y pedí los permisos pendientes; no saltees etapas.";
 const USAGE = "Uso: /omi-work resume | approve | pause | refresh | pr | status | stop";
@@ -49,6 +53,8 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 		};
 		session.onChange = loadout;
 		registerDevelopmentTools(pi, session);
+		// El arranque del harness también queda guardado como mensaje "user": no es una cita de la persona.
+		trackExtensionMessages(pi, session, [KICKOFF]);
 		let pendingBegin: string | undefined;
 		registerBeginTool(pi, { offline: session.offline, busy: () => !!session.state || !!session.lockedReason, onRequest: (token) => { pendingBegin = token; } });
 		// Sin el sí humano no se llama al modelo: un trabajo pausado o terminado sólo informa su estado.
@@ -61,6 +67,8 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 		const startHere = async (ctx: ExtensionContext) => {
 			await session.start(ctx);
 			if (session.state?.status === "paused") await session.apply({ type: "resume" }, ctx);
+			// Sin Foundations para el repo, se ofrece armarlo una vez por sesión; sólo se guarda con el sí.
+			await offerFoundations(ctx, session, deps.kb).catch((error: unknown) => ctx.ui.notify(`Foundations: ${error instanceof Error ? error.message : "no se pudo ofrecer"}`, "warning"));
 			loadout(); proceed(ctx);
 		};
 		async function begin(token: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -79,7 +87,12 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 				const { parseArgs } = await import("@earendil-works/pi-coding-agent");
 				await beginDevelopment(ctx, { origin: ticket.origin, request: ticket.request }, {
 					runner: session.runner, offline: session.offline, signal: session.lifecycle.signal, now: session.now, loader: deps.loader ?? borderedLoader,
-					sessionDir: parseArgs([...args]).sessionDir, confirm: (context, title, description) => session.confirm(context, title, description), startHere: () => startHere(ctx),
+					sessionDir: parseArgs([...args]).sessionDir, startHere: () => startHere(ctx),
+					// Foundations se decide recién acá: después de las guardas sin efectos y antes del sí del arranque.
+					confirm: async (context, title, description) => {
+						if ((await session.foundations.policy(context)).politica.arranque !== "auto") return session.confirm(context, title, description);
+						context.ui.notify(`Foundations · arranque auto: ${title}, sin preguntar.\n\n${description}`, "info"); return true;
+					},
 				});
 			} finally { release(); }
 		}
@@ -96,10 +109,11 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 			handler: async (input, ctx) => {
 				try {
 					const command = input.trim() || "status";
-					if (command === "status") { ctx.ui.notify(session.status(), "info"); return; }
+					if (command === "status") { ctx.ui.notify([session.status(), ...foundationsLines(session.foundations.current(ctx))].join("\n"), "info"); return; }
 					if (!ctx.isIdle() || ctx.hasPendingMessages()) throw new Error("Esperá a que termine el turno antes de cambiar el trabajo");
 					const [verb, ...rest] = command.split(/\s+/);
 					if (verb === BEGIN_SUBCOMMAND) { await begin(rest.join(" "), ctx); return; }
+					if (["resume", "approve", "pr"].includes(command)) await session.foundations.pin(ctx);
 					if (command === "resume") {
 						await session.restore(ctx, true); session.current(ctx);
 						if (!session.offline && !(await session.fresh(ctx))) { loadout(); return; }
@@ -116,16 +130,16 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 				} catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "No se pudo ejecutar el harness", busy(error) ? "warning" : "error"); }
 			},
 		});
-		pi.on("session_start", async (_event, ctx) => { await session.restore(ctx); loadout(); });
+		pi.on("session_start", async (_event, ctx) => { session.foundations.load(ctx); await session.restore(ctx); loadout(); });
 		pi.on("session_tree", async (_event, ctx) => { await session.restore(ctx); loadout(); });
 		pi.on("session_shutdown", () => { readsInFlight.clear(); session.shutdown(); });
-		pi.on("before_agent_start", (event) => {
+		pi.on("before_agent_start", (event, ctx) => {
 			if (session.lockedReason) {
 				event.systemPromptOptions.sections ??= {};
 				event.systemPromptOptions.sections.omi_development = `Harness bloqueado: ${session.lockedReason}. No cambiar archivos ni ejecutar comandos. Pedí recuperación humana con /omi-work resume.`;
 			} else if (session.state) {
 				event.systemPromptOptions.sections ??= {};
-				event.systemPromptOptions.sections.omi_development = developmentInstructions(session.state);
+				event.systemPromptOptions.sections.omi_development = developmentInstructions(session.state, effectivePolicy(session.foundations.current(ctx), session.state).command.catalog);
 			}
 		});
 		pi.on("tool_call", async (event, ctx) => {
@@ -180,5 +194,6 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 			if (!session.state && !session.lockedReason) return;
 			return { result: { output: "Harness activo: usá omi_workflow_check para comandos observados y autorizados, o /omi-work stop para salir explícitamente del flujo.", exitCode: 1, cancelled: false, truncated: false } };
 		});
+		observeDevelopment(pi, session);
 	} };
 }

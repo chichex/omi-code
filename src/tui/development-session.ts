@@ -7,37 +7,36 @@ import { Value } from "typebox/value";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Io } from "../cli/io.ts";
 import { processRunner, type Runner } from "../core/exec.ts";
-import type { Workflow } from "../harness/model.ts";
+import { parseWorkflow, type Workflow, type Phase } from "../harness/model.ts";
+export interface ObservationOrigin { id: string; source: string; epoch: number; phase: Phase; round: number }
 import { artifactHash } from "../harness/model.ts";
 import type { ReadReceipt } from "../harness/references.ts";
-import { createWorkflow, transition, type WorkflowEvent } from "../harness/state.ts";
+import { createWorkflow, recipeApprovalHash, transition, type WorkflowEvent } from "../harness/state.ts";
 import { readWorkflow, updateWorkflow } from "../harness/store.ts";
 import { inspectCheckout } from "../harness/git.ts";
-import { publishDraft, readIssueSource, renderWorkflowArtifact, syncIssueArtifact } from "../harness/github.ts";
+import { publishDraft, readIssueSource, renderWorkflowArtifact } from "../harness/github.ts";
+import { updateIssueSection } from "./development-issue.ts";
 import { restoreIssueTriage } from "./workspace/issue-triage.ts";
 import { readGit } from "./workspace/data.ts";
 import { developmentProgress, PHASE_LABELS } from "./development-view.ts";
 import type { BeginLoader } from "./development-begin.ts";
 import { developmentOffline } from "./development-tickets.ts";
+import { approvalDocument, approvalText } from "./development-approval.ts";
+import { showApprovalReview } from "./development-approval-view.ts";
+import type { KbClient } from "./kb-client.ts";
+import { FoundationsGate, foundationsLines } from "./development-foundations.ts";
+import { foundationsDir } from "../harness/foundations-trust.ts";
 
 export const DEVELOPMENT_ANCHOR = "omi-development-workflow";
 const AnchorSchema = Type.Object({ id: Type.String(), root: Type.String(), issue: Type.Integer({ minimum: 1 }), revision: Type.Integer({ minimum: 0 }), disabled: Type.Optional(Type.Boolean()) });
-export interface DevelopmentDeps { runner?: Runner; now?: () => string; loader?: BeginLoader }
-// Lo que la persona aprueba. Falla antes de pedir el sí si no entra en el diálogo o en GitHub.
-// Lo que se ejecuta sin volver a preguntar va primero y legible, no enterrado en el JSON.
-export function approvalPreview(state: Workflow): string {
-	const commands = `Comandos que quedan autorizados y se ejecutan sin volver a preguntar:\n${(state.recipe?.cases ?? []).map((c) => `- ${c.id} · ${c.command}`).join("\n")}`;
-	const preview = JSON.stringify({ source: { number: state.source.number, title: state.source.title, url: state.source.url, hash: state.source.hash }, recipe: state.recipe, spec: state.spec, inferences: state.inferences }, null, 2);
-	if (preview.length > 50000) throw new Error("La receta es demasiado grande para aprobarla completa; acotá el trabajo con planned o specified");
-	renderWorkflowArtifact(state);
-	return `${commands}\n\n${preview}`;
-}
+export interface DevelopmentDeps { runner?: Runner; now?: () => string; loader?: BeginLoader; kb?: KbClient }
+// El preflight y el documento íntegro se comparten con la revisión TUI y RPC.
+export function approvalPreview(state: Workflow): string { return approvalText(approvalDocument(state)); }
 export class DevelopmentSession {
 	state: Workflow | undefined;
 	onChange: (() => void) | undefined;
 	lockedReason = "";
 	readonly reads = new Map<string, ReadReceipt>();
-	readonly approvedCommands = new Set<string>();
 	readonly runner: Runner;
 	readonly now: () => string;
 	readonly lifecycle = new AbortController();
@@ -45,13 +44,41 @@ export class DevelopmentSession {
 	// Último vínculo válido de la conversación: permite salir aunque el estado no se pueda leer.
 	private lastAnchor: { id: string; root: string; issue: number; revision: number } | undefined;
 	private alive = true;
+	private epoch = 0;
+	private mutations: Promise<unknown> = Promise.resolve();
+	private serialize<T>(work: () => Promise<T>): Promise<T> {
+		const result = this.mutations.then(work); this.mutations = result.catch(() => {}); return result;
+	}
+	observationOrigin(): ObservationOrigin | undefined {
+		const s = this.state;
+		return s && this.alive && !this.lockedReason ? { id: s.id, source: s.source.hash, epoch: this.epoch, phase: s.phase, round: s.round } : undefined;
+	}
+	observe(origin: ObservationOrigin | undefined, mode: "inline" | "subagent" | "lens", ctx: ExtensionContext): Promise<void> {
+		return this.serialize(async () => {
+			const s = this.state;
+			if (!origin || !s || !this.alive || this.lockedReason || origin.epoch !== this.epoch || origin.id !== s.id || origin.source !== s.source.hash || origin.round !== s.round) return;
+			const previous = s.observations?.find(o => o.phase === origin.phase && o.round === origin.round);
+			if (previous?.[mode]) return;
+			this.checkContext(ctx);
+			this.state = await updateWorkflow(s.checkout, s.source.number, s.revision, saved => {
+				if (!saved || saved.id !== s.id) throw new Error("El trabajo cambió");
+				const observations = (saved.observations ?? []).filter(o => o.phase !== origin.phase || o.round !== origin.round);
+				observations.push({ phase: origin.phase, round: origin.round, inline: false, subagent: false, lens: false, ...previous, [mode]: true });
+				return parseWorkflow(JSON.stringify({ ...saved, observations, revision: saved.revision + 1 }));
+			});
+			this.anchor(); this.emit();
+		}).catch(() => { ctx.ui.notify("No se pudo guardar una observación de ejecución; no se mostrará como confirmada.", "warning"); });
+	}
 	offline: boolean;
 	readonly pi: ExtensionAPI;
 	readonly io: Io;
+	/** Foundations fijo de esta sesión: decide qué corre o avanza sin preguntar. */
+	readonly foundations: FoundationsGate;
 	constructor(pi: ExtensionAPI, io: Io, args: readonly string[], deps: DevelopmentDeps = {}) {
 		this.pi = pi; this.io = io;
 		this.runner = deps.runner ?? processRunner; this.now = deps.now ?? (() => new Date().toISOString());
 		this.offline = developmentOffline(args, io.env);
+		this.foundations = new FoundationsGate({ kb: deps.kb, runner: this.runner, trustDir: foundationsDir(io.homeDir), now: this.now, confirm: (ctx, title, description) => this.confirm(ctx, title, description) });
 	}
 	private anchor(): void {
 		const s = this.state;
@@ -59,7 +86,11 @@ export class DevelopmentSession {
 	}
 	emit(activity?: string, waiting = false): void {
 		if (!this.alive) return;
-		const progress = this.state ? { ...developmentProgress(this.state, activity), ...(this.lockedReason || waiting ? { status: "waiting" as const, blockedReason: this.lockedReason } : {}) } : undefined;
+		const progress = this.state ? developmentProgress(this.state, activity, foundationsLines(this.context && this.foundations.current(this.context))) : undefined;
+		if (progress && (this.lockedReason || waiting)) {
+			progress.status = "waiting"; progress.blockedReason = this.lockedReason;
+			if (progress.stages) progress.stages = progress.stages.map(s => s.current ? { ...s, status: "waiting" } : s);
+		}
 		this.onChange?.();
 		this.pi.events.emit("omi:workflow", { progress });
 		this.context?.ui.setStatus("omi-development", progress ? `Desarrollo · ${progress.phaseLabel}${progress.blockedReason ? " · bloqueado" : ""}` : this.lockedReason ? "Desarrollo · bloqueado · /omi-work stop para salir" : undefined);
@@ -82,7 +113,8 @@ export class DevelopmentSession {
 		return this.state;
 	}
 	async restore(ctx: ExtensionContext, adopt = false): Promise<void> {
-		this.context = ctx; this.state = undefined; this.lockedReason = ""; this.lastAnchor = undefined; this.reads.clear(); this.approvedCommands.clear();
+		await this.mutations; this.epoch++;
+		this.context = ctx; this.state = undefined; this.lockedReason = ""; this.lastAnchor = undefined; this.reads.clear();
 		const entry = ctx.sessionManager.getBranch().findLast((e) => e.type === "custom" && e.customType === DEVELOPMENT_ANCHOR);
 		if (!entry && !adopt) { this.emit(); return; }
 		try {
@@ -117,19 +149,22 @@ export class DevelopmentSession {
 		if (!snapshot.clean) throw new Error("Iniciá el harness con el worktree limpio; no se adoptan cambios ajenos a la receta");
 		const source = await readIssueSource(checkout, prepared.issue.number, this.runner, this.lifecycle.signal);
 		if (source.url.replace(/\/$/, "") !== prepared.issue.url.replace(/\/$/, "")) throw new Error("GitHub devolvió otro issue/repositorio");
-		// El pedido se cita en los comentarios del issue: si no entra, nunca se podrá aprobar.
+		// El pedido se cita en el PR draft: si no entra, nunca se podrá publicar.
 		try { renderWorkflowArtifact(createWorkflow(source, checkout, "preview", this.now())); }
-		catch { throw new Error("El pedido es demasiado grande para citarlo en un comentario de GitHub; acotá el issue antes de iniciar"); }
+		catch { throw new Error("El pedido es demasiado grande para citarlo en el PR draft de GitHub; acotá el issue antes de iniciar"); }
 		this.state = await updateWorkflow(checkout, source.number, undefined, () => createWorkflow(source, checkout, randomUUID(), this.now()));
 		this.anchor(); this.emit();
 	}
 	async apply(event: WorkflowEvent, ctx: ExtensionContext): Promise<Workflow> {
-		const expected = this.current(ctx);
-		this.state = await updateWorkflow(expected.checkout, expected.source.number, expected.revision, (saved) => {
-			if (!saved || saved.id !== expected.id) throw new Error("El trabajo cambió o desapareció");
-			return transition(saved, event, this.now());
+		return this.serialize(async () => {
+			const expected = this.current(ctx);
+			this.state = await updateWorkflow(expected.checkout, expected.source.number, expected.revision, (saved) => {
+				if (!saved || saved.id !== expected.id) throw new Error("El trabajo cambió o desapareció");
+				return transition(saved, event, this.now());
+			});
+			if (event.type === "source_changed") this.epoch++;
+			this.anchor(); this.emit(); return this.state;
 		});
-		this.anchor(); this.emit(); return this.state;
 	}
 	async fresh(ctx: ExtensionContext): Promise<boolean> {
 		const state = this.current(ctx);
@@ -137,7 +172,7 @@ export class DevelopmentSession {
 		const source = await readIssueSource(state.checkout, state.source.number, this.runner, this.lifecycle.signal);
 		if (source.url !== state.source.url) throw new Error("Cambió la identidad del issue; no se reutiliza el trabajo");
 		if (source.hash === state.source.hash) return true;
-		await this.apply({ type: "source_changed", source }, ctx); this.reads.clear(); this.approvedCommands.clear();
+		await this.apply({ type: "source_changed", source }, ctx); this.reads.clear();
 		ctx.ui.notify("El pedido cambió. Receta, aprobaciones y verificaciones se invalidaron; vuelve a Explorar.", "warning"); return false;
 	}
 	async confirm(ctx: ExtensionContext, title: string, description: string): Promise<boolean> {
@@ -148,7 +183,7 @@ export class DevelopmentSession {
 		finally { this.emit(); }
 	}
 	// true sólo si la persona aprobó: un no no vuelve a disparar al modelo.
-	async approve(ctx: ExtensionContext): Promise<boolean> {
+	async approve(ctx: ExtensionContext, signal?: AbortSignal): Promise<boolean> {
 		if (!(await this.fresh(ctx))) return false;
 		const state = this.current(ctx);
 		if (state.phase !== "approve") throw new Error("Todavía no hay una receta/spec lista para aprobar");
@@ -157,18 +192,34 @@ export class DevelopmentSession {
 			if (!state.exploration?.fingerprint || snapshot.fingerprint !== state.exploration.fingerprint) throw new Error("El código cambió desde Explorar. Usá /omi-work refresh y volvé a explorar antes de aprobar.");
 		};
 		await assertExplored();
-		const preview = approvalPreview(state);
-		if (!(await this.confirm(ctx, "Aprobar receta y sincronizar issue", `${preview}\n\nAutoriza implementar estos pasos, commits locales y comandos exactos de los casos D. Se agrega un comentario administrado con la receta al issue, sin reemplazar su descripción; no autoriza push, merge, workflows ni deploy.`))) return false;
+		const document = approvalDocument(state);
+		// receta: auto aprueba sin la revisión humana; se revalida igual y sus comandos no quedan autorizados.
+		const foundations = await this.foundations.policy(ctx, state); const auto = foundations.politica.receta === "auto";
+		if (!auto && (!ctx.hasUI || !["tui", "rpc"].includes(ctx.mode))) throw new Error("Aprobar receta: requiere confirmación humana interactiva");
+		const cancellation = AbortSignal.any([this.lifecycle.signal, ...((signal ?? ctx.signal) ? [signal ?? ctx.signal!] : [])]);
+		this.emit(auto ? "Foundations · receta auto" : "Esperando revisión de receta", !auto);
+		let approved: boolean;
+		try {
+			approved = auto || (ctx.mode === "tui" ? await showApprovalReview(ctx, document, cancellation)
+				: await ctx.ui.confirm(document.title, approvalText(document), { signal: cancellation }) === true);
+		} finally { this.emit(); }
+		if (!approved || cancellation.aborted) return false;
+		// Una revisión larga no puede autorizar una receta distinta ni un estado adoptado por otra ventana.
+		const saved = await readWorkflow(state.checkout, state.source.number);
+		if (!saved || saved.id !== state.id || saved.revision !== state.revision || recipeApprovalHash(saved) !== recipeApprovalHash(state)) throw new Error("El trabajo cambió durante la revisión; retomá el estado vigente y revisá la receta otra vez.");
+		if (!(await this.fresh(ctx))) return false;
 		await assertExplored();
-		await syncIssueArtifact(state, this.runner, this.lifecycle.signal);
-		await assertExplored();
-		await this.apply({ type: "approved" }, ctx);
+		cancellation.throwIfAborted();
+		await this.apply({ type: "approved", ...(auto ? { by: "foundations" as const, ...(foundations.hash ? { foundations: foundations.hash } : {}) } : {}) }, ctx);
+		// También con receta: auto la sección del issue muestra la receta aprobada.
+		await updateIssueSection(this, ctx);
+		if (auto) ctx.ui.notify("Foundations · receta auto: la receta se aprobó sin revisión humana. Sus comandos fuera del catálogo siguen pidiendo permiso.", "info");
 		return true;
 	}
 	// Volver a explorar descarta receta, aprobación y pruebas; también las lecturas y comandos autorizados.
 	async refresh(ctx: ExtensionContext): Promise<void> {
 		if (await this.fresh(ctx)) await this.apply({ type: "source_changed", source: this.current(ctx).source }, ctx);
-		this.reads.clear(); this.approvedCommands.clear();
+		this.reads.clear();
 	}
 	async publish(ctx: ExtensionContext): Promise<void> {
 		if (!(await this.fresh(ctx))) return;
@@ -179,11 +230,13 @@ export class DevelopmentSession {
 		// Revalidar evidencia con el fingerprint actual, también al recuperar una publicación pendiente.
 		transition({ ...state, phase: "verify", publication: { status: "none" } }, { type: "verified", fingerprint: snapshot.fingerprint }, this.now());
 		renderWorkflowArtifact(state); // Falla antes del sí si el artefacto no entra en GitHub.
-		if (!(await this.confirm(ctx, "Subir rama y abrir PR draft", `${state.checkout.branch} → main\nCommit ${snapshot.head}\nIssue #${state.source.number}\n\nAgrega evidencia en un comentario administrado del issue, hace push normal sólo de esta rama y crea o recupera su PR draft. No mergea, no fuerza pushes ni ejecuta workflows.`))) return;
-		await syncIssueArtifact(state, this.runner, this.lifecycle.signal);
+		const remote = `${state.checkout.branch} → main\nCommit ${snapshot.head}\nIssue #${state.source.number}\n\nHace push normal sólo de esta rama, crea o recupera su PR draft y actualiza la sección del harness en el cuerpo del issue con la evidencia. No mergea, no fuerza pushes ni ejecuta workflows.`;
+		if ((await this.foundations.policy(ctx, state)).politica.push_pr === "auto") ctx.ui.notify(`Foundations · push + PR draft auto: sin preguntar.\n${remote}`, "info");
+		else if (!(await this.confirm(ctx, "Subir rama y abrir PR draft", remote))) return;
 		if (state.publication.status === "none") state = await this.apply({ type: "publishing", head: snapshot.head, bodyHash: artifactHash(renderWorkflowArtifact(state)) }, ctx);
 		const receipt = await publishDraft(state, this.runner, this.lifecycle.signal);
 		await this.apply({ type: "published", ...receipt }, ctx);
+		await updateIssueSection(this, ctx);
 	}
 	async answer(id: string, ctx: ExtensionContext): Promise<boolean> {
 		const state = this.current(ctx); const inference = state.inferences.find((i) => i.id === id && i.resolution === "pending");
@@ -216,6 +269,6 @@ export class DevelopmentSession {
 		if (this.lastAnchor && this.alive) this.pi.appendEntry(DEVELOPMENT_ANCHOR, { ...this.lastAnchor, disabled: true });
 		this.state = undefined; this.lockedReason = ""; this.emit();
 	}
-	shutdown(): void { this.alive = false; this.lifecycle.abort(); }
+	shutdown(): void { this.alive = false; this.epoch++; this.lifecycle.abort(); }
 	status(): string { return this.lockedReason || (this.state ? `${PHASE_LABELS[this.state.phase]} · ${this.state.status}\n${this.state.activity}\n${this.state.blockedReason}\nDetalle: /omi-progress` : "Sin harness activo. Pedí un cambio en el chat o elegí un issue en Issues. /omi-work resume | approve | pause | refresh | pr | stop"); }
 }

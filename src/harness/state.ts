@@ -1,4 +1,6 @@
-import { artifactHash, MAX_ATTEMPTS, MAX_EVIDENCE, MAX_HISTORY, MAX_REVIEWS, MAX_STEPS, parseWorkflow, sourceHash, type Workflow, type Exploration, type InferenceInput, type Plan, type Spec, type Evidence, type Review, type Step } from "./model.ts";
+import { artifactHash, MAX_AGREEMENTS, MAX_ATTEMPTS, MAX_EVIDENCE, MAX_GRANTS, MAX_HISTORY, MAX_REVIEWS, MAX_STEPS, parseWorkflow, sourceHash, type Workflow, type Exploration, type InferenceInput, type Plan, type Spec, type Evidence, type Review, type Step } from "./model.ts";
+
+import { recipeNextPhase, recipeRoute } from "./phases.ts";
 
 export type WorkflowEvent =
  | { type: "explored"; exploration: Exploration }
@@ -7,7 +9,8 @@ export type WorkflowEvent =
  | { type: "planned"; plan: Plan }
  | { type: "diagnosed"; cause: string; reproduction: string; size: "small" | "large" }
  | { type: "specified"; spec: Spec }
- | { type: "approved" }
+ | { type: "approved"; by?: "person" | "foundations"; foundations?: string }
+ | { type: "command_granted"; key: string; command: string }
  | { type: "step_started"; id: string }
  | { type: "evidence"; evidence: Evidence }
  | { type: "check_failed"; evidence: Evidence }
@@ -18,6 +21,7 @@ export type WorkflowEvent =
  | { type: "pause"; reason: string }
  | { type: "resume" }
  | { type: "source_changed"; source: Workflow["source"] }
+ | { type: "agreed"; quote: string; summary: string; replan: boolean; fingerprint?: string }
  | { type: "publishing"; head: string; bodyHash: string }
  | { type: "published"; head: string; url: string; number: number };
 
@@ -31,7 +35,7 @@ export function createWorkflow(source: Workflow["source"], checkout: Workflow["c
  requireCondition(nonempty(at), "falta fecha");
  return validate({ version: 1, id, revision: 0, source: { ...source, hash: sourceHash(source.title, source.body) }, checkout: { ...checkout },
   phase: "explore", status: "active", blockedReason: "", activity: "Explorar el issue", exploration: null, inferences: [], recipe: null,
-  diagnosis: null, spec: null, steps: [], evidence: [], reviews: [], round: 0, maxRounds: 3, approval: null, publication: { status: "none" }, attempts: [], history: [] });
+  diagnosis: null, spec: null, steps: [], evidence: [], reviews: [], round: 0, maxRounds: 3, approval: null, publication: { status: "none" }, attempts: [], agreements: [], history: [] });
 }
 
 export function recipeApprovalHash(state: Workflow): string {
@@ -41,7 +45,7 @@ export function isApproved(state: Workflow): boolean {
  return state.recipe !== null && state.approval !== null && state.approval.sourceHash === state.source.hash
   && state.source.hash === sourceHash(state.source.title, state.source.body) && state.approval.recipeHash === recipeApprovalHash(state);
 }
-function explorationBlock(exploration: Exploration | null): string {
+export function explorationBlock(exploration: Exploration | null): string {
  if (!exploration) return "Falta explorar el repositorio";
  if (!exploration.references.length) return "Faltan referencias del repositorio";
  if (exploration.missingFoundation.length) return `Falta fundación: ${exploration.missingFoundation.join(", ")}`;
@@ -64,8 +68,8 @@ function stepsFor(state: Workflow): void {
  requireCondition(recipe, "falta receta");
  if (recipe.route === "direct") {
   state.steps = [{ id: "C1", title: recipe.objective, cases: recipe.cases.map(c => c.id), status: "pending", red: null, green: null, commit: null }];
-  state.phase = "approve";
- } else state.phase = recipe.route === "diagnostic" ? "diagnose" : "spec";
+ }
+ state.phase = recipeNextPhase(recipe.route);
 }
 // Una receta sin aprobar se puede rehacer: si la persona dice que no, se ajusta sin perder
 // exploración ni respuestas. Aprobada, sólo cambia con refresh.
@@ -79,7 +83,7 @@ function planWorkflow(state: Workflow, plan: Plan): void {
  if (classification.risk === "high") {
   for (const lens of ["compliance", "security"] as const) if (!lenses.includes(lens)) lenses.push(lens);
  }
- const route = classification.type === "fix" && !classification.causeKnown ? "diagnostic" : classification.size === "small" ? "direct" : "spec";
+ const route = recipeRoute(classification);
  state.recipe = { ...plan, classification, lenses, route };
  state.spec = null; state.diagnosis = null; state.approval = null; state.steps = [];
  stepsFor(state);
@@ -106,14 +110,15 @@ const EXHAUSTED = "Se agotaron las vueltas; se necesita intervención humana";
 // Por lente y contenido: hasta 3 veredictos (pass/fail) y 10 corridas en total, contando
 // cancelaciones y errores del proveedor (unknown), que no gastan veredictos.
 const MAX_LENS_VERDICTS = 3; const MAX_LENS_RUNS = 10;
+const SECURITY_FAILED = "el lente de seguridad falló sobre este contenido: bloquea Verificar; corregí el cambio con retry";
 // Un lente que falló no se vuelve a tirar sobre el mismo contenido, salvo que un refuter
-// posterior apruebe: si no, hay que corregir el código en otra vuelta.
+// posterior apruebe: el aviso no se borra tirándolo de nuevo, y el fail de seguridad sigue bloqueando.
 export function lensRunBlock(state: Workflow, lens: Review["lens"], fingerprint: string): string {
  const same = (r: Review) => r.lens === lens && r.fingerprint === fingerprint;
  const runs = state.reviews.filter(same); const last = runs.at(-1);
  if (last?.verdict === "fail") {
   const after = state.reviews.slice(state.reviews.lastIndexOf(last) + 1);
-  if (lens === "refuter" || !after.some(r => r.lens === "refuter" && r.fingerprint === fingerprint && r.verdict === "pass")) return `El lente ${lens} ya falló sobre este contenido; corregí el cambio con retry`;
+  if (lens === "refuter" || !after.some(r => r.lens === "refuter" && r.fingerprint === fingerprint && r.verdict === "pass")) return lens === "security" ? "El lente de seguridad ya falló sobre este contenido y bloquea Verificar; corregí el cambio con retry" : `El lente ${lens} ya falló sobre este contenido; queda como aviso y no bloquea Verificar`;
  }
  if (runs.filter(r => r.verdict !== "unknown").length >= MAX_LENS_VERDICTS || runs.length >= MAX_LENS_RUNS) return `Se agotaron los intentos del lente ${lens} sobre este contenido`;
  return "";
@@ -180,9 +185,13 @@ function verifiedEvidence(state: Workflow, fingerprint: string, head?: string): 
   const latest = state.evidence.findLast(e => e.kind === "verification" && e.caseId === c.id);
   requireCondition(latest && successful(latest) && latest.command === c.command && latest.fingerprint === fingerprint && (head === undefined || latest.head === head), `falta verificación actual del caso ${c.id}`);
  }
+ // Los lentes asesoran: cada uno pedido corre sobre este contenido y su fail/unknown queda como aviso.
+ // Sólo un fail de seguridad bloquea.
  for (const lens of state.recipe.lenses) {
   const review = state.reviews.findLast(r => r.lens === lens && r.fingerprint === fingerprint);
-  requireCondition(review?.verdict === "pass" && review.findings.length === 0, `falta lente aprobado: ${lens}`);
+  requireCondition(review, `falta correr el lente ${lens} sobre este contenido`);
+  requireCondition(review.verdict !== "pass" || review.findings.length === 0, `el lente ${lens} no puede aprobar con hallazgos`);
+  requireCondition(lens !== "security" || review.verdict !== "fail", SECURITY_FAILED);
  }
  const gates = state.evidence.filter(e => e.kind === "gate" && e.fingerprint === fingerprint);
  for (const command of new Set(gates.map(e => e.command))) {
@@ -234,9 +243,31 @@ function sourceChanged(state: Workflow, source: Workflow["source"], at: string):
  requireCondition(source.number === state.source.number && source.url === state.source.url, "no se puede cambiar la identidad del issue");
  archiveAttempt(state, "Cambió el pedido o se volvió a explorar", at);
  state.source = { ...source, hash: sourceHash(source.title, source.body) };
+ state.observations = [];
  state.exploration = null; state.inferences = []; state.recipe = null; state.diagnosis = null; state.spec = null;
- state.steps = []; state.evidence = []; state.reviews = []; state.approval = null; state.round = 0;
+ state.steps = []; state.evidence = []; state.reviews = []; state.approval = null; state.round = 0; state.grants = [];
  state.publication = { status: "none" }; state.phase = "explore"; setBlock(state, "");
+}
+// El chat vale como autorización: el host ya verificó la cita. Con un cambio de alcance (replan) la
+// receta se rehace y se vuelve a aprobar; exploración, respuestas, acuerdos y commits siguen valiendo.
+function agree(state: Workflow, event: Extract<WorkflowEvent, { type: "agreed" }>, at: string): void {
+ // Con las vueltas agotadas el acuerdo sólo se anota: rehacer la receta reiniciaría las vueltas sin una persona.
+ requireCondition(!event.replan || !retriesExhausted(state), "se agotaron las vueltas y un acuerdo del chat no las reinicia. Registralo sin replan; para seguir, una persona usa /omi-work refresh");
+ const agreements = state.agreements ?? [];
+ if (!agreements.some(a => a.quote === event.quote && a.summary === event.summary && a.replan === event.replan)) {
+  requireCondition(agreements.length < MAX_AGREEMENTS, "se llegó al tope de acuerdos del chat; dividí el trabajo");
+  agreements.push({ quote: event.quote, summary: event.summary, replan: event.replan, phase: state.phase, at });
+ }
+ state.agreements = agreements;
+ // Sin receta todavía, el agente la arma con el acuerdo: no hay nada que rehacer.
+ // Los permisos de comandos (grants) se conservan: son por comando y por pedido, no por receta.
+ if (!event.replan || !state.recipe) return;
+ archiveAttempt(state, `Acuerdo del chat: ${event.summary}`, at);
+ // El host manda fingerprint sólo con el checkout limpio: lo que cambió desde Explorar son los pasos commiteados, base de la receta nueva.
+ if (state.exploration && event.fingerprint && ["implement", "verify", "pr"].includes(state.phase)) state.exploration.fingerprint = event.fingerprint;
+ state.observations = (state.observations ?? []).filter(o => !["implement", "verify", "pr"].includes(o.phase));
+ state.approval = null; state.spec = null; state.steps = []; state.evidence = []; state.reviews = []; state.round = 0;
+ state.publication = { status: "none" }; state.phase = "recipe"; setBlock(state, "");
 }
 // El bloqueo de vueltas agotadas vive en el estado, no en el historial: el historial es una ventana acotada.
 function retriesExhausted(state: Workflow): boolean {
@@ -263,7 +294,7 @@ export function transition(original: Workflow, event: WorkflowEvent, at: string)
  // Un cierre sin cambio lo decide el modelo; volver a leer el pedido es la salida humana.
  requireCondition(state.status !== "complete" || state.phase === "closed" && event.type === "source_changed", "el trabajo ya está cerrado");
  requireCondition(state.status !== "paused" || event.type === "resume" || event.type === "source_changed", "el trabajo está pausado");
- if (state.status === "waiting" && retriesExhausted(state)) requireCondition(["pause", "resume", "source_changed"].includes(event.type), "se agotaron las vueltas");
+ if (state.status === "waiting" && retriesExhausted(state)) requireCondition(["pause", "resume", "source_changed", "agreed", "command_granted"].includes(event.type), "se agotaron las vueltas");
  applyEvent(state, event, at);
  state.revision++;
  state.activity = (event.type === "pause" || event.type === "retry" ? `${event.type}: ${event.reason}` : event.type).slice(0, 4000);
@@ -302,13 +333,18 @@ function applyEvent(state: Workflow, event: WorkflowEvent, at: string): void {
    requireCondition(reproduction && (successful(reproduction) || expectedFailure(reproduction)), "falta reproducción confirmada");
    state.diagnosis = { cause: event.cause, reproduction: event.reproduction, size: event.size };
    state.recipe.classification.causeKnown = true; state.recipe.classification.size = event.size;
-   state.recipe.route = event.size === "small" ? "direct" : "spec"; stepsFor(state); return;
+   state.recipe.route = recipeRoute(state.recipe.classification); stepsFor(state); return;
   }
   case "specified": specify(state, event.spec); return;
   case "approved":
    requirePhase(state, "approve"); requireCondition(!decisionBlock(state) && state.recipe && state.steps.length, "faltan decisiones, receta o pasos");
    requireCondition(state.recipe.route !== "spec" || state.spec, "falta spec");
-   state.approval = { sourceHash: state.source.hash, recipeHash: recipeApprovalHash(state), at }; state.phase = "implement"; setBlock(state, ""); return;
+   state.approval = { sourceHash: state.source.hash, recipeHash: recipeApprovalHash(state), at, ...(event.by === "foundations" ? { by: "foundations" as const, ...(event.foundations ? { foundations: event.foundations } : {}) } : {}) };
+   state.phase = "implement"; setBlock(state, ""); return;
+  case "command_granted":
+   requireCondition(nonempty(event.key) && nonempty(event.command), "falta el comando autorizado");
+   if (!state.grants?.some(g => g.key === event.key)) state.grants = [...(state.grants ?? []), { key: event.key, command: event.command, at }].slice(-MAX_GRANTS);
+   return;
   case "step_started": startStep(state, event.id); return;
   case "evidence": recordEvidence(state, event.evidence); return;
   case "check_failed": recordFailedCheck(state, event.evidence); return;
@@ -325,6 +361,7 @@ function applyEvent(state: Workflow, event: WorkflowEvent, at: string): void {
    requireCondition(state.status === "paused", "el trabajo no está pausado");
    setBlock(state, resumeBlock(state)); return;
   case "source_changed": sourceChanged(state, event.source, at); return;
+  case "agreed": agree(state, event, at); return;
   case "publishing": {
    requirePhase(state, "pr"); const latest = state.evidence.findLast(e => e.kind === "verification");
    requireCondition(latest, "falta verificación"); verifiedEvidence(state, latest.fingerprint, event.head);

@@ -149,7 +149,8 @@ test("omi real_al modelo sólo le llega lo de ~/.omi y lo del proyecto", async (
 	const agent = agentDir(home);
 	const cwd = await seedConfig(home, agent);
 	const body = await requestSeenByModel({
-		command: process.execPath, args: [bin], cwd, agent,
+		// --offline: un test no sale a la red; el aislamiento no depende de la KB.
+		command: process.execPath, args: [bin, "--offline"], cwd, agent,
 		env: { HOME: home, PATH: process.env.PATH, OMI_HOME: "" },
 	});
 	assert.ok(body.length > 0, "el proveedor no recibió nada");

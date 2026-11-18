@@ -12,6 +12,7 @@ import { prepareIssue } from "../src/tui/workspace/issue-preparation.ts";
 import { readSessionSnapshot } from "../src/tui/workspace/session-files.ts";
 import { tempDir } from "./helpers/io.ts";
 import { plainTerminal } from "./helpers/workspace-pty.ts";
+import { WORKSPACE_VIEWS } from "../src/tui/workspace/navigation.ts";
 
 const driver = `
 import fcntl, os, pty, select, signal, struct, sys, termios, time
@@ -37,7 +38,7 @@ while time.monotonic() - start < 22:
         os.write(fd, b'\\x0b' if os.environ['MAIN_MODE'] == 'original' else b'/omi-workspace\\r'); phase, mark = 5, len(output)
     elif phase == 5 and (b'Volver al repo principal' if os.environ['MAIN_MODE'] == 'original' else b'volver al repo') in output[mark:]:
         open(os.environ['MAIN_ENTER'], 'w').close()
-        os.write(fd, b'\\x1b[B' * 5 + b'\\r' if os.environ['MAIN_MODE'] == 'original' else b'\\r'); phase = 6
+        os.write(fd, b'\\x1b[B' * ${WORKSPACE_VIEWS.length} + b'\\r' if os.environ['MAIN_MODE'] == 'original' else b'\\r'); phase = 6
     elif phase == 6 and os.path.exists(os.environ['MAIN_READY']):
         phase, phase_at = 7, elapsed
     elif phase == 7 and elapsed - phase_at > 0.5:

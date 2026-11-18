@@ -87,13 +87,13 @@ test("workflow sidebar prioritizes progress at 20 rows without removing existing
 async function runtime(home: string) {
  execFileSync("git", ["init", "-b", "feat/issue-42"], { cwd: home, stdio: "ignore" });
  const events = createEventBus(); const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
- const commands = new Map<string, { handler: () => Promise<void> }>(); let root: Component | undefined; let modal: Component | undefined; let palette = false; let executions = 0;
+ const commands = new Map<string, { handler: () => Promise<void> }>(); let root: Component | undefined; let modal: Component | undefined; let palette = false; let executions = 0; let focus: Component | null = null; let input: ((data: string) => { consume: boolean } | undefined) | undefined;
  const document = new Container(); document.addChild(new Text("", 0, 0)); document.addChild(new Container()); document.addChild(new Container());
  const editor = new Container(); const footer = new Container();
- const ui = { [Symbol.for("@earendil-works/pi-tui/viewport")]: true, mode: "fullscreen", terminal: { columns: 132, rows: 40 }, children: [document, new Container(), new Container(), new Container(), editor, new Container(), footer], requestRender() {}, setLayoutRoot(next: Component) { root = next; }, hasOverlay: () => false, setFocus() {} } as unknown as TUI;
+ const ui = { [Symbol.for("@earendil-works/pi-tui/viewport")]: true, mode: "fullscreen", terminal: { columns: 132, rows: 40 }, children: [document, new Container(), new Container(), new Container(), editor, new Container(), footer], requestRender() {}, setLayoutRoot(next: Component) { root = next; }, hasOverlay: () => false, setFocus(next: Component | null) { focus = next; } } as unknown as TUI;
  const theme = getThemeByName("dark")!;
  const ctx = { mode: "tui", cwd: home, isIdle: () => true, isProjectTrusted: () => false, getContextUsage: () => undefined, sessionManager: { getBranch: () => [] },
- ui: { theme, getTheme: () => undefined, setHeader() {}, getEditorComponent: () => () => undefined, setFooter: (factory: (ui: TUI, theme: Theme, data: unknown) => Component) => footer.addChild(factory(ui, theme, { getExtensionStatuses: () => new Map() })), onTerminalInput: () => () => {}, notify() {},
+ ui: { theme, getTheme: () => undefined, setHeader() {}, getEditorComponent: () => () => undefined, setFooter: (factory: (ui: TUI, theme: Theme, data: unknown) => Component) => footer.addChild(factory(ui, theme, { getExtensionStatuses: () => new Map() })), onTerminalInput: (handler: typeof input) => { input = handler; return () => { input = undefined; }; }, notify() {},
  custom: async (factory: (ui: TUI, theme: Theme, keys: unknown, done: (value: unknown) => void) => Component) => {
   let result: unknown; modal = factory(ui, theme, { matches: () => false }, (value) => { result = value; });
   if (modal instanceof OmiCommandPalette) { palette = true; const index = modal.items.findIndex((item) => item.label === "Progreso de desarrollo"); assert.ok(index >= 0); for (let i = 0; i < index; i++) modal.handleInput("\x1b[B"); modal.handleInput("\r"); }
@@ -103,7 +103,7 @@ async function runtime(home: string) {
  await extension.factory({ events, on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => handlers.set(name, handler), registerCommand: (name: string, value: { handler: () => Promise<void> }) => commands.set(name, value), registerMarkdownTransformer() {}, getSettings: () => ({}), exec: () => { executions++; throw Error("UI must not execute"); } } as never);
  await handlers.get("session_start")?.({}, ctx);
  const frame = (width = 132, height = 40) => { Object.assign(ui.terminal, { columns: width, rows: height }); return renderLayoutFrame(root!, width, height, () => {}); };
- return { events, frame, commands, modal: () => modal!, palette: () => palette, executions: () => executions, tree: () => handlers.get("session_tree")?.({}, ctx), stop: () => handlers.get("session_shutdown")?.({}, ctx),
+ return { events, frame, commands, key(data: string) { if (!input?.(data)?.consume) focus?.handleInput?.(data); }, modal: () => modal!, palette: () => palette, executions: () => executions, tree: () => handlers.get("session_tree")?.({}, ctx), stop: () => handlers.get("session_shutdown")?.({}, ctx),
  click(x: number, y: number) { const box = getLayoutBoxesAt(frame(), x, y).find((box) => box.component.handleMouse); box?.component.handleMouse?.({ type: "click", x: x - box.rect.x, y: y - box.rect.y, width: box.rect.width, height: box.rect.height } as never); } };
 }
 
@@ -132,4 +132,63 @@ test("workflow detail uses existing modal with scrolling, responsive width and n
  assert.match(plain(modal.render(33)), /Issue: #42/); modal.handleInput("\x1b[F"); assert.match(plain(modal.render(33)), /Detalle 39/);
  modal.handleInput("\x1b[H"); assert.match(plain(modal.render(33)), /Issue: #42/); modal.handleInput("\x1b"); assert.equal(closed, true);
  for (const row of modal.render(33)) assert.equal(visibleWidth(row), 33);
+});
+
+test("screen 6: Ctrl+6, tab click and command, live events, scrolling, hidden sidebar and Esc", async t => {
+ const home = await tempDir(t); const ui = await runtime(home); t.after(ui.stop);
+ const { createWorkflow } = await import("../src/harness/state.ts");
+ const { developmentProgress } = await import("../src/tui/development-view.ts");
+ const p = developmentProgress(createWorkflow({ number: 42, title: "Feature", body: "Details", url: "https://example.test/42", hash: "old" }, { root: home, commonDir: "/git", branch: "feat/issue-42", baseCommit: "base" }, "work", "now"));
+ ui.events.emit("omi:workflow", { progress: p });
+ for (let i = 0; i < 100 && !plain(ui.frame().lines).includes("PROGRESO"); i++) await setTimeout(20);
+ ui.key("\x1b[54;5u");
+ assert.match(plain(ui.frame().lines), /Recorrido del harness/);
+ ui.key("\x1b"); assert.doesNotMatch(plain(ui.frame().lines), /Recorrido del harness/);
+ assert.ok(ui.commands.has("omi-workflow")); await ui.commands.get("omi-workflow")!.handler();
+ ui.frame(80, 16); assert.match(plain(ui.frame(80, 16).lines), /Recorrido del harness/);
+ for (let i = 0; i < 15; i++) ui.key("\x1b[6~");
+ assert.match(plain(ui.frame(80, 16).lines), /Cerrado sin cambio/);
+ ui.key("\x1b[H");
+ p.activity = "LIVE_UPDATE"; ui.events.emit("omi:workflow", { progress: p }); assert.match(plain(ui.frame(80, 16).lines), /LIVE_UPDATE/);
+ ui.key("\x1b"); ui.frame();
+ const { workspaceTabs } = await import("../src/tui/workspace/navigation.ts");
+ const tab = workspaceTabs(132, "chat").find(tab => tab.view === "workflow"); assert.ok(tab); ui.click(tab.start + 1, 1);
+ assert.match(plain(ui.frame().lines), /Recorrido del harness/); assert.equal(ui.executions(), 0);
+ ui.events.emit("omi:workflow", { progress: undefined }); assert.match(plain(ui.frame().lines), /Sin progreso/);
+});
+
+test("lens warnings stay visible in the sidebar, screen 6 and the detail, sanitized and without blocking", async () => {
+ const { createWorkflow } = await import("../src/harness/state.ts");
+ const { developmentProgress } = await import("../src/tui/development-view.ts");
+ const { workflowProgressView } = await import("../src/tui/workspace/workflow-progress.ts");
+ const base = developmentProgress(createWorkflow({ number: 42, title: "Feature", body: "Details", url: "https://example.test/42", hash: "old" }, { root: "/repo/issue-42", commonDir: "/git", branch: "feat/issue-42", baseCommit: "base" }, "work", "now"));
+ const stages = base.stages!.map(s => s.id === "verify" ? { ...s, status: "warning" as const } : s);
+ const monitor = new WorkflowProgressMonitor();
+ assert.equal(monitor.consume({ progress: { ...base, stages, warnings: [1] } }), false, "warnings must be strings");
+ assert.equal(monitor.consume({ progress: { ...base, stages, warnings: ["Lente compliance · unknown · sin historial\x1b]0;EVIL\x07", "Lente reliability · fail · falta el caso 0"] } }), true);
+ const p = monitor.current("/repo/issue-42", git())!;
+ assert.doesNotMatch(JSON.stringify(p), /EVIL|\\u001b/);
+ for (const name of ["dark", "light"]) {
+  const theme = getThemeByName(name)!;
+  const panel = plain(workflowProgressPanel(theme, p, 33, 30)); assert.match(panel, /Avisos de lentes: 2/); assert.match(panel, /Verificar/);
+  const view = plain(workflowProgressView(theme, p, 80)); assert.match(view, /Verificar · Con avisos/); assert.match(view, /compliance · unknown/); assert.match(view, /reliability · fail/); assert.match(view, /no bloquean/i);
+ }
+ const detail = plain(workflowProgressDetail(p).map(e => typeof e === "string" ? e : JSON.stringify(e)));
+ assert.match(detail, /compliance · unknown/);
+});
+
+test("sidebar journey stays all or nothing with a lens warnings row, and the warnings come before the stages", async () => {
+ const { createWorkflow } = await import("../src/harness/state.ts");
+ const { developmentProgress } = await import("../src/tui/development-view.ts");
+ const base = developmentProgress(createWorkflow({ number: 42, title: "Feature", body: "Details", url: "https://example.test/42", hash: "old" }, { root: "/repo/issue-42", commonDir: "/git", branch: "feat/issue-42", baseCommit: "base" }, "work", "now"));
+ const labels = base.stages!.map(s => s.label); let journeys = 0;
+ for (const blockedReason of ["", "Falta aprobación"]) for (let height = 20; height <= 64; height++) {
+  const monitor = new SubagentMonitor();
+  const state = { theme: getThemeByName("dark")!, cwd: "/repo/issue-42", height, git: git(), gitError: false, actions: { reviews: {}, releases: {} }, context: { label: "100 / 200", percent: 50, limit: 200 }, subagents: monitor, workflowProgress: { ...base, blockedReason, warnings: ["Lente compliance · unknown · sin historial"] } };
+  const text = plain(workspaceSidebar(state, 33).lines);
+  const shown = labels.filter(label => text.includes(`${label} ·`));
+  assert.ok(shown.length === 0 || shown.length === labels.length, `altura ${height}: ${shown.length}/${labels.length} etapas`);
+  if (shown.length) { journeys++; assert.match(text, /Avisos de lentes: 1/, `altura ${height}`); }
+ }
+ assert.ok(journeys > 0, "some height shows the whole journey");
 });

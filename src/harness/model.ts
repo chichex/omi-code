@@ -2,13 +2,14 @@
 import { createHash } from "node:crypto";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
+import { PHASES } from "./phases.ts";
 
 // Topes compartidos por el esquema y el reducer: el reducer los respeta antes de validar.
-export const MAX_HISTORY = 1000; export const MAX_STEPS = 50; export const MAX_ATTEMPTS = 100; export const MAX_EVIDENCE = 1000; export const MAX_REVIEWS = 100;
+export const MAX_HISTORY = 1000; export const MAX_STEPS = 50; export const MAX_ATTEMPTS = 100; export const MAX_EVIDENCE = 1000; export const MAX_REVIEWS = 100; export const MAX_AGREEMENTS = 50; export const MAX_GRANTS = 200;
 export const text = (maxLength = 4000) => Type.String({ minLength: 1, maxLength, pattern: "\\S" });
 const list = () => Type.Array(text(), { maxItems: 100 });
 const nullableText = () => Type.Union([text(8192), Type.Null()]);
-export const PhaseSchema = Type.Union([Type.Literal("explore"), Type.Literal("decide"), Type.Literal("recipe"), Type.Literal("diagnose"), Type.Literal("spec"), Type.Literal("approve"), Type.Literal("implement"), Type.Literal("verify"), Type.Literal("pr"), Type.Literal("done"), Type.Literal("closed")]);
+export const PhaseSchema = Type.Enum(PHASES.map(p => p.id));
 export type Phase = Static<typeof PhaseSchema>;
 export const LensSchema = Type.Union([Type.Literal("compliance"), Type.Literal("security"), Type.Literal("reliability"), Type.Literal("quality"), Type.Literal("resilience"), Type.Literal("refuter")]);
 export type Lens = Static<typeof LensSchema>;
@@ -62,6 +63,9 @@ export const EvidenceSchema = Type.Object({
 export type Evidence = Static<typeof EvidenceSchema>;
 export const ReviewSchema = Type.Object({ lens: LensSchema, fingerprint: text(128), verdict: Type.Union([Type.Literal("pass"), Type.Literal("fail"), Type.Literal("unknown")]), findings: list(), at: text(100) }, { additionalProperties: false });
 export type Review = Static<typeof ReviewSchema>;
+// Un acuerdo de alcance dicho por la persona en el chat: su cita textual (verificada por el host) y lo acordado.
+export const AgreementSchema = Type.Object({ quote: text(2000), summary: text(2000), replan: Type.Boolean(), phase: PhaseSchema, at: text(100) }, { additionalProperties: false });
+export type Agreement = Static<typeof AgreementSchema>;
 export const PublicationSchema = Type.Union([
 	Type.Object({ status: Type.Literal("none") }, { additionalProperties: false }),
 	Type.Object({ status: Type.Literal("pending"), head: text(128), bodyHash: text(128), at: text(100) }, { additionalProperties: false }),
@@ -78,8 +82,15 @@ export const WorkflowSchema = Type.Object({
 	spec: Type.Union([SpecSchema, Type.Null()]), steps: Type.Array(StepSchema, { maxItems: MAX_STEPS }), evidence: Type.Array(EvidenceSchema, { maxItems: MAX_EVIDENCE }), reviews: Type.Array(ReviewSchema, { maxItems: MAX_REVIEWS }),
 	round: Type.Integer({ minimum: 0 }), maxRounds: Type.Integer({ minimum: 1, maximum: 10 }),
 	attempts: Type.Optional(Type.Array(Type.Object({ sourceHash: text(128), round: Type.Integer({ minimum: 0 }), reason: text(), at: text(100), evidence: Type.Array(EvidenceSchema, { maxItems: 1000 }), reviews: Type.Array(ReviewSchema, { maxItems: 100 }) }, { additionalProperties: false }), { maxItems: MAX_ATTEMPTS })),
-	approval: Type.Union([Type.Object({ sourceHash: text(128), recipeHash: text(128), at: text(100) }, { additionalProperties: false }), Type.Null()]),
+	// by ausente es una persona: todo estado anterior lo es. foundations es el hash de la revisión que aprobó sola.
+	approval: Type.Union([Type.Object({ sourceHash: text(128), recipeHash: text(128), at: text(100), by: Type.Optional(Type.Union([Type.Literal("person"), Type.Literal("foundations")])), foundations: Type.Optional(text(128)) }, { additionalProperties: false }), Type.Null()]),
+	// Comandos que la persona autorizó para este pedido, con cualquier etiqueta. Sobreviven a resume.
+	grants: Type.Optional(Type.Array(Type.Object({ key: text(128), command: text(8192), at: text(100) }, { additionalProperties: false }), { maxItems: MAX_GRANTS })),
 	publication: PublicationSchema,
+	// Opcional para estados previos. Sobrevive a refresh: son palabras de la persona, no del pedido.
+	agreements: Type.Optional(Type.Array(AgreementSchema, { maxItems: MAX_AGREEMENTS })),
+	// Sólo hechos de ejecución, nunca inputs/outputs privados. Opcional para estados previos.
+	observations: Type.Optional(Type.Array(Type.Object({ phase: PhaseSchema, round: Type.Integer({ minimum: 0, maximum: 10 }), inline: Type.Boolean(), subagent: Type.Boolean(), lens: Type.Boolean() }, { additionalProperties: false }), { maxItems: 121 })),
 	history: Type.Array(Type.Object({ at: text(100), phase: PhaseSchema, activity: text() }, { additionalProperties: false }), { maxItems: MAX_HISTORY }),
 }, { additionalProperties: false });
 export type Workflow = Omit<Static<typeof WorkflowSchema>, "inferences"> & { inferences: Inference[] };

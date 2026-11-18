@@ -6,17 +6,19 @@ import { Value } from "typebox/value";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ExplorationSchema, InferenceInputSchema, LensSchema, PlanSchema, SpecSchema, text } from "../harness/model.ts";
 import { expectedFailure, successful, transition, type WorkflowEvent } from "../harness/state.ts";
-import { gitRead, inspectCheckout, readWorkflowDiff, validateReferences } from "../harness/git.ts";
+import { gitRead, inspectCheckout, validateReferences } from "../harness/git.ts";
 import { approvalPreview, DevelopmentSession } from "./development-session.ts";
 import { referenceDigest } from "../harness/references.ts";
 import { executeCheck, commitStep } from "./development-execution.ts";
-import { runLens } from "./development-review.ts";
+import { lensDiffParts, runLens } from "./development-review.ts";
 import { developmentInstructions } from "./development-view.ts";
+import { registerAgreement } from "./development-agreement.ts";
 
 const ActionSchema = Type.Object({
-	action: Type.Union([Type.Literal("status"), Type.Literal("explored"), Type.Literal("inferences"), Type.Literal("ask"), Type.Literal("planned"), Type.Literal("diagnosed"), Type.Literal("specified"), Type.Literal("approve"), Type.Literal("step"), Type.Literal("verified"), Type.Literal("retry"), Type.Literal("pause"), Type.Literal("refresh"), Type.Literal("publish")]),
+	action: Type.Union([Type.Literal("status"), Type.Literal("explored"), Type.Literal("inferences"), Type.Literal("ask"), Type.Literal("planned"), Type.Literal("diagnosed"), Type.Literal("specified"), Type.Literal("approve"), Type.Literal("step"), Type.Literal("verified"), Type.Literal("retry"), Type.Literal("pause"), Type.Literal("refresh"), Type.Literal("publish"), Type.Literal("agreed")]),
 	exploration: Type.Optional(ExplorationSchema), inferences: Type.Optional(Type.Array(InferenceInputSchema, { maxItems: 100 })), plan: Type.Optional(PlanSchema), spec: Type.Optional(SpecSchema),
 	id: Type.Optional(text(100)), cause: Type.Optional(text()), reproduction: Type.Optional(text(100)), size: Type.Optional(Type.Union([Type.Literal("small"), Type.Literal("large")])), reason: Type.Optional(text()),
+	quote: Type.Optional(text(2000)), agreement: Type.Optional(text(2000)), replan: Type.Optional(Type.Boolean()),
 }, { additionalProperties: false });
 const CheckSchema = Type.Object({ kind: Type.Union([Type.Literal("setup"), Type.Literal("reproduction"), Type.Literal("red"), Type.Literal("green"), Type.Literal("verification"), Type.Literal("gate")]), command: text(8192), stepId: Type.Optional(text(32)), caseId: Type.Optional(text(32)), timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 1800 })) }, { additionalProperties: false });
 const CommitSchema = Type.Object({ stepId: text(32), message: text(300), paths: Type.Array(text(8192), { maxItems: 100 }) }, { additionalProperties: false });
@@ -49,12 +51,12 @@ async function currentExploration(session: DevelopmentSession, ctx: ExtensionCon
 export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentSession): void {
 	pi.registerTool({
 		name: "omi_workflow", label: "Desarrollo: flujo", defaultActive: false, exposure: "model-only", executionMode: "sequential", parameters: ActionSchema,
-		description: "Avanza el harness de desarrollo activo. Explorar, resolver inferencias, receta, diagnóstico/spec, aprobación humana, pasos, verificar y PR draft. No acepta evidencia ni aprobaciones declaradas por el modelo. status consulta; pause bloquea. start/resume son comandos humanos /omi-work.",
+		description: "Avanza el harness de desarrollo activo. Explorar, resolver inferencias, receta, diagnóstico/spec, aprobación humana, pasos, verificar y PR draft. No acepta evidencia ni aprobaciones declaradas por el modelo. status consulta; pause bloquea. agreed registra un acuerdo de alcance dicho por la persona en el chat, con la cita textual de su mensaje (OMI la verifica). start/resume son comandos humanos /omi-work.",
 		promptSnippet: "Registrar el trabajo de desarrollo y su receta; pedir decisiones y permisos humanos",
 		async execute(_id, input, signal, _onUpdate, ctx) {
 			if (input.action === "status") return result(session);
 			session.current(ctx); signal?.throwIfAborted();
-			let terminate = false;
+			let terminate = false; let note = "";
 			switch (input.action) {
 				case "explored": {
 					const exploration = checked(ExplorationSchema, input.exploration);
@@ -81,7 +83,7 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 					const event = { type: "specified" as const, spec: checked(SpecSchema, input.spec) };
 					assertApprovable(session, ctx, event); await session.apply(event, ctx); break;
 				}
-				case "approve": await currentExploration(session, ctx); await session.approve(ctx); terminate = session.state?.phase === "approve"; break;
+				case "approve": await currentExploration(session, ctx); await session.approve(ctx, signal); terminate = session.state?.phase === "approve"; break;
 				case "step": await session.apply({ type: "step_started", id: checked(text(100), input.id) }, ctx); break;
 				case "verified": {
 					const snapshot = await inspectCheckout(session.current(ctx).checkout, session.runner, signal);
@@ -95,8 +97,11 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 					if (!(await session.confirm(ctx, "Volver a explorar", "Se descartan exploración, receta, aprobación, pasos y evidencia de este trabajo, y los comandos autorizados. No borra archivos ni commits."))) { terminate = true; break; }
 					await session.refresh(ctx); break;
 				case "publish": await session.publish(ctx); terminate = true; break;
+				case "agreed": note = await registerAgreement(session, { quote: checked(text(2000), input.quote), summary: checked(text(2000), input.agreement), replan: input.replan === true }, ctx); break;
 			}
-			return { ...result(session), terminate };
+			const output = result(session);
+			if (note) output.content.push({ type: "text", text: note });
+			return { ...output, terminate };
 		},
 	});
 	pi.registerTool({
@@ -119,18 +124,25 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 	});
 	pi.registerTool({
 		name: "omi_workflow_lens", label: "Desarrollo: lente de verificación", defaultActive: false, exposure: "model-only", executionMode: "sequential", parameters: Type.Object({ lens: LensSchema }, { additionalProperties: false }),
-		description: "Ejecuta un lente de Verificar en contexto aislado, sin tools ni conversación del implementador. Evalúa DoD y diff completo; registra verdict pass/fail/unknown ligado al contenido. No es Review externa del PR. Conserva uso del modelo.",
+		description: "Ejecuta un lente de Verificar en contexto aislado, sin tools ni conversación del implementador. Evalúa los casos D, la evidencia registrada por el harness y el diff completo, por partes si no entra en una llamada; registra verdict pass/fail/unknown ligado al contenido. Asesora: unknown y fail quedan como aviso y no bloquean verified; sólo un fail de security bloquea. No es Review externa del PR. Conserva uso del modelo.",
 		async execute(_id, { lens }, signal, _update, ctx) {
 			const result = await runLens(session, lens, ctx, AbortSignal.any([signal ?? new AbortController().signal, session.lifecycle.signal]));
-			return { content: [{ type: "text", text: JSON.stringify({ ...result.review, ...(result.error ? { error: result.error } : {}) }) }], details: result.review, usage: result.usage, isError: !!result.error || result.review.verdict !== "pass" };
+			const blocking = result.review.lens === "security" && result.review.verdict === "fail";
+			const notice = result.review.verdict === "pass" ? undefined : blocking ? "El fail de seguridad bloquea Verificar: corregí el cambio con retry." : "Aviso: queda visible en el progreso y en el PR draft y no bloquea Verificar. No repitas el lente para borrarlo.";
+			return { content: [{ type: "text", text: JSON.stringify({ ...result.review, ...(notice ? { notice } : {}), ...(result.error ? { error: result.error } : {}) }) }], details: result.review, usage: result.usage, isError: !!result.error || blocking };
 		},
 	});
 	pi.registerTool({
-		name: "omi_workflow_inspect", label: "Desarrollo: inspeccionar Git", defaultActive: false, parameters: Type.Object({ diff: Type.Optional(Type.Boolean()), history: Type.Optional(Type.Boolean()), related: Type.Optional(Type.Boolean()) }, { additionalProperties: false }), annotations: { readOnlyHint: true },
-		description: "Consulta identidad, HEAD, limpieza y fingerprint; diff opcional contra la base, history (20 commits) y related (hasta20 issues abiertos/cerrados del repo, búsqueda por título). Sólo lectura, sin shell. Falla si el diff excede 50.000 caracteres en vez de presentarlo incompleto.",
+		name: "omi_workflow_inspect", label: "Desarrollo: inspeccionar Git", defaultActive: false, parameters: Type.Object({ diff: Type.Optional(Type.Boolean()), diffPart: Type.Optional(Type.Integer({ minimum: 1 })), history: Type.Optional(Type.Boolean()), related: Type.Optional(Type.Boolean()) }, { additionalProperties: false }), annotations: { readOnlyHint: true },
+		description: "Consulta identidad, HEAD, limpieza y fingerprint; diff opcional contra la base, history (20 commits) y related (hasta20 issues abiertos/cerrados del repo, búsqueda por título). Sólo lectura, sin shell. El diff no se trunca: si es grande llega repartido por archivo en partes; la respuesta dice part y total, y diffPart (desde 1) pide otra parte.",
 		async execute(_id, input, signal, _update, ctx) {
 			const state = session.current(ctx); const snapshot = await inspectCheckout(state.checkout, session.runner, signal);
-			const diff = input.diff ? await readWorkflowDiff(state.checkout, session.runner, signal) : undefined;
+			let diff: { part: number; total: number; text: string } | undefined;
+			if (input.diff || input.diffPart) {
+				const parts = await lensDiffParts(state, session.runner, signal); const part = input.diffPart ?? 1;
+				if (part > parts.length) throw new Error(`El diff tiene ${parts.length} parte(s): pedí diffPart entre 1 y ${parts.length}`);
+				diff = { part, total: parts.length, text: parts[part - 1]! };
+			}
 			const history = input.history ? (await gitRead(state.checkout, ["log", "--max-count=20", "--no-notes", "--format=%h %s"], session.runner, signal)).slice(0, 20000) : undefined;
 			let related: unknown;
 			if (input.related) {

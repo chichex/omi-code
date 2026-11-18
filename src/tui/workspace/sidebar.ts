@@ -88,7 +88,7 @@ function resourcesPanel(state: SidebarState): Panel {
 
 function progressPanel(state: SidebarState, progress: WorkflowProgress, width: number, compact: boolean): Panel {
 	const blocked = !!progress.blockedReason;
-	const rows = workflowProgressPanel(state.theme, progress, width, 7).slice(1).map((line) => row(line));
+	const rows = workflowProgressPanel(state.theme, progress, width, Number.MAX_SAFE_INTEGER).slice(1).map(line => row(line));
 	return { id: "issue", title: `PROGRESO · #${progress.issueNumber}${compact ? ` · ${text(progress.phaseLabel)}` : ""}`,
 		color: blocked || progress.status === "waiting" || progress.status === "paused" ? "warning" : "accent", target: "progress",
 		rows: compact ? rows.slice(blocked ? 4 : 2, blocked ? 5 : 3) : rows };
@@ -129,13 +129,19 @@ function expandPanels(state: SidebarState, current: Panel[], normal: Panel[], wi
 	};
 	// The compact progress row reserves blockers (or activity). Spend spare rows on
 	// observed steps/checks first, without taking space from any other visible panel.
+	// The journey is all or nothing: a prefix of stages could hide the current one.
 	const progress = matchingWorkflow(state.workflowProgress, state.cwd, state.git);
 	const fullProgress = normal.find((panel) => panel.id === "issue" && panel.target === "progress");
 	if (joined && progress && fullProgress) {
+		// Filas del panel: estado, ruta, actividad, contadores, bloqueo y avisos de lentes si hay, etapas y pie.
+		const warnings = progress.warnings?.length ? progress.blockedReason ? 5 : 4 : undefined;
+		const first = 4 + (progress.blockedReason ? 1 : 0) + (warnings === undefined ? 0 : 1); const stages = progress.stages?.length ?? 0;
 		const selected = new Set([progress.blockedReason ? 4 : 2]);
-		for (const index of [3, 0, 1, 2, 4, 5]) {
-			if (index >= fullProgress.rows.length || selected.has(index)) continue;
-			selected.add(index);
+		const groups = [[3], [0], [1], [2], ...(progress.blockedReason ? [[4]] : []), ...(warnings === undefined ? [] : [[warnings]]), Array.from({ length: stages }, (_, i) => first + i), [first + stages]];
+		for (const group of groups) {
+			const added = group.filter((index) => index < fullProgress.rows.length && !selected.has(index));
+			if (!added.length) continue;
+			for (const index of added) selected.add(index);
 			const rows = fullProgress.rows.filter((_, offset) => selected.has(offset));
 			replace("issue", rows, selected.has(0) ? fullProgress.title : undefined);
 		}

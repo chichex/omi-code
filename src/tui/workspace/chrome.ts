@@ -55,7 +55,7 @@ interface FooterActions { openPr: (pr: BranchPullRequest) => Promise<void>; show
 function statusAt(snapshot: FooterSnapshot, width: number): FooterStatus {
 	const { theme: t, state, blocked, git, context, sidebar, extra, pr, prStale } = snapshot;
 	const left = ` ${t.fg(blocked ? "warning" : "success", "●")} ${text(state)} · ${text(workspaceName(git))}${git ? ` · ${text(git.branch)}` : ""}`;
-	const hint = sidebar ? extra || "Ctrl 1–5 vistas · /omi" : `Contexto ${context.label}${context.percent === undefined ? "" : ` · ${context.percent.toFixed(0)}%`}`;
+	const hint = sidebar ? extra || "Ctrl 1–6 vistas · /omi" : `Contexto ${context.label}${context.percent === undefined ? "" : ` · ${context.percent.toFixed(0)}%`}`;
 	return footerStatus(t, left, hint, width, pr, prStale);
 }
 export function workspaceFooter(snapshot: (width: number) => FooterSnapshot, actions: FooterActions): Component {
