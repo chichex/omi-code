@@ -42,7 +42,7 @@ export async function runLens(session: DevelopmentSession, lens: Lens, ctx: Exte
 	try {
 		if (response.stopReason !== "stop") throw new Error("El modelo no completó la revisión");
 		result = parseLensResult(response.content.filter((p) => p.type === "text").map((p) => p.text).join("\n"));
-	} catch { result = { verdict: "unknown", findings: ["El lente no completó un resultado válido. Reintentá o pedí revisión humana; no se considera aprobado."] }; }
+	} catch { result = { verdict: "unknown", findings: ["El lente no completó un resultado válido; queda como aviso y se puede volver a correr."] }; }
 	let valid = !signal.aborted;
 	if (valid) {
 		try {

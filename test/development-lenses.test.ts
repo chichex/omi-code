@@ -48,3 +48,28 @@ test("development_lenses tras una vuelta, el paso anterior conserva su rojo y ve
 	assert.deepEqual(steps.find((s: { id: string }) => s.id === "C1").history.map((e: { kind: string; archived?: boolean }) => [e.kind, e.archived]), [["red", true], ["green", true]]);
 	assert.deepEqual(steps.find((s: { id: string }) => s.id === "C2").history.map((e: { kind: string; archived?: boolean }) => [e.kind, e.archived]), [["red", undefined], ["green", undefined]]);
 });
+
+test("development_lenses un unknown o fail de un lente asesor queda como aviso: no frena Verificar ni el PR draft, y se ve en el progreso y en el PR", async (t) => {
+	const f = await verifying(t, ["compliance", "reliability"]);
+	f.modelControl.reply = (input) => JSON.stringify((input as LensCall).systemPrompt.includes("tests de comportamiento") ? { verdict: "fail", findings: ["test.cjs:1 · falta el caso 0"] } : { verdict: "unknown", findings: ["No se puede saber si D1 cubre el pedido"] });
+	const compliance = await f.invoke("omi_workflow_lens", { lens: "compliance" }); const reliability = await f.invoke("omi_workflow_lens", { lens: "reliability" });
+	for (const result of [compliance, reliability]) { assert.equal(result.isError, false); assert.match(JSON.stringify(result.content), /aviso/i); }
+	await f.action({ action: "verified" }); assert.equal((await f.state()).phase, "pr");
+	const progress = (f.progress.at(-1) as { progress: { warnings: string[]; stages: { id: string; status: string }[] } }).progress;
+	assert.equal(progress.stages.find((s) => s.id === "verify")?.status, "warning");
+	assert.ok(progress.warnings.some((w) => /compliance/.test(w) && /unknown/.test(w) && /D1 cubre/.test(w)), JSON.stringify(progress.warnings));
+	assert.ok(progress.warnings.some((w) => /reliability/.test(w) && /fail/.test(w) && /caso 0/.test(w)));
+	await f.action({ action: "publish" });
+	assert.equal((await f.state()).phase, "done");
+	assert.match(f.remote.prBody, /Avisos de los lentes/); assert.match(f.remote.prBody, /compliance.*unknown/); assert.match(f.remote.prBody, /falta el caso 0/);
+});
+
+test("development_lenses un fail del lente de seguridad sí bloquea Verificar", async (t) => {
+	const f = await verifying(t, ["security"]);
+	f.modelControl.reply = () => JSON.stringify({ verdict: "fail", findings: ["value.cjs:1 · expone un secreto"] });
+	const result = await f.invoke("omi_workflow_lens", { lens: "security" });
+	assert.equal(result.isError, true); assert.match(JSON.stringify(result.content), /bloquea/);
+	await assert.rejects(f.action({ action: "verified" }), /seguridad/);
+	const progress = (f.progress.at(-1) as { progress: { stages: { id: string; status: string }[] } }).progress;
+	assert.equal(progress.stages.find((s) => s.id === "verify")?.status, "failed");
+});

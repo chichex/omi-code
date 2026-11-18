@@ -108,14 +108,15 @@ const EXHAUSTED = "Se agotaron las vueltas; se necesita intervención humana";
 // Por lente y contenido: hasta 3 veredictos (pass/fail) y 10 corridas en total, contando
 // cancelaciones y errores del proveedor (unknown), que no gastan veredictos.
 const MAX_LENS_VERDICTS = 3; const MAX_LENS_RUNS = 10;
+const SECURITY_FAILED = "el lente de seguridad falló sobre este contenido: bloquea Verificar; corregí el cambio con retry";
 // Un lente que falló no se vuelve a tirar sobre el mismo contenido, salvo que un refuter
-// posterior apruebe: si no, hay que corregir el código en otra vuelta.
+// posterior apruebe: el aviso no se borra tirándolo de nuevo, y el fail de seguridad sigue bloqueando.
 export function lensRunBlock(state: Workflow, lens: Review["lens"], fingerprint: string): string {
  const same = (r: Review) => r.lens === lens && r.fingerprint === fingerprint;
  const runs = state.reviews.filter(same); const last = runs.at(-1);
  if (last?.verdict === "fail") {
   const after = state.reviews.slice(state.reviews.lastIndexOf(last) + 1);
-  if (lens === "refuter" || !after.some(r => r.lens === "refuter" && r.fingerprint === fingerprint && r.verdict === "pass")) return `El lente ${lens} ya falló sobre este contenido; corregí el cambio con retry`;
+  if (lens === "refuter" || !after.some(r => r.lens === "refuter" && r.fingerprint === fingerprint && r.verdict === "pass")) return lens === "security" ? "El lente de seguridad ya falló sobre este contenido y bloquea Verificar; corregí el cambio con retry" : `El lente ${lens} ya falló sobre este contenido; queda como aviso y no bloquea Verificar`;
  }
  if (runs.filter(r => r.verdict !== "unknown").length >= MAX_LENS_VERDICTS || runs.length >= MAX_LENS_RUNS) return `Se agotaron los intentos del lente ${lens} sobre este contenido`;
  return "";
@@ -182,9 +183,13 @@ function verifiedEvidence(state: Workflow, fingerprint: string, head?: string): 
   const latest = state.evidence.findLast(e => e.kind === "verification" && e.caseId === c.id);
   requireCondition(latest && successful(latest) && latest.command === c.command && latest.fingerprint === fingerprint && (head === undefined || latest.head === head), `falta verificación actual del caso ${c.id}`);
  }
+ // Los lentes asesoran: cada uno pedido corre sobre este contenido y su fail/unknown queda como aviso.
+ // Sólo un fail de seguridad bloquea.
  for (const lens of state.recipe.lenses) {
   const review = state.reviews.findLast(r => r.lens === lens && r.fingerprint === fingerprint);
-  requireCondition(review?.verdict === "pass" && review.findings.length === 0, `falta lente aprobado: ${lens}`);
+  requireCondition(review, `falta correr el lente ${lens} sobre este contenido`);
+  requireCondition(review.verdict !== "pass" || review.findings.length === 0, `el lente ${lens} no puede aprobar con hallazgos`);
+  requireCondition(lens !== "security" || review.verdict !== "fail", SECURITY_FAILED);
  }
  const gates = state.evidence.filter(e => e.kind === "gate" && e.fingerprint === fingerprint);
  for (const command of new Set(gates.map(e => e.command))) {

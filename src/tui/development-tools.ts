@@ -119,10 +119,12 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 	});
 	pi.registerTool({
 		name: "omi_workflow_lens", label: "Desarrollo: lente de verificación", defaultActive: false, exposure: "model-only", executionMode: "sequential", parameters: Type.Object({ lens: LensSchema }, { additionalProperties: false }),
-		description: "Ejecuta un lente de Verificar en contexto aislado, sin tools ni conversación del implementador. Evalúa DoD y diff completo; registra verdict pass/fail/unknown ligado al contenido. No es Review externa del PR. Conserva uso del modelo.",
+		description: "Ejecuta un lente de Verificar en contexto aislado, sin tools ni conversación del implementador. Evalúa los casos D, la evidencia registrada por el harness y el diff completo; registra verdict pass/fail/unknown ligado al contenido. Asesora: unknown y fail quedan como aviso y no bloquean verified; sólo un fail de security bloquea. No es Review externa del PR. Conserva uso del modelo.",
 		async execute(_id, { lens }, signal, _update, ctx) {
 			const result = await runLens(session, lens, ctx, AbortSignal.any([signal ?? new AbortController().signal, session.lifecycle.signal]));
-			return { content: [{ type: "text", text: JSON.stringify({ ...result.review, ...(result.error ? { error: result.error } : {}) }) }], details: result.review, usage: result.usage, isError: !!result.error || result.review.verdict !== "pass" };
+			const blocking = result.review.lens === "security" && result.review.verdict === "fail";
+			const notice = result.review.verdict === "pass" ? undefined : blocking ? "El fail de seguridad bloquea Verificar: corregí el cambio con retry." : "Aviso: queda visible en el progreso y en el PR draft y no bloquea Verificar. No repitas el lente para borrarlo.";
+			return { content: [{ type: "text", text: JSON.stringify({ ...result.review, ...(notice ? { notice } : {}), ...(result.error ? { error: result.error } : {}) }) }], details: result.review, usage: result.usage, isError: !!result.error || blocking };
 		},
 	});
 	pi.registerTool({

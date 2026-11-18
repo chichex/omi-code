@@ -223,8 +223,24 @@ test("verification considers the latest attempt for each case, not a filtered ol
  }
  const staleReview = send(s, { type: "reviewed", review: { lens: "quality", fingerprint: "stale", verdict: "fail", findings: ["old bug"], at } });
  assert.equal(send(staleReview, { type: "verified", fingerprint: "tree" }).phase, "pr");
+ // Un lente que no es de seguridad asesora: su fail queda como aviso y no frena Verificar.
  const failedReview = send(staleReview, { type: "reviewed", review: { lens: "quality", fingerprint: "tree", verdict: "fail", findings: ["current bug"], at } });
- assert.throws(() => send(failedReview, { type: "verified", fingerprint: "tree" }));
+ assert.equal(send(failedReview, { type: "verified", fingerprint: "tree" }).phase, "pr");
+});
+test("lenses advise: every requested lens must run, fail and unknown do not block, only a security fail does", () => {
+ const lenses = { ...plan, lenses: ["quality", "compliance", "security"] as Plan["lenses"] };
+ let s = send(ready(lenses), { type: "approved" }); s = send(s, { type: "step_started", id: "C1" }); s = send(s, { type: "evidence", evidence: evidence("red") }); s = send(s, { type: "evidence", evidence: evidence("green") }); s = send(s, { type: "step_completed", id: "C1", commit: "head", fingerprint: "tree" });
+ s = send(s, { type: "evidence", evidence: evidence("verification") });
+ const review = (lens: Plan["lenses"][number], verdict: "pass" | "fail" | "unknown", fingerprint = "tree") => ({ type: "reviewed" as const, review: { lens, fingerprint, verdict, findings: verdict === "pass" ? [] : ["src/a.ts:1 · finding"], at } });
+ s = send(send(s, review("quality", "fail")), review("compliance", "unknown"));
+ assert.throws(() => send(s, { type: "verified", fingerprint: "tree" }), /security/, "un lente pedido sin correr sobre este contenido no se saltea");
+ assert.throws(() => send(send(s, review("security", "pass", "stale")), { type: "verified", fingerprint: "tree" }), /security/);
+ assert.equal(send(send(s, review("security", "unknown")), { type: "verified", fingerprint: "tree" }).phase, "pr", "un unknown de seguridad es un aviso");
+ const insecure = send(s, review("security", "fail"));
+ assert.throws(() => send(insecure, { type: "verified", fingerprint: "tree" }), /seguridad/);
+ assert.throws(() => send(insecure, review("security", "pass")), /ya falló/, "un fail de seguridad no se borra volviendo a tirar el lente");
+ const published = send(send(s, review("security", "pass")), { type: "verified", fingerprint: "tree" });
+ assert.equal(send(published, { type: "publishing", head: "head", bodyHash: "body" }).publication.status, "pending", "los avisos tampoco frenan la publicación");
 });
 
 test("a wontfix closed by the model can be reopened by refreshing the request, and nothing else", () => {

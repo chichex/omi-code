@@ -2,7 +2,9 @@
 import type { Workflow } from "./model.ts";
 import { PHASES, recipeNextPhase, type Phase } from "./phases.ts";
 import { expectedFailure, explorationBlock, isApproved, successful } from "./state.ts";
-export const STAGE_STATUSES = ["pending", "conditional", "active", "done", "not-applicable", "waiting", "paused", "failed", "interrupted"] as const;
+import { lensWarnings } from "./lenses.ts";
+// warning: Verificar en curso o cumplida con avisos de lentes, que no bloquean.
+export const STAGE_STATUSES = ["pending", "conditional", "active", "done", "not-applicable", "waiting", "paused", "failed", "interrupted", "warning"] as const;
 export const OBSERVED_MODES = ["unknown", "inline", "subagent", "mixed", "isolated-lens", "inline+lens", "subagent+lens", "mixed+lens"] as const;
 export interface StageProgress {
  id: Phase; label: string; status: typeof STAGE_STATUSES[number]; current: boolean;
@@ -43,9 +45,9 @@ function currentStatus(s: Workflow): StageProgress["status"] {
  if (latest.some(e => !successful(e) && !(e.kind === "red" && expectedFailure(e)) && !(e.kind === "reproduction" && expectedFailure(e)))) return "failed";
  if (s.phase === "implement" && latest.some(e => e.kind === "red" && !expectedFailure(e))) return "failed";
  if (s.phase === "verify") {
-  const reviews = s.reviews.filter((r, index) => !s.reviews.slice(index + 1).some(next => next.lens === r.lens));
-  if (reviews.some(r => r.verdict === "fail")) return "failed";
-  if (reviews.some(r => r.verdict === "unknown")) return "interrupted";
+  const warnings = lensWarnings(s);
+  if (warnings.some(w => w.blocking)) return "failed";
+  if (warnings.length) return "warning";
  }
  return s.status === "complete" ? "done" : "active";
 }
@@ -59,6 +61,6 @@ function observed(s: Workflow, phase: Phase): StageProgress["observed"] {
 }
 export function workflowStages(s: Workflow): StageProgress[] {
  return PHASES.map(({ id, label }) => ({ id, label, current: s.phase === id,
-  status: s.phase === id ? currentStatus(s) : completed(s, id) ? "done" : applicability(s, id),
+  status: s.phase === id ? currentStatus(s) : completed(s, id) ? (id === "verify" && lensWarnings(s).length ? "warning" : "done") : applicability(s, id),
   planned: id === "implement" ? s.recipe?.executor.mode ?? "unknown" : "unknown", observed: observed(s, id) }));
 }

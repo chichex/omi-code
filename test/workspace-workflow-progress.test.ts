@@ -156,3 +156,23 @@ test("screen 6: Ctrl+6, tab click and command, live events, scrolling, hidden si
  assert.match(plain(ui.frame().lines), /Recorrido del harness/); assert.equal(ui.executions(), 0);
  ui.events.emit("omi:workflow", { progress: undefined }); assert.match(plain(ui.frame().lines), /Sin progreso/);
 });
+
+test("lens warnings stay visible in the sidebar, screen 6 and the detail, sanitized and without blocking", async () => {
+ const { createWorkflow } = await import("../src/harness/state.ts");
+ const { developmentProgress } = await import("../src/tui/development-view.ts");
+ const { workflowProgressView } = await import("../src/tui/workspace/workflow-progress.ts");
+ const base = developmentProgress(createWorkflow({ number: 42, title: "Feature", body: "Details", url: "https://example.test/42", hash: "old" }, { root: "/repo/issue-42", commonDir: "/git", branch: "feat/issue-42", baseCommit: "base" }, "work", "now"));
+ const stages = base.stages!.map(s => s.id === "verify" ? { ...s, status: "warning" as const } : s);
+ const monitor = new WorkflowProgressMonitor();
+ assert.equal(monitor.consume({ progress: { ...base, stages, warnings: [1] } }), false, "warnings must be strings");
+ assert.equal(monitor.consume({ progress: { ...base, stages, warnings: ["Lente compliance · unknown · sin historial\x1b]0;EVIL\x07", "Lente reliability · fail · falta el caso 0"] } }), true);
+ const p = monitor.current("/repo/issue-42", git())!;
+ assert.doesNotMatch(JSON.stringify(p), /EVIL|\\u001b/);
+ for (const name of ["dark", "light"]) {
+  const theme = getThemeByName(name)!;
+  const panel = plain(workflowProgressPanel(theme, p, 33, 30)); assert.match(panel, /Avisos de lentes: 2/); assert.match(panel, /Verificar/);
+  const view = plain(workflowProgressView(theme, p, 80)); assert.match(view, /Verificar · Con avisos/); assert.match(view, /compliance · unknown/); assert.match(view, /reliability · fail/); assert.match(view, /no bloquean/i);
+ }
+ const detail = plain(workflowProgressDetail(p).map(e => typeof e === "string" ? e : JSON.stringify(e)));
+ assert.match(detail, /compliance · unknown/);
+});

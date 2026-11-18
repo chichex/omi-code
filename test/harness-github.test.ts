@@ -162,3 +162,15 @@ test("lens findings in the artifact are bounded explicitly so publishing cannot 
  const f = await fixture(t); f.workflow.reviews = Array.from({ length: 18 }, (_, i) => ({ lens: "quality" as const, fingerprint: `fp${i}`, verdict: "fail" as const, findings: Array.from({ length: 50 }, () => "h".repeat(4000)), at: "now" }));
  const body = renderWorkflowArtifact(f.workflow); assert.ok(body.includes("estado local completo")); assert.ok(Buffer.byteLength(body) < 65536);
 });
+
+test("lens warnings are listed in a readable section that says they do not block, bounded explicitly", async (t) => {
+ const f = await fixture(t);
+ f.workflow.recipe = { route: "direct", classification: { type: "fix", size: "small", risk: "low", riskAreas: [], causeKnown: true }, objective: "Fix", approach: "Fix", scope: [], outOfScope: [], cases: [{ id: "D1", description: "Test", command: "npm test" }], lenses: ["compliance", "security", "quality"], executor: { mode: "inline", writers: 0 } };
+ f.workflow.evidence = [{ id: "E1", kind: "verification", command: "npm test", stepId: null, caseId: "D1", exitCode: 0, outcome: "passed", output: "ok", fingerprint: "fp", head: "b".repeat(40), startedAt: "now", finishedAt: "now" }];
+ f.workflow.reviews = [{ lens: "compliance", fingerprint: "fp", verdict: "unknown", findings: ["No hay historial rojo/verde"], at: "now" }, { lens: "security", fingerprint: "fp", verdict: "pass", findings: [], at: "now" }];
+ const body = renderWorkflowArtifact(f.workflow);
+ assert.match(body, /## Avisos de los lentes/); assert.match(body, /no bloquean/i);
+ assert.match(body, /compliance · unknown/); assert.match(body, /No hay historial rojo\/verde/); assert.match(body, /security · pass/); assert.match(body, /quality · sin correr/);
+ f.workflow.reviews = [{ lens: "compliance", fingerprint: "fp", verdict: "fail", findings: Array.from({ length: 100 }, () => "h".repeat(4000)), at: "now" }];
+ const bounded = renderWorkflowArtifact(f.workflow); assert.match(bounded, /Avisos de los lentes/); assert.ok(bounded.includes("estado local completo")); assert.ok(Buffer.byteLength(bounded) < 65536);
+});

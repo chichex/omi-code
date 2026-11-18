@@ -97,3 +97,17 @@ test("an exploration the reducer still blocks is never shown as completed", () =
  const closed = send(fresh(), { type: "explored", exploration: { ...base, references: [], disposition: "wontfix", reason: "No change" } });
  assert.equal(closed.phase, "closed"); assert.equal(stage(closed, "explore").status, "done");
 });
+
+test("advisory lens results show Verify with warnings, during and after it; only a security fail shows it failed", () => {
+ const withLenses = (lenses: Plan["lenses"]) => { let s = send(send(send(explored(), { type: "inferences", inferences: [] }), { type: "planned", plan: { ...plan(), lenses } }), { type: "approved" }); s = send(s, { type: "step_started", id: "C1" }); s = send(s, { type: "evidence", evidence: evidence("red") }); s = send(s, { type: "evidence", evidence: evidence("green") }); s = send(s, { type: "step_completed", id: "C1", commit: "head", fingerprint: "tree" }); return send(s, { type: "evidence", evidence: evidence("verification") }); };
+ const review = (lens: Plan["lenses"][number], verdict: "pass" | "fail" | "unknown") => ({ type: "reviewed" as const, review: { lens, fingerprint: "tree", verdict, findings: verdict === "pass" ? [] : ["src/a.ts:1 · finding"], at } });
+ let s = send(send(withLenses(["compliance", "security"]), review("compliance", "unknown")), review("security", "pass"));
+ assert.equal(stage(s, "verify").status, "warning");
+ assert.deepEqual(developmentProgress(s).warnings, ["Lente compliance · unknown · src/a.ts:1 · finding"]);
+ s = send(s, { type: "verified", fingerprint: "tree" });
+ assert.equal(stage(s, "verify").status, "warning", "a completed Verify keeps its warnings visible");
+ const insecure = send(withLenses(["security"]), review("security", "fail"));
+ assert.equal(stage(insecure, "verify").status, "failed");
+ const clean = send(withLenses(["security"]), review("security", "pass"));
+ assert.equal(stage(clean, "verify").status, "active"); assert.deepEqual(developmentProgress(clean).warnings, []);
+});
