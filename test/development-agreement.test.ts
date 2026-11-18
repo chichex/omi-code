@@ -21,6 +21,8 @@ test("agreement: lo que la persona dice en el chat autoriza el alcance, sin edit
 	const result = await f.action({ action: "agreed", quote: "Sumá también que other.cjs devuelva 2", agreement: "Ampliar el alcance a other.cjs", replan: true });
 	const replanned = await f.state();
 	assert.equal(replanned.phase, "recipe"); assert.equal(replanned.agreements?.length, 2); assert.ok(replanned.exploration, "la exploración sigue valiendo");
+	const revising = parseIssueBody(f.remote.body).section ?? "";
+	assert.match(revising, /### Receta \(en revisión\)/, "la sección se actualiza enseguida, con la receta en revisión"); assert.match(revising, /«Sumá también que other\.cjs devuelva 2»/);
 	assert.equal(f.prompts.length, prompts, "no se le pide nada a la persona: el chat ya la autorizó");
 	assert.doesNotMatch(JSON.stringify(result.content), /actualiz\w* el issue|edit\w* el issue|cuerpo del issue|refresh/i);
 	await f.action({ action: "planned", plan: { ...f.plan(), cases: [...f.plan().cases, { id: "D2", description: "Otro devuelve 2", command: "node other-test.cjs" }] } });

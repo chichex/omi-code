@@ -7,10 +7,11 @@ import type { DevelopmentSession } from "./development-session.ts";
 // Devuelve el aviso, si lo hubo, para que la tool se lo informe también al agente.
 export async function updateIssueSection(session: DevelopmentSession, ctx: ExtensionContext): Promise<string> {
 	const state = session.state;
-	// Antes del sí a una receta no se escribe en el issue: la aprobación es la que lo autoriza.
-	if (!state?.approval) return "";
+	if (!state) return "";
 	if (session.offline) return "Sin conexión: la sección del issue se actualiza en el próximo punto de control.";
-	try { await syncIssueSection(state, session.runner, session.lifecycle.signal); return ""; }
+	// Una aprobación autoriza la sección. Sin receta aprobada (por ejemplo, tras un acuerdo que la rehace)
+	// sólo se mantiene la que ya existe; antes del primer sí no se escribe nada en el issue.
+	try { await syncIssueSection(state, session.runner, session.lifecycle.signal, { onlyIfPresent: !state.approval }); return ""; }
 	catch (error) {
 		const warning = `No se actualizó la sección del harness en el issue #${state.source.number}: ${error instanceof Error ? error.message : "error de GitHub"}. El trabajo sigue.`;
 		ctx.ui.notify(warning, "warning"); return warning;

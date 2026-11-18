@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseIssueBody, renderIssueSection, withIssueSection, SECTION_START, SECTION_END } from "../src/harness/issue-section.ts";
+import { issueSectionVariants, parseIssueBody, renderIssueSection, withIssueSection, SECTION_START, SECTION_END } from "../src/harness/issue-section.ts";
 import { createWorkflow } from "../src/harness/state.ts";
 import type { Workflow } from "../src/harness/model.ts";
 
@@ -86,4 +86,33 @@ test("a long evidence list is bounded and says so", () => {
 	const w = working(); w.evidence = Array.from({ length: 80 }, (_, i) => ({ ...w.evidence[0]!, id: `e${i}`, kind: "gate" as const, caseId: null, command: `gate ${i}` }));
 	const section = renderIssueSection(w);
 	assert.ok(tableRows(section).length <= 42); assert.match(section, /anteriores en el estado local/);
+});
+
+test("lens warnings are visible in the section, with their findings, and say they advise", () => {
+	const w = working(); w.phase = "verify"; w.recipe!.lenses = ["compliance", "security", "quality"];
+	w.reviews = [{ lens: "compliance", fingerprint: "fp", verdict: "unknown", findings: ["No hay historial rojo/verde"], at: "now" }, { lens: "security", fingerprint: "fp", verdict: "pass", findings: [], at: "now" }];
+	let section = renderIssueSection(w);
+	assert.match(section, /### Avisos de los lentes\n.*asesoran.*Sólo un fail de seguridad bloquea/);
+	assert.match(section, /^- \*\*Cumplimiento:\*\* ⚠️ unknown\n {2}- No hay historial rojo\/verde$/m); assert.match(section, /^- \*\*Seguridad:\*\* ✅ pass$/m); assert.match(section, /^- \*\*Calidad:\*\* sin correr$/m);
+	w.reviews = [{ lens: "security", fingerprint: "fp", verdict: "fail", findings: ["secreto en a.ts:1"], at: "now" }];
+	section = renderIssueSection(w); assert.match(section, /^- \*\*Seguridad:\*\* ❌ fail · bloquea$/m);
+});
+
+test("after a chat agreement reopens the recipe, the section shows it under review", () => {
+	const w = working(); w.phase = "recipe"; w.steps = []; w.evidence = []; w.approval = null;
+	w.agreements = [{ quote: "sumá el caso de borde", summary: "Ampliar al borde", replan: true, phase: "implement", at: "now" }];
+	const section = renderIssueSection(w);
+	assert.match(section, /### Receta \(en revisión\)/); assert.match(section, /\*\*Aprobación:\*\* en revisión/); assert.match(section, /«sumá el caso de borde» → Ampliar al borde/);
+});
+
+test("summarized variants say so explicitly: first only the last proof of each case, then a minimal section", () => {
+	const w = working(); w.phase = "verify"; w.recipe!.lenses = ["quality"];
+	w.evidence.unshift({ ...w.evidence[0]!, id: "r", kind: "red", stepId: "C1", caseId: null, exitCode: 1, outcome: "failed" }, { ...w.evidence[0]!, id: "v-old", exitCode: 1, outcome: "failed" });
+	w.reviews = [{ lens: "quality", fingerprint: "fp", verdict: "fail", findings: ["primero", "segundo", "tercero"], at: "now" }];
+	const [full, summary, minimal] = issueSectionVariants(w);
+	assert.match(full!, /C1 · rojo/); assert.match(full!, /- segundo/); assert.doesNotMatch(full!, /[Rr]esumida/);
+	assert.match(summary!, /\*\*Resumida\*\* para entrar en el límite de 65\.536 caracteres de GitHub/);
+	assert.doesNotMatch(summary!, /C1 · rojo/); assert.match(summary!, /^\| D1 \| ✅ exit 0 \| cae0b33 \|$/m, "queda la última prueba de cada caso");
+	assert.match(summary!, /- primero\n {2}- _y 2 hallazgos más en OMI_/); assert.match(summary!, /### Receta/);
+	assert.match(minimal!, /no entra en el cuerpo del issue.*se omiten/); assert.match(minimal!, /Calidad:\*\* ❌ fail/); assert.doesNotMatch(minimal!, /### Receta/);
 });

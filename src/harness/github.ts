@@ -4,7 +4,7 @@ import { processRunner, type CommandOptions, type Runner } from "../core/exec.ts
 import { gitRead, inspectCheckout } from "./git.ts";
 import { artifactHash, sourceHash, type Workflow } from "./model.ts";
 import { lensReport } from "./lenses.ts";
-import { compactIssueSection, parseIssueBody, renderIssueSection, withIssueSection, type IssueBody } from "./issue-section.ts";
+import { ISSUE_BODY_LIMIT, issueSectionVariants, parseIssueBody, withIssueSection, type IssueBody } from "./issue-section.ts";
 
 const START = "<!-- omi-development:start -->";
 const END = "<!-- omi-development:end -->";
@@ -72,17 +72,17 @@ export function renderWorkflowArtifact(workflow: Workflow): string {
   workflow.recipe?.classification.risk === "high" ? "**Riesgo alto: revisión humana obligatoria antes de aprobar o mergear.**" : "El PR draft requiere revisión y aprobación humana; nunca se mergea automáticamente.",
  ].join("\n"));
 }
-// Límite de GitHub para el cuerpo de un issue, medido en bytes para no quedar del lado equivocado.
-const ISSUE_BODY_LIMIT = 65536;
 // GitHub no ofrece CAS para el cuerpo del issue: se relee justo antes de escribir y se reemplaza sólo
 // lo que está entre los marcadores. Riesgo residual: una edición humana que cae entre esa lectura y
 // la escritura se pierde del cuerpo (GitHub la conserva en el historial de ediciones del issue).
-export async function syncIssueSection(workflow: Workflow, runner: Runner = processRunner, signal?: AbortSignal): Promise<boolean> {
+// onlyIfPresent: sin receta aprobada, sólo se mantiene una sección que ya autorizó una aprobación anterior.
+export async function syncIssueSection(workflow: Workflow, runner: Runner = processRunner, signal?: AbortSignal, options: { onlyIfPresent?: boolean } = {}): Promise<boolean> {
  const repo = issueRepo(workflow.source.url, workflow.source.number);
  const fresh = await readIssue(workflow.checkout, workflow.source.number, runner, signal);
  if (fresh.source.url !== workflow.source.url || fresh.source.hash !== workflow.source.hash) throw new Error("El pedido cambió en GitHub desde el último contraste; la sección se actualiza después del próximo punto de control");
- const fits = (content: string) => Buffer.byteLength(withIssueSection(fresh.raw, fresh.parts, content), "utf8") <= ISSUE_BODY_LIMIT;
- const content = [renderIssueSection(workflow), compactIssueSection(workflow)].find(fits);
+ if (options.onlyIfPresent && fresh.parts.section === null) return false;
+ // Si no entra junto al pedido, la sección se resume y lo dice; el pedido nunca se toca.
+ const content = issueSectionVariants(workflow).find((c) => withIssueSection(fresh.raw, fresh.parts, c).length <= ISSUE_BODY_LIMIT);
  if (!content) throw new Error("El pedido ocupa casi todo el límite de GitHub para el cuerpo del issue; la sección del harness no entra");
  const body = withIssueSection(fresh.raw, fresh.parts, content);
  if (body === fresh.raw) return false;

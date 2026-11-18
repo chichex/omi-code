@@ -86,13 +86,29 @@ test("the section is not written when the request changed, the markers are broke
  await assert.rejects(syncIssueSection(f.workflow, f.runner), /confirmar/i); assert.equal(edits(f).length, 1, "no se reintenta solo");
 });
 
-test("a section that does not fit next to the request is compacted, never truncated silently", async (t) => {
- const f = await fixture(t); const human = "x".repeat(60000); f.state.issue.body = human; f.workflow.source.body = human; f.workflow.source.hash = sourceHash(f.workflow.source.title, human);
- f.workflow.recipe = { route: "direct", classification: { type: "fix", size: "small", risk: "low", riskAreas: [], causeKnown: true }, objective: "o".repeat(8000), approach: "Fix", scope: [], outOfScope: [], cases: [{ id: "D1", description: "Test", command: "npm test" }], lenses: [], executor: { mode: "inline", writers: 0 } };
+test("a section that does not fit next to the request is summarized and says so; the request is never touched", async (t) => {
+ const f = await fixture(t); const setHuman = (human: string) => { f.state.issue.body = human; f.workflow.source.body = human; f.workflow.source.hash = sourceHash(f.workflow.source.title, human); };
+ const human = "x".repeat(60000); setHuman(human); f.workflow.phase = "verify";
+ f.workflow.recipe = { route: "direct", classification: { type: "fix", size: "small", risk: "low", riskAreas: [], causeKnown: true }, objective: "Fix", approach: "Fix", scope: [], outOfScope: [], cases: [{ id: "D1", description: "Test", command: "npm test" }], lenses: ["quality"], executor: { mode: "inline", writers: 0 } };
+ const proof = { id: "E", kind: "verification" as const, command: "npm test", stepId: null, caseId: "D1", exitCode: 0, outcome: "passed" as const, output: "", fingerprint: "fp", head: "b".repeat(40), startedAt: "now", finishedAt: "now" };
+ f.workflow.evidence = [...Array.from({ length: 30 }, (_, i) => ({ ...proof, id: `R${i}`, kind: "red" as const, stepId: `C${i + 1}`, caseId: null, command: `node t${i}.js`, exitCode: 1, outcome: "failed" as const })), proof];
+ f.workflow.reviews = [{ lens: "quality", fingerprint: "fp", verdict: "fail", findings: Array.from({ length: 20 }, (_, i) => `hallazgo ${i} ` + "h".repeat(400)), at: "now" }];
  await syncIssueSection(f.workflow, f.runner);
- assert.ok(f.state.issue.body.length <= 65536); assert.equal(parseIssueBody(f.state.issue.body).human, human); assert.match(f.state.issue.body, /no entra/);
- const full = "y".repeat(65500); f.state.issue.body = full; f.workflow.source.body = full; f.workflow.source.hash = sourceHash(f.workflow.source.title, full);
+ let parts = parseIssueBody(f.state.issue.body);
+ assert.ok(f.state.issue.body.length <= 65536); assert.equal(parts.human, human, "el pedido no se toca");
+ assert.match(parts.section ?? "", /\*\*Resumida\*\*/); assert.match(parts.section ?? "", /\| D1 \| ✅ exit 0 \|/); assert.doesNotMatch(parts.section ?? "", /C1 · rojo/);
+ f.workflow.recipe = { ...f.workflow.recipe, objective: "o".repeat(8000) }; setHuman(human);
+ await syncIssueSection(f.workflow, f.runner);
+ parts = parseIssueBody(f.state.issue.body); assert.equal(parts.human, human); assert.match(parts.section ?? "", /no entra en el cuerpo del issue/); assert.ok(f.state.issue.body.length <= 65536);
+ const full = "y".repeat(65500); setHuman(full);
  await assert.rejects(syncIssueSection(f.workflow, f.runner), /límite/i); assert.equal(f.state.issue.body, full);
+});
+
+test("before any approval the section is only kept up to date if the issue already has one", async (t) => {
+ const f = await fixture(t);
+ assert.equal(await syncIssueSection(f.workflow, f.runner, undefined, { onlyIfPresent: true }), false); assert.equal(edits(f).length, 0);
+ f.state.issue.body = "Original\n\n\n<!-- omi:harness:start -->\nvieja\n<!-- omi:harness:end -->";
+ assert.equal(await syncIssueSection(f.workflow, f.runner, undefined, { onlyIfPresent: true }), true); assert.match(f.state.issue.body, /## Harness · #42/);
 });
 
 test("publication creates draft with immutable SHA/stdin and recovers ambiguous create without duplicate", async (t) => {
