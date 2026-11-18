@@ -174,6 +174,8 @@ test("release.yml_arranca en cada plataforma lo mismo que publica", async () => 
 	// Una instalación nueva viene sin skills, y cero skills no puede pasar si omi no contestó.
 	assert.match(boot, /\[ ! -e "\$HOME\/\.omi\/runtime\/skills" \]/);
 	assert.match(boot, /jq -se '.*\.success == true.*length == 1.*\.source != "skill"/);
+	// fd y rg del runtime corren en cada plataforma: en macOS Intel llegan sin firma.
+	for (const name of ["fd", "rg"]) assert.match(boot, new RegExp(`"\\$HOME/\\.omi/runtime/bin/${name}" --version`), name);
 
 	const release = workflow.slice(workflow.indexOf("\n  release:"));
 	assert.doesNotMatch(release, /build-release|npm ci/);
