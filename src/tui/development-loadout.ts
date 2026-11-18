@@ -30,13 +30,14 @@ export class HeldLoadout {
 		this.modifiers = flags.tools?.some(isModifier) ? flags.tools : [];
 		this.explicit = !!flags.noTools || !!flags.noBuiltinTools || (flags.tools !== undefined && this.modifiers.length === 0);
 	}
-	/** Lee la rama después de que Pi restauró sus tools: al arrancar (`launch`) o al moverse por el árbol. */
-	recall(branch: readonly SessionEntry[], launch: boolean): void {
+	/** Lee la rama después de que Pi restauró sus tools: al arrancar, al recargar o al moverse por el árbol. */
+	recall(branch: readonly SessionEntry[], source: "start" | "reload" | "tree"): void {
+		const launch = source !== "tree";
 		const at = branch.findLastIndex((entry) => entry.type === "custom" && entry.customType === LOADOUT_ENTRY);
 		const entry = branch[at]; const data: unknown = entry?.type === "custom" ? entry.data : undefined;
 		const saved = Value.Check(HeldSchema, data) ? data : undefined;
-		// Soltadas, el próximo request declara las de la persona. Una lista explícita nueva gana, como en Pi.
-		const valid = saved && !(saved.released && branch.slice(at + 1).some(declaresTools)) && !(launch && this.explicit && saved.selection !== this.selection);
+		// Soltadas, el próximo request declara las de la persona, y /reload conserva las activas. Una lista explícita nueva gana, como en Pi.
+		const valid = saved && !(saved.released && (source === "reload" || branch.slice(at + 1).some(declaresTools))) && !(launch && this.explicit && saved.selection !== this.selection);
 		this.open = !!valid && !saved.released;
 		// Sin loadout en el transcript Pi conserva las tools actuales: lo retenido sigue valiendo.
 		this.tools = valid ? (launch ? this.modifiers : []).reduce(apply, saved.tools) : branch.some(systemMessage) ? undefined : this.tools;

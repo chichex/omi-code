@@ -94,6 +94,14 @@ test("harness real · /reload con el harness activo y salir devuelve las tools d
 	assert.deepEqual(sorted(r.first.getActiveToolNames()), sorted(r.normal));
 });
 
+test("harness real · después de salir, /reload conserva las tools que la persona cambió", { timeout: 30000 }, async (t) => {
+	const r = await started(t);
+	await r.stop(r.first);
+	const chosen = r.normal.filter((name) => name !== "edit"); r.first.setActiveToolsByName(chosen);
+	await r.first.reload();
+	assert.deepEqual(sorted(r.first.getActiveToolNames()), sorted(chosen));
+});
+
 test("harness real · salir, cerrar antes de otro request y retomar no vuelve al loadout restringido", { timeout: 30000 }, async (t) => {
 	const r = await started(t);
 	await r.stop(r.first); assert.deepEqual(sorted(r.first.getActiveToolNames()), sorted(r.normal));
