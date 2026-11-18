@@ -48,7 +48,8 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 		const loadout = () => {
 			if (!session.state && !session.lockedReason) { held.release(); return; }
 			const originalTools = held.hold();
-			const names = new Set([...originalTools, "read", "grep", "find", "ls", "subagent", ASK_TOOL, ...WORKFLOW_TOOLS]);
+			// omi_ask queda si la sesión la ofrece (sólo con TUI): el harness no la agrega por su cuenta.
+			const names = new Set([...originalTools, "read", "grep", "find", "ls", "subagent", ...WORKFLOW_TOOLS]);
 			pi.setActiveTools([...names].filter((name) => name === "subagent" || WORKFLOW_TOOLS.includes(name) || (session.state ? workflowToolAllowed(session.state, name, {}) : ["read", "grep", "find", "ls", ASK_TOOL].includes(name))));
 		};
 		session.onChange = loadout;

@@ -4,11 +4,12 @@ import { batchProblem, type AskResult, type QuestionBatch } from "./batch.ts";
 import { QuestionBatchPrompt } from "./prompt.ts";
 
 export const NO_INTERACTIVE_UI = "Preguntar necesita la TUI interactiva de OMI: en modo print, RPC o sin UI no hay a quién preguntar.";
+/** RPC tiene UI pero no componentes propios: devolvería sin preguntar. */
+export const canAsk = (ctx: Pick<ExtensionContext, "hasUI" | "mode">): boolean => ctx.hasUI && ctx.mode === "tui";
 
 /** Las respuestas de la persona, o `cancelled` si cerró la tanda, otra UI la reemplazó o se abortó. */
 export async function askQuestions(ctx: ExtensionContext, batch: QuestionBatch, options: { signal?: AbortSignal | undefined } = {}): Promise<AskResult> {
-	// RPC tiene UI pero no componentes propios: devolvería sin preguntar.
-	if (!ctx.hasUI || ctx.mode !== "tui") throw new Error(NO_INTERACTIVE_UI);
+	if (!canAsk(ctx)) throw new Error(NO_INTERACTIVE_UI);
 	const problem = batchProblem(batch);
 	if (problem) throw new Error(`Preguntas inválidas: ${problem}`);
 	const { signal } = options;

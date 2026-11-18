@@ -11,13 +11,17 @@ import { questionsExtension } from "../src/tui/questions/tool.ts";
 import { answerCustom, KEYS, typed } from "./helpers/questions.ts";
 import { developmentFixture } from "./helpers/development.ts";
 
-async function askTool(): Promise<ToolDefinition> {
-	const tools: ToolDefinition[] = [];
+/** La extensión sobre un Pi mínimo: Pi activa al registrarla una tool model-only. */
+async function loadQuestions() {
+	const tools: ToolDefinition[] = []; const starts: ((event: unknown, ctx: unknown) => unknown)[] = []; let active = ["read"];
 	const extension = questionsExtension();
-	await extension.factory({ registerTool: (tool: ToolDefinition) => tools.push(tool) } as unknown as ExtensionAPI);
+	await extension.factory({ registerTool: (tool: ToolDefinition) => { tools.push(tool); active.push(tool.name); }, on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => { if (name === "session_start") starts.push(handler); },
+		getActiveTools: () => [...active], setActiveTools: (names: string[]) => { active = names; } } as unknown as ExtensionAPI);
 	assert.equal(extension.name, "omi-questions");
-	const tool = tools.find((t) => t.name === ASK_TOOL); assert.ok(tool); return tool;
+	const tool = tools.find((t) => t.name === ASK_TOOL); assert.ok(tool);
+	return { tool, active: () => active, start: async (ctx: { mode: string; hasUI: boolean }) => { for (const handler of starts) await handler({ type: "session_start" }, ctx); } };
 }
+async function askTool(): Promise<ToolDefinition> { return (await loadQuestions()).tool; }
 function context(keys: (screen: string) => readonly string[] | undefined, options: { mode?: string; hasUI?: boolean } = {}) {
 	const screens: string[][] = []; let customs = 0;
 	const ctx = { mode: options.mode ?? "tui", hasUI: options.hasUI ?? true, ui: {
@@ -60,6 +64,15 @@ test("omi_ask: sin TUI interactiva falla con un error claro y no supone una resp
 		assert.equal(customs(), 0, "no abre ningún diálogo");
 	}
 	await assert.rejects(askQuestions(context(() => ["1"], { mode: "rpc" }).ctx, { title: "t", questions: [] }), /TUI interactiva/);
+});
+
+test("omi_ask: fuera de la TUI interactiva no se le ofrece al modelo", async () => {
+	for (const ctx of [{ mode: "print", hasUI: false }, { mode: "json", hasUI: false }, { mode: "rpc", hasUI: true }, { mode: "tui", hasUI: false }]) {
+		const pi = await loadQuestions(); await pi.start(ctx);
+		assert.deepEqual(pi.active(), ["read"], JSON.stringify(ctx));
+	}
+	const tui = await loadQuestions(); await tui.start({ mode: "tui", hasUI: true });
+	assert.deepEqual(tui.active(), ["read", ASK_TOOL]);
 });
 
 test("omi_ask: la primera opción es la recomendada, nada viene elegido y OMI agrega la respuesta libre", async () => {
@@ -134,4 +147,9 @@ test("omi_ask: el harness la deja activa en toda etapa y una respuesta no vale c
 	assert.equal(result.details && typeof result.details === "object" && "status" in result.details && result.details.status, "answered");
 	await assert.rejects(f.action({ action: "agreed", quote: "ampliá el alcance a todo el repo", agreement: "Todo el repo", replan: false }), /no aparece textual/);
 	assert.equal((await f.state()).agreements?.length ?? 0, 0);
+	// En RPC la sesión no la ofrece y el harness no la agrega por su cuenta.
+	const rpc = await developmentFixture(t); Reflect.set(rpc.context, "mode", "rpc");
+	await rpc.emit("session_start"); await rpc.start();
+	assert.ok(rpc.activeTools().includes("omi_workflow"), "el harness está activo");
+	assert.ok(!rpc.activeTools().includes(ASK_TOOL), "sin TUI el harness no la ofrece");
 });

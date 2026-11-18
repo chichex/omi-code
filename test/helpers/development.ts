@@ -62,7 +62,7 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 		return { code: 0, stdout: JSON.stringify(data), stderr: "" };
 	} };
 	const events = new Map<string, ((event: unknown, context: ExtensionContext) => unknown)[]>(); const tools = new Map<string, ToolDefinition>();
-	const commands = new Map<string, { handler: (args: string, ctx: ExtensionContext) => Promise<void> }>(); let activeTools = ["read", "bash", "write", "edit"];
+	const commands = new Map<string, { handler: (args: string, ctx: ExtensionContext) => Promise<void> }>(); let activeTools = ["read", "bash", "write", "edit", "omi_ask"]; // Pi activa omi_ask, model-only, al registrarla.
 	const busHandlers = new Map<string, Set<(event: unknown) => unknown>>();
 	const emitBus = async (name: string, event: unknown) => {
 		if (name === "omi:workflow") progress.push(event);

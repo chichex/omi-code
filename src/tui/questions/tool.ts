@@ -3,7 +3,7 @@
 import { Type, type Static } from "typebox";
 import type { ExtensionAPI, ExtensionFactory, InlineExtension } from "@earendil-works/pi-coding-agent";
 import { ASK_TOOL } from "../../harness/permissions.ts";
-import { askQuestions } from "./ask.ts";
+import { askQuestions, canAsk } from "./ask.ts";
 import { MAX_HEADER, MAX_QUESTIONS, type QuestionBatch } from "./batch.ts";
 
 const OptionSchema = Type.Object({
@@ -39,7 +39,7 @@ export function registerAskTool(pi: ExtensionAPI): void {
 		name: ASK_TOOL, label: "Preguntar a la persona", parameters: AskSchema,
 		// Interactiva: la ve el modelo, pero ni codemode ni un subagente en segundo plano la pueden llamar.
 		exposure: "model-only", executionMode: "sequential",
-		description: `Le hace a la persona de 1 a ${MAX_QUESTIONS} preguntas en una sola tanda, en la TUI de OMI, y devuelve sus respuestas: por pregunta, su id (q1…), el texto, las opciones elegidas (options) y lo que escribió con sus palabras (text). La primera opción de cada pregunta es la recomendada y nunca se elige sola. OMI agrega siempre «Escribir otra respuesta». Esc cancela sin respuestas. Sin TUI interactiva (print, RPC, sin UI) falla. Una respuesta no autoriza comandos, push, merge, deploy ni cambios de alcance.`,
+		description: `Le hace a la persona de 1 a ${MAX_QUESTIONS} preguntas en una sola tanda, en la TUI de OMI, y devuelve sus respuestas: por pregunta, su id (q1…), el texto, las opciones elegidas (options) y lo que escribió con sus palabras (text). La primera opción de cada pregunta es la recomendada y nunca se elige sola. OMI agrega siempre «Escribir otra respuesta». Esc cancela sin respuestas. Sólo existe con la TUI interactiva: en print, RPC o sin UI no se ofrece, y si llega igual, falla. Una respuesta no autoriza comandos, push, merge, deploy ni cambios de alcance.`,
 		promptSnippet: "Preguntarle a la persona una tanda de 1–4 decisiones con una recomendada, alternativas y respuesta libre",
 		promptGuidelines: [
 			"Cuando necesites una decisión de la persona y haya alternativas razonables, usá omi_ask en lugar de preguntar en texto: hasta 4 preguntas por tanda, de 2 a 4 opciones cada una, con la recomendada primero y una descripción que diga qué implica cada opción. OMI agrega «Escribir otra respuesta».",
@@ -55,5 +55,9 @@ export function registerAskTool(pi: ExtensionAPI): void {
 }
 
 export function questionsExtension(): Exclude<InlineExtension, ExtensionFactory> {
-	return { name: "omi-questions", factory: (pi: ExtensionAPI) => registerAskTool(pi) };
+	return { name: "omi-questions", factory: (pi: ExtensionAPI) => {
+		registerAskTool(pi);
+		// Sin TUI interactiva siempre fallaría: no se le ofrece al modelo. Va antes del harness, que conserva lo que la sesión ofrece.
+		pi.on("session_start", (_event, ctx) => { if (!canAsk(ctx)) pi.setActiveTools(pi.getActiveTools().filter((name) => name !== ASK_TOOL)); });
+	} };
 }
