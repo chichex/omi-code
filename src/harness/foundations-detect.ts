@@ -43,8 +43,10 @@ export async function detectFoundationsCandidates(root: string): Promise<Detecte
 		for (const name of names) found.push({ command: name === "test" ? manager.test : `${manager.run} ${name}`, source: `Script «${name}» de package.json` });
 	}
 	if (await regularFile(join(root, "go.mod"))) found.push({ command: "go test ./...", source: "Tests del módulo de go.mod" }, { command: "go vet ./...", source: "Análisis estático del módulo de go.mod" });
-	const seen = new Set<string>();
-	return found.filter((entry) => !seen.has(entry.command) && !!seen.add(entry.command)).slice(0, 100);
+	// Un comando repetido conserva su primera aparición, con su origen.
+	const unique = new Map<string, DetectedCommand>();
+	for (const entry of found) if (!unique.has(entry.command)) unique.set(entry.command, entry);
+	return [...unique.values()].slice(0, 100);
 }
 
 /** Primera propuesta: los comandos detectados y los cuatro puntos en ask. */
