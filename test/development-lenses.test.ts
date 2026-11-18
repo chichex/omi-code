@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { test, type TestContext } from "node:test";
 import type { Plan } from "../src/harness/model.ts";
+import { LENS_PART_BUDGET } from "../src/harness/lenses.ts";
 import { developmentFixture } from "./helpers/development.ts";
 
 type LensCall = { systemPrompt: string; messages: { content: { text: string }[] }[] };
@@ -99,4 +100,24 @@ test("development_lenses un diff más grande que una llamada se revisa completo 
 	const texts = [first.text, ...rest.map((r) => (r.details as { diff: { text: string } }).diff.text)];
 	assert.equal(texts.map((d) => d.replace(/^\[continúa [^\n]*\]\n/gm, "")).join(""), full);
 	await assert.rejects(f.invoke("omi_workflow_inspect", { diff: true, diffPart: first.total + 1 }), /parte/);
+});
+
+test("development_lenses la evidencia cuenta en el presupuesto: ninguna llamada lo pasa y, si no entra, se resume y lo dice", async (t) => {
+	const lines = Array.from({ length: 4000 }, (_, i) => `linea "${i}" \\ ${"d".repeat(60)}`).join("\n") + "\nFIN-DEL-ARCHIVO\n";
+	const f = await verifying(t, ["quality"], { "data.txt": lines });
+	const gates = ["node -e \"process.stdout.write('g'.repeat(13000))\"", "node -e \"process.stdout.write('h'.repeat(13000))\""];
+	for (let round = 0; round < 4; round++) for (const command of gates) await f.invoke("omi_workflow_check", { kind: "gate", command });
+	const before = f.modelCalls.length;
+	await f.invoke("omi_workflow_lens", { lens: "quality" });
+	const calls = f.modelCalls.slice(before) as LensCall[]; const sent = calls.map(material);
+	assert.ok(calls.length >= 2);
+	for (const call of calls) assert.ok(call.messages[0]!.content[0]!.text.length <= LENS_PART_BUDGET, `${call.messages[0]!.content[0]!.text.length} > ${LENS_PART_BUDGET}`);
+	for (const m of sent) {
+		assert.deepEqual(m.evidence, sent[0].evidence, "la misma evidencia en cada parte");
+		assert.deepEqual(m.evidence.gates.map((g: { command: string }) => g.command), gates, "la última corrida de cada gate");
+		assert.equal(m.evidence.summarized.omittedRuns, 6, "cuenta lo que no vino");
+	}
+	assert.match(calls[0]!.systemPrompt, /summarized/);
+	const full = execFileSync("git", ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--color=never", f.checkout.baseCommit, "--"], { cwd: f.checkout.root, encoding: "utf8" });
+	assert.equal(sent.map((m) => m.diff.replace(/^\[continúa [^\n]*\]\n/gm, "")).join(""), full, "ninguna parte trunca el diff");
 });
