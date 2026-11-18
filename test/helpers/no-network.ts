@@ -9,7 +9,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const LOG = "OMI_TEST_NETWORK_LOG";
-const LOCAL = /^(localhost|127\.\d+\.\d+\.\d+|::1|::ffff:127\.\d+\.\d+\.\d+)$/;
+// Los nombres DNS no distinguen mayúsculas y admiten el punto final. 0.0.0.0 no se enruta: en Linux
+// y macOS un connect ahí llega a la máquina misma, y en Windows falla.
+const LOCAL = /^(localhost\.?|127\.\d+\.\d+\.\d+|::1|::ffff:127\.\d+\.\d+\.\d+|0\.0\.0\.0)$/i;
 
 const outside = (host: string | undefined, port: unknown) => host === undefined || LOCAL.test(host) ? undefined : `${host}:${String(port)}`;
 

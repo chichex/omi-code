@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
+import { createServer, type AddressInfo } from "node:net";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -58,6 +59,22 @@ test("no-network: corta TCP fuera de loopback en el proceso y en un hijo que her
 	assert.deepEqual(JSON.parse(result.stdout), { results: ["ECONNREFUSED"], child: ["ECONNREFUSED"] });
 	const lines = (await readFile(log, "utf8")).split("\n").filter(Boolean);
 	assert.deepEqual(lines, [`${OUTSIDE} desde ${probe} parent ${OUTSIDE}`, `${OUTSIDE} desde ${probe} child ${OUTSIDE}`]);
+});
+
+test("no-network: deja pasar loopback con cualquier grafía, y 0.0.0.0, que no sale de la máquina", async (t) => {
+	const dir = await tempDir(t);
+	const probe = join(dir, "probe.mjs");
+	await writeFile(probe, PROBE);
+	const server = createServer((socket) => socket.end());
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+	const port = (server.address() as AddressInfo).port;
+	const hosts = ["127.0.0.1", "localhost", "LOCALHOST", "localhost.", "LocalHost.", "0.0.0.0"];
+	const log = join(dir, "network.log");
+	const result = await run(["--import", guard, probe, "child", ...hosts.map((host) => `${host}:${port}`)], dir, { OMI_TEST_NETWORK_LOG: log });
+	assert.equal(result.code, 0, result.stderr);
+	assert.deepEqual(JSON.parse(result.stdout), { results: hosts.map(() => "connected") });
+	await assert.rejects(readFile(log, "utf8"), { code: "ENOENT" }, "loopback no se anota");
 });
 
 test("no-network: un hijo rezagado, después de borrar el log, también recibe ECONNREFUSED", async (t) => {
