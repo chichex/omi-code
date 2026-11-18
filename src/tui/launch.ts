@@ -1,6 +1,7 @@
 // Cara TUI: arranca Pi con la configuración en ~/.omi y las tools de OMI cargadas.
 
 import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { Io } from "../cli/io.ts";
 import { EXIT_OK } from "../core/errors.ts";
@@ -13,6 +14,7 @@ import { CATALOG } from "../tools/catalog.ts";
 import { codemodeDefaultExtension, defaultExtensions, harnessKb } from "./defaults.ts";
 import { herdrExtension } from "./herdr.ts";
 import { isolatePi } from "./isolation.ts";
+import { linkBundledTools } from "./managed-tools.ts";
 import { ensureModelDefaults } from "./model-defaults.ts";
 import { registerCatalogTools } from "./tools.ts";
 import { runtimeShellExtension } from "./runtime-shell.ts";
@@ -41,6 +43,13 @@ export async function launchTui(args: string[], io: Io, deps: LaunchDeps = {}): 
 	process.env[AGENT_SESSION_ENV] = "1";
 	const runtime = await resolveRuntime(io.homeDir, deps.compiled);
 	if (runtime.packageDir !== undefined) process.env.PI_PACKAGE_DIR = runtime.packageDir;
+	// Instalación limpia: Pi no baja fd ni rg de GitHub; usa los del runtime si el PATH no los trae.
+	// Si no se puede enlazar (un FAT sin symlinks, <agent>/bin que es un archivo), Pi sigue como antes.
+	if (runtime.toolsDir !== undefined) {
+		await linkBundledTools(join(dir, "bin"), runtime.toolsDir, process.env.PATH).catch((error: unknown) => {
+			io.err(`aviso: no se pudieron enlazar fd y rg del runtime en ${join(dir, "bin")} (${error instanceof Error ? error.message : String(error)}); Pi usa los del PATH o los baja`);
+		});
+	}
 	const piMain = deps.piMain ?? (await import("@earendil-works/pi-coding-agent")).main;
 
 	const isolation = await isolatePi(args, dir, io);

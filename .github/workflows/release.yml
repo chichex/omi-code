@@ -122,6 +122,9 @@ jobs:
           file "$HOME/.omi/bin/omi"
           [ "$("$HOME/.omi/bin/omi" --version)" = "$VERSION" ]
           [ "$("$HOME/.omi/runtime/omi" --version)" = "$VERSION" ]
+          # fd y rg van en el runtime para que Pi no los baje; en macOS Intel llegan sin firma.
+          "$HOME/.omi/runtime/bin/fd" --version
+          "$HOME/.omi/runtime/bin/rg" --version
       - name: Pi responde por RPC y la instalación viene sin skills
         run: |
           ( printf '{"id":"1","type":"get_commands"}\n'; sleep 20 ) | "$HOME/.omi/bin/omi" --mode rpc --no-session > "$RUNNER_TEMP/rpc.out" || true

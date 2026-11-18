@@ -3,17 +3,18 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { mkdir, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test, type TestContext } from "node:test";
 import pkg from "../package.json" with { type: "json" };
+import bundledTools from "../scripts/bundled-tools.json" with { type: "json" };
 import { assetNames, currentPlatform } from "../src/upgrade/release.ts";
 import { FOREIGN, OWN, PI_MARKS, requestSeenByModel, seedConfig, seedPi } from "./helpers/foreign-config.ts";
 import { tempDir } from "./helpers/io.ts";
-import { SENTINEL_CONNECT, startupNetwork } from "./helpers/startup-network.ts";
+import { SENTINEL_CONNECT, pathWithout, startupNetwork } from "./helpers/startup-network.ts";
 import { exerciseWorkspace, plainTerminal } from "./helpers/workspace-pty.ts";
 import { exerciseSubagentRuntime } from "./helpers/subagent-runtime.ts";
 import { exerciseSubagentBackgroundRuntime } from "./helpers/subagent-background-runtime.ts";
@@ -73,9 +74,22 @@ test("release real_compila, instala y arranca sin Node ni repo", { skip: !enable
 
 	// Primer arranque interactivo: es el que Pi reporta como instalación nueva. El fetch de bun sólo
 	// deja ver el destino del CONNECT; sin credenciales, el único a pi.dev es la telemetría.
-	const seen = await startupNetwork(binary, ["--no-mcp", "--no-context-files", "--no-skills"], home, { HOME: home, PATH: "/usr/bin:/bin", OMI_HOME: installRoot });
+	// Sin fd ni rg en el PATH, Pi los bajaría de GitHub: tiene que usar los del runtime.
+	const noTools = await pathWithout(["fd", "fdfind", "rg"], "/usr/bin:/bin", await tempDir(t, "omi-path-"));
+	const seen = await startupNetwork(binary, ["--no-mcp", "--no-context-files", "--no-skills"], home, { HOME: home, PATH: noTools, OMI_HOME: installRoot });
 	assert.ok(seen.connects.includes(SENTINEL_CONNECT), `la sonda no llegó a la sesión:\n${plainTerminal(seen.output)}`);
 	assert.ok(!seen.connects.includes("pi.dev:443"), `conexiones: ${seen.connects.join(", ")}`);
+	assert.deepEqual(seen.connects.filter((target) => target.includes("github")), [], "Pi intentó bajar fd o rg");
+	assert.doesNotMatch(plainTerminal(seen.output), /not found\. Downloading|Failed to download/);
+	for (const [name, label] of [["fd", "fd"], ["rg", "ripgrep"]] as const) {
+		const found = seen.tools[name];
+		const managed = join(installRoot, "agent/bin", name);
+		assert.equal(found?.path, managed, `${name}: ${JSON.stringify(seen.tools)}`);
+		assert.equal((await lstat(managed)).isSymbolicLink(), true, `Pi bajó ${name} en vez de usar el del runtime`);
+		assert.equal(await realpath(managed), await realpath(join(installRoot, "runtime/bin", name)));
+		assert.ok(found.version.startsWith(`${label} ${bundledTools[name].version}`), `${name} no corre: ${found.version}`);
+		for (const license of bundledTools[name].licenses) assert.equal((await stat(join(installRoot, "runtime/licenses", name, license))).isFile(), true, license);
+	}
 
 	// El workspace también debe funcionar compilado, sin Node ni el repo en PATH.
 	const terminal = await exerciseWorkspace(binary, ["--no-extensions", "--no-context-files", "--no-skills", "--offline"], home, { HOME: home, PATH: "/usr/bin:/bin", OMI_HOME: installRoot });
@@ -107,6 +121,10 @@ test("release real_compila, instala y arranca sin Node ni repo", { skip: !enable
 	const shellResponse = shell.find((line) => line.id === "env" && line.type === "response");
 	assert.ok(shellResponse?.data, JSON.stringify(shell));
 	assert.equal((shellResponse.data as { output: string }).output, "unset|del-shell|1");
+	// El bash del agente también los encuentra, como los que bajaba Pi.
+	const tools = await rpc(binary, home, { id: "tools", type: "bash", command: "fd --version; rg --version | head -n 1" }, [], { PATH: noTools });
+	const toolsOutput = (tools.find((line) => line.id === "tools" && line.type === "response")?.data as { output?: string } | undefined)?.output ?? JSON.stringify(tools);
+	assert.ok(toolsOutput.startsWith(`fd ${bundledTools.fd.version}\nripgrep ${bundledTools.rg.version} `), toolsOutput);
 	const agent = join(installRoot, "agent");
 	await exerciseClaudeBridgeRuntime({ command: binary, cwd: home, agent, env: { HOME: home, OMI_HOME: "" } });
 	await exerciseClaudeBridgeRuntime({ command: binary, cwd: home, agent, env: { HOME: home, OMI_HOME: "" } }, true);
