@@ -28,7 +28,7 @@ Todos corren desde la raíz del repo. Un worktree nuevo no trae `node_modules`: 
 ## Ambientes
 
 - **Local:** todo corre contra un mock efímero de omi-api. Los tests no usan credenciales reales.
-- **Sin red en tests:** `npm test` precarga `test/helpers/no-network.ts`: corta toda conexión fuera de loopback de los procesos que heredan su entorno y hace fallar el archivo. Un hijo con Pi interactivo y HOME nuevo lleva `PI_TELEMETRY=0`; `PI_OFFLINE` apaga además la KB y GitHub.
+- **Sin red en tests:** `npm test` precarga `test/helpers/no-network.ts`: corta las conexiones TCP/TLS de Node (`net.Socket#connect`) fuera de loopback, del archivo de test y de los hijos de Node que heredan su entorno, y hace fallar el archivo. Sus huecos están en «Límites conocidos». Un hijo con Pi interactivo y HOME nuevo lleva `PI_TELEMETRY=0`; `PI_OFFLINE` apaga además la KB y GitHub.
 - **Real:** `https://app.ohmyinfra.com`, con `chichex/omi#140` desplegado. Sin eso, `omi login` falla con `session_token_unavailable`.
 - **Linux real:** el host `chichex-linux` sirve para probar el binario `linux-x64` en un HOME temporal.
 - **Git:** branch default `main`, remote `origin` en `github.com/chichex/omi-code`. `main` está protegida: exige PR y el check `cierre`, también para admins.
@@ -109,4 +109,5 @@ Esto no lo hace un agente solo, con cualquier instrucción:
 - El aislamiento cubre la configuración de agentes, no todo el home (por ejemplo `~/.cache/huggingface/token`). Sin repo git, Pi sube hasta `/` buscando `.agents/skills`.
 - `models.json` o `auth.json` con una referencia a una variable oculta (`$GEMINI_API_KEY`) no la resuelven.
 - Importar no cubre symlinks absolutos hacia `~/.pi`, rutas fuera de `~/.pi/agent` ni paquetes de terceros con `~/.pi` en su código.
+- El guard de red de `npm test` sólo ve `net.Socket#connect` en procesos Node que cargan el preload. No cubre DNS (`dns.lookup`, `dns.resolve*`), UDP (`dgram`), hijos que no son Node (`git`, `curl`, `gh`, `python3`), el binario de bun ni hijos lanzados con un entorno explícito sin `NODE_OPTIONS`. Si un hijo conecta después del `after` de su archivo, la conexión se corta pero sólo queda en stderr.
 - `release.yml` pasa los binarios entre jobs como un artifact de 283 MB que expira en un día. Sin confirmar el límite de almacenamiento de Actions: si se llena, falla el build y no se publica nada.
