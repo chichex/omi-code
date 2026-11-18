@@ -35,10 +35,10 @@ No hay un comando para empezar: `/omi-triage` y `/omi-work start` ya no existen.
 | Comando humano | Efecto |
 |---|---|
 | `/omi-work resume` | Adoptar explícitamente el estado guardado; no repite comandos ya hechos. Si estaba pausado, reanuda sin conceder aprobaciones. |
-| `/omi-work approve` | Aprobar receta/spec vigente y agregar su artefacto al issue. Revalida fuente y código explorado. |
+| `/omi-work approve` | Aprobar receta/spec vigente y escribirla en la sección del harness del issue. Revalida fuente y código explorado. |
 | `/omi-work pause` | Pausar conservando fase, decisiones, archivos y evidencia. |
-| `/omi-work refresh` | Volver a leer el pedido y explorar; invalida receta, decisiones y pruebas activas. También reabre un trabajo que el agente cerró sin cambio. Si lo propone el agente, pide confirmación. |
-| `/omi-work pr` | Revalidar y pedir permiso remoto para comentario de evidencia, push normal y PR draft. |
+| `/omi-work refresh` | Opcional. Volver a leer el pedido y explorar; invalida receta, decisiones y pruebas activas. También reabre un trabajo que el agente cerró sin cambio. Si lo propone el agente, pide confirmación. Un cambio de alcance dicho en el chat no lo necesita. |
+| `/omi-work pr` | Revalidar y pedir permiso remoto para push normal y PR draft; después actualiza la sección del issue con la evidencia. |
 | `/omi-work status` | Consultar el estado sin llamar al modelo. |
 | `/omi-work stop` | Salir explícitamente del flujo y restaurar las tools normales del chat, sin borrar ni revertir archivos. También sale de un harness bloqueado (estado inválido o atrasado) sin tocar el estado guardado. |
 | Ctrl 6 / `/omi-workflow` | Pantalla 6 · Progreso: recorrido completo de sólo lectura, también con la lateral oculta. |
@@ -52,11 +52,11 @@ La TUI presenta una revisión dedicada, no un volcado JSON en un confirm genéri
 
 - **←/→**, **Tab / Shift+Tab**: cambiar de sección. **1–9**: ir directamente a una sección.
 - **↑/↓**, **PgUp/PgDn**, **Home/End** y rueda: desplazar el cuerpo de la sección. El título informa posición y total; ayuda y decisiones quedan fuera del cuerpo desplazable.
-- **Ctrl+S**: aprobar deliberadamente. **Enter no aprueba**. **Esc**, **Ctrl+C**, **Ctrl+D** o cerrar/abortar: volver sin conceder aprobación ni publicar comentarios. Se puede ajustar y revisar de nuevo sin perder exploración ni respuestas.
+- **Ctrl+S**: aprobar deliberadamente. **Enter no aprueba**. **Esc**, **Ctrl+C**, **Ctrl+D** o cerrar/abortar: volver sin conceder aprobación ni escribir en el issue. Se puede ajustar y revisar de nuevo sin perder exploración ni respuestas.
 - **Pruebas** muestra cada caso con descripción y comando completo. `│` inicia una línea lógica, `↳` marca continuación visual y `↵` un salto real. No se pierden espacios al envolver comandos. Los backslashes se duplican (`\\` representa `\`); tabulaciones, retornos, controles y caracteres invisibles se muestran como escapes (`\t`, `\r`, `\uXXXX`), nunca como secuencias ejecutables del terminal. La leyenda de la sección los escribe igual que en los comandos. Navegar no ejecuta comandos ni exige visitar todas las secciones para habilitar el sí.
 - El marco adapta ancho/alto al terminal y al tema vigente, incluidos 80×24 y resize. Si el pane ya no permite inspección (menos de 32 columnas de revisión o 14 filas de terminal), se suspende aprobar hasta ampliarlo; Esc sigue cancelando.
 
-El sí autoriza **implementar, commits locales, comandos D exactos sin volver a preguntar y agregar el comentario administrado de receta al issue**. No autoriza push, merge, workflows ni deploy. Setup y otros comandos siguen requiriendo consentimiento aparte. La receta no tiene un tope propio de tamaño: la revisión navega por secciones. Antes del sí sólo se comprueba que el artefacto entre en GitHub; si no entra, falla pidiendo dividir el trabajo, no se resume en silencio para aprobarla.
+El sí autoriza **implementar, commits locales, comandos D exactos sin volver a preguntar y mantener la sección del harness al final del cuerpo del issue**, sin tocar el pedido de arriba. No autoriza push, merge, workflows ni deploy. Setup y otros comandos siguen requiriendo consentimiento aparte. La receta no tiene un tope propio de tamaño: la revisión navega por secciones. Antes del sí sólo se comprueba que el artefacto entre en GitHub; si no entra, falla pidiendo dividir el trabajo, no se resume en silencio para aprobarla.
 
 En RPC, donde Pi no ofrece componentes TUI, se conserva una confirmación humana con el mismo documento completo organizado en texto, con los mismos escapes y marcadores `│`/`↵` en los comandos. Los modos sin UI no pueden aprobar. Tras revisar se vuelve a contrastar la fuente, el estado guardado y el código explorado; una revisión obsoleta no se convierte en aprobación de otra receta.
 
@@ -89,9 +89,21 @@ Base incompleta, dependencia bloqueante, información insuficiente, inferencia n
 - El fingerprint representa contenido cambiado desde la base y archivos nuevos no ignorados, incluidos modos/eliminaciones/symlinks. Permanece estable al hacer stage/commit del mismo contenido.
 - Las pruebas de cada paso y su commit deben coincidir. La verificación final debe corresponder al contenido actual; un verde histórico o un comando distinto no alcanza.
 - Hay hasta tres vueltas de corrección. Reintentar invalida pruebas activas y conserva sus resultados en un archivo de intentos anteriores; no pueden acreditar la nueva vuelta. Los pasos ya commiteados siguen hechos y la vuelta agrega un paso de corrección `C<n>` que cubre todos los D, con su propio rojo, verde y commit. Ese paso conserva la aprobación porque usa los mismos casos y comandos aprobados; su título lo escribe el agente y la persona no lo aprueba aparte. Se mantiene la aprobación sólo si pedido, receta y spec son exactamente los mismos.
-- Cambiar el pedido invalida receta/aprobación/pruebas cuando se contrasta con GitHub, en los checkpoints de inicio/retoma, planificación, aprobación y publicación. Si el alcance cambia en chat, hay que pausar, actualizar el issue y hacer `refresh`; no tratarlo como un cambio silencioso del Cómo.
+- Cambiar el pedido invalida receta/aprobación/pruebas cuando se contrasta con GitHub, en los checkpoints de inicio/retoma, planificación, aprobación y publicación. El contraste ignora la sección del harness: escribirla, o que alguien la toque, no invalida nada.
+- Si el alcance cambia en el chat, lo dicho vale: el agente lo registra como acuerdo con la cita textual de la persona y rehace la receta (ver «El chat como autorización»). No hace falta editar el issue ni `refresh`, y el cambio no pasa como un ajuste silencioso del Cómo.
 
 Mientras el flujo está activo, shell arbitrario, tools desconocidas y operaciones OMI no están habilitadas por el harness. Edit/write requieren receta aprobada y C activo, con paths relativos dentro del checkout (sin `~` ni `file://`, que Pi expandiría afuera) y sin metadata Git ni rutas evidentes de secretos. Código como `credentials.ts` y plantillas como `.env.example` sí se pueden editar. El commit del paso trata sus paths como literales, no como pathspecs. Las tools conservan el pipeline y hooks de Pi. **No es una frontera de seguridad:** comparte usuario, filesystem y credenciales; un comando aprobado ejecuta código arbitrario con esos permisos. No reemplaza aislamiento del sistema operativo ni los guardrails de OMI. Las reglas del proyecto prevalecen.
+
+## El chat como autorización
+
+Lo que la persona escribe en el chat vale como autorización de alcance. Ejemplo: «sumá también que `other.cjs` devuelva 2».
+
+1. El agente llama a `omi_workflow` con `action: "agreed"`, `quote` (un fragmento textual del mensaje, sin comillas), `agreement` (lo acordado) y `replan` (si cambia la receta).
+2. OMI busca la cita en los mensajes de la persona de la rama actual de esta sesión. Compara sin distinguir espacios ni saltos de línea. No cuentan el texto del modelo, los resultados de tools ni los mensajes que manda una extensión (por ejemplo, el arranque del harness). Una cita que no aparece se rechaza y no se anota nada.
+3. El acuerdo queda en el estado, en la sección del issue (con `replan`, al aprobar la receta nueva), en la revisión de la receta y en el PR draft. OMI lo muestra en la TUI al registrarlo.
+4. Con `replan`, si ya había receta, se vuelve a Preparar receta. Siguen valiendo la exploración, las respuestas, los acuerdos y los commits. La aprobación, los pasos y las pruebas de la receta anterior pasan a intentos anteriores; la base explorada pasa a ser el código actual cuando lo cambiaron los pasos aprobados. La receta nueva se aprueba como cualquier otra. Antes de la receta, el acuerdo sólo se anota y el agente lo usa al planificar.
+
+La verificación prueba que la persona escribió esas palabras, no que el resumen del agente las interprete bien. Por eso el acuerdo se muestra entero, con su cita, y un cambio de receta vuelve a pedir el sí. Los acuerdos sobreviven a `refresh`: son palabras de la persona, no del pedido. Para retirarlo, se dice en el chat.
 
 ## Persistencia, sesiones y recuperación
 
@@ -109,9 +121,34 @@ Los cambios externos del filesystem no se revierten. Una operación ejecutada si
 
 Crear el issue de un pedido nuevo es la única escritura en GitHub antes de Explorar. Pasa sólo con el sí, una vez, con el título y el cuerpo que mostró el diálogo. Si GitHub no confirma la creación, no se reintenta: hay que revisar el repo antes de volver a pedirlo, para no duplicarlo.
 
-GitHub no ofrece un CAS efectivo para reemplazar el body del issue con `gh issue edit`. Por eso **la fuente humana se conserva intacta**: receta/spec y evidencia se agregan como comentarios append-only administrados, no como reemplazo de la descripción. La evidencia publicada lleva comando, exit code, HEAD y fingerprint; la salida de los comandos queda sólo en el estado local, porque nadie la revisa antes de publicar. Se deduplican por identidad, autor y contenido exacto; un POST ambiguo se intenta recuperar antes de repetirlo. No se editan comentarios ajenos.
+El harness no crea comentarios en el issue. Su estado va en una **sección administrada al final del cuerpo**, entre `<!-- omi:harness:start -->` y `<!-- omi:harness:end -->`. El pedido humano queda arriba, intacto byte a byte. La sección es markdown: ruta y etapa, receta con sus casos D, pasos, decisiones, acuerdos del chat, una tabla de evidencia (caso, resultado, HEAD) y lentes. Ejemplo:
 
-La publicación guarda un recibo pendiente antes del push, valida repositorio/origin/branch y usa el SHA inmutable aprobado, sin force ni tags. Recupera sólo un draft abierto de esa rama/base/SHA con identidad y cuerpo exactos de este trabajo. Un PR ajeno o editado por una persona requiere intervención; no se sobrescribe ni se duplica. Los artefactos obligatorios se publican completos o fallan pidiendo dividir la tarea; no se aprueba una spec silenciosamente truncada.
+```
+## Harness · #45
+**Ruta:** Con spec · **Etapa:** Implementar (C2 de 3)
+
+### Receta
+- **Objetivo:** …
+- **D1** `npm test` · Tests del repo
+
+### Evidencia
+| Caso | Resultado | HEAD |
+|---|---|---|
+| D1 | ✅ exit 0 | cae0b33 |
+```
+
+- **Cuándo se escribe:** al aprobar una receta, al registrar un acuerdo con la receta aprobada y al abrir el PR draft. Nunca antes del primer sí a una receta. Si no se puede escribir (sin red, límite de GitHub, marcadores rotos), OMI avisa y el trabajo sigue: el estado local es la fuente de verdad.
+- **Cómo se escribe:** se relee el cuerpo justo antes de escribir y se reemplaza sólo lo que está entre los marcadores. Sin marcadores, la sección se agrega al final. No se escribe si el pedido cambió desde el último contraste, y la escritura se confirma releyendo; no se reintenta sola. Una sección igual no se vuelve a escribir.
+- **Riesgo residual:** GitHub no ofrece CAS para el cuerpo del issue. Una edición humana que cae entre esa relectura y la escritura se pierde del cuerpo; GitHub la conserva en el historial de ediciones del issue.
+- **Marcadores:** sólo cuentan solos en su línea, desde la primera columna. Una mención en el pedido (en línea, entre backticks o indentada) es texto humano. Marcadores repetidos, sueltos, invertidos o desconocidos no se adivinan: OMI no escribe ni contrasta el pedido (los puntos de control fallan) y pide dejar un solo par o borrar la sección. Un par bien formado escrito por una persona, por ejemplo en un bloque de código, se toma como la sección.
+- **Qué cuenta como pedido:** todo lo de fuera de los marcadores, también lo que alguien agregue debajo. Lo de adentro se reescribe entero: lo que se edite ahí se pierde y no invalida el trabajo.
+- **Escape:** los datos de la receta, del agente y de la persona no pueden romper la tabla, los bloques de código ni los marcadores. Los backticks y pipes de un comando quedan dentro del código, un comando multilínea va en un bloque con una cerca más larga, el HTML se escapa y los controles e invisibles se muestran como `\uXXXX`.
+- **Salida de comandos:** la sección lleva exit code y HEAD, no la salida, que queda sólo en el estado local porque nadie la revisa antes de publicar.
+- **Comentarios viejos:** los que dejaron versiones anteriores quedan en GitHub; OMI no los borra ni los edita.
+
+Si la sección completa no entra junto al pedido en el límite de GitHub, va una mínima que lo dice; no se corta la receta.
+
+La publicación guarda un recibo pendiente antes del push, valida repositorio/origin/branch y usa el SHA inmutable aprobado, sin force ni tags. Recupera sólo un draft abierto de esa rama/base/SHA con identidad y cuerpo exactos de este trabajo. Un PR ajeno o editado por una persona requiere intervención; no se sobrescribe ni se duplica. El PR draft conserva su propio cuerpo, con el artefacto completo del trabajo: se publica entero o falla pidiendo dividir la tarea; no se aprueba una spec silenciosamente truncada.
 
 No hay garantía de atomicidad entre cambios humanos del issue y todas las acciones posteriores de Git/GitHub. Los checkpoints detectan cambios; no hay lock distribuido sobre la intención de la persona.
 
@@ -129,4 +166,4 @@ El panel sólo pertenece al cwd/worktree/rama correctos, se reinicia al cambiar 
 
 ## Verificación del cambio
 
-El arranque tiene sus propios tests, con Git, worktrees y sesiones reales y con GitHub y modelo falsos: pedido nuevo con un solo sí, issue existente sin duplicar, decir que no, token de un solo uso, guardas sin efectos y recarga sin kickoff. Dos tests de pty real recorren los dos caminos. El del panel: Enter en Issues, el sí, Esc en la clasificación y el harness arrancado en el worktree. El del agente: un pedido en el chat, la tool, un turno que termina sin seguir, el sí antes de crear el issue y de clasificar, y el harness en el worktree del issue nuevo. Los lentes tienen tests con Git real: la evidencia que reciben, los avisos que no frenan el PR draft, el bloqueo por un fail de Seguridad y un diff de más de 200.000 caracteres revisado por partes sin truncar. Los tests del flujo cubren las tres rutas con Git y comandos reales en repos temporales, modelos/GitHub falsos, consentimientos, invalidación, evidencia, recuperación, concurrencia, cancelación y panel estrecho/claro/oscuro. La aprobación tiene cobertura específica de documento íntegro, comandos largos/multilínea y caracteres de control, navegación/resize/temas, decisiones negativas y revalidación durante la revisión. Una prueba con Pi en PTY real recorre 80×24, resize a 132×40 y vuelta, temas claro/oscuro, navegación hasta el final del comando, cancelar y aprobar explícitamente con GitHub falso; no es una evaluación visual humana. El empaquetado comprueba el binario instalado. No equivalen a una prueba contra GitHub/OMI real ni a una evaluación de calidad de modelos: esas pruebas requieren una persona.
+El arranque tiene sus propios tests, con Git, worktrees y sesiones reales y con GitHub y modelo falsos: pedido nuevo con un solo sí, issue existente sin duplicar, decir que no, token de un solo uso, guardas sin efectos y recarga sin kickoff. Dos tests de pty real recorren los dos caminos. El del panel: Enter en Issues, el sí, Esc en la clasificación y el harness arrancado en el worktree. El del agente: un pedido en el chat, la tool, un turno que termina sin seguir, el sí antes de crear el issue y de clasificar, y el harness en el worktree del issue nuevo. Los lentes tienen tests con Git real: la evidencia que reciben, los avisos que no frenan el PR draft, el bloqueo por un fail de Seguridad y un diff de más de 200.000 caracteres revisado por partes sin truncar. Los tests del flujo cubren las tres rutas con Git y comandos reales en repos temporales, modelos/GitHub falsos, consentimientos, invalidación, evidencia, recuperación, concurrencia, cancelación y panel estrecho/claro/oscuro. La sección del issue tiene cobertura del pedido byte a byte, marcadores rotos, contraste que la ignora, escape de contenido hostil y escrituras no confirmadas. Los acuerdos del chat, de citas aceptadas y rechazadas (modelo, tools, mensajes de OMI e inventadas). La aprobación tiene cobertura específica de documento íntegro, comandos largos/multilínea y caracteres de control, navegación/resize/temas, decisiones negativas y revalidación durante la revisión. Una prueba con Pi en PTY real recorre 80×24, resize a 132×40 y vuelta, temas claro/oscuro, navegación hasta el final del comando, cancelar y aprobar explícitamente con GitHub falso; no es una evaluación visual humana. El empaquetado comprueba el binario instalado. No equivalen a una prueba contra GitHub/OMI real ni a una evaluación de calidad de modelos: esas pruebas requieren una persona.
