@@ -9,6 +9,7 @@ import { SessionManager, type ExtensionAPI, type ExtensionCommandContext, type E
 import { processRunner, type Runner } from "../../src/core/exec.ts";
 import { developmentHarnessExtension } from "../../src/tui/development.ts";
 import { tempDir, testIo } from "./io.ts";
+import { emitLikePi } from "./pi-events.ts";
 
 type Handler = (event: unknown, ctx: ExtensionCommandContext) => unknown;
 interface Sent { text: string; options?: { expandPromptTemplates?: boolean } }
@@ -89,7 +90,7 @@ export async function beginFixture(t: TestContext, options: { args?: readonly st
 	const main = options.persistent === false ? SessionManager.inMemory(root) : SessionManager.create(root, sessions);
 	main.appendMessage({ role: "user", content: "Pedido en el chat principal", timestamp: Date.now() });
 	current = await attach(main);
-	const emit = async (name: string, event: unknown = {}) => { let result: unknown; for (const handler of current.events.get(name) ?? []) result = await handler(event, current.ctx); return result; };
+	const emit = (name: string, event: unknown = {}) => emitLikePi(current.events.get(name) ?? [], name, event, current.ctx);
 	// Pi procesa los comandos despachados cuando la sesión queda en reposo; los mensajes comunes van al modelo.
 	const flush = async () => {
 		for (let item = queue.shift(); item; item = queue.shift()) {

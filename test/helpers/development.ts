@@ -16,6 +16,7 @@ import { issueDevelopmentTicket } from "../../src/tui/development-tickets.ts";
 import { tempDir, testIo } from "./io.ts";
 import { stripTerminalSequences, type Component, type TUI } from "@earendil-works/pi-tui";
 import { getThemeByName } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
+import { emitLikePi } from "./pi-events.ts";
 
 export async function developmentFixture(t: TestContext) {
 	const home = await realpath(await tempDir(t)); const root = join(home, "repo"); await mkdir(root);
@@ -95,7 +96,7 @@ export async function developmentFixture(t: TestContext) {
 			} },
 		modelRegistry: { hasConfiguredAuth: () => true, streamSimple: (_model: unknown, input: unknown) => { modelCalls.push(input); return { result: async () => { modelControl.onResult(); return { stopReason: modelControl.stopReason, content: [{ type: "text", text: '{"verdict":"pass","findings":[]}' }], usage: { input: 1, output: 2, totalTokens: 3, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }; } }; } },
 	} as unknown as ExtensionContext;
-	const emit = async (name: string, event: unknown = {}) => { let result: unknown; for (const handler of events.get(name) ?? []) result = await handler(event, context); return result; };
+	const emit = (name: string, event: unknown = {}) => emitLikePi(events.get(name) ?? [], name, event, context);
 	const attach = async () => { busHandlers.clear(); events.clear(); tools.clear(); commands.clear(); const extension = developmentHarnessExtension(testIo({ homeDir: home, cwd: checkout.root }), [], { runner }); if (typeof extension === "function") await extension(pi); else await extension.factory(pi); await emit("session_start"); };
 	await attach();
 	const invoke = async (name: string, input: unknown, signal = new AbortController().signal) => {
