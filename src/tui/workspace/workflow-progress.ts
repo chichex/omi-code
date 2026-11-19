@@ -18,6 +18,8 @@ export interface WorkflowProgress {
  stages?: StageProgress[];
  /** Avisos de lentes: se muestran, no bloquean. */
  warnings?: string[];
+ /** Una línea por PR del stack: número, base, pasos y estado. */
+ stack?: string[];
 }
 const clean = (value: string): string => {
  const plain = stripTerminalSequences(value).replace(/[\x00-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "");
@@ -50,12 +52,13 @@ function parseProgress(value: unknown): WorkflowProgress | undefined {
  if (!Array.isArray(value.details) || !value.details.every((line: unknown) => typeof line === "string")) return;
  const stages = value.stages === undefined ? undefined : parseStages(value.stages);
  if (value.stages !== undefined && !stages) return;
- if (value.warnings !== undefined && (!Array.isArray(value.warnings) || !value.warnings.every((line: unknown) => typeof line === "string"))) return;
+ const lines = (field: unknown) => field === undefined || Array.isArray(field) && field.every((line: unknown) => typeof line === "string");
+ if (!lines(value.warnings) || !lines(value.stack)) return;
  // Extra fields are ignored; copies contain only the public presentation contract.
  return { id: value.id, issueNumber: value.issueNumber, worktree: value.worktree, branch: value.branch,
   phaseLabel: clean(value.phaseLabel), routeLabel: clean(value.routeLabel), activity: clean(value.activity), status: value.status,
   completedSteps: value.completedSteps, totalSteps: value.totalSteps, passedChecks: value.passedChecks, totalChecks: value.totalChecks,
-  blockedReason: clean(value.blockedReason), details: value.details.slice(0, 100).map(clean), ...(stages ? { stages } : {}), ...(Array.isArray(value.warnings) ? { warnings: value.warnings.slice(0, 20).map(clean) } : {}) };
+  blockedReason: clean(value.blockedReason), details: value.details.slice(0, 100).map(clean), ...(stages ? { stages } : {}), ...(Array.isArray(value.warnings) ? { warnings: value.warnings.slice(0, 20).map(clean) } : {}), ...(Array.isArray(value.stack) ? { stack: value.stack.slice(0, 20).map(clean) } : {}) };
 }
 export function matchingWorkflow(progress: WorkflowProgress | undefined, cwd: string, git: GitSnapshot | undefined): WorkflowProgress | undefined {
  if (!progress || !git || git.detached || git.branch !== progress.branch || checkoutPath(git.root) !== checkoutPath(progress.worktree)) return;
@@ -72,7 +75,7 @@ export class WorkflowProgressMonitor {
  }
  current(cwd: string, git: GitSnapshot | undefined): WorkflowProgress | undefined {
   const current = matchingWorkflow(this.progress, cwd, git);
-  return current ? { ...current, details: [...current.details], ...(current.stages ? { stages: current.stages.map(s => ({ ...s })) } : {}), ...(current.warnings ? { warnings: [...current.warnings] } : {}) } : undefined;
+  return current ? { ...current, details: [...current.details], ...(current.stages ? { stages: current.stages.map(s => ({ ...s })) } : {}), ...(current.warnings ? { warnings: [...current.warnings] } : {}), ...(current.stack ? { stack: [...current.stack] } : {}) } : undefined;
  }
  clear(): void { this.progress = undefined; }
 }
@@ -95,6 +98,7 @@ export function workflowProgressView(t: Theme, progress: WorkflowProgress | unde
   if (!p.stages) lines.push(" Etapas no informadas por este harness.");
   for (const s of p.stages ?? []) lines.push(t.fg(stageColor(s), ` ${s.current ? ">" : " "} ${symbols[s.status]} ${clean(s.label)} · ${stageLabels[s.status]}`), `    Previsto: ${plannedLabels[s.planned]}`, `    Real: ${modeLabels[s.observed]}`);
   if (p.warnings?.length) lines.push("", t.fg("warning", t.bold(" Avisos de lentes · no bloquean, salvo un fail de seguridad")), ...p.warnings.map(w => t.fg("warning", ` △ ${clean(w)}`)));
+  if (p.stack?.length) lines.push("", t.bold(" Stack de PRs"), ...p.stack.map(line => ` ${clean(line)}`));
   lines.push("", " ? condicional/sin observar · ○ pendiente · ✓ cumplida · △ con avisos · – no aplica", " Previsto no confirma ejecución. Los lentes son llamadas aisladas.", " Esta vista no ejecuta ni aprueba pasos, checks o publicaciones.");
  }
  return lines.flatMap(line => wrapTextWithAnsi(line, Math.max(1, width))).map(line => fit(line, width));
@@ -127,5 +131,6 @@ export function workflowProgressDetail(progress: WorkflowProgress | undefined): 
   "", notice("Sólo datos informados por el harness; este panel no ejecuta pasos ni checks."), section("Recorrido"),
   ...(p.stages ?? []).flatMap(s => [notice(`${s.current ? "> " : ""}${clean(s.label)} · ${stageLabels[s.status]}`, "text"), notice(`Previsto: ${plannedLabels[s.planned]} · Real: ${modeLabels[s.observed]}`)]),
   ...(p.warnings?.length ? [section("Avisos de lentes (no bloquean, salvo un fail de seguridad)"), ...p.warnings.map((line) => notice(clean(line), "warning"))] : []),
+  ...(p.stack?.length ? [section("Stack de PRs"), ...p.stack.map((line) => notice(clean(line), "text"))] : []),
   section("Detalle observado"), ...p.details.map((line) => notice(clean(line), "text"))];
 }

@@ -2,6 +2,7 @@
 import type { Lens, Workflow } from "../harness/model.ts";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { renderWorkflowArtifact } from "../harness/github.ts";
+import { stackLines } from "../harness/stack.ts";
 
 // legend: texto propio de OMI ya escrito como se ve; nunca datos de la receta.
 export interface ApprovalLine { kind: "heading" | "text" | "command" | "legend"; text: string }
@@ -51,7 +52,7 @@ export function approvalDocument(state: Workflow): ApprovalDocument {
 	if (!recipe) throw new Error("Falta receta para revisar");
 	// Sin tope propio: la revisión navega por secciones. Sólo se comprueba que el artefacto entre en GitHub.
 	renderWorkflowArtifact(state);
-	const { classification: c, executor } = recipe;
+	const { classification: c, executor } = recipe; const stack = stackLines(state);
 	const sections: ApprovalSection[] = [
 		{ id: "summary", title: "Resumen", lines: [line(`Issue #${state.source.number} · ${state.source.title}`),
 			line(`Tipo: ${TYPES[c.type]} · Ruta: ${ROUTES[recipe.route]} · Tamaño: ${c.size === "small" ? "Chico" : "Grande"}`),
@@ -64,7 +65,8 @@ export function approvalDocument(state: Workflow): ApprovalDocument {
 		{ id: "approach", title: "Enfoque y riesgos", lines: [heading("Enfoque"), line(recipe.approach), heading("Riesgos"), ...bullets(c.riskAreas), line(`Causa conocida: ${c.causeKnown ? "sí" : "no"}`), heading("Lentes de verificación"), ...bullets(recipe.lenses.map((l) => LENSES[l]))] },
 		{ id: "scope", title: "Alcance", lines: [heading("Dentro del alcance"), ...bullets(recipe.scope), heading("Fuera de alcance"), ...bullets(recipe.outOfScope),
 			...(state.agreements?.length ? [heading("Acuerdos del chat"), ...bullets(state.agreements.map((a) => `«${a.quote}» → ${a.summary}`))] : [])] },
-		{ id: "steps", title: "Pasos C / casos D", lines: state.steps.flatMap((s) => [heading(`${s.id} · ${s.title}`), line(`Casos cubiertos: ${s.cases.join(", ")}`)]) },
+		{ id: "steps", title: "Pasos C / casos D", lines: [...state.steps.flatMap((s) => [heading(`${s.id} · ${s.title}`), line(`Casos cubiertos: ${s.cases.join(", ")}`)]),
+			...(stack.length ? [heading("Stack de PRs"), line("Cada grupo se publica como un PR draft: el primero sobre main y cada uno sobre el de abajo. Sólo el último cierra el issue."), ...stack.map(line)] : [])] },
 		{ id: "commands", title: "Pruebas y comandos exactos", lines: [line("Estos comandos quedan autorizados sin volver a preguntar. Revisarlos no los ejecuta."),
 			{ kind: "legend" as const, text: COMMAND_LEGEND },
 			...recipe.cases.flatMap((d) => [heading(`${d.id} · ${d.description}`), { kind: "command" as const, text: d.command }])] },

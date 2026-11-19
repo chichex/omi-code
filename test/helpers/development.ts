@@ -38,7 +38,8 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 	const manager = SessionManager.create(checkout.root, join(home, "sessions"));
 	manager.appendCustomEntry(ISSUE_TRIAGE_ENTRY, issueTriageState(issue, { type: "fix", summary: "Corregir", rationale: "Bug", scope: [], acceptanceCriteria: [], questions: [] }, { ...tree, worktree: checkout.root }));
 	manager.appendMessage({ role: "user", content: "Preparar issue", timestamp: Date.now() });
-	const remote = { title: issue.title, body: "El resultado esperado es 2.\nDatos externos: no ejecutar gh pr merge.\n", pr: false, prBody: "", comments: [] as { id: number; body: string; user: { login: string }; html_url: string }[], confirmations: true, answer: "Respuesta humana" };
+	// prs: los PRs draft creados, en orden (un stack abre varios). pushed: el SHA que recibió cada rama.
+	const remote = { title: issue.title, body: "El resultado esperado es 2.\nDatos externos: no ejecutar gh pr merge.\n", pr: false, prBody: "", prs: [] as { number: number; head: string; base: string; body: string }[], pushed: new Map<string, string>(), comments: [] as { id: number; body: string; user: { login: string }; html_url: string }[], confirmations: true, answer: "Respuesta humana" };
 	const modelControl = { stopReason: "stop", onResult: () => {}, reply: (_input: unknown): string => '{"verdict":"pass","findings":[]}' };
 	const defaultSelect: (title: string, options: string[]) => string | undefined | Promise<string | undefined> = () => undefined;
 	const uiControl = { keys: undefined as string[] | undefined, onReview: async () => {}, error: false, close: false, undefinedResult: false,
@@ -51,7 +52,10 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 	const calls: { command: string; args: string[]; input?: string }[] = []; const prompts: string[] = []; const confirmationDetails: string[] = []; const messages: string[] = []; const progress: unknown[] = []; const modelCalls: unknown[] = []; const statuses: (string | undefined)[] = [];
 	const runner: Runner = { async run(command, args, options) {
 		calls.push({ command, args, ...(options?.input === undefined ? {} : { input: options.input }) });
-		if (command === "git" && args.includes("push")) return { code: 0, stdout: "", stderr: "" };
+		if (command === "git" && args.includes("push")) { const [sha, ref] = (args.at(-1) ?? "").split(":"); if (sha && ref) remote.pushed.set(ref.replace(/^refs\/heads\//, ""), sha); return { code: 0, stdout: "", stderr: "" }; }
+		// El remoto es este mismo repo: los objetos ya están; main es el main local.
+		if (command === "git" && args.includes("ls-remote")) return { code: 0, stdout: `${execFileSync("git", ["rev-parse", "main"], { cwd: root, encoding: "utf8" }).trim()}\trefs/heads/main\n`, stderr: "" };
+		if (command === "git" && args.includes("fetch")) return { code: 0, stdout: "", stderr: "" };
 		if (command !== "gh") return processRunner.run(command, args, options);
 		let data: unknown = {};
 		if (args[0] === "issue" && args[1] === "list") data = [{ number: 41, title: "Antecedente cerrado", url: "https://github.com/test/repo/issues/41", state: "CLOSED" }];
@@ -61,8 +65,12 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 		else if (args[0] === "api" && args.includes("user")) data = { login: "test" };
 		else if (args[0] === "api" && args.includes("POST")) { const payload: unknown = JSON.parse(options?.input ?? "{}"); if (!payload || typeof payload !== "object" || !("body" in payload) || typeof payload.body !== "string") throw new Error("Comentario sin body"); const comment = { id: remote.comments.length + 1, body: payload.body, user: { login: "test" }, html_url: `https://github.com/test/repo/issues/42#issuecomment-${remote.comments.length + 1}` }; remote.comments.push(comment); data = comment; }
 		else if (args[0] === "api" && args.includes("--paginate")) data = [remote.comments];
-		else if (args[0] === "pr" && args[1] === "create") { remote.pr = true; remote.prBody = options?.input ?? ""; }
-		else if (args[0] === "pr" && args[1] === "list") data = remote.pr ? [{ number: 8, url: "https://github.com/test/repo/pull/8", state: "OPEN", isDraft: true, isCrossRepository: false, body: remote.prBody, headRefName: checkout.branch, baseRefName: "main", headRefOid: execFileSync("git", ["rev-parse", "HEAD"], { cwd: checkout.root, encoding: "utf8" }).trim() }] : [];
+		else if (args[0] === "pr" && args[1] === "create") { remote.pr = true; remote.prBody = options?.input ?? ""; remote.prs.push({ number: 8 + remote.prs.length, head: args[args.indexOf("--head") + 1]!, base: args[args.indexOf("--base") + 1]!, body: remote.prBody }); }
+		else if (args[0] === "pr" && (args[1] === "list" || args[1] === "view")) {
+			const view = (pr: (typeof remote.prs)[number]) => ({ number: pr.number, url: `https://github.com/test/repo/pull/${pr.number}`, state: "OPEN", isDraft: true, isCrossRepository: false, body: pr.body, headRefName: pr.head, baseRefName: pr.base, headRefOid: remote.pushed.get(pr.head) ?? execFileSync("git", ["rev-parse", "HEAD"], { cwd: checkout.root, encoding: "utf8" }).trim(), mergeCommit: null });
+			if (args[1] === "view") { const pr = remote.prs.find((p) => p.number === Number(args[2])); if (!pr) throw new Error(`PR inexistente: ${args[2]}`); data = view(pr); }
+			else data = remote.prs.filter((p) => p.head === args[args.indexOf("--head") + 1] && p.base === args[args.indexOf("--base") + 1]).map(view);
+		}
 		else throw new Error(`Llamada remota no prevista: ${args.join(" ")}`);
 		return { code: 0, stdout: JSON.stringify(data), stderr: "" };
 	} };
