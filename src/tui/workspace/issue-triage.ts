@@ -6,6 +6,7 @@ import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-a
 import { safeText, type GithubItem } from "./data.ts";
 import { ISSUE_TYPES, type IssueWorktree } from "./issue-worktree.ts";
 import { publishSessionSnapshot } from "./session-files.ts";
+import { AssessmentSchema, decideAssessment, type TriagePolicy } from "../../harness/triage-policy.ts";
 
 const nonempty = (maxLength: number) => Type.String({ minLength: 1, maxLength, pattern: "\\S" });
 const bullets = () => Type.Array(nonempty(400), { maxItems: 8 });
@@ -56,6 +57,33 @@ export async function classifyIssue(ctx: ExtensionContext, issue: GithubItem, bo
 	if (response.stopReason !== "stop") throw new Error("El modelo no completó el triage. Revisá el proveedor y reintentá; no se creó ningún worktree.");
 	const triage = parseIssueTriage(response.content.filter((block) => block.type === "text").map((block) => block.text).join("\n"));
 	return { triage, usage: response.usage, provider: response.provider, model: response.model };
+}
+// Esquema de evaluación efímero: no se agrega a IssueTriageState ni a preparaciones versión 1.
+const RequestTriageSchema = Type.Object({ triage: TriageSchema, assessment: AssessmentSchema }, { additionalProperties: false });
+export type DevelopmentRequestTriage = Static<typeof RequestTriageSchema>;
+export function decideDevelopmentRequest(value: unknown, policy?: TriagePolicy) {
+	const evaluation = value && typeof value === "object" && "triage" in value && "assessment" in value ? { triage: value.triage, assessment: value.assessment } : undefined;
+	if (!Value.Check(RequestTriageSchema, evaluation)) throw new Error("Evaluación de clasificación inválida");
+	return decideAssessment(evaluation.assessment, evaluation.triage.questions, policy);
+}
+export async function classifyDevelopmentRequest(ctx: ExtensionContext, request: { title: string; body: string }, signal: AbortSignal) {
+	if (!ctx.model) throw new Error("Elegí un modelo antes de clasificar el pedido");
+	if (request.body.length > 100_000) throw new Error("El pedido es demasiado grande para la clasificación");
+	signal.throwIfAborted();
+	const response = await ctx.modelRegistry.complete(ctx.model, {
+		systemPrompt: SYSTEM_PROMPT + `\nPara este pedido SIN issue, reemplazá el formato anterior por {"triage":{los campos del triage anterior},"assessment":{"scope":"localized|module|crosscutting|unknown","impact":"cosmetic|documentation|local-behavior|public-contract|unknown","reversible":"yes|no|unknown","verification":"clear|unclear|unknown","risk":"low|high|unknown","riskAreas":[],"rationale":"motivos basados en el pedido, hasta 1000 caracteres"}}.
+La evaluación es una estimación, no una medición: no conocés el diff ni las líneas reales, no inventes archivos inspeccionados. localized es un único punto; module abarca un módulo; crosscutting afecta varios. reversible=yes sólo si el pedido permite deshacer el cambio sin pérdida de datos ni efectos externos. verification=clear requiere un resultado esperado comprobable.
+Riesgos sensibles (también para una sola línea): security, permissions, auth, secrets, payments, personal-data, migrations, infra, public-contract, harness. Marcá risk=high y enumeralos en riskAreas. Sin riesgo sensible conocido usá []; si falta evidencia usá unknown, nunca supongas low. Información ambigua va en triage.questions y dimensiones desconocidas usan unknown. No decidas permisos ni ejecutes acciones. Todos los campos son obligatorios, sin otros campos.`,
+		messages: [{ role: "user", content: [{ type: "text", text: JSON.stringify(request) }], timestamp: Date.now() }],
+	}, { signal, maxTokens: 4096, cacheRetention: "none" });
+	signal.throwIfAborted();
+	if (response.stopReason !== "stop") throw new Error("El modelo no completó la clasificación; no se creó ningún recurso.");
+	const text = response.content.filter((block) => block.type === "text").map((block) => block.text).join("\n");
+	let value: unknown;
+	try { if (text.length > 24_000) throw new Error(); value = JSON.parse(text.trim().replace(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i, "$1")); }
+	catch { throw new Error("La clasificación no devolvió una evaluación JSON válida; no se creó ningún recurso."); }
+	if (!Value.Check(RequestTriageSchema, value)) throw new Error("La clasificación devolvió una evaluación inválida; no se creó ningún recurso.");
+	return { ...value, usage: response.usage, provider: response.provider, model: response.model };
 }
 export function issueTriageState(issue: GithubItem, triage: IssueTriage, worktree: IssueWorktree): IssueTriageState {
 	return { version: 1, issue: { number: issue.number, title: issue.title, url: issue.url }, triage, ...worktree };
