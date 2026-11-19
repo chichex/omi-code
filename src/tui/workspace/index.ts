@@ -24,6 +24,7 @@ import { readBranchPullRequest, type BranchPullRequest } from "./pull-request.ts
 import { restoreIssueTriage, type IssueTriageState } from "./issue-triage.ts";
 import { discoverLegacyPreparations, loadIssuePreparations, rememberIssueSession, type IssuePreparationEntry } from "./issue-registry.ts";
 import { developmentOffline, holdSessionSwitch, requestDevelopmentBegin, sessionSwitchOwner } from "../development-tickets.ts";
+import { foundationsLines, sessionFoundationsPin } from "../development-foundations.ts";
 import { preparePrincipalSession, PrincipalSessionBusyError } from "./main-workspace.ts";
 
 type View = WorkspaceView;
@@ -238,10 +239,15 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			if (!sessionFile) { ctx.ui.notify("El trabajo requiere una sesión persistente. Volvé a abrir OMI sin --no-session.", "warning"); return; }
 			switchView("chat"); requestDevelopmentBegin(pi, sessionFile, { issue: number });
 		}
+		// El editor es del harness, que tiene el pin, la KB y la sesión: se le despacha su comando.
+		function editFoundations(): void {
+			if (!ctx.isIdle() || ctx.hasPendingMessages()) { ctx.ui.notify("Esperá a que termine el turno antes de editar Foundations.", "warning"); return; }
+			pi.sendUserMessage("/omi-foundations", { expandPromptTemplates: true });
+		}
 		async function palette(): Promise<void> {
 			if (!active || finishModal) return;
 			const actions: [string, () => void | Promise<void>][] = [...WORKSPACE_VIEWS.map((item): [string, () => void] => [item.label, () => switchView(item.id)]),
-				["Progreso de desarrollo", showProgress], ["PR de la rama actual", showBranchPr], ["GitHub Actions", showActions], ["Subagentes", showSubagents], ["Elegir modelo", showModel], ["Ventana de contexto", showContext], ["Ubicación / worktree", showWorkspace], ["Recursos del equipo", showResources], ["Mostrar / ocultar lateral", toggleSidebar], ["Personalizar lateral", customizeSidebar], ["Alternar detalle de herramientas", () => { ctx.ui.setToolsExpanded(!ctx.ui.getToolsExpanded()); }], ["Actualizar datos", () => { void refreshLocal(); void refreshRemote(); }],
+				["Progreso de desarrollo", showProgress], ["Foundations", editFoundations], ["PR de la rama actual", showBranchPr], ["GitHub Actions", showActions], ["Subagentes", showSubagents], ["Elegir modelo", showModel], ["Ventana de contexto", showContext], ["Ubicación / worktree", showWorkspace], ["Recursos del equipo", showResources], ["Mostrar / ocultar lateral", toggleSidebar], ["Personalizar lateral", customizeSidebar], ["Alternar detalle de herramientas", () => { ctx.ui.setToolsExpanded(!ctx.ui.getToolsExpanded()); }], ["Actualizar datos", () => { void refreshLocal(); void refreshRemote(); }],
 				["Trabajar en el issue seleccionado", workOnSelectedIssue]];
 			if (git?.linked) actions.splice(WORKSPACE_VIEWS.length, 0, ["Volver al repo principal", () => pi.sendUserMessage("/omi-main", { expandPromptTemplates: true })]);
 			let selected: string | undefined;
@@ -340,9 +346,11 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			} finally { mainSessionTask = undefined; mainBusy = false; release(); changed(); }
 		}
 		pi.registerCommand("omi-main", { description: "Volver del worktree al repo principal y retomar su sesión, sin cambiar ramas", handler: returnToPrincipal });
-		const omiPane = new ReadView((width) => omiViewLines(theme(), { project, services, environments, error: envError, at: envAt, now: Date.now() }, width), (data) => {
+		const foundations = (): string[] => { const file = ctx.sessionManager.getSessionFile(); return foundationsLines(file ? sessionFoundationsPin(file) : undefined); };
+		const omiPane = new ReadView((width) => omiViewLines(theme(), { project, services, environments, error: envError, at: envAt, now: Date.now(), foundations: foundations() }, width), (data) => {
 			if (matchesKey(data, "escape")) { switchView("chat"); return true; }
 			if (data === "r") { void refreshRemote(); return true; }
+			if (data === "f") { editFoundations(); return true; }
 			return false;
 		}, changed, () => rows() - 6);
 		const progressPane = new ReadView(width => workflowProgressView(theme(), gitError ? undefined : workflow.current(ctx.cwd, git), width), data => {

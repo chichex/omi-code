@@ -215,7 +215,7 @@ Los comandos del catálogo corren sin preguntar con cualquier etiqueta. Las regl
 
 3. Toda revisión nueva pide el sí, también si sólo quita permisos. La misma revisión en otro documento de perillas (alguien editó otra parte) no vuelve a preguntar.
 4. La aceptada se guarda en `<OMI_HOME>/agent/foundations/` (por defecto `~/.omi/agent/foundations/`), 0600, por KB, producto y repo.
-5. La revisión queda **fija toda la sesión**: un cambio externo en la KB a mitad de sesión no se aplica. Sobrevive a `/reload` y viaja a la sesión del worktree con `omi_work_begin`, sin otro diálogo. La sesión siguiente muestra la diferencia. La excepción es una decisión propia de guardar Foundations o **Permitir siempre en este proyecto**: tras guardarse y aceptarse, reemplaza el pin inmediatamente.
+5. La revisión queda **fija toda la sesión**: un cambio externo en la KB a mitad de sesión no se aplica. Sobrevive a `/reload` y viaja a la sesión del worktree con `omi_work_begin`, sin otro diálogo. La sesión siguiente muestra la diferencia. La excepción es una decisión propia de guardar Foundations (armarlo o [editarlo desde la pantalla OMI](#editar-foundations-desde-la-pantalla-omi)) o **Permitir siempre en este proyecto**: tras guardarse y aceptarse, reemplaza el pin inmediatamente.
 
 Rechazar o cancelar deja la última revisión aceptada. Sin ninguna, la política estricta: `ask` en los cuatro puntos y catálogo vacío.
 
@@ -233,7 +233,7 @@ OMI lee la KB por la conexión MCP de Pi, sin el modelo. Si `~/.omi/agent/mcp.js
 
 ### Qué escribe en la KB y cuándo
 
-Sólo tras una decisión explícita de la persona: armar Foundations cuando falta, o agregar un comando desde su diálogo de autorización. El agente no recibe permiso para editar libremente la KB.
+Sólo tras una decisión explícita de la persona: armar Foundations cuando falta, editarlo desde la pantalla OMI, o agregar un comando desde su diálogo de autorización. El agente no recibe permiso para editar libremente la KB.
 
 **Agregar un comando con «Permitir siempre en este proyecto»**
 
@@ -255,7 +255,31 @@ Sólo tras una decisión explícita de la persona: armar Foundations cuando falt
 - Si las perillas cambiaron durante el diálogo, no se guarda. Una respuesta perdida se reintenta con la misma clave, sin duplicar el documento. La clave es determinista (repo, perillas previas y cuerpo), así que no se guarda en el registro local: un guardado que falla no deja nada ahí.
 - Lo guardado queda aceptado y vale en esa sesión.
 
-Para cambiar políticas, quitar comandos o editar libremente el catálogo, editá las perillas en la KB (o pedíselo al agente fuera del harness). El diálogo de autorización sólo puede sumar el comando exacto solicitado; no hay un comando de edición general. `/omi-work status` y el detalle del progreso muestran la revisión vigente, su origen (KB, local o estricta), las cuatro políticas, el catálogo y los avisos.
+#### Editar Foundations desde la pantalla OMI
+
+- Dónde: **f** en la vista OMI (Ctrl 5), «Foundations» en la paleta (Ctrl K) o `/omi-foundations`. La vista OMI muestra la revisión vigente, su origen (KB, última aceptada local o el default), las cuatro políticas y el catálogo. Antes del primer punto del harness dice que todavía no se decidió; abrir el editor la decide como cualquier otro punto.
+- Pide la TUI interactiva, un proyecto de confianza, sesión persistente y la KB disponible, con el agente en reposo. Si falta algo, o el bloque de la KB es inválido, dice por qué y no abre nada: un bloque inválido se corrige en la KB.
+- Parte de la revisión vigente en la KB; sin bloque, de lo vigente en la sesión. Usa las mismas tandas que el creador, ya respondidas con lo actual: los comandos del catálogo vienen en «Escribir otra respuesta», uno por línea, y ahí se agregan, quitan o cambian. Si la KB tiene otra revisión que la vigente, la primera tanda lo avisa.
+- Un único sí. El resumen muestra la diferencia contra lo vigente en la sesión y el destino. Ejemplo:
+
+  ```
+  ¿Guardar Foundations en la KB?
+  Foundations · chichex/omi-code · KB omi-code (kb-prod-chiche.ohmyinfra.com)
+  Antes: última revisión aceptada e0cabd0f
+  Comandos que corren sin preguntar:
+      npm test
+    + npm run typecheck
+  Políticas:
+    push + PR draft: ask → auto   ⚠ hace push de la rama y abre el PR draft sin preguntar; nunca mergea ni fuerza
+  ```
+
+- Con el sí guarda una revisión nueva de las perillas (el resto del documento queda byte a byte), registra la aceptación local y la aplica en la sesión, sin reiniciar. Si la KB ya tiene esa revisión, sólo la acepta. Sin cambios, no pregunta ni guarda.
+- Esc en cualquier tanda, o «Cancelar», no guarda, no acepta ni cambia la sesión.
+- Si las perillas cambian en la KB antes de guardar, no las pisa: recarga la revisión más reciente y vuelve a las preguntas con un aviso. Hay que confirmar de nuevo.
+- Guardado a medias (la KB guardó pero falló la aceptación local, o no se pudo confirmar el guardado): sigue valiendo la política anterior, muestra el estado real y ofrece «Reintentar» o «Dejar así». No revierte la KB. Reintentar relee la KB: si ya tiene tu revisión, la acepta sin volver a guardar; si tiene otra, muestra la más reciente y pide un sí nuevo.
+- Sólo cambia decisiones futuras: no deshace lo que ya corrió. No habilita merge, tags, workflows, deploys ni secretos.
+
+También se pueden editar las perillas en la KB a mano. El diálogo de autorización sólo suma el comando exacto solicitado. `/omi-work status` y el detalle del progreso muestran la revisión vigente, su origen (KB, local o estricta), las cuatro políticas, el catálogo y los avisos.
 
 ### Límites
 

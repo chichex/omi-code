@@ -5,6 +5,13 @@ import { readTrust, writeTrust, type TrustKey, type TrustRecord } from "../harne
 import type { FoundationsPin } from "./development-foundations.ts";
 import type { KbClient, KbDoc } from "./kb-client.ts";
 
+/** En qué quedó la KB: cambió antes de guardar (nada guardado), pudo haberse guardado, quedó guardada sin aceptar, o aceptada. */
+export type SaveStage = "conflict" | "unconfirmed" | "saved" | "accepted";
+export class FoundationsSaveError extends Error {
+	readonly stage: SaveStage;
+	constructor(stage: SaveStage, message: string, options?: ErrorOptions) { super(message, options); this.name = "FoundationsSaveError"; this.stage = stage; }
+}
+
 export interface PreparedSave { previous: KbDoc | null; body: string; clave: string }
 const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
 /** La expectativa se valida sobre el mismo documento que se compone, incluida la ausencia explícita (null). */
@@ -14,18 +21,31 @@ export async function prepareFoundationsSave(kb: KbClient, key: TrustKey, block:
 	signal.throwIfAborted();
 	if (expectedHash !== undefined) {
 		const parsed = parseFoundations(previous?.cuerpo ?? "", key.repo);
-		if (parsed.status === "invalid" || (parsed.status === "valid" ? parsed.hash : null) !== expectedHash) throw new Error("La revisión de Foundations cambió antes de componer las perillas; no se guardó nada. Revisá la KB en una sesión nueva.");
+		if (parsed.status === "invalid" || (parsed.status === "valid" ? parsed.hash : null) !== expectedHash) throw new FoundationsSaveError("conflict", "La revisión de Foundations cambió antes de componer las perillas; no se guardó nada. Revisá la KB en una sesión nueva.");
 	}
 	const body = composePerillas(previous?.cuerpo, key.product, key.repo, block);
 	return { previous, body, clave: `omi-foundations|${key.repo.slice(0, 80)}|${previous?.id ?? "none"}|${sha256(body).slice(0, 40)}` };
 }
 
-interface SaveDeps {
-	trustDir: string; now: () => string; signal: AbortSignal;
+interface AcceptDeps { trustDir: string; now: () => string; signal: AbortSignal; writeAcceptance?: typeof writeTrust }
+/** Registra la aceptación local de una revisión que ya está en la KB (`stored`) y devuelve el pin que vale con ella. */
+export async function acceptFoundations(key: TrustKey, block: FoundationsBlock, stored: KbDoc, deps: AcceptDeps & { notice?: string }): Promise<FoundationsPin> {
+	const { signal } = deps;
+	signal.throwIfAborted();
+	const hash = foundationsHash(block);
+	const record: TrustRecord = await readTrust(deps.trustDir, key) ?? { version: 1, ...key, accepted: null, offerDeclined: false };
+	signal.throwIfAborted();
+	await (deps.writeAcceptance ?? writeTrust)(deps.trustDir, { ...record, accepted: { docId: stored.id, blockHash: hash, block, author: stored.autor ?? "", date: stored.fecha ?? "", acceptedAt: deps.now() } });
+	return {
+		origin: "kb", block, hash, docId: stored.id, author: stored.autor ?? "", date: stored.fecha ?? "", notice: deps.notice ?? "",
+		reading: { kind: "valid", key, block, hash, perillas: stored },
+	};
+}
+
+interface SaveDeps extends AcceptDeps {
 	requireLatest?: boolean; beforeAccept?: () => Promise<void>;
 	/** Recibe el pin apenas la aceptación local quedó escrita, aunque después se cancele: es durable. */
 	onAccepted?: (pin: FoundationsPin) => void;
-	writeAcceptance?: typeof writeTrust;
 }
 /** Control optimista, no CAS: relee antes de enviar y confirma después. La clave recupera una respuesta perdida. */
 export async function commitFoundationsSave(kb: KbClient, key: TrustKey, block: FoundationsBlock, prepared: PreparedSave, deps: SaveDeps): Promise<FoundationsPin> {
@@ -33,7 +53,7 @@ export async function commitFoundationsSave(kb: KbClient, key: TrustKey, block: 
 	signal.throwIfAborted();
 	const current = await kb.currentPerillas(key.product, signal);
 	signal.throwIfAborted();
-	if ((current?.id ?? null) !== (prepared.previous?.id ?? null) || current?.cuerpo !== prepared.previous?.cuerpo) throw new Error("Las perillas cambiaron en la KB antes de guardar Foundations; no se guardó nada. Revisá la revisión vigente.");
+	if ((current?.id ?? null) !== (prepared.previous?.id ?? null) || current?.cuerpo !== prepared.previous?.cuerpo) throw new FoundationsSaveError("conflict", "Las perillas cambiaron en la KB antes de guardar Foundations; no se guardó nada. Revisá la revisión vigente.");
 	const input = { product: key.product, titulo: prepared.previous?.titulo || `Perillas de ${key.product}`, cuerpo: prepared.body, clave: prepared.clave };
 	let confirmed = false; let accepted = false;
 	try {
@@ -48,17 +68,8 @@ export async function commitFoundationsSave(kb: KbClient, key: TrustKey, block: 
 		signal.throwIfAborted();
 		if (deps.requireLatest && (latest?.id !== stored.id || latest.cuerpo !== prepared.body)) throw new Error("Las perillas cambiaron durante la confirmación: hay una revisión más nueva. Revisala antes de continuar.");
 		await deps.beforeAccept?.();
-		signal.throwIfAborted();
-		const hash = foundationsHash(block);
-		const record: TrustRecord = await readTrust(deps.trustDir, key) ?? { version: 1, ...key, accepted: null, offerDeclined: false };
-		signal.throwIfAborted();
-		await (deps.writeAcceptance ?? writeTrust)(deps.trustDir, { ...record, accepted: { docId: stored.id, blockHash: hash, block, author: stored.autor ?? "", date: stored.fecha ?? "", acceptedAt: deps.now() } });
+		const pin = await acceptFoundations(key, block, stored, { ...deps, notice: latest?.id === stored.id ? "" : "La KB guardó Foundations, pero ya hay perillas más nuevas: la próxima sesión muestra la diferencia." });
 		accepted = true;
-		const pin: FoundationsPin = {
-			origin: "kb", block, hash, docId: stored.id, author: stored.autor ?? "", date: stored.fecha ?? "",
-			notice: latest?.id === stored.id ? "" : "La KB guardó Foundations, pero ya hay perillas más nuevas: la próxima sesión muestra la diferencia.",
-			reading: { kind: "valid", key, block, hash, perillas: stored },
-		};
 		deps.onAccepted?.(pin);
 		signal.throwIfAborted();
 		return pin;
@@ -67,6 +78,6 @@ export async function commitFoundationsSave(kb: KbClient, key: TrustKey, block: 
 		const status = accepted ? "Foundations quedó guardado en la KB y aceptado localmente para futuras sesiones, pero no se ejecutó el comando"
 			: confirmed ? "Foundations se guardó en la KB, pero no se completó su verificación o aceptación local"
 				: "No se pudo confirmar el guardado de Foundations en la KB; pudo haberse guardado";
-		throw new Error(`${status}. ${why}`, { cause: error });
+		throw new FoundationsSaveError(accepted ? "accepted" : confirmed ? "saved" : "unconfirmed", `${status}. ${why}`, { cause: error });
 	}
 }
