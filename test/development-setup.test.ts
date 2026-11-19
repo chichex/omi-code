@@ -5,6 +5,7 @@ import { renderFoundationsBlock } from "../src/harness/foundations.ts";
 import { developmentInstructions } from "../src/tui/development-view.ts";
 import { developmentFixture } from "./helpers/development.ts";
 import { memoryKb } from "./helpers/mock-kb.ts";
+import { ASK_ALL } from "./helpers/foundations.ts";
 
 const AUTHORIZE = "Autorizar comando del proyecto";
 const INSTALL = "node -e \"process.exit(0)\"";
@@ -19,7 +20,7 @@ async function withCatalog(t: TestContext, comandos: string[]) {
 }
 
 test("development_setup: setup corre en Explorar, antes de aprobar la receta, con la autorización de siempre", async (t) => {
-	const f = await developmentFixture(t); await f.start();
+	const f = await developmentFixture(t, { foundations: ASK_ALL }); await f.start();
 	const result = await f.invoke("omi_workflow_check", { kind: "setup", command: INSTALL });
 	assert.equal(result.isError, false);
 	assert.equal(asked(f), 1, "un comando fuera del catálogo pregunta una vez");

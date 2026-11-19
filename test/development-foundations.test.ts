@@ -1,11 +1,11 @@
-// Foundations por sesión: se lee al arrancar, se acepta una vez por revisión y queda fijo toda la sesión.
+// Foundations por sesión: se lee al arrancar, una revisión válida se acepta sola y queda fija toda la sesión.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { foundationsHash, renderFoundationsBlock, type FoundationsBlock } from "../src/harness/foundations.ts";
+import { DEFAULT_POLICY, foundationsHash, renderFoundationsBlock, type FoundationsBlock } from "../src/harness/foundations.ts";
 import { foundationsDir, readTrust, trustPath } from "../src/harness/foundations-trust.ts";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { decideFoundations, parseRepoIdentity, readFoundations, type FoundationsReading } from "../src/tui/development-foundations.ts";
+import { decideFoundations, effectivePolicy, parseRepoIdentity, readFoundations, type FoundationsReading } from "../src/tui/development-foundations.ts";
 import { developmentFixture } from "./helpers/development.ts";
 import { beginFixture } from "./helpers/development-begin.ts";
 import { memoryKb, type MemoryKb } from "./helpers/mock-kb.ts";
@@ -45,101 +45,106 @@ test("foundations_session: leer distingue válido, ausente, inválido, sin KB y 
 	assert.equal((await reading(t, other)).kind, "missing", "un bloque de otro repo no aplica");
 });
 
-function ctx(answers: boolean[], hasUI = true) {
-	const prompts: { title: string; description: string }[] = [];
-	return { prompts, ctx: { hasUI } as ExtensionContext, deps: (trustDir: string) => ({ trustDir, now: () => "2026-11-18T03:00:00Z", confirm: async (_ctx: ExtensionContext, title: string, description: string) => { prompts.push({ title, description }); return answers.shift() ?? false; } }) };
+function ctx(hasUI = true) {
+	const notices: { message: string; level: string | undefined }[] = [];
+	return { notices, ctx: { hasUI, ui: { notify: (message: string, level?: string) => { notices.push({ message, level }); } } } as unknown as ExtensionContext, deps: (trustDir: string) => ({ trustDir, now: () => "2026-11-18T03:00:00Z" }) };
 }
-test("foundations_session: una revisión nueva muestra la diferencia, pide un sí y queda aceptada para el próximo proceso", async (t) => {
+const APPLIED = /Foundations: se aplica la revisión nueva de la KB, sin preguntar/;
+test("foundations_session: una revisión nueva se acepta sola, avisa la diferencia y queda aceptada para el próximo proceso", async (t) => {
 	const dir = foundationsDir(await tempDir(t)); const kb = kbWith(block());
-	const read = await reading(t, kb);
-	const first = ctx([true]);
-	const pin = await decideFoundations(read, first.ctx, first.deps(dir));
-	assert.deepEqual(first.prompts.map((p) => p.title), [ACCEPT]);
-	assert.match(first.prompts[0]!.description, /^ {2}\+ node test\.cjs$/m);
-	assert.match(first.prompts[0]!.description, /política estricta/);
+	const first = ctx();
+	const pin = await decideFoundations(await reading(t, kb), first.ctx, first.deps(dir));
+	assert.equal(first.notices.length, 1, "un aviso, ningún diálogo"); assert.equal(first.notices[0]!.level, "info");
+	const notice = first.notices[0]!.message;
+	assert.match(notice, APPLIED); assert.match(notice, /^ {2}\+ node test\.cjs$/m);
+	assert.match(notice, /Antes: sin Foundations \(por defecto: todo auto\)/);
+	assert.match(notice, /arranque: auto → ask/, "la diferencia parte del default");
 	assert.equal(pin.origin, "kb"); assert.deepEqual(pin.block, block());
 	assert.equal((await readTrust(dir, key(kb.url)))?.accepted?.blockHash, foundationsHash(block()));
-	const again = ctx([]);
+	const again = ctx();
 	assert.equal((await decideFoundations(await reading(t, kb), again.ctx, again.deps(dir))).origin, "kb");
-	assert.equal(again.prompts.length, 0, "proceso nuevo con el mismo hash: sin diálogo");
+	assert.equal(again.notices.length, 0, "proceso nuevo con el mismo hash: sin aviso");
 });
 
-test("foundations_session: rechazar deja la última aceptada, o la estricta si no hay", async (t) => {
+test("foundations_session: una revisión nueva reemplaza la aceptada sin preguntar, también si sólo quita permisos", async (t) => {
 	const dir = foundationsDir(await tempDir(t)); const kb = kbWith(block());
-	const strict = ctx([false]);
-	const none = await decideFoundations(await reading(t, kb), strict.ctx, strict.deps(dir));
-	assert.equal(none.origin, "strict"); assert.equal(none.block, null);
-	assert.equal(await readTrust(dir, key(kb.url)), undefined, "un no no registra nada");
-	await decideFoundations(await reading(t, kb), ctx([true]).ctx, ctx([true]).deps(dir));
+	await decideFoundations(await reading(t, kb), ctx().ctx, ctx().deps(dir));
 	const newer = block({ comandos: ["node test.cjs", "node other-test.cjs"], politica: { ...block().politica, fuera_de_catalogo: "auto" } });
 	perillas(kb, newer);
-	const reject = ctx([false]);
-	const pin = await decideFoundations(await reading(t, kb), reject.ctx, reject.deps(dir));
-	assert.match(reject.prompts[0]!.description, /^ {2}\+ node other-test\.cjs$/m);
-	assert.match(reject.prompts[0]!.description, /corre cualquier comando sin preguntar/);
-	assert.equal(pin.origin, "local"); assert.deepEqual(pin.block, block());
-	assert.match(pin.notice, /rechaz/i);
+	const wider = ctx();
+	const pin = await decideFoundations(await reading(t, kb), wider.ctx, wider.deps(dir));
+	assert.match(wider.notices[0]!.message, /^ {2}\+ node other-test\.cjs$/m);
+	assert.match(wider.notices[0]!.message, /fuera del catálogo: ask → auto .*corre cualquier comando sin preguntar/, "el aviso marca cada auto");
+	assert.equal(pin.origin, "kb"); assert.deepEqual(pin.block, newer);
+	assert.equal((await readTrust(dir, key(kb.url)))?.accepted?.blockHash, foundationsHash(newer));
+	perillas(kb, block());
+	const narrower = ctx();
+	assert.deepEqual((await decideFoundations(await reading(t, kb), narrower.ctx, narrower.deps(dir))).block, block());
+	assert.match(narrower.notices[0]!.message, /fuera del catálogo: auto → ask/);
+	assert.equal((await readTrust(dir, key(kb.url)))?.accepted?.blockHash, foundationsHash(block()));
 });
 
-test("foundations_session: inválido, ausente o sin KB no preguntan y usan la aceptada local, con aviso", async (t) => {
+test("foundations_session: inválido, ausente o sin KB no avisan y usan la aceptada local; sin ninguna, el default: todo auto", async (t) => {
 	const dir = foundationsDir(await tempDir(t)); const kb = kbWith(block());
 	const cases: [string, MemoryKb][] = [["inválido", kbWith("```omi-foundations\n{ roto\n```")], ["sin bloque", kbWith()]];
 	const offline = kbWith(block()); offline.available = "sin login"; cases.push(["sin KB", offline]);
 	for (const [name, other] of cases) {
-		const empty = ctx([]);
-		const strict = await decideFoundations(await reading(t, other), empty.ctx, empty.deps(dir));
-		assert.equal(strict.origin, "strict", name); assert.equal(empty.prompts.length, 0, name); assert.ok(strict.notice, name);
+		const empty = ctx();
+		const fallback = await decideFoundations(await reading(t, other), empty.ctx, empty.deps(dir));
+		assert.equal(fallback.origin, "default", name); assert.equal(fallback.block, null, name); assert.equal(empty.notices.length, 0, name);
+		assert.match(fallback.notice, /todo auto/, name);
+		assert.deepEqual(effectivePolicy(fallback), { politica: DEFAULT_POLICY, command: { catalog: [], outside: "auto" }, hash: null }, name);
 	}
-	await decideFoundations(await reading(t, kb), ctx([true]).ctx, ctx([true]).deps(dir));
+	await decideFoundations(await reading(t, kb), ctx().ctx, ctx().deps(dir));
 	for (const [name, other] of cases) {
-		const empty = ctx([]);
+		const empty = ctx();
 		const local = await decideFoundations(await reading(t, other), empty.ctx, empty.deps(dir));
-		assert.equal(local.origin, "local", name); assert.deepEqual(local.block, block(), name); assert.equal(empty.prompts.length, 0, name);
+		assert.equal(local.origin, "local", name); assert.deepEqual(local.block, block(), name); assert.equal(empty.notices.length, 0, name);
+		assert.equal(effectivePolicy(local).politica.receta, "ask", `${name}: el ask aceptado sigue valiendo`);
 	}
-	const invalid = await decideFoundations(await reading(t, Object.assign(kbWith("```omi-foundations\n{ roto\n```"), { url: kb.url })), ctx([]).ctx, ctx([]).deps(dir));
+	const invalid = await decideFoundations(await reading(t, Object.assign(kbWith("```omi-foundations\n{ roto\n```"), { url: kb.url })), ctx().ctx, ctx().deps(dir));
 	assert.match(invalid.notice, /inválid/);
 });
 
-test("foundations_session: sin UI una revisión nueva no se acepta", async (t) => {
-	const dir = foundationsDir(await tempDir(t)); const headless = ctx([true], false);
-	const pin = await decideFoundations(await reading(t, kbWith(block())), headless.ctx, headless.deps(dir));
-	assert.equal(pin.origin, "strict"); assert.equal(headless.prompts.length, 0);
+test("foundations_session: sin UI una revisión nueva también se acepta", async (t) => {
+	const dir = foundationsDir(await tempDir(t)); const headless = ctx(false); const kb = kbWith(block());
+	const pin = await decideFoundations(await reading(t, kb), headless.ctx, headless.deps(dir));
+	assert.equal(pin.origin, "kb"); assert.deepEqual(pin.block, block());
+	assert.equal((await readTrust(dir, key(kb.url)))?.accepted?.blockHash, foundationsHash(block()));
 });
 
-test("foundations_session: el mismo hash en otro documento se adopta sin preguntar", async (t) => {
+test("foundations_session: el mismo hash en otro documento se adopta sin avisar", async (t) => {
 	const dir = foundationsDir(await tempDir(t)); const kb = kbWith(block());
-	await decideFoundations(await reading(t, kb), ctx([true]).ctx, ctx([true]).deps(dir));
+	await decideFoundations(await reading(t, kb), ctx().ctx, ctx().deps(dir));
 	const edited = perillas(kb, `Otra perilla cambiada.\n\n${renderFoundationsBlock(block())}`);
-	const quiet = ctx([]);
+	const quiet = ctx();
 	assert.equal((await decideFoundations(await reading(t, kb), quiet.ctx, quiet.deps(dir))).docId, edited.id);
-	assert.equal(quiet.prompts.length, 0);
+	assert.equal(quiet.notices.length, 0);
 	assert.equal((await readTrust(dir, key(kb.url)))?.accepted?.docId, edited.id);
 });
 
-test("foundations_session: un registro local corrupto no se reescribe sin un sí", async (t) => {
+test("foundations_session: un registro local corrupto no cuenta como aceptado y sólo lo reemplaza una revisión válida", async (t) => {
 	const dir = foundationsDir(await tempDir(t)); const kb = kbWith(block());
 	await mkdir(dir, { recursive: true, mode: 0o700 }); await writeFile(trustPath(dir, key(kb.url)), "{ roto", { mode: 0o600 });
-	const offline = kbWith(block()); offline.available = "sin login";
-	assert.equal((await decideFoundations(await reading(t, offline), ctx([]).ctx, ctx([]).deps(dir))).origin, "strict");
-	const reject = ctx([false]);
-	assert.equal((await decideFoundations(await reading(t, kb), reject.ctx, reject.deps(dir))).origin, "strict");
-	assert.equal(await readFile(trustPath(dir, key(kb.url)), "utf8"), "{ roto");
-	const accept = ctx([true]);
-	assert.equal((await decideFoundations(await reading(t, kb), accept.ctx, accept.deps(dir))).origin, "kb");
-	assert.equal((await readTrust(dir, key(kb.url)))?.accepted?.blockHash, foundationsHash(block()), "con el sí se reemplaza");
+	const offline = Object.assign(kbWith(block()), { url: kb.url }); offline.available = "sin login";
+	assert.equal((await decideFoundations(await reading(t, offline), ctx().ctx, ctx().deps(dir))).origin, "default");
+	assert.equal((await decideFoundations(await reading(t, Object.assign(kbWith("```omi-foundations\n{ roto\n```"), { url: kb.url })), ctx().ctx, ctx().deps(dir))).origin, "default");
+	assert.equal(await readFile(trustPath(dir, key(kb.url)), "utf8"), "{ roto", "sin una revisión válida no se toca");
+	assert.equal((await decideFoundations(await reading(t, kb), ctx().ctx, ctx().deps(dir))).origin, "kb");
+	assert.equal((await readTrust(dir, key(kb.url)))?.accepted?.blockHash, foundationsHash(block()), "la revisión válida lo reemplaza");
 });
 
 const fixture = async (t: import("node:test").TestContext, kb: MemoryKb) => developmentFixture(t, { kb });
 const reads = (kb: MemoryKb) => kb.calls.filter((c) => c.tool === "mis_productos").length;
-const accepts = (prompts: string[]) => prompts.filter((title) => title === ACCEPT).length;
-test("foundations_session: un diálogo por revisión nueva, fijo toda la sesión aunque cambie la KB", async (t) => {
+const applied = (notices: string[]) => notices.filter((message) => APPLIED.test(message)).length;
+test("foundations_session: una revisión nueva se acepta sin diálogo y queda fija toda la sesión aunque cambie la KB", async (t) => {
 	const kb = kbWith(block()); const f = await fixture(t, kb);
 	await f.start();
-	assert.equal(accepts(f.prompts), 1);
-	assert.ok(f.prompts.indexOf(ACCEPT) < f.prompts.indexOf("Empezar el trabajo del issue #42"), "se acepta antes del sí del arranque");
+	assert.equal(applied(f.messages), 1); assert.ok(!f.prompts.includes(ACCEPT), "sin diálogo de aceptación");
+	assert.deepEqual(f.prompts, ["Empezar el trabajo del issue #42"], "el arranque ya usa la revisión aceptada: arranque ask");
 	perillas(kb, block({ comandos: ["node test.cjs", "node -e 1"] }));
 	await f.command("resume"); await f.command("status");
-	assert.equal(accepts(f.prompts), 1);
+	assert.equal(applied(f.messages), 1);
 	const status = f.messages.at(-1)!;
 	assert.match(status, /Foundations: KB · revisión [0-9a-f]{8}/);
 	assert.match(status, new RegExp(foundationsHash(block()).slice(0, 8)), "la sesión sigue con la revisión que leyó al arrancar");
@@ -149,27 +154,32 @@ test("foundations_session: un diálogo por revisión nueva, fijo toda la sesión
 	assert.ok(detail.some((line) => /^Foundations: KB · revisión/.test(line)), "el detalle del progreso muestra Foundations");
 });
 
-test("foundations_session: recargar la extensión no relee ni vuelve a preguntar", async (t) => {
+test("foundations_session: recargar la extensión no relee ni vuelve a avisar", async (t) => {
 	const kb = kbWith(block()); const f = await fixture(t, kb);
 	await f.start();
 	await f.attach(); await f.command("resume");
-	assert.equal(accepts(f.prompts), 1);
+	assert.equal(applied(f.messages), 1);
 	assert.equal(reads(kb), 1, "/reload no vuelve a leer la KB");
 });
 
-test("foundations_session: sin KB y sin aceptada todo sigue como hoy", async (t) => {
+test("foundations_session: sin KB y sin aceptada vale el default: nada pregunta", async (t) => {
 	const kb = kbWith(block()); kb.available = "sin login"; const f = await fixture(t, kb);
 	await f.start(); await f.command("status");
-	assert.equal(accepts(f.prompts), 0);
-	assert.match(f.messages.at(-1)!, /Foundations: estricta/);
+	assert.deepEqual(f.prompts, []); assert.equal(applied(f.messages), 0);
+	const status = f.messages.at(-1)!;
+	assert.match(status, /Foundations: por defecto/);
+	assert.match(status, /arranque auto · receta auto · fuera del catálogo auto · push \+ PR draft auto/);
+	assert.doesNotMatch(status, /estricta|todo pregunta/);
 });
 
-test("foundations_session: omi_work_begin lleva la revisión a la sesión del worktree sin otro diálogo", async (t) => {
-	const kb = kbWith(block()); const f = await beginFixture(t, { kb });
+test("foundations_session: omi_work_begin lleva la revisión a la sesión del worktree sin otro aviso", async (t) => {
+	const kb = kbWith(block()); const f = await beginFixture(t, { kb }); const origin = f.current();
 	await f.ask({ title: "Arreglar el valor", body: "Debe dar 2.", reason: "Bug" });
-	assert.deepEqual(f.prompts.map((p) => p.title), [ACCEPT, "Crear issue y empezar el trabajo"]);
+	assert.deepEqual(f.prompts.map((p) => p.title), ["Crear issue y empezar el trabajo"], "arranque ask de la revisión aceptada");
+	assert.equal(applied(origin.notices), 1);
 	assert.notEqual(f.current().manager.getSessionFile(), f.main.getSessionFile(), "cambió a la sesión del worktree");
 	await f.command("status");
+	assert.equal(applied(f.current().notices), 0, "la sesión del worktree no vuelve a avisar");
 	assert.match(f.current().notices.at(-1)!, /Foundations: KB · revisión/);
 	assert.equal(reads(kb), 1, "la sesión del worktree no relee la KB");
 });
