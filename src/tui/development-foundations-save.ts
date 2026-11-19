@@ -23,6 +23,7 @@ export async function prepareFoundationsSave(kb: KbClient, key: TrustKey, block:
 interface SaveDeps {
 	trustDir: string; now: () => string; signal: AbortSignal;
 	requireLatest?: boolean; beforeAccept?: () => Promise<void>;
+	writeAcceptance?: typeof writeTrust;
 }
 /** Control optimista, no CAS: relee antes de enviar y confirma después. La clave recupera una respuesta perdida. */
 export async function commitFoundationsSave(kb: KbClient, key: TrustKey, block: FoundationsBlock, prepared: PreparedSave, deps: SaveDeps): Promise<FoundationsPin> {
@@ -32,7 +33,7 @@ export async function commitFoundationsSave(kb: KbClient, key: TrustKey, block: 
 	signal.throwIfAborted();
 	if ((current?.id ?? null) !== (prepared.previous?.id ?? null) || current?.cuerpo !== prepared.previous?.cuerpo) throw new Error("Las perillas cambiaron en la KB antes de guardar Foundations; no se guardó nada. Revisá la revisión vigente.");
 	const input = { product: key.product, titulo: prepared.previous?.titulo || `Perillas de ${key.product}`, cuerpo: prepared.body, clave: prepared.clave };
-	let confirmed = false;
+	let confirmed = false; let accepted = false;
 	try {
 		// Una respuesta perdida puede haber guardado; jamás reintentar después de un aborto.
 		const saved = await kb.save(input, signal).catch(() => { signal.throwIfAborted(); return kb.save(input, signal); });
@@ -49,7 +50,8 @@ export async function commitFoundationsSave(kb: KbClient, key: TrustKey, block: 
 		const hash = foundationsHash(block);
 		const record: TrustRecord = await readTrust(deps.trustDir, key) ?? { version: 1, ...key, accepted: null, offerDeclined: false };
 		signal.throwIfAborted();
-		await writeTrust(deps.trustDir, { ...record, accepted: { docId: stored.id, blockHash: hash, block, author: stored.autor ?? "", date: stored.fecha ?? "", acceptedAt: deps.now() } });
+		await (deps.writeAcceptance ?? writeTrust)(deps.trustDir, { ...record, accepted: { docId: stored.id, blockHash: hash, block, author: stored.autor ?? "", date: stored.fecha ?? "", acceptedAt: deps.now() } });
+		accepted = true;
 		signal.throwIfAborted();
 		return {
 			origin: "kb", block, hash, docId: stored.id, author: stored.autor ?? "", date: stored.fecha ?? "",
@@ -58,6 +60,9 @@ export async function commitFoundationsSave(kb: KbClient, key: TrustKey, block: 
 		};
 	} catch (error) {
 		const why = error instanceof Error ? error.message : "falló la persistencia";
-		throw new Error(`${confirmed ? "Foundations se guardó en la KB, pero no se completó su verificación o aceptación local" : "No se pudo confirmar el guardado de Foundations en la KB; pudo haberse guardado"}. ${why}`, { cause: error });
+		const status = accepted ? "Foundations quedó guardado en la KB y aceptado localmente para futuras sesiones, pero no se ejecutó el comando"
+			: confirmed ? "Foundations se guardó en la KB, pero no se completó su verificación o aceptación local"
+				: "No se pudo confirmar el guardado de Foundations en la KB; pudo haberse guardado";
+		throw new Error(`${status}. ${why}`, { cause: error });
 	}
 }

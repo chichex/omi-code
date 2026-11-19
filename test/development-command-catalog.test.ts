@@ -6,11 +6,27 @@ import { test } from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { commandAuthorization } from "../src/harness/authorization.ts";
 import { MAX_COMMANDS, STRICT_POLICY, parseFoundations, renderFoundationsBlock } from "../src/harness/foundations.ts";
-import { foundationsDir, trustPath } from "../src/harness/foundations-trust.ts";
+import { foundationsDir, trustPath, writeTrust, type TrustRecord } from "../src/harness/foundations-trust.ts";
+import { commitFoundationsSave, prepareFoundationsSave } from "../src/tui/development-foundations-save.ts";
 import { FoundationsGate, decideFoundations, effectivePolicy, readFoundations } from "../src/tui/development-foundations.ts";
 import { COMMAND, HUMAN, KNOWN, REPO, accepted, authorizations, block, choose, commandFixture, key, noPermissionAdded, saves } from "./helpers/command-permissions.ts";
 
 const OTHER = 'node -e "process.exitCode = 0"';
+
+for (const reason of [undefined, new DOMException("Se agotó el tiempo de guardado", "TimeoutError")]) test(`command_catalog: ${reason ? "timeout" : "aborto"} durante la aceptación completada informa el permiso durable`, async (t) => {
+	const f = await commandFixture(t); const controller = new AbortController(); let writes = 0;
+	const next = block([KNOWN, COMMAND]);
+	const prepared = await prepareFoundationsSave(f.kb, key(f), next, controller.signal);
+	const deps = { trustDir: foundationsDir(f.home), now: () => "2026-11-19T00:00:00Z", signal: controller.signal, requireLatest: true,
+		writeAcceptance: async (dir: string, record: TrustRecord) => {
+			await writeTrust(dir, record); writes++; controller.abort(reason);
+		} };
+	await assert.rejects(commitFoundationsSave(f.kb, key(f), next, prepared, deps), /guardado.*KB.*aceptado.*no se ejecut/is);
+	assert.equal(writes, 1, "la cancelación está coordinada con la escritura, sin timers ni sleeps");
+	assert.equal((await accepted(f))?.accepted?.docId, f.kb.documents.at(-1)!.id);
+	assert.ok((await accepted(f))?.accepted?.block.comandos.includes(COMMAND));
+	assert.deepEqual(f.executed, []); assert.deepEqual((await f.state()).grants ?? [], []);
+});
 
 for (const missing of [false, true]) test(`command_catalog: la revisión usada para componer también debe coincidir con el pin (${missing ? "ausencia" : "bloque"})`, async (t) => {
 	const f = await commandFixture(t, missing ? { body: null } : {}); choose(f, "always");

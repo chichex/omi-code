@@ -1,4 +1,4 @@
-// Las decisiones humanas de autorización: TUI y RPC comparten select; ningún resultado tardío concede permiso.
+// Las decisiones humanas de autorización en TUI/RPC; ningún resultado tardío concede permiso.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
@@ -21,6 +21,12 @@ for (const mode of ["tui", "rpc"] as const) {
 		assert.match(text, /producto repo/); assert.ok(text.includes(new URL(f.kb.url).host));
 		assert.match(text, /queda guardado para este trabajo/, "el sí conserva el alcance temporal que ya documentaba");
 		assert.match(text, /(?:no |nunca )(?:autoriza|habilita).*(?:merge|deploy|secretos)/i, "no reemplaza decisiones sensibles de OMI");
+		if (mode === "tui") {
+			const rendered = f.permissionScreens.at(-1)!.join("\n").replace(/\s+/g, "");
+			for (const visible of [COMMAND, f.checkout.root, REPO, new URL(f.kb.url).host, "producto repo", "perillas"]) {
+				assert.ok(rendered.includes(visible.replace(/\s+/g, "")), `las páginas renderizadas muestran ${visible}, no sólo los props del componente`);
+			}
+		}
 		assert.equal(saves(f).length, 0); await noPermissionAdded(f);
 	});
 
@@ -177,9 +183,9 @@ test("command_permissions: en 80×24 el permiso tiene detalle navegable sin ocul
 	const f = await commandFixture(t); choose(f, "always"); let mounted = false;
 	const longCommand = `node -e '${"a".repeat(1800)}' FIN-DEL-COMANDO`;
 	f.context.ui.custom = async (factory) => {
-		mounted = true; let decision: unknown;
+		mounted = true; let decision: unknown; let doneCalls = 0;
 		const size = { columns: 80, rows: 24 };
-		const component = await factory(fakeTui(size), darkTheme(), { matches: () => false } as never, (result) => { decision = result; });
+		const component = await factory(fakeTui(size), darkTheme(), { matches: () => false } as never, (result) => { doneCalls++; decision = result; });
 		const pages: string[] = [];
 		for (let page = 0; page < 100; page++) {
 			const lines = component.render(80);
@@ -191,8 +197,11 @@ test("command_permissions: en 80×24 el permiso tiene detalle navegable sin ocul
 		}
 		const inspected = pages.join("\n");
 		assert.match(inspected, /FIN-DEL-COMANDO/); assert.match(inspected, /Foundations/); assert.match(inspected, /producto repo/);
+		assert.equal(doneCalls, 0, "navegar no cierra ni autoriza");
 		component.handleInput?.("\x1b");
+		assert.equal(doneCalls, 1, "Esc invoca la finalización, no se fabrica un undefined en el doble");
 		assert.equal(decision, undefined, "Esc cancela el permiso");
+		component.handleInput?.("\x1b"); assert.equal(doneCalls, 1, "cancelar dos veces no repite la finalización");
 		return decision as never;
 	};
 	await assert.rejects(f.check(longCommand), /no autorizado|cancel/i);

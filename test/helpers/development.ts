@@ -20,7 +20,6 @@ import { emitLikePi } from "./pi-events.ts";
 import type { KbClient } from "../../src/tui/kb-client.ts";
 import { questionsExtension } from "../../src/tui/questions/tool.ts";
 import { answerCustom, darkTheme, fakeTui } from "./questions.ts";
-import { CommandPermissionPrompt } from "../../src/tui/development-command-dialog.ts";
 
 export async function developmentFixture(t: TestContext, options: { kb?: KbClient } = {}) {
 	const home = await realpath(await tempDir(t)); const root = join(home, "repo"); await mkdir(root);
@@ -43,7 +42,7 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 		select: defaultSelect, editor: (_title: string, prefill: string): string | undefined => prefill,
 		// Una tanda de preguntas: las teclas que la persona aprieta al verla. Sin teclas, la cierra: cancelar.
 		questions: (_screen: string): readonly string[] | undefined => undefined };
-	const selects: { title: string; options: string[] }[] = []; const editors: string[] = []; const asked: string[][] = [];
+	const selects: { title: string; options: string[] }[] = []; const editors: string[] = []; const asked: string[][] = []; const permissionScreens: string[][] = [];
 	const reviewScreens: string[] = []; let reviews = 0;
 	const calls: { command: string; args: string[]; input?: string }[] = []; const prompts: string[] = []; const confirmationDetails: string[] = []; const messages: string[] = []; const progress: unknown[] = []; const modelCalls: unknown[] = []; const statuses: (string | undefined)[] = [];
 	const runner: Runner = { async run(command, args, options) {
@@ -92,17 +91,28 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 				if (options?.blocked?.kind === "permission" && options.blocked.message === "Autorizar comando del proyecto") {
 					let decision: unknown;
 					const component = factory(fakeTui({ columns: 80, rows: 24 }), darkTheme(), { matches: () => false }, (value) => { decision = value; });
-					if (!(component instanceof CommandPermissionPrompt)) throw new Error("La UI de permiso no recibió su componente navegable");
-					const title = `${component.request.title}\n${component.request.detail}`; const choices = [...component.request.choices];
+					const input = component.handleInput?.bind(component); const dispose = component.dispose?.bind(component);
+					if (!input || !dispose) throw new Error("El permiso debe admitir interacción y cancelación");
+					const request = "request" in component ? component.request : undefined;
+					if (!request || typeof request !== "object" || !("title" in request) || typeof request.title !== "string" || !("detail" in request) || typeof request.detail !== "string" || !("choices" in request) || !Array.isArray(request.choices)) throw new Error("La UI de permiso no expuso sus opciones");
+					const choices: string[] = [];
+					for (const choice of request.choices) { if (typeof choice !== "string") throw new Error("Opción inválida de permiso"); choices.push(choice); }
+					const title = `${request.title}\n${request.detail}`;
 					selects.push({ title, options: choices }); prompts.push("Autorizar comando del proyecto"); confirmationDetails.push([title, ...choices].join("\n"));
 					try {
-						component.render(80);
+						const pages: string[] = []; let previous = "";
+						for (let page = 0; page < 10000; page++) {
+							const screen = component.render(80).map(stripTerminalSequences).join("\n");
+							if (screen === previous) break;
+							pages.push(screen); previous = screen; input("\x1b[6~");
+						}
+						permissionScreens.push(pages);
 						const selected = uiControl.select === defaultSelect ? choices.find((choice) => remote.confirmations ? choice === "Sí" : choice === "No") : await uiControl.select(title, choices);
 						const index = selected === undefined ? -1 : choices.indexOf(selected);
-						if (index >= 0) { component.handleInput(String(index + 1)); component.render(80); component.handleInput("\r"); }
-						else component.dispose();
+						if (index >= 0) { input(String(index + 1)); component.render(80); input("\r"); }
+						else dispose();
 						return decision;
-					} finally { component.dispose(); }
+					} finally { dispose(); }
 				}
 				if (options?.blocked?.kind === "question") {
 					const { value, screens } = await answerCustom(factory, (screen) => uiControl.questions(screen)); asked.push(screens); return value;
@@ -146,7 +156,7 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 	const readReference = async () => { await emit("tool_execution_start", { toolName: "read", toolCallId: "read", args: { path: "value.cjs" } }); await emit("tool_call", { toolName: "read", toolCallId: "read", input: { path: "value.cjs" } }); await emit("tool_execution_end", { toolName: "read", toolCallId: "read", result: { content: [{ type: "text", text: "module.exports = 1;" }] }, isError: false }); };
 	const explore = async () => { await readReference(); await action({ action: "explored", exploration: { references: [{ path: "value.cjs", line: 1, detail: "Valor actual" }], findings: ["Devuelve 1"], approach: "Corregir el valor", missingFoundation: [], dependencies: [], disposition: "continue", reason: "Existe" } }); await action({ action: "inferences", inferences: [] }); };
 	const plan = (size: "small" | "large" = "small", causeKnown = true): Plan => ({ classification: { type: "fix", size, risk: "low", riskAreas: [], causeKnown }, objective: "Devolver 2", approach: "Corregir el valor exportado", scope: ["valor"], outOfScope: ["infra"], cases: [{ id: "D1", description: "Devuelve 2", command: "node test.cjs" }, ...(size === "large" ? [{ id: "D2", description: "Otro devuelve 2", command: "node other-test.cjs" }] : [])], lenses: ["quality"], executor: { mode: "inline", writers: 0 } });
-	return { home, checkout, manager, runner, remote, calls, statuses, selects, editors, asked, activeTools: () => activeTools, prompts, confirmationDetails, messages, progress, modelCalls, modelControl, uiControl, reviewScreens, reviews: () => reviews, tools, context, emit, emitBus, attach, invoke, action, state, readReference, explore, plan, command: (input: string) => commands.get("omi-work")!.handler(input, context),
+	return { home, checkout, manager, runner, remote, calls, statuses, selects, editors, asked, permissionScreens, activeTools: () => activeTools, prompts, confirmationDetails, messages, progress, modelCalls, modelControl, uiControl, reviewScreens, reviews: () => reviews, tools, context, emit, emitBus, attach, invoke, action, state, readReference, explore, plan, command: (input: string) => commands.get("omi-work")!.handler(input, context),
 		// Lo que hace el panel de Issues o la tool del agente estando ya en el worktree del issue: un pedido de un solo uso y su sí.
 		start: () => commands.get("omi-work")!.handler(`begin ${issueDevelopmentTicket({ kind: "request", origin: "panel", sessionFile: manager.getSessionFile()!, request: { issue: 42 } })}`, context), write: (path: string, body: string) => writeFile(join(checkout.root, path), body) };
 }
