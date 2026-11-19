@@ -1,7 +1,7 @@
 // Documento de consentimiento: datos íntegros, sin ANSI ni efectos de navegación.
 import type { Lens, Workflow } from "../harness/model.ts";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { renderWorkflowArtifact } from "../harness/github.ts";
+import { renderWorkflowArtifact } from "../harness/pr-body.ts";
 
 // legend: texto propio de OMI ya escrito como se ve; nunca datos de la receta.
 export interface ApprovalLine { kind: "heading" | "text" | "command" | "legend"; text: string }

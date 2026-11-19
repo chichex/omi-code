@@ -1,0 +1,38 @@
+// Markdown seguro para GitHub, compartido por la sección del issue y el cuerpo del PR draft. Todo dato
+// (modelo, receta, comandos, persona) pasa por text, code, cell o codeBlock: en GitHub nada queda activo.
+import type { Evidence, Lens } from "./model.ts";
+import { expectedFailure } from "./state.ts";
+
+export const TYPES = { add: "Nueva capacidad", fix: "Corrección", improve: "Mejora", chore: "Mantenimiento" };
+export const ROUTES = { direct: "Directa", diagnostic: "Diagnóstico", spec: "Con spec" };
+export const LENSES: Record<Lens, string> = { quality: "Calidad", reliability: "Confiabilidad", security: "Seguridad", compliance: "Cumplimiento", resilience: "Resiliencia", refuter: "Refutador" };
+// Controles, bidi e invisibles se ven como escapes; nunca se publican crudos.
+const visible = (value: string) => value.replace(/\r\n?/g, "\n").replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}]/gu, (c) => c === "\n" || c === "\t" ? c : `\\u${c.codePointAt(0)!.toString(16).padStart(4, "0")}`);
+// Texto del modelo, de un comando o de la persona: en GitHub nada queda activo. Una palabra que podría
+// enlazar, avisar o referenciar (URL, www., correo, @mención, #123, GH-123) va entera como código; el
+// resto escapa HTML y la sintaxis de links, imágenes y código. Los saltos no abren bloques nuevos.
+const LINKABLE = /:\/\/|www\.|@|#\d|\bgh-\d/i;
+const escaped = (value: string) => value.replace(/[\\`[\]]/g, "\\$&").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+export const text = (value: string) => visible(value).split(/(\s+)/).map((part, i) => i % 2 ? part.replace(/\n/g, "<br>") : LINKABLE.test(part) ? code(part) : escaped(part)).join("");
+// Código en línea con una cerca más larga que cualquier racha de backticks del contenido.
+export function code(value: string): string {
+	const content = visible(value).replace(/\n/g, " ↵ ");
+	const fence = "`".repeat(Math.max(0, ...[...content.matchAll(/`+/g)].map((m) => m[0].length)) + 1);
+	const pad = /^[` ]|[` ]$/.test(content) ? " " : "";
+	return `${fence}${pad}${content}${pad}${fence}`;
+}
+// En una tabla de GFM el pipe separa celdas incluso dentro del código: se escapa siempre.
+export const cell = (value: string) => value.replace(/\|/g, "\\|");
+// Bloque cercado e indentado: ninguna línea empieza en la primera columna y la cerca es más larga que
+// cualquier racha de backticks del contenido.
+export function codeBlock(value: string): string[] {
+	const content = visible(value).split("\n");
+	const fence = "`".repeat(Math.max(3, ...content.flatMap((l) => [...l.matchAll(/`+/g)].map((m) => m[0].length + 1))));
+	return [fence, ...content, fence].map((l) => `  ${l}`.trimEnd() || "  ");
+}
+export const list = (label: string, values: string[]) => values.length ? [`- **${label}:**`, ...values.map((v) => `  - ${text(v)}`)] : [];
+export function evidenceResult(e: Evidence): string {
+	if (e.outcome === "interrupted") return "⚠️ interrumpido";
+	if (e.outcome === "passed") return `✅ exit ${e.exitCode}`;
+	return e.kind === "red" && expectedFailure(e) ? `🔴 exit ${e.exitCode} · rojo esperado` : `❌ exit ${e.exitCode ?? "—"}`;
+}

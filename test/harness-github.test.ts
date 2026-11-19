@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Runner, CommandOptions } from "../src/core/exec.ts";
 import { artifactHash, sourceHash, type Workflow } from "../src/harness/model.ts";
-import { readIssueSource, renderWorkflowArtifact, renderPullRequestBody, syncIssueSection, publishDraft } from "../src/harness/github.ts";
+import { readIssueSource, renderPullRequestBody, syncIssueSection, publishDraft } from "../src/harness/github.ts";
+import { renderWorkflowArtifact } from "../src/harness/pr-body.ts";
 import { parseIssueBody, renderIssueSection } from "../src/harness/issue-section.ts";
 
 async function fixture(t: import("node:test").TestContext) {

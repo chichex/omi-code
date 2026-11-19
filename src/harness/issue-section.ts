@@ -1,10 +1,11 @@
 // Sección administrada del harness al final del cuerpo del issue. El pedido humano queda arriba,
 // intacto byte a byte; la sección se reescribe entera y nunca se toca texto fuera de sus marcadores.
-import type { Evidence, Lens, Workflow } from "./model.ts";
+import type { Evidence, Workflow } from "./model.ts";
 import { PHASE_LABELS } from "./phases.ts";
-import { expectedFailure, isApproved } from "./state.ts";
+import { isApproved } from "./state.ts";
 import { lensStatuses } from "./lenses.ts";
 import { fences } from "./fences.ts";
+import { cell, code, codeBlock, evidenceResult, LENSES, list, ROUTES, text, TYPES } from "./markdown.ts";
 export const SECTION_START = "<!-- omi:harness:start -->";
 export const SECTION_END = "<!-- omi:harness:end -->";
 // Lo que OMI agrega entre el pedido y la sección; se descuenta al leer el pedido.
@@ -46,36 +47,10 @@ export function withIssueSection(body: string, parts: IssueBody, content: string
 
 // --- Presentación. Todo dato (modelo, receta, persona) pasa por text/code/cell: ninguna línea
 // de contenido empieza en la primera columna, así que nunca puede imitar un marcador.
-const TYPES = { add: "Nueva capacidad", fix: "Corrección", improve: "Mejora", chore: "Mantenimiento" };
-const ROUTES = { direct: "Directa", diagnostic: "Diagnóstico", spec: "Con spec" };
-const LENSES: Record<Lens, string> = { quality: "Calidad", reliability: "Confiabilidad", security: "Seguridad", compliance: "Cumplimiento", resilience: "Resiliencia", refuter: "Refutador" };
 const MAX_ROWS = 40;
 // Límite de GitHub para el cuerpo de un issue. La longitud UTF-16 nunca cuenta menos caracteres que GitHub.
 export const ISSUE_BODY_LIMIT = 65536;
 type Detail = "full" | "summary";
-// Controles, bidi e invisibles se ven como escapes; nunca se publican crudos.
-const visible = (value: string) => value.replace(/\r\n?/g, "\n").replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}]/gu, (c) => c === "\n" || c === "\t" ? c : `\\u${c.codePointAt(0)!.toString(16).padStart(4, "0")}`);
-// Texto del modelo, de un comando o de la persona: en GitHub nada queda activo. Una palabra que podría
-// enlazar, avisar o referenciar (URL, www., correo, @mención, #123, GH-123) va entera como código; el
-// resto escapa HTML y la sintaxis de links, imágenes y código. Los saltos no abren bloques nuevos.
-const LINKABLE = /:\/\/|www\.|@|#\d|\bgh-\d/i;
-const escaped = (value: string) => value.replace(/[\\`[\]]/g, "\\$&").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-const text = (value: string) => visible(value).split(/(\s+)/).map((part, i) => i % 2 ? part.replace(/\n/g, "<br>") : LINKABLE.test(part) ? code(part) : escaped(part)).join("");
-// Código en línea con una cerca más larga que cualquier racha de backticks del contenido.
-function code(value: string): string {
-	const content = visible(value).replace(/\n/g, " ↵ ");
-	const fence = "`".repeat(Math.max(0, ...[...content.matchAll(/`+/g)].map((m) => m[0].length)) + 1);
-	const pad = /^[` ]|[` ]$/.test(content) ? " " : "";
-	return `${fence}${pad}${content}${pad}${fence}`;
-}
-// En una tabla de GFM el pipe separa celdas incluso dentro del código: se escapa siempre.
-const cell = (value: string) => value.replace(/\|/g, "\\|");
-function codeBlock(value: string): string[] {
-	const content = visible(value).split("\n");
-	const fence = "`".repeat(Math.max(3, ...content.flatMap((l) => [...l.matchAll(/`+/g)].map((m) => m[0].length + 1))));
-	return [fence, ...content, fence].map((l) => `  ${l}`.trimEnd() || "  ");
-}
-const list = (label: string, values: string[]) => values.length ? [`- **${label}:**`, ...values.map((v) => `  - ${text(v)}`)] : [];
 function stage(w: Workflow): string {
 	const step = w.steps.find((s) => s.status === "active") ?? w.steps.find((s) => s.status === "pending");
 	const detail = w.phase === "implement" && step ? ` (${step.id} de ${w.steps.length})` : "";
@@ -114,11 +89,6 @@ function agreements(w: Workflow): string[] {
 	const all = w.agreements ?? [];
 	return all.length ? ["", "### Acuerdos del chat", ...all.map((a) => `- «${text(a.quote)}» → ${text(a.summary)} _(${PHASE_LABELS[a.phase]}${a.replan ? "; rehízo la receta" : ""})_`)] : [];
 }
-function result(e: Evidence): string {
-	if (e.outcome === "interrupted") return "⚠️ interrumpido";
-	if (e.outcome === "passed") return `✅ exit ${e.exitCode}`;
-	return e.kind === "red" && expectedFailure(e) ? `🔴 exit ${e.exitCode} · rojo esperado` : `❌ exit ${e.exitCode ?? "—"}`;
-}
 function evidence(w: Workflow, detail: Detail): string[] {
 	// Último resultado por prueba: un intento viejo no se muestra como el estado actual. Resumida, sólo
 	// la última de cada caso D (y de cada gate): sin el historial rojo/verde de los pasos.
@@ -126,7 +96,7 @@ function evidence(w: Workflow, detail: Detail): string[] {
 		.filter((e) => detail === "full" || e.kind === "verification" || e.kind === "gate");
 	if (!latest.length) return ["", "### Evidencia", "Sin pruebas ejecutadas todavía."];
 	const label = (e: Evidence) => e.kind === "verification" ? text(e.caseId ?? "Verificación") : e.kind === "gate" ? `Gate ${code(e.command)}` : e.kind === "reproduction" ? "Reproducción" : `${text(e.stepId ?? "—")} · ${e.kind === "red" ? "rojo" : "verde"}`;
-	const rows = latest.slice(-MAX_ROWS).map((e) => `| ${cell(label(e))} | ${result(e)} | ${cell(text(e.head.slice(0, 7)))} |`);
+	const rows = latest.slice(-MAX_ROWS).map((e) => `| ${cell(label(e))} | ${evidenceResult(e)} | ${cell(text(e.head.slice(0, 7)))} |`);
 	return ["", "### Evidencia", "| Caso | Resultado | HEAD |", "|---|---|---|", ...rows, ...(latest.length > MAX_ROWS ? ["", `_${latest.length - MAX_ROWS} pruebas anteriores en el estado local._`] : [])];
 }
 // Los mismos avisos que el progreso y el PR draft. Resumidos, cada lente lleva su primer hallazgo y cuántos faltan.
