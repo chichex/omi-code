@@ -12,7 +12,8 @@ import { readWorkflow } from "../harness/store.ts";
 import type { Workflow } from "../harness/model.ts";
 import { beginCommand, issueDevelopmentTicket, revokeDevelopmentTicket, type BeginOrigin, type BeginRequest } from "./development-tickets.ts";
 import { readGit, safeText, type GitSnapshot, type GithubItem } from "./workspace/data.ts";
-import { classifyIssue, restoreIssueTriage } from "./workspace/issue-triage.ts";
+import { classifyDevelopmentRequest, decideDevelopmentRequest, classifyIssue, restoreIssueTriage } from "./workspace/issue-triage.ts";
+import type { RequestDecision, TriagePolicyPin } from "../harness/triage-policy.ts";
 import { prepareIssue, type IssueClassification } from "./workspace/issue-preparation.ts";
 import { assertIssueIdentity, discoverLegacyPreparations, readIssuePreparation, verifyIssuePreparation, type IssuePreparation } from "./workspace/issue-registry.ts";
 import { PHASE_LABELS } from "./development-view.ts";
@@ -24,6 +25,7 @@ export type BeginLoader = <T>(ctx: ExtensionContext, title: string, work: (signa
 export interface BeginOptions {
 	runner: Runner; offline: boolean; signal: AbortSignal; now: () => string; loader: BeginLoader; sessionDir: string | undefined;
 	confirm: (ctx: ExtensionContext, title: string, description: string) => Promise<boolean>;
+	triagePolicy: (ctx: ExtensionContext) => Promise<TriagePolicyPin>;
 	/** El sí ya se dio: empezar o retomar el trabajo en la sesión actual. */
 	startHere: () => Promise<void>;
 }
@@ -115,21 +117,33 @@ function dialog(actions: string, ticket: BeginTicket, details: string): string {
 	const who = ticket.origin === "panel" ? "Pedido desde el panel de Issues." : `Motivo del agente: ${shown(ticket.request.reason?.trim() || "sin motivo")}`;
 	return `${actions} ${TAIL}\n\n${who}\n\n${details}`;
 }
-export async function beginDevelopment(ctx: ExtensionCommandContext, ticket: BeginTicket, options: BeginOptions): Promise<void> {
+export interface BeginChatResult { classification: Awaited<ReturnType<typeof classifyDevelopmentRequest>>; decision: RequestDecision }
+export async function beginDevelopment(ctx: ExtensionCommandContext, ticket: BeginTicket, options: BeginOptions): Promise<BeginChatResult | undefined> {
 	const { request } = ticket;
 	assertBeginRequest(request); assertCanBegin(ctx, options.offline);
 	const git = await readGit(ctx.cwd, options.signal);
 	if (!git) throw new Error("Empezar un trabajo necesita un repositorio Git");
 	const origin = ctx.sessionManager.getSessionFile()!;
 	let number = request.issue; let source: Workflow["source"] | undefined; let created = "";
+	let prior: (IssueClassification & { title: string }) | undefined;
+	const current = () => { options.signal.throwIfAborted(); if (ctx.sessionManager.getSessionFile() !== origin) throw new Error("La sesión cambió durante la clasificación; no se creó ningún recurso."); };
 	if (number === undefined) {
 		const title = request.title!.trim(); const body = request.body!.trim();
 		const repo = await readRepository(git, options);
 		assertQuotable({ number: MAX_ISSUE, title, body, url: `https://github.com/${repo}/issues/${MAX_ISSUE}`, hash: "preview" }, git, options.now());
-		await mainBaseCommit(git, options.signal);
-		if (!(await options.confirm(ctx, "Crear issue y empezar el trabajo", dialog(`Se crea un issue en ${repo} con el pedido de abajo. ${FRESH}`, ticket, `${shown(title)}\n\n${shown(body)}`)))) {
+		await mainBaseCommit(git, options.signal); current();
+		const pin = await options.triagePolicy(ctx); current();
+		if (pin.notice) ctx.ui.notify(shown(pin.notice), "info");
+		const classification = await options.loader(ctx, "Clasificando el pedido antes de crear el issue", (signal) => classifyDevelopmentRequest(ctx, { title, body }, AbortSignal.any([signal, options.signal, AbortSignal.timeout(CLASSIFY_TIMEOUT_MS)])));
+		current();
+		if (!classification) { ctx.ui.notify("Clasificación cancelada: no se creó issue, rama, worktree ni sesión. El chat sigue igual.", "info"); return; }
+		const decision = decideDevelopmentRequest(classification, pin.policy);
+		if (decision.kind !== "harness") return { classification, decision };
+		prior = { ...classification, title, body };
+		if (!(await options.confirm(ctx, "Crear issue y empezar el trabajo", dialog(`Clasificación previa: ${shown(decision.reason)} Se crea un issue en ${repo} con el pedido de abajo. Se prepara un worktree desde main local y una sesión nueva para explorar el código, sin volver a clasificar.`, ticket, `${shown(title)}\n\n${shown(body)}`)))) {
 			ctx.ui.notify("No se creó nada: el chat sigue igual.", "info"); return;
 		}
+		current();
 		number = await createIssue(git, repo, title, body, options);
 		created = `El issue #${number} ya se creó en ${repo}: para seguir, pedí el #${number}; no lo vuelvas a crear.`;
 	} else {
@@ -150,16 +164,18 @@ export async function beginDevelopment(ctx: ExtensionCommandContext, ticket: Beg
 		}
 		if (here) { await options.startHere(); return; }
 	}
-	try { await prepareAndSwitch(ctx, git, number, source, origin, options); }
+	try { await prepareAndSwitch(ctx, git, number, source, origin, options, prior); }
 	catch (error) { throw created ? new Error(`${created} ${error instanceof Error ? error.message : "No se pudo preparar el trabajo."}`, { cause: error }) : error; }
 }
-async function prepareAndSwitch(ctx: ExtensionCommandContext, git: GitSnapshot, issueNumber: number, known: Workflow["source"] | undefined, origin: string, options: BeginOptions): Promise<void> {
+async function prepareAndSwitch(ctx: ExtensionCommandContext, git: GitSnapshot, issueNumber: number, known: Workflow["source"] | undefined, origin: string, options: BeginOptions, prior?: IssueClassification & { title: string }): Promise<void> {
 	const issueSource = known ?? await readIssueSource(placeholder(git), issueNumber, options.runner, options.signal);
+	if (prior && (prior.title !== issueSource.title || prior.body !== issueSource.body)) throw new Error("El pedido publicado no coincide con el que se clasificó. Retomá el issue existente para revisar el cambio.");
 	const item: GithubItem = { number: issueNumber, title: issueSource.title, url: issueSource.url, labels: [], author: "", updatedAt: "", draft: false, head: "", base: "", review: "" };
 	const prepared = await prepareIssue(git, issueNumber, item, ctx, {
 		...(options.sessionDir ? { sessionDir: options.sessionDir } : {}), signal: options.signal,
 		isCurrent: () => !options.signal.aborted && ctx.sessionManager.getSessionFile() === origin,
 		classify: async (): Promise<IssueClassification | undefined> => {
+			if (prior) return prior;
 			// Las etiquetas sólo sirven para un triage nuevo (clasificar y guardarlo): al retomar no se piden.
 			item.labels = await readLabels(git, issueNumber, options);
 			const result = await options.loader(ctx, `Clasificando el issue #${issueNumber}`, (signal) => classifyIssue(ctx, item, issueSource.body, AbortSignal.any([signal, options.signal, AbortSignal.timeout(CLASSIFY_TIMEOUT_MS)])));

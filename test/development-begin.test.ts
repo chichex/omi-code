@@ -11,11 +11,45 @@ import { beginFixture } from "./helpers/development-begin.ts";
 
 const KICKOFF = /Continuá el harness de desarrollo/;
 const request = { title: "Mostrar el total del carrito", body: "Pedido: mostrar el total con impuestos.\nCriterio: el total coincide con la suma.", reason: "Cambio de código con criterio verificable" };
+const simple = { triage: { type: "chore", summary: "Corregir texto", rationale: "Errata local", scope: [], acceptanceCriteria: [], questions: [] }, assessment: { scope: "localized", impact: "documentation", reversible: "yes", verification: "clear", risk: "low", riskAreas: [], rationale: "Una errata sin efectos externos." } };
 async function preparation(root: string, number: number) { return readIssuePreparation((await readGit(root))!, number); }
 async function workflowOf(root: string, number: number) {
 	const record = (await preparation(root, number))!; const git = (await readGit(record.state.worktree))!;
 	return readWorkflow({ root: record.state.worktree, commonDir: git.commonDir, branch: record.state.branch, baseCommit: record.state.baseCommit }, number);
 }
+
+test("development_begin simple conserva chat/tools sin issue, preparación, sesión ni harness", async (t) => {
+	const f = await beginFixture(t); f.remote.requestClassify = JSON.stringify(simple);
+	const original = f.current(); const tools = [...original.activeTools]; await f.ask(request);
+	assert.equal(f.current(), original); assert.deepEqual(f.current().activeTools, tools);
+	assert.deepEqual(f.prompts, []); assert.deepEqual(f.remote.created, []); assert.deepEqual(f.switches, []);
+	assert.equal(await preparation(f.root, 43), undefined); assert.equal(f.git("branch", "--list"), "* main");
+	assert.equal(f.git("worktree", "list").split("\n").length, 1);
+	assert.equal(f.continuations.length, 1); assert.match(f.continuations[0]!.content, /reglas y permisos/);
+	assert.match(f.continuations[0]!.content, /chat/); assert.equal(f.kickoffs().length, 0);
+	assert.equal(await f.emit("tool_call", { toolName: "read", input: { path: "value.cjs" } }), undefined);
+});
+
+test("development_begin needs-info devuelve preguntas al chat sin interpretar la duda como trivialidad", async (t) => {
+	const f = await beginFixture(t); f.remote.requestClassify = JSON.stringify({ ...simple, triage: { ...simple.triage, questions: ["¿Qué texto querés corregir?"] } });
+	await f.ask(request);
+	assert.deepEqual(f.remote.created, []); assert.deepEqual(f.prompts, []); assert.deepEqual(f.switches, []);
+	assert.equal(await preparation(f.root, 43), undefined); assert.equal(f.continuations.length, 1);
+	assert.match(f.continuations[0]!.content, /Qué texto/); assert.match(f.continuations[0]!.content, /información|ambig/i);
+});
+
+for (const failure of ["cancel", "error", "length", "incomplete", "aborted-session"] as const) test(`development_begin clasificación previa ${failure} no deja recursos ni continuación simple`, async (t) => {
+	const f = await beginFixture(t);
+	if (failure === "cancel") f.remote.cancelClassify = true;
+	if (failure === "error") f.remote.failClassify = true;
+	if (failure === "length") f.remote.stopReason = "length";
+	if (failure === "incomplete") f.remote.requestClassify = JSON.stringify({ triage: simple.triage });
+	if (failure === "aborted-session") f.remote.onClassify = async () => { await f.emit("session_shutdown"); };
+	await f.ask(request);
+	assert.deepEqual(f.remote.created, []); assert.deepEqual(f.prompts, []); assert.deepEqual(f.switches, []); assert.deepEqual(f.continuations, []);
+	assert.equal(await preparation(f.root, 43), undefined); assert.equal(f.git("worktree", "list").split("\n").length, 1);
+	assert.equal(f.git("branch", "--list"), "* main");
+});
 
 test("development_begin un pedido nuevo del chat crea el issue, el worktree y la sesión con un solo sí y sigue en Explorar", async (t) => {
 	const f = await beginFixture(t);
@@ -26,6 +60,8 @@ test("development_begin un pedido nuevo del chat crea el issue, el worktree y la
 	assert.ok(dialog.indexOf("Se crea un issue en test/repo") < dialog.indexOf(request.title) && dialog.indexOf("PR draft") < dialog.indexOf(request.title), "lo que va a pasar se lee antes del cuerpo");
 	assert.match(f.prompts[0]!.description, /Criterio: el total coincide/); assert.match(f.prompts[0]!.description, /Cambio de código con criterio verificable/);
 	assert.deepEqual(f.remote.created, [{ title: request.title, body: request.body }]);
+	assert.deepEqual(f.order.slice(0, 3), ["classify", "confirm", "create"]);
+	assert.equal(f.modelCalls.length, 1, "la preparación reutiliza la clasificación previa");
 	const record = (await preparation(f.root, 43))!;
 	assert.equal(record.phase, "ready"); await access(record.state.worktree);
 	assert.deepEqual(f.switches, [record.sessionFile]); assert.equal(f.current().ctx.cwd, record.state.worktree);
@@ -63,7 +99,7 @@ test("development_begin decir que no no crea issue, worktree, sesión ni trabajo
 	const f = await beginFixture(t); f.remote.confirm = false;
 	await f.ask(request);
 	assert.equal(f.prompts.length, 1); assert.deepEqual(f.remote.created, []); assert.deepEqual(f.switches, []);
-	assert.equal(await preparation(f.root, 43), undefined); assert.equal(f.modelCalls.length, 0);
+	assert.equal(await preparation(f.root, 43), undefined); assert.equal(f.modelCalls.length, 1, "se clasifica antes de la confirmación rechazada");
 	assert.ok(!f.calls.some((args) => args[0] === "issue" && args[1] === "create"));
 	assert.deepEqual(f.kickoffs(), []); assert.equal(f.git("worktree", "list").split("\n").length, 1);
 });
@@ -116,7 +152,7 @@ test("development_begin recargar la sesión del worktree restaura el trabajo sin
 test("development_begin si GitHub no confirma la creación, no reintenta y pide revisar antes de volver a pedirlo", async (t) => {
 	const f = await beginFixture(t); f.remote.failCreate = true;
 	await f.ask(request);
-	assert.match(f.current().notices.join("\n"), /revis/i); assert.deepEqual(f.switches, []); assert.equal(f.modelCalls.length, 0);
+	assert.match(f.current().notices.join("\n"), /revis/i); assert.deepEqual(f.switches, []); assert.equal(f.modelCalls.length, 1);
 	assert.equal(f.calls.filter((args) => args[0] === "issue" && args[1] === "create").length, 1, "no reintenta solo");
 });
 
@@ -148,11 +184,11 @@ test("development_begin lo que se puede comprobar sin efectos falla antes del s�
 	assert.match(f.current().notices.join("\n"), /Ya existe/); assert.equal(f.prompts.length, 0); assert.equal(f.modelCalls.length, 0);
 });
 
-test("development_begin si algo falla después de crear el issue, el aviso trae su número para no duplicarlo", async (t) => {
-	const f = await beginFixture(t); f.remote.classify = "no es JSON";
+test("development_begin una clasificación inválida falla antes de crear el issue o preguntar", async (t) => {
+	const f = await beginFixture(t); f.remote.requestClassify = "no es JSON";
 	await f.ask(request);
-	assert.deepEqual(f.remote.created.length, 1); assert.match(f.current().notices.join("\n"), /#43 ya se creó/);
-	assert.deepEqual(f.switches, []); assert.equal(f.git("worktree", "list").split("\n").length, 1);
+	assert.equal(f.remote.created.length, 0); assert.match(f.current().notices.join("\n"), /clasific|evaluación/i);
+	assert.deepEqual(f.prompts, []); assert.deepEqual(f.switches, []); assert.equal(f.git("worktree", "list").split("\n").length, 1);
 });
 
 test("development_begin un cambio de sesión cancelado conserva la preparación, avisa y no arranca nada", async (t) => {
