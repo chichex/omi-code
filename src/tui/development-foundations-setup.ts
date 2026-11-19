@@ -22,8 +22,8 @@ export function shouldOfferFoundations(pin: FoundationsPin | undefined, record: 
 	return hasUI && pin?.reading.kind === "missing" && pin.origin === "default" && !record?.accepted && !record?.offerDeclined;
 }
 
-/** Cada tanda del creador, con el progreso en espera como cualquier otra decisión del harness. */
-function asker(ctx: ExtensionContext, session: DevelopmentSession): Ask {
+/** Cada tanda del creador y del editor, con el progreso en espera como cualquier otra decisión del harness. */
+export function asker(ctx: ExtensionContext, session: DevelopmentSession): Ask {
 	return async (batch) => {
 		session.checkContext(ctx);
 		session.emit(`Esperando respuesta · ${batch.title}`, true);
@@ -31,7 +31,8 @@ function asker(ctx: ExtensionContext, session: DevelopmentSession): Ask {
 		finally { session.emit(); }
 	};
 }
-const saveSignal = (session: DevelopmentSession) => AbortSignal.any([session.lifecycle.signal, AbortSignal.timeout(SAVE_TIMEOUT_MS)]);
+/** Cada tramo con la KB tiene su propio tope: lo que tarde la persona en una tanda no lo consume. */
+export const saveSignal = (session: DevelopmentSession): AbortSignal => AbortSignal.any([session.lifecycle.signal, AbortSignal.timeout(SAVE_TIMEOUT_MS)]);
 
 /** En la sesión del worktree, con un trabajo activo. Un no o un error nunca guardan nada en la KB. */
 export async function offerFoundations(ctx: ExtensionContext, session: DevelopmentSession, kb: KbClient | undefined): Promise<void> {

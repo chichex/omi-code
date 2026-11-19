@@ -123,6 +123,8 @@ export function carryFoundationsPin(from: string, to: string): void {
 	const entry = sessions.get(resolve(from));
 	if (entry && !sessions.has(resolve(to))) remember(resolve(to), entry);
 }
+/** Para la pantalla OMI, que vive en otra extensión: el pin de esa sesión si ya se decidió. Sin I/O ni efectos. */
+export const sessionFoundationsPin = (sessionFile: string): FoundationsPin | undefined => sessions.get(resolve(sessionFile))?.pin;
 
 export interface FoundationsGateDeps extends DecideDeps { kb: KbClient | undefined; runner: Runner }
 export class FoundationsGate {

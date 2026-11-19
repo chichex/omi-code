@@ -17,6 +17,7 @@ import { beginCommand, BEGIN_SUBCOMMAND, holdSessionSwitch, revokeDevelopmentTic
 import { restoreIssueTriage } from "./workspace/issue-triage.ts";
 import { IssuePreparationBusyError } from "./workspace/issue-registry.ts";
 import { effectivePolicy, foundationsLines } from "./development-foundations.ts";
+import { editFoundations } from "./development-foundations-edit.ts";
 import { HeldLoadout } from "./development-loadout.ts";
 
 const KICKOFF = "Continuá el harness de desarrollo activo desde su etapa persistida. Respetá sus bloqueos y pedí los permisos pendientes; no saltees etapas.";
@@ -135,6 +136,16 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 					if (["resume", "approve", "refresh"].includes(command)) proceed(ctx);
 					else ctx.ui.notify(session.status(), "info");
 				} catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "No se pudo ejecutar el harness", busy(error) ? "warning" : "error"); }
+			},
+		});
+		// La pantalla OMI (otra extensión) lo despacha con «f»: el editor vive acá, con el pin, la KB y la sesión.
+		pi.registerCommand("omi-foundations", {
+			description: "Ver y editar Foundations: comandos del catálogo y políticas ask/auto, con un sí",
+			handler: async (_input, ctx) => {
+				try {
+					if (!ctx.isIdle() || ctx.hasPendingMessages()) throw new Error("Esperá a que termine el turno antes de editar Foundations.");
+					await editFoundations(ctx, session, deps.kb);
+				} catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "No se pudo editar Foundations", "warning"); }
 			},
 		});
 		// Pi ya restauró las tools de la rama: con el harness activo, las restringidas.
