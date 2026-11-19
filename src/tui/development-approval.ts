@@ -1,7 +1,7 @@
 // Documento de consentimiento: datos íntegros, sin ANSI ni efectos de navegación.
 import type { Lens, Workflow } from "../harness/model.ts";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { renderWorkflowArtifact } from "../harness/github.ts";
+import { renderWorkflowArtifact } from "../harness/pr-body.ts";
 import { stackLines } from "../harness/stack.ts";
 
 // legend: texto propio de OMI ya escrito como se ve; nunca datos de la receta.
@@ -28,7 +28,7 @@ export function approvalDisplayText(value: string): string {
 	});
 }
 // La leyenda muestra cada escape tal como aparece en los comandos, sin escaparla otra vez.
-const COMMAND_LEGEND = `│ inicia línea; ↳ continúa visualmente; ↵ es un salto real. Se muestran escapes literales: ${approvalDisplayText("\\")} = backslash, ${approvalDisplayText("\t")} = tab, ${approvalDisplayText("\r")} = retorno, \\uXXXX = control/invisible.`;
+export const COMMAND_LEGEND = `│ inicia línea; ↳ continúa visualmente; ↵ es un salto real. Se muestran escapes literales: ${approvalDisplayText("\\")} = backslash, ${approvalDisplayText("\t")} = tab, ${approvalDisplayText("\r")} = retorno, \\uXXXX = control/invisible.`;
 export function approvalLineText(l: ApprovalLine): string { return l.kind === "legend" ? l.text : approvalDisplayText(l.text); }
 // Sin trim ni word-wrap: espacios finales y saltos siguen inspeccionables. Sin ancho (RPC), una fila por línea lógica.
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
@@ -50,7 +50,7 @@ export function commandDisplayLines(value: string, width = Number.POSITIVE_INFIN
 export function approvalDocument(state: Workflow): ApprovalDocument {
 	const recipe = state.recipe;
 	if (!recipe) throw new Error("Falta receta para revisar");
-	// Sin tope propio: la revisión navega por secciones. Sólo se comprueba que el artefacto entre en GitHub.
+	// Sin tope propio: la revisión navega por secciones. Sólo se comprueba que el cuerpo del PR draft entre en GitHub.
 	renderWorkflowArtifact(state);
 	const { classification: c, executor } = recipe; const stack = stackLines(state);
 	const sections: ApprovalSection[] = [

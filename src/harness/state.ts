@@ -23,7 +23,8 @@ export type WorkflowEvent =
  | { type: "resume" }
  | { type: "source_changed"; source: Workflow["source"] }
  | { type: "agreed"; quote: string; summary: string; replan: boolean; fingerprint?: string }
- | { type: "publishing"; head: string; bodyHash: string }
+ // replaces: el hash del recibo pendiente que se renueva con otro cuerpo; sin él, un recibo distinto no se pisa.
+ | { type: "publishing"; head: string; bodyHash: string; replaces?: string }
  | { type: "published"; head: string; url: string; number: number; stack?: { number: number; url: string }[] }
  | { type: "stack_synced"; stack: StackPull[] };
 
@@ -371,7 +372,8 @@ function applyEvent(state: Workflow, event: WorkflowEvent, at: string): void {
    requirePhase(state, "pr"); const latest = state.evidence.findLast(e => e.kind === "verification");
    requireCondition(latest, "falta verificación"); verifiedEvidence(state, latest.fingerprint, event.head);
    requireCondition(nonempty(event.bodyHash), "falta hash del cuerpo");
-   if (state.publication.status === "pending") requireCondition(state.publication.head === event.head && state.publication.bodyHash === event.bodyHash, "publicación pendiente distinta");
+   if (state.publication.status === "pending") requireCondition(state.publication.head === event.head && state.publication.bodyHash === (event.replaces ?? event.bodyHash), "publicación pendiente distinta");
+   else requireCondition(event.replaces === undefined, "no hay publicación pendiente que renovar");
    const stack = stackGroups(state) ? planStack(state, event.head) : undefined;
    state.publication = { status: "pending", head: event.head, bodyHash: event.bodyHash, at, ...(stack ? { stack } : {}) }; return;
   }

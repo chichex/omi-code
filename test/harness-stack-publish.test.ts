@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommandOptions, Runner } from "../src/core/exec.ts";
 import { artifactHash, sourceHash, type Workflow } from "../src/harness/model.ts";
-import { renderPullRequestBody, renderWorkflowArtifact } from "../src/harness/github.ts";
+import { renderPullRequestBody } from "../src/harness/github.ts";
+import { renderWorkflowArtifact } from "../src/harness/pr-body.ts";
 import { publishStack } from "../src/harness/stack-publish.ts";
 
 const h1 = "1".repeat(40); const h2 = "2".repeat(40); const base = "a".repeat(40);
@@ -93,9 +94,10 @@ test("stack_publish exige a cada PR las validaciones del PR único y falla antes
  await assert.rejects(publishStack(raced.workflow, raced.runner), /HEAD/); assert.equal(pushes(raced).length, 0);
  const changed = await fixture(t); changed.state.issue.body = "Otro pedido\n";
  await assert.rejects(publishStack(changed.workflow, changed.runner), /pedido/); assert.equal(pushes(changed).length, 0);
- // El artefacto entra en GitHub, pero no con el envoltorio y la línea del stack de cada PR.
+ // El cuerpo del PR único entra justo en GitHub con su marcador, pero no con el Refs y la línea del stack de cada PR.
  const big = await fixture(t); big.workflow.source.body = "";
- big.workflow.source.body = "x".repeat(65530 - Buffer.byteLength(renderWorkflowArtifact(big.workflow)));
+ const marker = "<!-- omi-development:pr identity= source= head= artifact= -->".length + 4 * 64;
+ big.workflow.source.body = "x".repeat(65536 - 1 - marker - Buffer.byteLength(renderWorkflowArtifact(big.workflow)));
  if (big.workflow.publication.status === "pending") big.workflow.publication.bodyHash = artifactHash(renderWorkflowArtifact(big.workflow));
  await assert.rejects(publishStack(big.workflow, big.runner), /dividir/); assert.equal(big.calls.length, 0, "un cuerpo que no entra falla antes de cualquier llamada");
  const single = await fixture(t); if (single.workflow.publication.status === "pending") delete single.workflow.publication.stack;

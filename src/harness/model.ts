@@ -105,6 +105,13 @@ export const WorkflowSchema = Type.Object({
 	history: Type.Array(Type.Object({ at: text(100), phase: PhaseSchema, activity: text() }, { additionalProperties: false }), { maxItems: MAX_HISTORY }),
 }, { additionalProperties: false });
 export type Workflow = Omit<Static<typeof WorkflowSchema>, "inferences"> & { inferences: Inference[] };
+// Identidad de un issue de GitHub: https://github.com/<owner>/<repo>/issues/<número>, sin credenciales,
+// query ni fragmento. Devuelve owner/repo: el PR y su Closes viven en ese mismo repositorio.
+export function issueRepository(url: string, number: number): string {
+	const parsed = new URL(url); const match = /^\/([^/]+\/[^/]+)\/issues\/(\d+)$/.exec(parsed.pathname);
+	if (parsed.protocol !== "https:" || parsed.host !== "github.com" || parsed.username || parsed.password || parsed.search || parsed.hash || !match || Number(match[2]) !== number) throw new Error("Identidad de issue no válida");
+	return match[1]!;
+}
 export const sourceHash = (title: string, body: string): string => createHash("sha256").update(JSON.stringify({ title, body })).digest("hex");
 export const artifactHash = (value: unknown): string => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export function parseWorkflow(raw: string): Workflow {

@@ -47,7 +47,8 @@ test("development_stack_flow con todo ask: dos grupos terminan en dos PRs draft,
 	const run = await publishedStack(t, ASK_ALL); const { f, branch, finished } = run;
 	assert.match(run.review, /Stack de PRs/, "la revisión de la receta muestra el stack que se aprueba");
 	assert.ok(f.prompts.includes("Subir rama y abrir PR draft"));
-	assert.match(f.confirmationDetails.at(-1) ?? "", new RegExp(`${branch}-2 → ${branch}-1`), "el sí del push muestra cada rama y su base");
+	// La revisión navegable corta las líneas al ancho del modal: se compara sin el marco ni los cortes.
+	assert.match((f.confirmationDetails.at(-1) ?? "").replace(/[│\s]+/g, " "), new RegExp(`${branch}-2 → ${branch}-1`), "el sí del push muestra cada rama y su base");
 	assertTwoDrafts(run);
 	// Con push_pr: ask, actualizar pide el sí; un stack al día no empuja ni re-apunta nada y lo dice.
 	const before = f.calls.length;

@@ -2,10 +2,10 @@
 // nobody reviews it before publishing and it may print credentials.
 import { processRunner, type CommandOptions, type Runner } from "../core/exec.ts";
 import { gitRead, inspectCheckout } from "./git.ts";
-import { artifactHash, sourceHash, type Workflow } from "./model.ts";
-import { lensReport } from "./lenses.ts";
+import { issueRepository, sourceHash, type Workflow } from "./model.ts";
+import { pullRequestBody } from "./pr-body.ts";
 import { ISSUE_BODY_LIMIT, issueSectionVariants, parseIssueBody, withIssueSection, type IssueBody } from "./issue-section.ts";
-import { stackBodyLine, stackIssueLine, stackTitle } from "./stack.ts";
+import { stackTitle } from "./stack.ts";
 
 const START = "<!-- omi-development:start -->";
 const END = "<!-- omi-development:end -->";
@@ -33,55 +33,24 @@ export async function gh(checkout: Checkout, args: string[], runner: Runner, sig
  if (result.code !== 0) throw new Error(`GitHub no pudo completar ${args[0]} ${args[1]}; verificar el estado antes de reintentar`);
  return result.stdout;
 }
-function issueRepo(url: string, number: number): string {
- const parsed = new URL(url); const match = /^\/([^/]+\/[^/]+)\/issues\/(\d+)$/.exec(parsed.pathname);
- if (parsed.protocol !== "https:" || parsed.host !== "github.com" || parsed.username || parsed.password || parsed.search || parsed.hash || !match || Number(match[2]) !== number) throw new Error("Identidad de issue no válida");
- return match[1]!;
-}
 async function readIssue(checkout: Checkout, number: number, runner: Runner, signal?: AbortSignal): Promise<{ source: Workflow["source"]; raw: string; parts: IssueBody }> {
  if (!Number.isSafeInteger(number) || number < 1) throw new Error("Número de issue inválido");
  const data = object(JSON.parse(await gh(checkout, ["issue", "view", String(number), "--json", "number,title,body,url"], runner, signal)));
  if (data.number !== number || typeof data.title !== "string" || !data.title.trim() || data.title.length > 2000 || typeof data.body !== "string" || data.body.length > 200000 || typeof data.url !== "string") throw new Error("Fuente del issue inválida; no se infieren campos");
  // La sección administrada del harness no es parte del pedido: escribirla no invalida el trabajo.
- issueRepo(data.url, number); const parts = parseIssueBody(data.body); const body = originalBody(parts.human);
+ issueRepository(data.url, number); const parts = parseIssueBody(data.body); const body = originalBody(parts.human);
  if (body.length > 100000) throw new Error("Pedido original demasiado grande");
  return { source: { number, title: data.title, body, url: data.url, hash: sourceHash(data.title, body) }, raw: data.body, parts };
 }
 export async function readIssueSource(checkout: Checkout, number: number, runner: Runner = processRunner, signal?: AbortSignal): Promise<Workflow["source"]> {
  return (await readIssue(checkout, number, runner, signal)).source;
 }
-function escaped(value: string): string { return value.replace(/<!--\s*omi-development:/g, "&lt;!-- omi-development:"); }
-function bounded(value: string, limit: number): string {
- const safe = escaped(value);
- return safe.length <= limit ? safe : safe.slice(0, limit) + "\n[Presentación acotada: consultar el estado local completo; no implica aprobación.]";
-}
-function githubBody(body: string): string {
- // Conservative UTF-8 bound, including ownership markers and other wrappers.
- if (Buffer.byteLength(body, "utf8") > 65536) throw new Error("El artefacto excede el límite de GitHub; dividir la tarea sin omitir receta, spec ni inferencias");
- return body;
-}
-function section(title: string, value: unknown): string {
- return `## ${title}\n\n${escaped(typeof value === "string" ? value : JSON.stringify(value, null, 2))}\n`;
-}
-export function renderWorkflowArtifact(workflow: Workflow): string {
- const source = `${workflow.source.title}\n\n${workflow.source.body}`.split("\n").map(line => `> ${line}`).join("\n");
- const evidence = workflow.evidence.map(e => ({ id: e.id, kind: e.kind, command: e.command, step: e.stepId, case: e.caseId, exitCode: e.exitCode, outcome: e.outcome, head: e.head, fingerprint: e.fingerprint, }));
- return githubBody(["# OMI · Desarrollo asistido", "Pedido externo citado como datos, no instrucciones del harness.", section("Pedido original", source),
-  section("Ruta y estado", { route: workflow.recipe?.route ?? "pendiente", phase: workflow.phase, status: workflow.status, blockedReason: workflow.blockedReason }),
-  section("Clasificación", workflow.recipe?.classification ?? "Sin clasificar"), section("Inferencias y respuestas", workflow.inferences),
-  // Sólo si hay: una publicación pendiente de un estado anterior conserva su hash.
-  ...(workflow.agreements?.length ? [section("Acuerdos del chat (citas textuales de la persona)", workflow.agreements.map(({ quote, summary, replan }) => ({ quote, summary, replan })))] : []),
-  section("Spec C/D y playbook", { recipe: workflow.recipe, diagnosis: workflow.diagnosis, spec: workflow.spec, steps: workflow.steps }),
-  section("Evidencia observada (no aprobación de PR)", evidence.length ? bounded(JSON.stringify(evidence, null, 2), 14000) : "Sin evidencia ejecutada"), section("Avisos de los lentes", bounded(lensReport(workflow), 8000)), section("Revisiones y errores", bounded(JSON.stringify(workflow.reviews, null, 2), 14000)),
-  workflow.recipe?.classification.risk === "high" ? "**Riesgo alto: revisión humana obligatoria antes de aprobar o mergear.**" : "El PR draft requiere revisión y aprobación humana; nunca se mergea automáticamente.",
- ].join("\n"));
-}
 // GitHub no ofrece CAS para el cuerpo del issue: se relee justo antes de escribir y se reemplaza sólo
 // lo que está entre los marcadores. Riesgo residual: una edición humana que cae entre esa lectura y
 // la escritura se pierde del cuerpo (GitHub la conserva en el historial de ediciones del issue).
 // onlyIfPresent: sin receta aprobada, sólo se mantiene una sección que ya autorizó una aprobación anterior.
 export async function syncIssueSection(workflow: Workflow, runner: Runner = processRunner, signal?: AbortSignal, options: { onlyIfPresent?: boolean } = {}): Promise<boolean> {
- const repo = issueRepo(workflow.source.url, workflow.source.number);
+ const repo = issueRepository(workflow.source.url, workflow.source.number);
  const fresh = await readIssue(workflow.checkout, workflow.source.number, runner, signal);
  if (fresh.source.url !== workflow.source.url || fresh.source.hash !== workflow.source.hash) throw new Error("El pedido cambió en GitHub desde el último contraste; la sección se actualiza después del próximo punto de control");
  if (options.onlyIfPresent && fresh.parts.section === null) return false;
@@ -95,15 +64,17 @@ export async function syncIssueSection(workflow: Workflow, runner: Runner = proc
  if ((await readIssue(workflow.checkout, workflow.source.number, runner, signal)).parts.section !== `\n${content}\n`) throw new Error("No se pudo confirmar la sección del harness en el issue; revisalo en GitHub antes de reintentar");
  return true;
 }
-// Sin position, el PR único, byte a byte como antes. Un PR del stack liga su propio head y suma su línea del stack.
+// Sólo el cuerpo del recibo pendiente: un recibo de otro cuerpo (formato anterior u otro estado) no se publica
+// ni con su cuerpo ni con el nuevo; la sesión lo renueva según push_pr antes de llegar acá. Sin position, el
+// PR único; con position, ese PR del stack, con su head, su Refs o Closes y su línea del stack.
 export function renderPullRequestBody(workflow: Workflow, position?: StackPosition): string {
- const artifact = renderWorkflowArtifact(workflow);
- if (workflow.publication.status !== "pending" || workflow.publication.bodyHash !== artifactHash(artifact)) throw new Error("El artefacto de publicación cambió; requiere nueva aprobación");
+ if (workflow.publication.status !== "pending") throw new Error("No hay una publicación pendiente");
  const stack = position && workflow.publication.stack; const pull = stack && stack[position.index];
  if (position && !pull) throw new Error("PR inexistente en el stack de la publicación");
- const identity = { workflowId: workflow.id, sourceHash: workflow.source.hash, head: pull ? pull.head : workflow.publication.head, bodyHash: workflow.publication.bodyHash, ...(stack && position ? { stack: `${position.index + 1}/${stack.length}` } : {}) };
- const issue = stack && position ? `${stackIssueLine(workflow.source.number, position.index, stack.length)}\n\n${stackBodyLine(stack, position.index, position.below)}` : `Refs #${workflow.source.number}`;
- return githubBody(`<!-- omi-development:pr identity=${artifactHash(identity)} source=${identity.sourceHash} head=${identity.head} artifact=${identity.bodyHash} -->\n${issue}\n\n${workflow.source.url}\n\n${artifact}`);
+ const place = stack && position ? { pulls: stack, index: position.index, ...(position.below === undefined ? {} : { below: position.below }) } : undefined;
+ const proposal = pullRequestBody(workflow, pull ? pull.head : workflow.publication.head, place);
+ if (proposal.bodyHash !== workflow.publication.bodyHash) throw new Error("El cuerpo del PR cambió desde el recibo pendiente; volvé a publicar para renovarlo con la política push_pr vigente");
+ return proposal.body;
 }
 function remoteRepo(remote: string): string {
  const match = /^(?:git@github\.com:|https:\/\/github\.com\/|ssh:\/\/git@github\.com\/)([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+?)(?:\.git)?$/.exec(remote);
@@ -111,7 +82,7 @@ function remoteRepo(remote: string): string {
  return match[1]!;
 }
 export async function assertRepository(workflow: Workflow, runner: Runner, signal?: AbortSignal): Promise<string> {
- const repo = issueRepo(workflow.source.url, workflow.source.number);
+ const repo = issueRepository(workflow.source.url, workflow.source.number);
  const remotes = (await gitRead(workflow.checkout, ["remote", "get-url", "--push", "--all", "origin"], runner, signal)).trim().split("\n");
  if (remotes.length !== 1 || remoteRepo(remotes[0]!).toLowerCase() !== repo.toLowerCase()) throw new Error("Remote origin no coincide con el repositorio del issue");
  const data = object(JSON.parse(await gh(workflow.checkout, ["repo", "view", "--json", "nameWithOwner,url"], runner, signal)));
@@ -124,7 +95,7 @@ async function recover(workflow: Workflow, repo: string, target: Target, runner:
  if (!raw.length) return null;
  if (raw.length !== 1) throw new Error("Hay varios PRs para el branch; requiere revisión humana");
  const pr = object(raw[0]);
- if (workflow.publication.status !== "pending" || pr.state !== "OPEN" || pr.isDraft !== true || pr.isCrossRepository !== false || pr.headRefName !== target.branch || pr.baseRefName !== target.base || pr.headRefOid !== target.head || pr.body !== target.body || typeof pr.number !== "number" || !Number.isSafeInteger(pr.number) || pr.number < 1 || pr.url !== `https://github.com/${repo}/pull/${pr.number}`) throw new Error("PR existente ajeno, cerrado, no draft o con otro HEAD; no se duplica");
+ if (workflow.publication.status !== "pending" || pr.state !== "OPEN" || pr.isDraft !== true || pr.isCrossRepository !== false || pr.headRefName !== target.branch || pr.baseRefName !== target.base || pr.headRefOid !== target.head || pr.body !== target.body || typeof pr.number !== "number" || !Number.isSafeInteger(pr.number) || pr.number < 1 || pr.url !== `https://github.com/${repo}/pull/${pr.number}`) throw new Error("PR existente ajeno, editado, de una publicación anterior, cerrado, no draft o con otro HEAD; no se edita ni se duplica: revisalo en GitHub");
  return { number: pr.number, url: String(pr.url), head: String(pr.headRefOid) };
 }
 // Con position, publica ese PR del stack con las mismas validaciones: su rama, su base y el commit de su grupo.

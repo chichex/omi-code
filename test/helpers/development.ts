@@ -146,7 +146,7 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 					}
 				}
 				component.handleInput?.("1"); component.render(72);
-				prompts.push("Aprobar receta y sincronizar issue"); confirmationDetails.push(inspected.join("\n"));
+				prompts.push(options?.blocked?.message ?? "Aprobar receta y sincronizar issue"); confirmationDetails.push(inspected.join("\n"));
 				await uiControl.onReview();
 				if (uiControl.close) component.dispose?.();
 				else for (const key of uiControl.keys ?? [remote.confirmations ? "\x13" : "\x1b"]) { component.handleInput?.(key); component.render(72); }

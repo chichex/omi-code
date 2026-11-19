@@ -80,13 +80,6 @@ export function lensWarningLine(s: LensStatus): string {
 	const more = s.findings.length > 1 ? ` (+${s.findings.length - 1} hallazgos)` : "";
 	return `Lente ${s.lens} · ${s.verdict}${s.blocking ? " · bloquea" : ""}${s.findings[0] ? ` · ${s.findings[0]}` : ""}${more}`;
 }
-const oneLine = (value: string): string => value.replace(/\s*[\r\n]+\s*/g, " ");
-export function lensReport(state: Workflow): string {
-	const statuses = lensStatuses(state);
-	if (!statuses.length) return "La receta no pidió lentes.";
-	return ["Los lentes asesoran: unknown y fail quedan como aviso y no bloquean Verificar ni este PR. Sólo un fail de seguridad bloquea.", "",
-		...statuses.flatMap((s) => [`- ${s.lens} · ${s.verdict === "not-run" ? "sin correr" : s.verdict}${s.blocking ? " · bloquea" : ""}`, ...s.findings.map((f) => `  - ${oneLine(f)}`)])].join("\n");
-}
 
 // Un diff que no entra en una llamada se reparte por archivo en partes de hasta `budget` caracteres, medidos
 // como van en el JSON de la llamada (comillas, barras y saltos escapados). Un archivo más grande se corta por
