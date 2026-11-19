@@ -80,7 +80,7 @@ export class DevelopmentSession {
 		this.pi = pi; this.io = io;
 		this.runner = deps.runner ?? processRunner; this.now = deps.now ?? (() => new Date().toISOString());
 		this.offline = developmentOffline(args, io.env);
-		this.foundations = new FoundationsGate({ kb: deps.kb, runner: this.runner, trustDir: foundationsDir(io.homeDir), now: this.now, confirm: (ctx, title, description) => this.confirm(ctx, title, description) });
+		this.foundations = new FoundationsGate({ kb: deps.kb, runner: this.runner, trustDir: foundationsDir(io.homeDir), now: this.now });
 	}
 	private anchor(): void {
 		const s = this.state;
@@ -140,7 +140,7 @@ export class DevelopmentSession {
 		}
 		this.emit();
 	}
-	// La persona ya dio el sí al empezar (development-begin): acá no se vuelve a preguntar.
+	// El arranque ya pasó por development-begin (el sí, o arranque: auto): acá no se vuelve a preguntar.
 	async start(ctx: ExtensionContext): Promise<void> {
 		this.context = ctx; this.checkContext(ctx);
 		if (this.offline) throw new Error("Iniciar requiere leer el issue vigente en GitHub; quitá --offline o PI_OFFLINE. Retomar lo guardado no requiere red.");
@@ -217,7 +217,7 @@ export class DevelopmentSession {
 		};
 		await assertExplored();
 		const document = approvalDocument(state);
-		// receta: auto aprueba sin la revisión humana; se revalida igual y sus comandos no quedan autorizados.
+		// receta: auto aprueba sin la revisión humana y sin UI; se revalida igual y sus D quedan autorizados.
 		const foundations = await this.foundations.policy(ctx, state); const auto = foundations.politica.receta === "auto";
 		if (!auto && (!ctx.hasUI || !["tui", "rpc"].includes(ctx.mode))) throw new Error("Aprobar receta: requiere confirmación humana interactiva");
 		const cancellation = AbortSignal.any([this.lifecycle.signal, ...((signal ?? ctx.signal) ? [signal ?? ctx.signal!] : [])]);
@@ -236,7 +236,7 @@ export class DevelopmentSession {
 		await this.apply({ type: "approved", ...(auto ? { by: "foundations" as const, ...(foundations.hash ? { foundations: foundations.hash } : {}) } : {}) }, ctx);
 		// También con receta: auto la sección del issue muestra la receta aprobada.
 		await updateIssueSection(this, ctx);
-		if (auto) ctx.ui.notify("Foundations · receta auto: la receta se aprobó sin revisión humana. Sus comandos fuera del catálogo siguen pidiendo permiso.", "info");
+		if (auto) ctx.ui.notify("Foundations · receta auto: la receta se aprobó sin revisión humana. Sus comandos corren sin volver a preguntar.", "info");
 		return true;
 	}
 	// Volver a explorar descarta receta, aprobación y pruebas; también las lecturas y comandos autorizados.

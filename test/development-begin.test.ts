@@ -8,6 +8,7 @@ import { readGit } from "../src/tui/workspace/data.ts";
 import { issueRegistryDir, readIssuePreparation } from "../src/tui/workspace/issue-registry.ts";
 import { holdSessionSwitch, issueDevelopmentTicket, requestDevelopmentBegin, takeDevelopmentTicket } from "../src/tui/development-tickets.ts";
 import { beginFixture } from "./helpers/development-begin.ts";
+import { ASK_ALL } from "./helpers/foundations.ts";
 
 const KICKOFF = /Continuá el harness de desarrollo/;
 const request = { title: "Mostrar el total del carrito", body: "Pedido: mostrar el total con impuestos.\nCriterio: el total coincide con la suma.", reason: "Cambio de código con criterio verificable" };
@@ -64,7 +65,7 @@ test("development_begin cancelar una clasificación iniciada ignora una respuest
 });
 
 test("development_begin un pedido nuevo del chat crea el issue, el worktree y la sesión con un solo sí y sigue en Explorar", async (t) => {
-	const f = await beginFixture(t);
+	const f = await beginFixture(t, { foundations: ASK_ALL });
 	const result = await f.ask(request);
 	assert.equal(result.terminate, true, "la tool termina el turno: no concede permisos ni sigue sola");
 	assert.equal(f.prompts.length, 1, "una sola confirmación humana"); assert.match(f.prompts[0]!.description, /Mostrar el total del carrito/); assert.match(f.prompts[0]!.description, /test\/repo/);
@@ -88,7 +89,7 @@ test("development_begin un pedido nuevo del chat crea el issue, el worktree y la
 });
 
 test("development_begin con un issue existente no crea otro, y volver a pedirlo retoma sin reclasificar ni duplicar", async (t) => {
-	const f = await beginFixture(t);
+	const f = await beginFixture(t, { foundations: ASK_ALL });
 	await f.ask({ issue: 42, reason: "La persona nombró el #42" });
 	assert.deepEqual(f.remote.created, []); assert.equal(f.modelCalls.length, 1);
 	const labelReads = () => f.calls.filter((args) => args.includes("labels")).length;
@@ -108,7 +109,7 @@ test("development_begin con un issue existente no crea otro, y volver a pedirlo 
 });
 
 test("development_begin decir que no no crea issue, worktree, sesión ni trabajo", async (t) => {
-	const f = await beginFixture(t); f.remote.confirm = false;
+	const f = await beginFixture(t, { foundations: ASK_ALL }); f.remote.confirm = false;
 	await f.ask(request);
 	assert.equal(f.prompts.length, 1); assert.deepEqual(f.remote.created, []); assert.deepEqual(f.switches, []);
 	assert.equal(await preparation(f.root, 43), undefined); assert.equal(f.modelCalls.length, 1, "se clasifica antes de la confirmación rechazada");
@@ -117,7 +118,7 @@ test("development_begin decir que no no crea issue, worktree, sesión ni trabajo
 });
 
 test("development_begin no hay entrada manual: sin token no pasa nada, el token es de un solo uso y start ya no existe", async (t) => {
-	const f = await beginFixture(t);
+	const f = await beginFixture(t, { foundations: ASK_ALL });
 	for (const input of ["begin", "begin 00000000-0000-0000-0000-000000000000", "start"]) await f.command(input);
 	assert.equal(f.prompts.length, 0); assert.deepEqual(f.switches, []); assert.deepEqual(f.remote.created, []);
 	assert.match(f.current().notices.join("\n"), /Uso: \/omi-work resume/); assert.doesNotMatch(f.current().notices.join("\n"), /\bstart\b/);
@@ -153,7 +154,7 @@ test("development_begin la tool sólo se ofrece fuera del harness y valida el pe
 });
 
 test("development_begin recargar la sesión del worktree restaura el trabajo sin volver a mandar el arranque", async (t) => {
-	const f = await beginFixture(t);
+	const f = await beginFixture(t, { foundations: ASK_ALL });
 	await f.ask({ issue: 42, reason: "Pedido" });
 	const kickoffs = f.kickoffs().length; assert.equal(kickoffs, 1);
 	await f.reload();
@@ -179,10 +180,10 @@ for (const [name, options, expected] of [
 });
 
 test("development_begin el panel usa las mismas guardas y su origen se muestra como de la persona, no del agente", async (t) => {
-	const unauthenticated = await beginFixture(t, { authenticated: false });
+	const unauthenticated = await beginFixture(t, { foundations: ASK_ALL, authenticated: false });
 	requestDevelopmentBegin({ sendUserMessage: (text: string) => unauthenticated.current().send(text, { expandPromptTemplates: true }) }, unauthenticated.main.getSessionFile()!, { issue: 42 }); await unauthenticated.flush();
 	assert.match(unauthenticated.current().notices.join("\n"), /modelo autenticado/); assert.equal(unauthenticated.prompts.length, 0); assert.deepEqual(unauthenticated.calls, []);
-	const f = await beginFixture(t); f.remote.confirm = false;
+	const f = await beginFixture(t, { foundations: ASK_ALL }); f.remote.confirm = false;
 	requestDevelopmentBegin({ sendUserMessage: (text: string) => f.current().send(text, { expandPromptTemplates: true }) }, f.main.getSessionFile()!, { issue: 42 }); await f.flush();
 	assert.match(f.prompts[0]!.description, /panel de Issues/); assert.doesNotMatch(f.prompts[0]!.description, /Motivo del agente/);
 });
@@ -214,11 +215,11 @@ test("development_begin un cambio de sesión cancelado conserva la preparación,
 });
 
 test("development_begin con el agente trabajando no se arranca, y un segundo arranque espera al primero", async (t) => {
-	const busy = await beginFixture(t, { busy: true });
+	const busy = await beginFixture(t, { foundations: ASK_ALL, busy: true });
 	const token = issueDevelopmentTicket({ kind: "request", origin: "panel", sessionFile: busy.main.getSessionFile()!, request: { issue: 42 } });
 	await busy.command(`begin ${token}`);
 	assert.match(busy.current().notices.join("\n"), /Esperá a que termine el turno/); assert.equal(busy.prompts.length, 0);
-	const f = await beginFixture(t); let release!: () => void; f.remote.hold = new Promise((done) => { release = done; }); f.remote.confirm = false;
+	const f = await beginFixture(t, { foundations: ASK_ALL }); let release!: () => void; f.remote.hold = new Promise((done) => { release = done; }); f.remote.confirm = false;
 	const first = f.command(`begin ${issueDevelopmentTicket({ kind: "request", origin: "panel", sessionFile: f.main.getSessionFile()!, request: { issue: 42 } })}`);
 	for (let i = 0; i < 50 && !f.prompts.length; i++) await new Promise((done) => setImmediate(done));
 	const second = f.command(`begin ${issueDevelopmentTicket({ kind: "request", origin: "panel", sessionFile: f.main.getSessionFile()!, request: { issue: 42 } })}`);
@@ -228,7 +229,7 @@ test("development_begin con el agente trabajando no se arranca, y un segundo arr
 });
 
 test("development_begin mientras el pedido espera el sí, el agente no puede seguir con otras tools", async (t) => {
-	const f = await beginFixture(t);
+	const f = await beginFixture(t, { foundations: ASK_ALL });
 	await f.invoke("omi_work_begin", request);
 	for (const toolName of ["edit", "write", "bash", "read"]) {
 		const blocked = await f.emit("tool_call", { toolName, input: { path: "value.cjs" } });
@@ -251,7 +252,7 @@ test("development_begin retomar con el pedido editado en GitHub lo contrasta, vu
 });
 
 test("development_begin una preparación anterior al registro se retoma desde su sesión, sin reclasificar ni chocar con su worktree", async (t) => {
-	const f = await beginFixture(t);
+	const f = await beginFixture(t, { foundations: ASK_ALL });
 	await f.ask({ issue: 42, reason: "Pedido" });
 	const record = (await preparation(f.root, 42))!;
 	await rm(join(issueRegistryDir((await readGit(f.root))!), "42.json"));
@@ -261,7 +262,7 @@ test("development_begin una preparación anterior al registro se retoma desde su
 });
 
 test("development_begin una preparación guardada rota falla antes de preguntar", async (t) => {
-	const f = await beginFixture(t);
+	const f = await beginFixture(t, { foundations: ASK_ALL });
 	await f.ask({ issue: 42, reason: "Pedido" });
 	const record = (await preparation(f.root, 42))!;
 	await f.openMain(); await rm(record.sessionFile!);
@@ -271,7 +272,7 @@ test("development_begin una preparación guardada rota falla antes de preguntar"
 });
 
 test("development_begin retomar un trabajo pausado lo dice en el diálogo y el sí lo reanuda, en el worktree y desde main", async (t) => {
-	const f = await beginFixture(t);
+	const f = await beginFixture(t, { foundations: ASK_ALL });
 	await f.ask({ issue: 42, reason: "Pedido" }); await f.command("stop");
 	const kickoffs = () => f.kickoffs().filter((text) => KICKOFF.test(text)).length;
 	await f.ask({ issue: 42, reason: "Seguir acá" });
@@ -293,7 +294,7 @@ test("development_begin un Esc en el turno del agente descarta el pedido sin pre
 });
 
 test("development_begin no arranca mientras otro cambio de sesión está en curso", async (t) => {
-	const f = await beginFixture(t);
+	const f = await beginFixture(t, { foundations: ASK_ALL });
 	const release = holdSessionSwitch("regreso al repo principal")!; t.after(release);
 	assert.equal(holdSessionSwitch("arranque"), undefined, "el cerrojo es exclusivo");
 	await f.ask(request);

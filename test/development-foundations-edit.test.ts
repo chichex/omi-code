@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { renameSync, rmSync, symlinkSync } from "node:fs";
 import { test, type TestContext } from "node:test";
-import { foundationsHash, parseFoundations, renderFoundationsBlock, type FoundationsBlock } from "../src/harness/foundations.ts";
+import { DEFAULT_POLICY, foundationsHash, parseFoundations, renderFoundationsBlock, type FoundationsBlock } from "../src/harness/foundations.ts";
 import { foundationsDir, readTrust, writeTrust } from "../src/harness/foundations-trust.ts";
 import { effectivePolicy, foundationsLines, sessionFoundationsPin } from "../src/tui/development-foundations.ts";
 import { commitFoundationsSave, FoundationsSaveError, prepareFoundationsSave } from "../src/tui/development-foundations-save.ts";
@@ -180,7 +180,8 @@ test("foundations_edit: sin Foundations en la KB parte de la política vigente y
 	await f.edit();
 	assert.equal(saves(f.kb), 1);
 	assert.ok(f.kb.documents.at(-1)!.cuerpo.startsWith(HUMAN));
-	assert.deepEqual(f.latest(), { version: 1, repo: REPO, comandos: ["node test.cjs"], politica: effectivePolicy(undefined).politica }, "las políticas parten del default, sea cual sea");
+	assert.deepEqual(effectivePolicy(undefined).politica, DEFAULT_POLICY, "el default vigente sin Foundations: todo auto");
+	assert.deepEqual(f.latest(), { version: 1, repo: REPO, comandos: ["node test.cjs"], politica: { ...DEFAULT_POLICY } }, "las políticas parten del default: todo auto");
 	assert.equal(f.pin()?.origin, "kb");
 });
 

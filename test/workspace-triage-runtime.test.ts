@@ -7,6 +7,7 @@ import { delimiter, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { tempDir } from "./helpers/io.ts";
+import { acceptFoundations, ASK_ALL } from "./helpers/foundations.ts";
 import { plainTerminal } from "./helpers/workspace-pty.ts";
 
 const driver = `
@@ -132,6 +133,8 @@ for (const mode of ["ready", "cancel", "invalid"] as const) test(`workspace_begi
 	for (const path of [root, agent, bin]) await mkdir(path, { recursive: true });
 	const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 	git("init", "-b", "main"); git("config", "user.email", "test@example.test"); git("config", "user.name", "Test");
+	// Sin Foundations el arranque no pregunta: arranque ask, aceptado localmente, para probar el sí.
+	git("remote", "add", "origin", "https://github.com/test/repo.git"); await acceptFoundations(join(agent, "foundations"), ASK_ALL);
 	// El probe escribe en el worktree al abrirse: ignorado, para que el harness lo encuentre limpio.
 	await writeFile(join(root, "main.txt"), "MAIN_ONLY\n"); await writeFile(join(root, ".gitignore"), "worktree-only.txt\n"); git("add", "."); git("-c", "commit.gpgsign=false", "commit", "-m", "main");
 	const main = git("rev-parse", "main"); await writeFile(join(root, "local.txt"), "LOCAL_UNCOMMITTED\n");
