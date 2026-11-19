@@ -45,7 +45,8 @@ No hay un comando para empezar: `/omi-triage` y `/omi-work start` ya no existen.
 | `/omi-work approve` | Aprobar receta/spec vigente y escribirla en la sección del harness del issue. Revalida fuente y código explorado. |
 | `/omi-work pause` | Pausar conservando fase, decisiones, archivos y evidencia. |
 | `/omi-work refresh` | Opcional. Volver a leer el pedido y explorar; invalida receta, decisiones y pruebas activas. También reabre un trabajo que el agente cerró sin cambio. Si lo propone el agente, pide confirmación sólo con `receta: ask`. Un cambio de alcance dicho en el chat no lo necesita. |
-| `/omi-work pr` | Revalidar, hacer push normal y abrir el PR draft (con `push_pr: ask`, antes pide el permiso); después actualiza la sección del issue con la evidencia. |
+| `/omi-work pr` | Revalidar, hacer push normal y abrir el PR draft, uno por grupo si hay [stack](#stack-de-prs) (con `push_pr: ask`, antes pide el permiso); después actualiza la sección del issue con la evidencia. |
+| `/omi-work stack` | Actualizar un [stack de PRs](#stack-de-prs) publicado: mergea el de abajo en el de arriba y re-apunta a `main` el que quedó sobre uno mergeado. Sigue la misma política que el push: con `push_pr: ask` pide el sí. |
 | `/omi-work status` | Consultar el estado sin llamar al modelo, con la revisión de Foundations vigente, sus políticas y su catálogo. |
 | `/omi-work stop` | Salir explícitamente del flujo y restaurar las tools normales del chat, sin borrar ni revertir archivos. También sale de un harness bloqueado (estado inválido o atrasado) sin tocar el estado guardado. |
 | Ctrl 6 / `/omi-workflow` | Pantalla 6 · Progreso: recorrido completo de sólo lectura, también con la lateral oculta. |
@@ -101,7 +102,7 @@ En RPC, donde Pi no ofrece componentes TUI, se conserva una confirmación humana
 - **Receta:** tipo, tamaño, riesgo y ejecutor, objetivo, enfoque, alcance/fuera de alcance, casos D y comandos exactos, lentes. Inline por defecto; delegación por las primitivas existentes, hasta cuatro escritores y respetando el tope de la receta. El filesystem sigue siendo compartido: no hay reservas ni sandbox por archivo.
 - **Directa:** trabajo chico con causa/enfoque entendido; genera un paso C1 sin spec pesada.
 - **Diagnóstico:** bug sin causa conocida. Pide reproducción observada y causa; después el arreglo sigue como Directa o Con spec según su tamaño. No habilita arreglos durante el diagnóstico.
-- **Con spec:** trabajo grande. Exige por qué, pasos C con cobertura explícita de todos los D y playbook humano antes de aprobar.
+- **Con spec:** trabajo grande. Exige por qué, pasos C con cobertura explícita de todos los D y playbook humano antes de aprobar. Puede agrupar los pasos en un [stack de PRs](#stack-de-prs).
 - **Implementar:** un C activo por vez, test rojo real, mismo comando verde, commit convencional nuevo por paso. No se completa un paso mediante texto del modelo.
 - **Verificar:** cada D con su comando aprobado, salida/exit code y contenido actuales; gates ejecutados y lentes solicitados. Seguridad y Cumplimiento son obligatorios con riesgo alto. Los lentes son llamadas de sólo lectura, sin tools ni conversación del implementador; no sustituyen la Review externa del PR.
   - **Qué ven.** Los casos D, el alcance, el diff completo y la evidencia que registró el harness, no el modelo: por caso D su última verificación; por paso C su historial rojo→verde con comando, etiqueta, exit code, HEAD, fingerprint y la salida que ya se guarda. Un paso de una vuelta anterior trae su rojo y su verde acreditados, archivados.
@@ -109,7 +110,7 @@ En RPC, donde Pi no ofrece componentes TUI, se conserva una confirmación humana
   - **Sin tope de tamaño.** Si el diff no entra en una llamada, se reparte por archivo en partes. Un archivo más grande se corta por líneas, con una etiqueta por fragmento. El lente corre por parte, con los casos y la evidencia en cada una, y se combina: el peor veredicto gana (`fail`, `unknown`, `pass`) y se juntan los hallazgos con su parte. Nada se trunca en silencio.
   - **Presupuesto por llamada.** Cada llamada entra en 120.000 caracteres, medidos en el JSON que se manda: casos, alcance, evidencia y su parte del diff. Si la evidencia completa no deja lugar para al menos 30.000 de diff, se resume de forma determinista y lo dice en `evidence.summarized`: por paso C el rojo y el verde acreditados (o los últimos), por caso D y por gate la última corrida, y cada salida con su cola y la marca «[recortado: N caracteres]». `omittedRuns` cuenta las corridas que no vinieron. Ejemplo: 5 pasos, un D y 2 gates × 3 vueltas con salidas de 12.000 (≈207 KB) y un diff de ≈600 KB van en 20 llamadas de hasta 120.000, con salidas de 4.000. Si ni resumida entra (por ejemplo, casos D enormes), el lente falla con un error explícito en vez de mandar una llamada que no entra.
   - **Corridas.** Un lente que falló no se repite sobre el mismo contenido, salvo que un `refuter` posterior apruebe: así un aviso no se borra repitiendo el lente y el fail de Seguridad no se esquiva. Por contenido, cada lente admite tres veredictos y diez corridas: cancelar o un error del proveedor no gasta veredictos.
-- **PR:** sólo con cambio limpio y verificado y un SHA autorizado; con `push_pr: ask`, además, confirmación humana remota. Termina en un draft; no mergea ni cierra el issue.
+- **PR:** sólo con cambio limpio y verificado y un SHA autorizado; con `push_pr: ask`, además, confirmación humana remota. Termina en un draft, o en uno por grupo con un stack; no mergea ni cierra el issue.
 
 Dependencia bloqueante, información insuficiente, inferencia nueva o imposibilidad de verificar deben quedar como espera/pausa. Una base que se arma con un comando no es una espera: el agente la prepara con `setup`, en cualquier etapa activa. Ejemplo: un worktree nuevo sin `node_modules` corre `npm ci` en Explorar (sin preguntar si está en el catálogo), vuelve a reproducir y registra `explored` de nuevo, sin `refresh`. Sólo queda como base faltante lo que un comando no resuelve, por ejemplo una credencial o un servicio externo.
 
@@ -317,6 +318,93 @@ OMI pregunta como AskUserQuestion de Claude Code: de 1 a 4 preguntas en una tand
 
 El agente pregunta así con `omi_ask`: `questions` de 1 a 4, cada una con `question`, `header` (hasta 12 caracteres), `options` de 2 a 4 (`label` y `description`, la primera es la recomendada) y `multiSelect`. OMI agrega la respuesta libre. Devuelve, por pregunta, su id (`q1`…), el texto, las opciones elegidas (`options`) y lo escrito (`text`); al cancelar, `cancelled`, y el turno termina. En modo print, RPC o sin UI no se le ofrece al modelo; si llega igual, falla con un error: nunca supone una respuesta. Es `model-only`: ni `codemode` ni un subagente la pueden llamar.
 
+## Stack de PRs
+
+Un trabajo grande puede terminar en varios PRs encadenados (un **stack**) en vez de un PR enorme. Cada PR se revisa y se mergea por separado.
+
+### Cuándo partir
+
+Lo decide el agente al escribir la spec (ruta Con spec) y lo aprueba la persona con la receta. Conviene cuando el cambio no se revisa bien en un solo PR. Ejemplos: más de unas 400 líneas de diff, o partes que se revisan y mergean por separado (modelo, lógica, UI). Cada PR tiene que pasar sus tests solo. Sin stack, el trabajo va en un solo PR, como siempre. Directa tiene un solo paso: siempre un PR.
+
+### Cómo se declara
+
+En `specified`, junto a los pasos, `stack` agrupa los pasos C en PRs:
+
+```json
+{
+  "why": "Se revisa mejor por partes",
+  "steps": [
+    { "id": "C1", "title": "Modelo", "cases": ["D1"] },
+    { "id": "C2", "title": "Estado", "cases": ["D1"] },
+    { "id": "C3", "title": "Vista", "cases": ["D2"] }
+  ],
+  "playbook": ["Probar el flujo completo"],
+  "stack": [
+    { "title": "Modelo y estado", "steps": ["C1", "C2"] },
+    { "title": "Vista", "steps": ["C3"] }
+  ]
+}
+```
+
+- De 2 a 10 grupos. Cada uno lleva `title` (qué entrega) y sus pasos.
+- Los grupos son contiguos, van en orden y cubren cada paso una vez: cortan la secuencia C1…Cn. `[C1, C3], [C2]` se rechaza, porque cada rama apunta al commit del último paso de su grupo.
+- El stack es parte de la spec: la aprobación lo cubre y la revisión de la receta lo muestra en Pasos. Cambiarlo es otra receta.
+- Un paso de corrección de una vuelta (`retry`) va en el último PR.
+- Un estado guardado sin `stack` sigue igual: un solo PR.
+
+### Cómo se publica
+
+`publish` abre un PR draft por grupo, en orden, con la política del push: con `push_pr: auto` (el default) no pregunta; con `push_pr: ask` pide un solo sí para todo el stack. Ejemplo con la receta de arriba y la rama `feat/issue-46`:
+
+| PR | Rama | Base | Commit | Cierra |
+|---|---|---|---|---|
+| 1 | `feat/issue-46-1` | `main` | el de C2 | no: `Refs #46` |
+| 2 | `feat/issue-46-2` | `feat/issue-46-1` | el de C3, el HEAD verificado | sí: `Closes #46` |
+
+- Cada PR pasa las mismas validaciones que el PR único: aprobación vigente, HEAD verificado y limpio, repo y `origin`, pedido sin cambios, hash del recibo y recuperación sin duplicar. Antes de escribir se arman todos los cuerpos (si uno no entra en GitHub, no se abre ninguno) y se comprueba que cada commit esté debajo del de arriba.
+- Push normal del SHA de cada grupo a su rama, sin force ni tags. La rama del worktree no se sube.
+- Título: `<título del issue> · PR k/n: <título del grupo>`.
+- El cuerpo es el mismo Markdown del PR único (ver «Cuerpo del PR draft»), con su encabezado propio: `Refs #N` o `Closes #N` y la línea del stack. Ejemplo: ``Stack: PR 2 de 2 · pasos C3 · sobre #123 (rama `feat/issue-46-1`)``. El texto de cada PR dice si cierra el issue o no.
+- Sólo el último PR cierra el issue (`Closes #N`); los de abajo lo referencian (`Refs #N`). GitHub lo cierra cuando ese PR entra en `main`.
+- Si la publicación se corta a mitad, volver a publicar recupera los PRs ya abiertos (por rama, base, head y cuerpo exactos) y sigue con el que falta. Un PR ajeno en una rama del stack frena; los de abajo ya abiertos quedan.
+
+### Cómo se ve
+
+La sección del issue suma **Stack de PRs**: cada PR con su número (link), base, pasos y estado (`sin abrir`, `draft`, `abierto` o `mergeado`). Antes de publicar muestra el plan. El progreso (pantalla 6 y `/omi-progress`) y la revisión de la receta muestran las mismas líneas en texto plano.
+
+```
+### Stack de PRs
+- **PR 1 de 2** · https://github.com/chichex/omi-code/pull/123 · base `main` · pasos C1, C2 · draft · Modelo y estado
+- **PR 2 de 2** · https://github.com/chichex/omi-code/pull/124 · base `feat/issue-46-1` (#123) · pasos C3 · draft · Vista
+```
+
+### Cómo se actualiza
+
+`/omi-work stack` (o el agente, con `omi_workflow` `action: "stack"`) deja el stack al día. Sigue la política del push: con `push_pr: auto` no pregunta y avisa qué hace; con `push_pr: ask` pide el sí antes de leer GitHub. Lee cada PR en GitHub y va de abajo hacia arriba:
+
+- **Cambió el de abajo.** Ejemplo: una persona sube un commit de review a `…-1`. Lo mergea en `…-2` con un commit de merge y hace push normal de `…-2`. Sigue hacia arriba: `…-2` en `…-3`, y así.
+- **El de abajo se mergeó a `main`**, también con squash. Al de arriba le mergea `main` y lo re-apunta con `gh pr edit --base main`. El merge usa como base la punta final del PR mergeado: así sus propios cambios, que `main` trae aplastados en un commit, no chocan. Ejemplo: C3 cambia una línea que agregó C1; un `git merge main` común chocaría, este no.
+- **Nada cambió:** no escribe nada y lo dice. Correrlo otra vez no repite nada.
+
+Nunca rebase ni force push, nunca mergea un PR, nunca corre workflows. Los merges se calculan con `git merge-tree` y `git commit-tree`: no tocan el worktree ni su índice. Todo se calcula antes de la primera escritura en GitHub.
+
+Frena y pide una persona si:
+
+- un merge tiene conflicto: se resuelve a mano con `git merge`, se sube y se vuelve a correr;
+- un PR del stack está cerrado sin mergear, o se mergeó en una rama que no es `main`;
+- una rama del stack se reescribió (ya no contiene el commit publicado);
+- GitHub rechaza el push (la rama cambió mientras tanto o está protegida). Si ya había subido un PR de abajo, esa rama queda bien: volver a correr sigue desde ahí.
+
+### Límites
+
+- Sólo la ruta Con spec arma un stack. La base es siempre `main`, como en el PR único.
+- El harness no implementa los cambios de review de un PR de abajo: los hace una persona (u otro trabajo) y el harness los propaga hacia arriba.
+- Un paso de corrección de una vuelta va al último PR, aunque arregle algo de uno de abajo.
+- Si `main` avanza, no se mergea en el PR 1 ni en los que ya están sobre `main`: eso sigue el flujo normal de GitHub.
+- El merge con base fija necesita Git 2.40 o superior.
+- No hay lock con GitHub: otro puede escribir entre la lectura y el push. El push normal lo rechaza y se vuelve a correr.
+- La línea «sobre #N» del cuerpo queda como al abrir el PR. La base vigente la muestran GitHub y la sección del issue.
+
 ## Persistencia, sesiones y recuperación
 
 El trabajo se guarda en `<git-common-dir>/omi/development/N.json`, separado de `.omi/project.json` y del registro de preparación del worktree (`<git-common-dir>/omi/issue-workspaces/N.json`). No requiere vincular el repo a un proyecto de infraestructura OMI.
@@ -350,7 +438,7 @@ El harness no crea comentarios en el issue. Su estado va en una **sección admin
 | D1 | ✅ exit 0 | cae0b33 |
 ```
 
-- **Cuándo se escribe:** al aprobar una receta, al registrar un acuerdo y al abrir el PR draft. Nunca antes del primer sí a una receta: sin receta aprobada sólo se actualiza una sección que ya existe. Por ejemplo, tras un acuerdo que rehace la receta, la sección se actualiza enseguida y muestra la receta «en revisión» hasta el nuevo sí. Si no se puede escribir (sin red, límite de GitHub, marcadores rotos), OMI avisa y el trabajo sigue: el estado local es la fuente de verdad.
+- **Cuándo se escribe:** al aprobar una receta, al registrar un acuerdo, al abrir el PR draft (o el stack) y al actualizar un stack que cambió. Nunca antes del primer sí a una receta: sin receta aprobada sólo se actualiza una sección que ya existe. Por ejemplo, tras un acuerdo que rehace la receta, la sección se actualiza enseguida y muestra la receta «en revisión» hasta el nuevo sí. Si no se puede escribir (sin red, límite de GitHub, marcadores rotos), OMI avisa y el trabajo sigue: el estado local es la fuente de verdad.
 - **Cómo se escribe:** se relee el cuerpo justo antes de escribir y se reemplaza sólo lo que está entre los marcadores. Sin marcadores, la sección se agrega al final. No se escribe si el pedido cambió desde el último contraste, y la escritura se confirma releyendo; no se reintenta sola. Una sección igual no se vuelve a escribir.
 - **Riesgo residual:** GitHub no ofrece CAS para el cuerpo del issue. Una edición humana que cae entre esa relectura y la escritura se pierde del cuerpo; GitHub la conserva en el historial de ediciones del issue.
 - **Marcadores:** sólo cuentan solos en su línea, desde la primera columna y fuera de un bloque de código cercado. Una mención en el pedido (en línea, entre backticks, indentada o dentro de una cerca ```` ``` ```` o `~~~`) es texto humano. Ejemplo: un pedido que muestra el par de marcadores en un bloque de código no se pisa, sigue en el pedido que se contrasta y no frena los puntos de control. La cerca cierra con su mismo carácter y al menos su largo; una cerca sin cerrar no esconde marcadores, así la sección que OMI agrega después se sigue encontrando. Marcadores repetidos, sueltos, invertidos o desconocidos fuera de un bloque no se adivinan: OMI no escribe ni contrasta el pedido (los puntos de control fallan) y pide dejar un solo par o borrar la sección. Un par bien formado escrito por una persona fuera de un bloque se toma como la sección.
@@ -395,9 +483,9 @@ _PR draft preparado por OMI para el issue #60. Requiere revisión humana y nunca
 - **Arriba, lo que se revisa:** resumen, alcance (con los pasos y sus commits), verificación y advertencias. La verificación lista cada caso D con su última corrida y cada gate con la suya. Un caso que no corrió dice `⬜ sin correr`, no se muestra como pasado. Lleva exit code y HEAD, nunca la salida de los comandos.
 - **En `<details>`:** receta, spec y playbook; inferencias y respuestas; acuerdos del chat; la evidencia completa (reproducción, rojo, verde, verificación y gates); las revisiones de los lentes y el pedido original.
 - **Sin JSON y nada activo:** los datos pasan por el mismo escape que la sección del issue: no enlazan, no mencionan ni referencian. El pedido es Markdown de una persona: va citado en un bloque de código, con una cerca más larga que cualquier racha de backticks. Ejemplo: un pedido con `Closes #999` o `@octocat` se ve tal cual y no cierra ni avisa nada. Un `</details>` de los datos no cierra una sección y un `<!-- omi-development:` de los datos no imita el marcador.
-- **Cierre del issue:** la segunda línea es `Closes #N`, sólo para el issue del trabajo, validado como del mismo repo que el PR (origin y `gh` apuntan ahí). Va fuera de citas y bloques. Crear el draft no cierra nada: GitHub cierra el issue cuando una persona mergea el PR a la rama default. OMI no corre `gh issue close` ni mergea, y no hay soporte entre repos.
+- **Cierre del issue:** la segunda línea es `Closes #N`, sólo para el issue del trabajo, validado como del mismo repo que el PR (origin y `gh` apuntan ahí). Va fuera de citas y bloques. En un stack la lleva sólo el último PR; los de abajo llevan `Refs #N` (ver «Stack de PRs»). Crear el draft no cierra nada: GitHub cierra el issue cuando una persona mergea el PR a la rama default. OMI no corre `gh issue close` ni mergea, y no hay soporte entre repos.
 - **Límite:** GitHub admite 65.536 caracteres. OMI mide bytes UTF-8 y cuenta el marcador más largo posible. Evidencia, avisos y revisiones se acotan por líneas enteras y lo dicen (`Presentación acotada: se muestran N de M …`). Receta, spec, inferencias, acuerdos y pedido van enteros, o falla pidiendo dividir la tarea.
-- **Hash:** el recibo pendiente guarda el hash de todo lo que sigue al marcador, `Closes` incluido. El marcador liga trabajo, pedido, HEAD y ese hash, así que el cuerpo entero queda determinado sin cubrirse a sí mismo.
+- **Hash:** el recibo pendiente guarda el hash del cuerpo del PR único, todo lo que sigue al marcador, `Closes` incluido. El marcador liga trabajo, pedido, HEAD y ese recibo, y su `artifact=` es el hash de todo lo que le sigue en ese PR. En el PR único los dos coinciden. En un stack, cada PR cambia sólo su encabezado, que sale del stack del recibo y del número del PR de abajo, y la recuperación compara su cuerpo exacto.
 
 ### Publicar y recuperar
 
@@ -423,4 +511,4 @@ El panel sólo pertenece al cwd/worktree/rama correctos, se reinicia al cambiar 
 
 ## Verificación del cambio
 
-El arranque tiene sus propios tests, con Git, worktrees y sesiones reales y con GitHub y modelo falsos: pedido nuevo sin preguntar por defecto y con un solo sí con `arranque: ask`, issue existente sin duplicar, decir que no, token de un solo uso, guardas sin efectos y recarga sin kickoff. Los tests de pty real recorren el panel de issue existente y los tres resultados del pedido nuevo: harness, chat y falta de información. El del panel: Enter en Issues, el sí, Esc en la clasificación y el harness arrancado en el worktree. El del agente: un pedido en el chat, la tool, un turno que termina sin seguir, clasificar antes de crear el issue y antes del sí, reutilizar ese resultado y arrancar el harness en el worktree sólo después de confirmar. Los otros dos resultados continúan en el chat original sin recursos, con las tools normales y sin permisos nuevos. Los lentes tienen tests con Git real: la evidencia que reciben, los avisos que no frenan el PR draft, el bloqueo por un fail de Seguridad y un diff de más de 200.000 caracteres revisado por partes sin truncar, y ninguna llamada por encima del presupuesto, con la evidencia resumida y explícita cuando no entra. Los tests del flujo cubren las tres rutas con Git y comandos reales en repos temporales, modelos/GitHub falsos, consentimientos, invalidación, evidencia, recuperación, concurrencia, cancelación y panel estrecho/claro/oscuro. El cuerpo del PR draft tiene cobertura de su formato, de un único `Closes` fuera de bloques con datos hostiles (cierres falsos, menciones, HTML, `</details>`, marcadores, controles), de los presupuestos con aviso, del cuerpo exacto que recibe `gh` y se muestra antes del sí, y del recibo pendiente de un cuerpo anterior con `ask` y con `auto`. La sección del issue tiene cobertura del pedido byte a byte, marcadores rotos, contraste que la ignora, escape de contenido hostil (sin links, imágenes, autolinks, HTML ni menciones activos) y escrituras no confirmadas. Los acuerdos del chat, de citas aceptadas y rechazadas (modelo, tools, mensajes de OMI, inventadas y triviales). Las preguntas en tanda tienen tests del componente (lo que dibuja y cada tecla, también respuesta libre, elección múltiple, pestañas y cancelar), del contrato de `omi_ask` (esquema, sin UI, cancelar, opción frente a texto libre y el harness) y un PTY real que abre una tanda dentro del workspace, con resize y Esc. El creador de Foundations tiene tests del flujo con una UI falsa, sin KB, que recorren sus tandas con teclas; los del arranque verifican que sin Foundations no se ofrece ni se pregunta nada. Foundations tiene tests con un MCP falso por HTTP y el `createMcpExtension` real de Pi, que fallan si un bump de Pi cambia cómo se registran o ejecutan las tools MCP o cómo se reemplaza `builtin:mcp`; y cuentan los avisos de aceptación, reutilización de permisos, cambio de etiqueta, `resume`, `replan`, rechazo, KB caída y bloque inválido o ajeno. La aprobación tiene cobertura específica de documento íntegro, comandos largos/multilínea y caracteres de control, navegación/resize/temas, decisiones negativas y revalidación durante la revisión. Una prueba con Pi en PTY real recorre 80×24, resize a 132×40 y vuelta, temas claro/oscuro, navegación hasta el final del comando, cancelar y aprobar explícitamente con GitHub falso; no es una evaluación visual humana. El empaquetado comprueba el binario instalado. No equivalen a una prueba contra GitHub/OMI real ni a una evaluación de calidad de modelos: esas pruebas requieren una persona.
+El arranque tiene sus propios tests, con Git, worktrees y sesiones reales y con GitHub y modelo falsos: pedido nuevo sin preguntar por defecto y con un solo sí con `arranque: ask`, issue existente sin duplicar, decir que no, token de un solo uso, guardas sin efectos y recarga sin kickoff. Los tests de pty real recorren el panel de issue existente y los tres resultados del pedido nuevo: harness, chat y falta de información. El del panel: Enter en Issues, el sí, Esc en la clasificación y el harness arrancado en el worktree. El del agente: un pedido en el chat, la tool, un turno que termina sin seguir, clasificar antes de crear el issue y antes del sí, reutilizar ese resultado y arrancar el harness en el worktree sólo después de confirmar. Los otros dos resultados continúan en el chat original sin recursos, con las tools normales y sin permisos nuevos. Los lentes tienen tests con Git real: la evidencia que reciben, los avisos que no frenan el PR draft, el bloqueo por un fail de Seguridad y un diff de más de 200.000 caracteres revisado por partes sin truncar, y ninguna llamada por encima del presupuesto, con la evidencia resumida y explícita cuando no entra. Los tests del flujo cubren las tres rutas con Git y comandos reales en repos temporales, modelos/GitHub falsos, consentimientos, invalidación, evidencia, recuperación, concurrencia, cancelación y panel estrecho/claro/oscuro. El cuerpo del PR draft tiene cobertura de su formato, de un único `Closes` fuera de bloques con datos hostiles (cierres falsos, menciones, HTML, `</details>`, marcadores, controles), de los presupuestos con aviso, del cuerpo exacto que recibe `gh` y se muestra antes del sí, y del recibo pendiente de un cuerpo anterior con `ask` y con `auto`. La sección del issue tiene cobertura del pedido byte a byte, marcadores rotos, contraste que la ignora, escape de contenido hostil (sin links, imágenes, autolinks, HTML ni menciones activos) y escrituras no confirmadas. El stack tiene tests del reducer (agrupación, plan de ramas y bases, PRs abiertos, actualización sin cambiar la identidad), de la publicación contra un GitHub falso (orden, bases, `Refs`/`Closes`, recuperación sin duplicar y validaciones por PR), de la actualización con Git real contra un remoto bare local (merge del de abajo, squash a `main` sin conflicto, re-apuntar, segunda corrida sin cambios, conflicto, PR cerrado y rama reescrita) y un recorrido completo con dos PRs encadenados. Los acuerdos del chat, de citas aceptadas y rechazadas (modelo, tools, mensajes de OMI, inventadas y triviales). Las preguntas en tanda tienen tests del componente (lo que dibuja y cada tecla, también respuesta libre, elección múltiple, pestañas y cancelar), del contrato de `omi_ask` (esquema, sin UI, cancelar, opción frente a texto libre y el harness) y un PTY real que abre una tanda dentro del workspace, con resize y Esc. El creador de Foundations tiene tests del flujo con una UI falsa, sin KB, que recorren sus tandas con teclas; los del arranque verifican que sin Foundations no se ofrece ni se pregunta nada. Foundations tiene tests con un MCP falso por HTTP y el `createMcpExtension` real de Pi, que fallan si un bump de Pi cambia cómo se registran o ejecutan las tools MCP o cómo se reemplaza `builtin:mcp`; y cuentan los avisos de aceptación, reutilización de permisos, cambio de etiqueta, `resume`, `replan`, rechazo, KB caída y bloque inválido o ajeno. La aprobación tiene cobertura específica de documento íntegro, comandos largos/multilínea y caracteres de control, navegación/resize/temas, decisiones negativas y revalidación durante la revisión. Una prueba con Pi en PTY real recorre 80×24, resize a 132×40 y vuelta, temas claro/oscuro, navegación hasta el final del comando, cancelar y aprobar explícitamente con GitHub falso; no es una evaluación visual humana. El empaquetado comprueba el binario instalado. No equivalen a una prueba contra GitHub/OMI real ni a una evaluación de calidad de modelos: esas pruebas requieren una persona.

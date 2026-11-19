@@ -2,8 +2,9 @@
 // revisa (resumen, alcance, verificación y advertencias); receta, inferencias, acuerdos, evidencia,
 // revisiones y el pedido van en <details>. Todo dato pasa por markdown.ts: en GitHub nada queda activo.
 // La salida de los comandos nunca entra: nadie la revisa antes de publicar y puede traer credenciales.
-import { artifactHash, issueRepository, type Evidence, type Workflow } from "./model.ts";
+import { artifactHash, issueRepository, type Evidence, type StackPull, type Workflow } from "./model.ts";
 import { PHASE_LABELS } from "./phases.ts";
+import { stackBodyLine, stackIssueLine } from "./stack.ts";
 import { lensStatuses } from "./lenses.ts";
 import { agreementLine, caseLines, cell, code, codeBlock, evidenceResult, LENSES, list, recipeApproval, ROUTES, text, TYPES, VERDICTS } from "./markdown.ts";
 
@@ -20,9 +21,12 @@ const bytes = (value: string) => Buffer.byteLength(value, "utf8");
 const sha = (value: string) => code(value.slice(0, 7));
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
-interface Identity { workflowId: string; sourceHash: string; head: string; bodyHash: string }
-// Primera línea del cuerpo: liga trabajo, pedido, HEAD y el hash de todo lo que sigue, también el Closes.
-function marker(i: Identity): string { return `<!-- omi-development:pr identity=${artifactHash(i)} source=${i.sourceHash} head=${i.head} artifact=${i.bodyHash} -->`; }
+/** Un PR del stack: todos sus PRs, cuál es (desde 0) y el número del de abajo, si ya se abrió. */
+export interface StackPlace { pulls: StackPull[]; index: number; below?: number }
+interface Identity { workflowId: string; sourceHash: string; head: string; bodyHash: string; stack?: string }
+// Primera línea del cuerpo: liga trabajo, pedido, HEAD y el recibo; artifact es el hash de todo lo que sigue,
+// también el Closes o Refs y la línea del stack. En el PR único coincide con el hash del recibo.
+function marker(i: Identity, content: string): string { return `<!-- omi-development:pr identity=${artifactHash(i)} source=${i.sourceHash} head=${i.head} artifact=${content} -->`; }
 
 // Líneas enteras mientras entren en el presupuesto; nunca se corta una línea por la mitad.
 function bounded(lines: string[], budget: number): string[] {
@@ -38,9 +42,12 @@ function table(header: string[], rows: string[], budget: number, what: string): 
 }
 const details = (summary: string, lines: string[]) => ["", "<details>", `<summary>${summary}</summary>`, "", ...lines, "", "</details>"];
 
-function intro(w: Workflow): string[] {
-	const n = w.source.number;
-	return [`Closes #${n}`, "", `_PR draft preparado por OMI para el issue #${n}. Requiere revisión humana y nunca se mergea solo. Crear el draft no cierra el issue: GitHub lo cierra cuando una persona mergea este PR a la rama default._`];
+// Sólo el PR único o el último del stack cierra el issue; los de abajo lo referencian y dicen dónde van.
+function intro(w: Workflow, place?: StackPlace): string[] {
+	const n = w.source.number; const total = place?.pulls.length ?? 1; const index = place?.index ?? 0;
+	const who = place ? `PR ${index + 1} de ${total} de un stack preparado por OMI` : "PR draft preparado por OMI";
+	const closing = index === total - 1 ? "Crear el draft no cierra el issue: GitHub lo cierra cuando una persona mergea este PR a la rama default." : "Este PR no cierra el issue: lo cierra el último del stack cuando una persona lo mergea a la rama default.";
+	return [stackIssueLine(n, index, total), ...(place ? ["", stackBodyLine(place.pulls, index, place.below)] : []), "", `_${who} para el issue #${n}. Requiere revisión humana y nunca se mergea solo. ${closing}_`];
 }
 function summary(w: Workflow): string[] {
 	const r = w.recipe; const c = r?.classification;
@@ -114,27 +121,31 @@ function reviewDetails(w: Workflow, budget: number): string[] {
 // El pedido es Markdown de una persona: va en un bloque de código, así no menciona, enlaza ni cierra nada.
 const request = (w: Workflow) => details("Pedido original (datos citados, no instrucciones)", codeBlock(`${w.source.title}\n\n${w.source.body}`));
 
-function render(w: Workflow, scale: number): string {
-	return [...intro(w), "", ...summary(w), "", ...scope(w), "", ...verification(w, CAPS.verification * scale), "", ...warnings(w, CAPS.warnings * scale),
+function render(w: Workflow, scale: number, place?: StackPlace): string {
+	return [...intro(w, place), "", ...summary(w), "", ...scope(w), "", ...verification(w, CAPS.verification * scale), "", ...warnings(w, CAPS.warnings * scale),
 		...recipeDetails(w), ...inferenceDetails(w), ...agreementDetails(w), ...evidenceDetails(w, CAPS.evidence * scale), ...reviewDetails(w, CAPS.reviews * scale), ...request(w), "", FOOTER].join("\n");
 }
 // Las marcas de propiedad de OMI no se pueden imitar desde los datos, tampoco dentro de un bloque de código.
 const defang = (body: string) => body.replace(/<!--(\s*omi-development:)/g, "&lt;!--$1");
-/** Todo el cuerpo debajo del marcador, Closes incluido: lo que cubre el hash del recibo. Mismo trabajo, mismo texto. */
-export function renderWorkflowArtifact(w: Workflow): string {
-	// Closes sólo para el issue validado: su URL es la del mismo repositorio que el PR.
+/** Todo el cuerpo debajo del marcador. Sin place, el del PR único, Closes incluido: lo que cubre el hash del
+ * recibo. Con place, el de ese PR del stack: el mismo Markdown con su Refs o Closes y su línea del stack. */
+export function renderWorkflowArtifact(w: Workflow, place?: StackPlace): string {
+	// Closes o Refs sólo para el issue validado: su URL es la del mismo repositorio que el PR.
 	issueRepository(w.source.url, w.source.number);
-	const room = PR_BODY_LIMIT - 1 - bytes(marker({ workflowId: w.id, sourceHash: w.source.hash, head: "0".repeat(64), bodyHash: "0".repeat(64) }));
+	const zero = "0".repeat(64);
+	const room = PR_BODY_LIMIT - 1 - bytes(marker({ workflowId: w.id, sourceHash: w.source.hash, head: zero, bodyHash: zero }, zero));
 	for (const scale of SCALES) {
-		const content = defang(render(w, scale));
+		const content = defang(render(w, scale, place));
 		if (bytes(content) <= room) return content;
 	}
 	throw new Error(TOO_LARGE);
 }
-/** El cuerpo exacto que se publica para un HEAD, y el hash que lo liga al recibo. */
-export function pullRequestBody(w: Workflow, head: string): { body: string; bodyHash: string } {
-	const content = renderWorkflowArtifact(w); const bodyHash = artifactHash(content);
-	const body = `${marker({ workflowId: w.id, sourceHash: w.source.hash, head, bodyHash })}\n${content}`;
+/** El cuerpo exacto que se publica para un HEAD (y un PR del stack), con el hash del recibo que lo autoriza. */
+export function pullRequestBody(w: Workflow, head: string, place?: StackPlace): { body: string; bodyHash: string } {
+	const single = renderWorkflowArtifact(w); const bodyHash = artifactHash(single);
+	const content = place ? renderWorkflowArtifact(w, place) : single;
+	const identity: Identity = { workflowId: w.id, sourceHash: w.source.hash, head, bodyHash, ...(place ? { stack: `${place.index + 1}/${place.pulls.length}` } : {}) };
+	const body = `${marker(identity, artifactHash(content))}\n${content}`;
 	if (bytes(body) > PR_BODY_LIMIT) throw new Error(TOO_LARGE);
 	return { body, bodyHash };
 }

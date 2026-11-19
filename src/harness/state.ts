@@ -1,6 +1,7 @@
-import { artifactHash, MAX_AGREEMENTS, MAX_ATTEMPTS, MAX_EVIDENCE, MAX_GRANTS, MAX_HISTORY, MAX_REVIEWS, MAX_STEPS, parseWorkflow, sourceHash, type Workflow, type Exploration, type InferenceInput, type Plan, type Spec, type Evidence, type Review, type Step } from "./model.ts";
+import { artifactHash, MAX_AGREEMENTS, MAX_ATTEMPTS, MAX_EVIDENCE, MAX_GRANTS, MAX_HISTORY, MAX_REVIEWS, MAX_STEPS, parseWorkflow, sourceHash, type Workflow, type Exploration, type InferenceInput, type Plan, type Spec, type Evidence, type Review, type Step, type StackPull } from "./model.ts";
 
 import { recipeNextPhase, recipeRoute } from "./phases.ts";
+import { openedStack, planStack, stackGroups, stackProblem, syncedStack } from "./stack.ts";
 
 export type WorkflowEvent =
  | { type: "explored"; exploration: Exploration }
@@ -24,7 +25,8 @@ export type WorkflowEvent =
  | { type: "agreed"; quote: string; summary: string; replan: boolean; fingerprint?: string }
  // replaces: el hash del recibo pendiente que se renueva con otro cuerpo; sin él, un recibo distinto no se pisa.
  | { type: "publishing"; head: string; bodyHash: string; replaces?: string }
- | { type: "published"; head: string; url: string; number: number };
+ | { type: "published"; head: string; url: string; number: number; stack?: { number: number; url: string }[] }
+ | { type: "stack_synced"; stack: StackPull[] };
 
 function requireCondition(condition: unknown, message: string): asserts condition {
  if (!condition) throw new Error(`Harness: ${message}`);
@@ -98,6 +100,7 @@ function specify(state: Workflow, spec: Spec): void {
  const cases = state.recipe.cases.map(c => c.id);
  requireCondition(spec.steps.every(s => s.cases.length && s.cases.every(c => cases.includes(c))), "paso contiene caso desconocido");
  requireCondition(cases.every(c => spec.steps.some(s => s.cases.includes(c))), "faltan casos D cubiertos");
+ const stack = stackProblem(spec); requireCondition(!stack, stack);
  state.spec = spec;
  state.steps = spec.steps.map(s => ({ ...s, status: "pending", red: null, green: null, commit: null }));
  state.phase = "approve";
@@ -294,7 +297,8 @@ export function transition(original: Workflow, event: WorkflowEvent, at: string)
  const state = validate(original);
  requireCondition(nonempty(at), "falta fecha");
  // Un cierre sin cambio lo decide el modelo; volver a leer el pedido es la salida humana.
- requireCondition(state.status !== "complete" || state.phase === "closed" && event.type === "source_changed", "el trabajo ya está cerrado");
+ // Un stack abierto se sigue actualizando: sus PRs cambian y se mergean después de terminar el trabajo.
+ requireCondition(state.status !== "complete" || state.phase === "closed" && event.type === "source_changed" || state.phase === "done" && event.type === "stack_synced", "el trabajo ya está cerrado");
  requireCondition(state.status !== "paused" || event.type === "resume" || event.type === "source_changed", "el trabajo está pausado");
  if (state.status === "waiting" && retriesExhausted(state)) requireCondition(["pause", "resume", "source_changed", "agreed", "command_granted"].includes(event.type), "se agotaron las vueltas");
  applyEvent(state, event, at);
@@ -370,11 +374,17 @@ function applyEvent(state: Workflow, event: WorkflowEvent, at: string): void {
    requireCondition(nonempty(event.bodyHash), "falta hash del cuerpo");
    if (state.publication.status === "pending") requireCondition(state.publication.head === event.head && state.publication.bodyHash === (event.replaces ?? event.bodyHash), "publicación pendiente distinta");
    else requireCondition(event.replaces === undefined, "no hay publicación pendiente que renovar");
-   state.publication = { status: "pending", head: event.head, bodyHash: event.bodyHash, at }; return;
+   const stack = stackGroups(state) ? planStack(state, event.head) : undefined;
+   state.publication = { status: "pending", head: event.head, bodyHash: event.bodyHash, at, ...(stack ? { stack } : {}) }; return;
   }
-  case "published":
+  case "published": {
    requirePhase(state, "pr"); requireCondition(state.publication.status === "pending" && state.publication.head === event.head, "head no coincide con publicación pendiente");
-   state.publication = { status: "opened", head: event.head, url: event.url, number: event.number }; state.phase = "done"; state.status = "complete"; return;
+   const stack = openedStack(state.publication.stack, event);
+   state.publication = { status: "opened", head: event.head, url: event.url, number: event.number, ...(stack ? { stack } : {}) }; state.phase = "done"; state.status = "complete"; return;
+  }
+  case "stack_synced":
+   requirePhase(state, "done"); requireCondition(state.publication.status === "opened", "no hay PRs publicados");
+   state.publication.stack = syncedStack(state.publication.stack, event.stack); return;
   default: { const unhandled: never = event; throw new Error(`Evento desconocido: ${JSON.stringify(unhandled)}`); }
  }
 }

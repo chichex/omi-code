@@ -95,9 +95,9 @@ test("publication: with push_pr ask an old-format receipt shows the whole new bo
 test("publication: a draft already opened with the old body blocks; it is not edited, closed or duplicated", async (t) => {
 	const f = await fixture(t, "auto"); await f.stale();
 	const old = `<!-- omi-development:pr identity=${"0".repeat(64)} source=x head=${f.head()} artifact=${OLD_HASH} -->\nRefs #42\n\nhttps://github.com/test/repo/issues/42\n\n# OMI · Desarrollo asistido`;
-	f.remote.pr = true; f.remote.prBody = old;
+	const draft = { number: 8, head: f.checkout.branch, base: "main", body: old }; f.remote.prs.push({ ...draft });
 	await assert.rejects(f.action({ action: "publish" }), /no se edita ni se duplica/);
-	assert.equal(f.created().length, 0); assert.deepEqual(f.edited(), []); assert.equal(f.remote.prBody, old);
+	assert.equal(f.created().length, 0); assert.deepEqual(f.edited(), []); assert.deepEqual(f.remote.prs, [draft], "el draft viejo queda como estaba");
 	assert.notEqual((await f.state()).phase, "done");
 });
 

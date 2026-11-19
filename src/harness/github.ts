@@ -5,11 +5,15 @@ import { gitRead, inspectCheckout } from "./git.ts";
 import { issueRepository, sourceHash, type Workflow } from "./model.ts";
 import { pullRequestBody } from "./pr-body.ts";
 import { ISSUE_BODY_LIMIT, issueSectionVariants, parseIssueBody, withIssueSection, type IssueBody } from "./issue-section.ts";
+import { stackTitle } from "./stack.ts";
 
 const START = "<!-- omi-development:start -->";
 const END = "<!-- omi-development:end -->";
 type Checkout = Workflow["checkout"];
-type Published = { number: number; url: string; head: string };
+export type Published = { number: number; url: string; head: string };
+// Un PR del stack de la publicación (index desde 0) y el número del de abajo, ya abierto.
+export interface StackPosition { index: number; below?: number }
+type Target = { branch: string; base: string; head: string; body: string };
 function object(value: unknown): Record<string, unknown> {
  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Respuesta JSON de GitHub inválida");
  return Object.fromEntries(Object.entries(value));
@@ -22,7 +26,7 @@ function originalBody(body: string): string {
  if (!starts) return body;
  return body.slice(0, body.indexOf(START)) + body.slice(body.indexOf(END) + END.length);
 }
-async function gh(checkout: Checkout, args: string[], runner: Runner, signal?: AbortSignal, input?: string): Promise<string> {
+export async function gh(checkout: Checkout, args: string[], runner: Runner, signal?: AbortSignal, input?: string): Promise<string> {
  signal?.throwIfAborted();
  const options: CommandOptions = { cwd: checkout.root, env: { GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", GH_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" }, ...(signal ? { signal } : {}), ...(input === undefined ? {} : { input }) };
  const result = await runner.run("gh", args, options); signal?.throwIfAborted();
@@ -61,10 +65,14 @@ export async function syncIssueSection(workflow: Workflow, runner: Runner = proc
  return true;
 }
 // Sólo el cuerpo del recibo pendiente: un recibo de otro cuerpo (formato anterior u otro estado) no se publica
-// ni con su cuerpo ni con el nuevo. La sesión lo renueva según push_pr antes de llegar acá.
-export function renderPullRequestBody(workflow: Workflow): string {
+// ni con su cuerpo ni con el nuevo; la sesión lo renueva según push_pr antes de llegar acá. Sin position, el
+// PR único; con position, ese PR del stack, con su head, su Refs o Closes y su línea del stack.
+export function renderPullRequestBody(workflow: Workflow, position?: StackPosition): string {
  if (workflow.publication.status !== "pending") throw new Error("No hay una publicación pendiente");
- const proposal = pullRequestBody(workflow, workflow.publication.head);
+ const stack = position && workflow.publication.stack; const pull = stack && stack[position.index];
+ if (position && !pull) throw new Error("PR inexistente en el stack de la publicación");
+ const place = stack && position ? { pulls: stack, index: position.index, ...(position.below === undefined ? {} : { below: position.below }) } : undefined;
+ const proposal = pullRequestBody(workflow, pull ? pull.head : workflow.publication.head, place);
  if (proposal.bodyHash !== workflow.publication.bodyHash) throw new Error("El cuerpo del PR cambió desde el recibo pendiente; volvé a publicar para renovarlo con la política push_pr vigente");
  return proposal.body;
 }
@@ -73,7 +81,7 @@ function remoteRepo(remote: string): string {
  if (!match) throw new Error("Remote origin no es una identidad GitHub admitida");
  return match[1]!;
 }
-async function assertRepository(workflow: Workflow, runner: Runner, signal?: AbortSignal): Promise<string> {
+export async function assertRepository(workflow: Workflow, runner: Runner, signal?: AbortSignal): Promise<string> {
  const repo = issueRepository(workflow.source.url, workflow.source.number);
  const remotes = (await gitRead(workflow.checkout, ["remote", "get-url", "--push", "--all", "origin"], runner, signal)).trim().split("\n");
  if (remotes.length !== 1 || remoteRepo(remotes[0]!).toLowerCase() !== repo.toLowerCase()) throw new Error("Remote origin no coincide con el repositorio del issue");
@@ -81,41 +89,46 @@ async function assertRepository(workflow: Workflow, runner: Runner, signal?: Abo
  if (data.nameWithOwner !== repo || data.url !== `https://github.com/${repo}`) throw new Error("gh apunta a otro repositorio");
  return repo;
 }
-async function recover(workflow: Workflow, repo: string, runner: Runner, signal?: AbortSignal): Promise<Published | null> {
- const raw: unknown = JSON.parse(await gh(workflow.checkout, ["pr", "list", "--repo", repo, "--state", "all", "--head", workflow.checkout.branch, "--base", "main", "--json", "number,url,state,isDraft,headRefName,baseRefName,headRefOid,isCrossRepository,body", "--limit", "100"], runner, signal));
+async function recover(workflow: Workflow, repo: string, target: Target, runner: Runner, signal?: AbortSignal): Promise<Published | null> {
+ const raw: unknown = JSON.parse(await gh(workflow.checkout, ["pr", "list", "--repo", repo, "--state", "all", "--head", target.branch, "--base", target.base, "--json", "number,url,state,isDraft,headRefName,baseRefName,headRefOid,isCrossRepository,body", "--limit", "100"], runner, signal));
  if (!Array.isArray(raw)) throw new Error("Lista de PRs inválida");
  if (!raw.length) return null;
  if (raw.length !== 1) throw new Error("Hay varios PRs para el branch; requiere revisión humana");
  const pr = object(raw[0]);
- if (workflow.publication.status !== "pending" || pr.state !== "OPEN" || pr.isDraft !== true || pr.isCrossRepository !== false || pr.headRefName !== workflow.checkout.branch || pr.baseRefName !== "main" || pr.headRefOid !== workflow.publication.head || pr.body !== renderPullRequestBody(workflow) || typeof pr.number !== "number" || !Number.isSafeInteger(pr.number) || pr.number < 1 || pr.url !== `https://github.com/${repo}/pull/${pr.number}`) throw new Error("PR existente ajeno, editado, de una publicación anterior, cerrado, no draft o con otro HEAD; no se edita ni se duplica: revisalo en GitHub");
+ if (workflow.publication.status !== "pending" || pr.state !== "OPEN" || pr.isDraft !== true || pr.isCrossRepository !== false || pr.headRefName !== target.branch || pr.baseRefName !== target.base || pr.headRefOid !== target.head || pr.body !== target.body || typeof pr.number !== "number" || !Number.isSafeInteger(pr.number) || pr.number < 1 || pr.url !== `https://github.com/${repo}/pull/${pr.number}`) throw new Error("PR existente ajeno, editado, de una publicación anterior, cerrado, no draft o con otro HEAD; no se edita ni se duplica: revisalo en GitHub");
  return { number: pr.number, url: String(pr.url), head: String(pr.headRefOid) };
 }
-export async function publishDraft(workflow: Workflow, runner: Runner = processRunner, signal?: AbortSignal): Promise<Published> {
+// Con position, publica ese PR del stack con las mismas validaciones: su rama, su base y el commit de su grupo.
+// HEAD sigue siendo el de arriba, el verificado: el checkout no puede moverse mientras se publica el stack.
+export async function publishDraft(workflow: Workflow, runner: Runner = processRunner, signal?: AbortSignal, position?: StackPosition): Promise<Published> {
  if (workflow.phase !== "pr" || workflow.publication.status !== "pending" || !workflow.approval || workflow.approval.sourceHash !== workflow.source.hash) throw new Error("Publicación draft no aprobada o no pendiente");
- const body = renderPullRequestBody(workflow);
- const head = workflow.publication.head;
+ const body = renderPullRequestBody(workflow, position);
+ const stack = position && workflow.publication.stack; const pull = stack && stack[position.index];
+ const head = pull ? pull.head : workflow.publication.head;
  if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(head)) throw new Error("SHA de publicación inválido");
- const branch = workflow.checkout.branch;
- if (!/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(branch) || branch.includes("..") || branch.includes("//") || branch.endsWith("/") || branch.endsWith(".") || branch.split("/").some(p => p.startsWith(".") || p.endsWith(".lock"))) throw new Error("Branch no válido para publicación");
+ const branch = pull ? pull.branch : workflow.checkout.branch; const base = pull ? pull.base : "main";
+ const title = stack && position ? stackTitle(workflow.source.title, stack, position.index) : workflow.source.title;
+ const target = { branch, base, head, body };
+ if ([branch, base].some(b => !/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(b) || b.includes("..") || b.includes("//") || b.endsWith("/") || b.endsWith(".") || b.split("/").some(p => p.startsWith(".") || p.endsWith(".lock")))) throw new Error("Branch no válido para publicación");
  const assertHead = async () => { const snapshot = await inspectCheckout(workflow.checkout, runner, signal); if (workflow.publication.status !== "pending" || !snapshot.clean || snapshot.head !== workflow.publication.head) throw new Error("HEAD de publicación cambió o checkout sucio"); };
  await assertHead(); const repo = await assertRepository(workflow, runner, signal);
  const fresh = await readIssueSource(workflow.checkout, workflow.source.number, runner, signal);
  if (fresh.hash !== workflow.source.hash || fresh.url !== workflow.source.url) throw new Error("El pedido cambió antes de publicar");
- const existing = await recover(workflow, repo, runner, signal); if (existing) return existing;
+ const existing = await recover(workflow, repo, target, runner, signal); if (existing) return existing;
  // Revalidate immediately before the write; push the approved immutable object even if HEAD races afterwards.
  await assertHead();
  // Only this branch, no force, no tags and no destination inferred from git config.
  try {
   await gitRead(workflow.checkout, ["push", "--no-follow-tags", "origin", `${head}:refs/heads/${branch}`], runner, signal);
  } catch {
-  signal?.throwIfAborted(); const found = await recover(workflow, repo, runner, signal); if (found) return found;
+  signal?.throwIfAborted(); const found = await recover(workflow, repo, target, runner, signal); if (found) return found;
   throw new Error("git push de la rama falló: revisá autenticación, rama protegida o non-fast-forward antes de volver a publicar");
  }
  await assertHead();
  try {
-  await gh(workflow.checkout, ["pr", "create", "--repo", repo, "--draft", "--base", "main", "--head", branch, "--title", workflow.source.title, "--body-file", "-"], runner, signal, body);
- } catch (error) { signal?.throwIfAborted(); const found = await recover(workflow, repo, runner, signal); if (found) return found; throw error; }
- const created = await recover(workflow, repo, runner, signal);
+  await gh(workflow.checkout, ["pr", "create", "--repo", repo, "--draft", "--base", base, "--head", branch, "--title", title, "--body-file", "-"], runner, signal, body);
+ } catch (error) { signal?.throwIfAborted(); const found = await recover(workflow, repo, target, runner, signal); if (found) return found; throw error; }
+ const created = await recover(workflow, repo, target, runner, signal);
  if (!created) throw new Error("No se pudo confirmar el PR creado; recuperar por branch antes de reintentar");
  return created;
 }

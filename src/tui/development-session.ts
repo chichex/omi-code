@@ -13,8 +13,9 @@ import type { ReadReceipt } from "../harness/references.ts";
 import { createWorkflow, recipeApprovalHash, transition, type WorkflowEvent } from "../harness/state.ts";
 import { readWorkflow, updateWorkflow } from "../harness/store.ts";
 import { inspectCheckout } from "../harness/git.ts";
-import { publishDraft, readIssueSource } from "../harness/github.ts";
+import { readIssueSource } from "../harness/github.ts";
 import { pullRequestBody, renderWorkflowArtifact } from "../harness/pr-body.ts";
+import { publishTargets, publishWork } from "./development-stack.ts";
 import { updateIssueSection } from "./development-issue.ts";
 import { restoreIssueTriage } from "./workspace/issue-triage.ts";
 import { readGit } from "./workspace/data.ts";
@@ -252,19 +253,19 @@ export class DevelopmentSession {
 		if (!snapshot.clean) throw new Error("El worktree cambió después de verificar. Volvé a Implementar/Verificar.");
 		// Revalidar evidencia con el fingerprint actual, también al recuperar una publicación pendiente.
 		transition({ ...state, phase: "verify", publication: { status: "none" } }, { type: "verified", fingerprint: snapshot.fingerprint }, this.now());
-		// El cuerpo exacto que se publica; falla antes del sí si no entra en GitHub. Un recibo pendiente de otro
+		// El cuerpo exacto que se publica (en un stack, el del PR que cierra); falla antes del sí si no entra en GitHub. Un recibo pendiente de otro
 		// cuerpo (por ejemplo, del formato anterior) nunca se publica: se renueva con este, según push_pr.
 		const head = state.publication.status === "pending" ? state.publication.head : snapshot.head;
 		const proposal = pullRequestBody(state, head);
 		const replaces = state.publication.status === "pending" && state.publication.bodyHash !== proposal.bodyHash ? state.publication.bodyHash : undefined;
-		const summary = publicationSummary(state, head, replaces !== undefined);
+		const summary = publicationSummary(state, publishTargets(state, head), replaces !== undefined);
 		if ((await this.foundations.policy(ctx, state)).politica.push_pr === "auto") ctx.ui.notify(`Foundations · push + PR draft auto: sin preguntar.\n${summary}`, "info");
 		else if (!(await this.reviewPublication(ctx, publicationDocument(summary, proposal.body)))) return;
 		// Una revisión larga no autoriza un trabajo que avanzó en otra ventana.
 		const saved = await readWorkflow(state.checkout, state.source.number);
 		if (!saved || saved.id !== state.id || saved.revision !== state.revision) throw new Error("El trabajo cambió durante la revisión del PR; retomá el estado vigente y volvé a publicar.");
 		if (state.publication.status === "none" || replaces) state = await this.apply({ type: "publishing", head, bodyHash: proposal.bodyHash, ...(replaces ? { replaces } : {}) }, ctx);
-		const receipt = await publishDraft(state, this.runner, this.lifecycle.signal);
+		const receipt = await publishWork(state, this.runner, this.lifecycle.signal);
 		await this.apply({ type: "published", ...receipt }, ctx);
 		await updateIssueSection(this, ctx);
 	}

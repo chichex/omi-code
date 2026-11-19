@@ -19,9 +19,10 @@ import { IssuePreparationBusyError } from "./workspace/issue-registry.ts";
 import { effectivePolicy, foundationsLines } from "./development-foundations.ts";
 import { editFoundations } from "./development-foundations-edit.ts";
 import { HeldLoadout } from "./development-loadout.ts";
+import { syncWorkStack } from "./development-stack.ts";
 
 const KICKOFF = "Continuá el harness de desarrollo activo desde su etapa persistida. Respetá sus bloqueos y pedí los permisos pendientes; no saltees etapas.";
-const USAGE = "Uso: /omi-work resume | approve | pause | refresh | pr | status | stop";
+const USAGE = "Uso: /omi-work resume | approve | pause | refresh | pr | stack | status | stop";
 // Otra ventana preparando el mismo issue es una espera, no un error; también envuelto en un aviso.
 const busy = (error: unknown): boolean => error instanceof IssuePreparationBusyError || (error instanceof Error && error.cause instanceof IssuePreparationBusyError);
 
@@ -113,7 +114,7 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 			pi.sendUserMessage(beginCommand(token), { expandPromptTemplates: true });
 		});
 		pi.registerCommand("omi-work", {
-			description: "Harness de desarrollo: resume, approve, pause, refresh, pr, status, stop",
+			description: "Harness de desarrollo: resume, approve, pause, refresh, pr, stack, status, stop",
 			handler: async (input, ctx) => {
 				try {
 					const command = input.trim() || "status";
@@ -121,7 +122,7 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 					if (!ctx.isIdle() || ctx.hasPendingMessages()) throw new Error("Esperá a que termine el turno antes de cambiar el trabajo");
 					const [verb, ...rest] = command.split(/\s+/);
 					if (verb === BEGIN_SUBCOMMAND) { await begin(rest.join(" "), ctx); return; }
-					if (["resume", "approve", "pr"].includes(command)) await session.foundations.pin(ctx);
+					if (["resume", "approve", "pr", "stack"].includes(command)) await session.foundations.pin(ctx);
 					if (command === "resume") {
 						await session.restore(ctx, true); session.current(ctx);
 						if (!session.offline && !(await session.fresh(ctx))) { loadout(); return; }
@@ -130,6 +131,7 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 					else if (command === "pause") await session.apply({ type: "pause", reason: "Pausado por la persona" }, ctx);
 					else if (command === "refresh") await session.refresh(ctx);
 					else if (command === "pr") await session.publish(ctx);
+					else if (command === "stack") await syncWorkStack(session, ctx);
 					else if (command === "stop") await session.stop(ctx);
 					else throw new Error(USAGE);
 					loadout();
