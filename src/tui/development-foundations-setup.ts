@@ -9,7 +9,6 @@ import { chooseFoundationsOffer, composeFoundations, confirmFoundationsSave, typ
 import type { DevelopmentSession } from "./development-session.ts";
 import type { KbClient } from "./kb-client.ts";
 import { commitFoundationsSave, prepareFoundationsSave } from "./development-foundations-save.ts";
-export { commitFoundationsSave, prepareFoundationsSave, type PreparedSave } from "./development-foundations-save.ts";
 import { askQuestions } from "./questions/ask.ts";
 
 export { FOUNDATIONS_OFFER } from "./development-foundations-wizard.ts";

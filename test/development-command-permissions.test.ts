@@ -177,6 +177,13 @@ for (const failure of ["pause", "abort"] as const) test(`command_permissions: ${
 	assert.equal(injected, true); assert.deepEqual(f.executed, []);
 	assert.ok((await accepted(f))?.accepted?.block.comandos.includes(COMMAND));
 	assert.deepEqual((await f.state()).grants ?? [], []);
+	assert.ok(f.session.foundations.current(f.context)?.block?.comandos.includes(COMMAND), "la sesión ya usa el permiso durable: no vuelve a preguntar ni choca con su propia revisión");
+	if (failure === "abort") {
+		const asked = authorizations(f).length;
+		await f.check();
+		assert.equal(authorizations(f).length, asked, "repetir el comando no vuelve a preguntar");
+		assert.deepEqual(f.executed, [COMMAND]);
+	}
 });
 
 test("command_permissions: en 80×24 el permiso tiene detalle navegable sin ocultar decisiones ni truncar el comando", async (t) => {

@@ -4,6 +4,7 @@ import { grantKey } from "../harness/authorization.ts";
 import { visibleText } from "../harness/foundations.ts";
 import type { Workflow } from "../harness/model.ts";
 import type { DevelopmentSession } from "./development-session.ts";
+import type { FoundationsPin } from "./development-foundations.ts";
 
 const CHOICES = ["Sí", "No", "Permitir siempre en este proyecto"];
 const SAVE_TIMEOUT_MS = 30_000;
@@ -30,7 +31,9 @@ export async function authorizeProjectCommand(session: DevelopmentSession, ctx: 
 	signal.throwIfAborted();
 	if (choice === CHOICES[0]) return session.apply({ type: "command_granted", key: grantKey(state, command), command }, ctx);
 	const saving = AbortSignal.any([signal, session.lifecycle.signal, AbortSignal.timeout(SAVE_TIMEOUT_MS)]);
-	const next = await session.foundations.saveCommand(ctx, state, command, saving, () => session.assertUnchanged(state, ctx));
+	// Durable desde la aceptación local: la sesión lo usa aunque después falle la ejecución, así no vuelve a preguntar.
+	const onAccepted = (pin: FoundationsPin) => { session.foundations.replace(ctx, pin); session.emit(); };
+	const next = await session.foundations.saveCommand(ctx, state, command, saving, { beforeAccept: () => session.assertUnchanged(state, ctx), onAccepted });
 	// Aunque ya se haya escrito en la KB, una ventana vieja o cancelada no ejecuta ni anuncia éxito.
 	try {
 		await session.assertUnchanged(state, ctx);
@@ -39,7 +42,6 @@ export async function authorizeProjectCommand(session: DevelopmentSession, ctx: 
 		const why = error instanceof Error ? error.message : "ejecución cancelada";
 		throw new Error(`El permiso quedó guardado en la KB y aceptado localmente para futuras sesiones, pero no se ejecutó el comando. ${why}`, { cause: error });
 	}
-	session.foundations.replace(ctx, next); session.emit();
 	ctx.ui.notify(`Comando guardado en Foundations de ${next.block?.repo} (KB, perillas ${next.docId?.slice(0, 8)}) y aceptado para esta sesión.`, "info");
 	return state;
 }

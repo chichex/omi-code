@@ -71,3 +71,9 @@ test("development_setup: las instrucciones de Explorar dicen que preparar la bas
 	assert.match(text, /kind setup/);
 	assert.match(text, /no es fundación faltante/);
 });
+
+test("development_setup: la reproducción sigue rechazada en Implementar", async (t) => {
+	const f = await withCatalog(t, ["node test.cjs"]); await f.start(); await f.explore();
+	await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" });
+	await assert.rejects(f.invoke("omi_workflow_check", { kind: "reproduction", command: "node test.cjs" }), /La reproducción corresponde a Explorar, Resolver inferencias o Diagnóstico/);
+});

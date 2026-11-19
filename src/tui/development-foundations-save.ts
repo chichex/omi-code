@@ -23,6 +23,8 @@ export async function prepareFoundationsSave(kb: KbClient, key: TrustKey, block:
 interface SaveDeps {
 	trustDir: string; now: () => string; signal: AbortSignal;
 	requireLatest?: boolean; beforeAccept?: () => Promise<void>;
+	/** Recibe el pin apenas la aceptación local quedó escrita, aunque después se cancele: es durable. */
+	onAccepted?: (pin: FoundationsPin) => void;
 	writeAcceptance?: typeof writeTrust;
 }
 /** Control optimista, no CAS: relee antes de enviar y confirma después. La clave recupera una respuesta perdida. */
@@ -52,12 +54,14 @@ export async function commitFoundationsSave(kb: KbClient, key: TrustKey, block: 
 		signal.throwIfAborted();
 		await (deps.writeAcceptance ?? writeTrust)(deps.trustDir, { ...record, accepted: { docId: stored.id, blockHash: hash, block, author: stored.autor ?? "", date: stored.fecha ?? "", acceptedAt: deps.now() } });
 		accepted = true;
-		signal.throwIfAborted();
-		return {
+		const pin: FoundationsPin = {
 			origin: "kb", block, hash, docId: stored.id, author: stored.autor ?? "", date: stored.fecha ?? "",
 			notice: latest?.id === stored.id ? "" : "La KB guardó Foundations, pero ya hay perillas más nuevas: la próxima sesión muestra la diferencia.",
 			reading: { kind: "valid", key, block, hash, perillas: stored },
 		};
+		deps.onAccepted?.(pin);
+		signal.throwIfAborted();
+		return pin;
 	} catch (error) {
 		const why = error instanceof Error ? error.message : "falló la persistencia";
 		const status = accepted ? "Foundations quedó guardado en la KB y aceptado localmente para futuras sesiones, pero no se ejecutó el comando"

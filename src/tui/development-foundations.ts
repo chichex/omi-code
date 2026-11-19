@@ -143,8 +143,8 @@ export class FoundationsGate {
 	/** Una persona armó Foundations en esta sesión: es su propio sí, no un cambio externo. */
 	replace(ctx: ExtensionContext, pin: FoundationsPin): void { const file = this.file(ctx); const entry = file && sessions.get(file); if (entry) entry.pin = pin; }
 	async policy(ctx: ExtensionContext, state?: Workflow): Promise<ReturnType<typeof effectivePolicy>> { return effectivePolicy(await this.pin(ctx), state); }
-	/** La persona eligió guardar este comando, no aceptar cambios ajenos en comandos o políticas. No reemplaza el pin. */
-	async saveCommand(ctx: ExtensionContext, state: Workflow, command: string, signal: AbortSignal, beforeAccept: () => Promise<void>): Promise<FoundationsPin> {
+	/** La persona eligió guardar este comando, no aceptar cambios ajenos en comandos o políticas. El pin lo reemplaza quien llama, en onAccepted. */
+	async saveCommand(ctx: ExtensionContext, state: Workflow, command: string, signal: AbortSignal, hooks: { beforeAccept: () => Promise<void>; onAccepted: (pin: FoundationsPin) => void }): Promise<FoundationsPin> {
 		signal.throwIfAborted();
 		const problem = commandProblem(command);
 		if (problem) throw new Error(`Comando inválido para Foundations: ${problem}`);
@@ -165,7 +165,7 @@ export class FoundationsGate {
 		if ("reason" in checked) throw new Error(`No se puede agregar el comando al catálogo de Foundations: ${checked.reason}`);
 		// También verifica la expectativa sobre la relectura que realmente se usa para componer.
 		const prepared = await prepareFoundationsSave(kb, key, checked.block, signal, expectedHash);
-		await beforeAccept();
-		return commitFoundationsSave(kb, key, checked.block, prepared, { trustDir: this.deps.trustDir, now: this.deps.now, signal, requireLatest: true, beforeAccept });
+		await hooks.beforeAccept();
+		return commitFoundationsSave(kb, key, checked.block, prepared, { trustDir: this.deps.trustDir, now: this.deps.now, signal, requireLatest: true, ...hooks });
 	}
 }
