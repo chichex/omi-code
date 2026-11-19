@@ -232,7 +232,8 @@ el historial y la edición siguen usando el renderer de Pi; no hay un segundo pr
 | Ctrl 2 o `/omi-issues` | Issues abiertos de GitHub |
 | Ctrl 3 o `/omi-prs` | PRs abiertos de GitHub |
 | Ctrl 4 o `/omi-changes` | Cambios locales |
-| Ctrl 5 o `/omi-platform` | OMI: proyecto, servicios y ambientes |
+| Ctrl 5 o `/omi-platform` | OMI: proyecto, servicios, ambientes y Foundations vigente con su origen |
+| **f** en OMI o `/omi-foundations` | Editar Foundations: comandos del catálogo y políticas `ask`/`auto`, con un sí; vale ya en la sesión ([detalle](docs/development-harness.md#editar-foundations-desde-la-pantalla-omi)) |
 | Ctrl 6 o `/omi-workflow` | Progreso: recorrido completo del harness y modo previsto/real por etapa |
 | Ctrl K o `/omi` | Paleta de comandos (Ctrl K reemplaza borrar hasta fin de línea en el editor) |
 | F4 o `/omi-sidebar` | Mostrar / ocultar lateral |
