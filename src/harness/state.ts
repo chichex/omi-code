@@ -144,7 +144,7 @@ function activeEvidenceStep(state: Workflow, evidence: Evidence): Step {
 function recordFailedCheck(state: Workflow, evidence: Evidence): void {
  requireEvidenceRoom(state); requireCondition(!state.evidence.some(e => e.id === evidence.id), "id de evidencia repetido");
  if (evidence.kind === "reproduction") {
-  requirePhase(state, "explore", "diagnose");
+  requirePhase(state, "explore", "decide", "diagnose");
   requireCondition(!successful(evidence) && !expectedFailure(evidence), "la reproducción es válida; usar evidence");
  } else {
   requireCondition(evidence.kind === "red" || evidence.kind === "green", "check_failed sólo admite reproducción, rojo o verde");
@@ -159,7 +159,8 @@ function recordEvidence(state: Workflow, evidence: Evidence): void {
  requireEvidenceRoom(state); requireCondition(!state.evidence.some(e => e.id === evidence.id), "id de evidencia repetido");
  switch (evidence.kind) {
   case "reproduction":
-   requirePhase(state, "explore", "diagnose");
+   // En Resolver inferencias se puede volver a explorar: también reproducir, por ejemplo tras preparar la base.
+   requirePhase(state, "explore", "decide", "diagnose");
    requireCondition(successful(evidence) || expectedFailure(evidence), "reproducción no confirmada");
    break;
   case "red": case "green": {

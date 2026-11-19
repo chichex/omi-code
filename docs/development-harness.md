@@ -90,7 +90,7 @@ La TUI presenta una revisión dedicada, no un volcado JSON en un confirm genéri
 - **Pruebas** muestra cada caso con descripción y comando completo. `│` inicia una línea lógica, `↳` marca continuación visual y `↵` un salto real. No se pierden espacios al envolver comandos. Los backslashes se duplican (`\\` representa `\`); tabulaciones, retornos, controles y caracteres invisibles se muestran como escapes (`\t`, `\r`, `\uXXXX`), nunca como secuencias ejecutables del terminal. La leyenda de la sección los escribe igual que en los comandos. Navegar no ejecuta comandos ni exige visitar todas las secciones para habilitar el sí.
 - El marco adapta ancho/alto al terminal y al tema vigente, incluidos 80×24 y resize. Si el pane ya no permite inspección (menos de 32 columnas de revisión o 14 filas de terminal), se suspende aprobar hasta ampliarlo; Esc sigue cancelando.
 
-El sí autoriza **implementar, commits locales, comandos D exactos sin volver a preguntar y mantener la sección del harness al final del cuerpo del issue**, sin tocar el pedido de arriba. No autoriza push, merge, workflows ni deploy. Un comando D corre sin volver a preguntar con cualquier etiqueta, también como setup. Otros comandos piden permiso una vez por trabajo, salvo los del catálogo de Foundations. Con `receta: auto` no hay revisión: la receta se aprueba sola y sus D no quedan autorizados (ver Foundations). La receta no tiene un tope propio de tamaño: la revisión navega por secciones. Antes del sí sólo se comprueba que el artefacto entre en GitHub; si no entra, falla pidiendo dividir el trabajo, no se resume en silencio para aprobarla.
+El sí autoriza **implementar, commits locales, comandos D exactos sin volver a preguntar y mantener la sección del harness al final del cuerpo del issue**, sin tocar el pedido de arriba. No autoriza push, merge, workflows ni deploy. Un comando D corre sin volver a preguntar con cualquier etiqueta, también como setup. Otros comandos piden permiso, salvo los del catálogo de Foundations: «Sí» vale para el trabajo y «Permitir siempre en este proyecto» lo suma al catálogo (ver «Evidencia y permisos»). Con `receta: auto` no hay revisión: la receta se aprueba sola y sus D no quedan autorizados (ver Foundations). La receta no tiene un tope propio de tamaño: la revisión navega por secciones. Antes del sí sólo se comprueba que el artefacto entre en GitHub; si no entra, falla pidiendo dividir el trabajo, no se resume en silencio para aprobarla.
 
 En RPC, donde Pi no ofrece componentes TUI, se conserva una confirmación humana con el mismo documento completo organizado en texto, con los mismos escapes y marcadores `│`/`↵` en los comandos. Los modos sin UI no pueden aprobar. Tras revisar se vuelve a contrastar la fuente, el estado guardado y el código explorado; una revisión obsoleta no se convierte en aprobación de otra receta.
 
@@ -111,7 +111,7 @@ En RPC, donde Pi no ofrece componentes TUI, se conserva una confirmación humana
   - **Corridas.** Un lente que falló no se repite sobre el mismo contenido, salvo que un `refuter` posterior apruebe: así un aviso no se borra repitiendo el lente y el fail de Seguridad no se esquiva. Por contenido, cada lente admite tres veredictos y diez corridas: cancelar o un error del proveedor no gasta veredictos.
 - **PR:** sólo con cambio limpio y verificado, confirmación humana remota y un SHA autorizado. Termina en un draft; no mergea ni cierra el issue.
 
-Base incompleta, dependencia bloqueante, información insuficiente, inferencia nueva o imposibilidad de verificar deben quedar como espera/pausa. En este corte, Fundación no se ejecuta: la persona completa la base y usa `refresh`.
+Dependencia bloqueante, información insuficiente, inferencia nueva o imposibilidad de verificar deben quedar como espera/pausa. Una base que se arma con un comando no es una espera: el agente la prepara con `setup`, en cualquier etapa activa. Ejemplo: un worktree nuevo sin `node_modules` corre `npm ci` en Explorar (sin preguntar si está en el catálogo), vuelve a reproducir y registra `explored` de nuevo, sin `refresh`. Sólo queda como base faltante lo que un comando no resuelve, por ejemplo una credencial o un servicio externo.
 
 ## Evidencia y permisos
 
@@ -123,8 +123,15 @@ Base incompleta, dependencia bloqueante, información insuficiente, inferencia n
   - es el comando exacto de un caso D de una receta que aprobó una persona;
   - ya tiene un permiso guardado en este trabajo;
   - o Foundations dice `fuera_de_catalogo: auto`.
-- Si no, OMI pregunta una vez. El sí queda guardado en el estado del trabajo (`grants`), por comando exacto y por pedido: sobrevive a `/reload`, `resume`, aprobar la receta y un `replan` por acuerdo del chat. Cambiar el pedido o `refresh` lo descarta. Un no no guarda nada. Ejemplo: `npm run typecheck` aprobado como D5 corre igual como setup, sin otro diálogo.
-- Setup nunca acredita una prueba y sus errores se muestran.
+- Si no, OMI ofrece **Sí**, **No** y **Permitir siempre en este proyecto**, tanto en TUI como en RPC. Muestra el comando exacto, el checkout, el repo y el destino en la KB. En TUI el detalle se desplaza con PgUp/PgDn sin ocultar las tres decisiones; no hay consentimiento preseleccionado y se confirma con Enter. RPC usa el selector nativo con el detalle completo. Sin UI no concede permisos.
+  - **Sí** queda guardado en el estado del trabajo (`grants`), por comando exacto y por pedido: sobrevive a `/reload`, `resume`, aprobar la receta y un `replan` por acuerdo del chat. Cambiar el pedido o `refresh` lo descarta. No cambia Foundations ni habilita otros trabajos.
+  - **Permitir siempre en este proyecto** guarda inmediatamente ese comando exacto en el catálogo existente de Foundations de las perillas del producto, y su aceptación en el registro local. Recién tras confirmar ambos actualiza la política de esta sesión y ejecuta. Vale tras reiniciar y en otros trabajos/clones/worktrees del mismo repo, no en otros repos; `refresh` no elimina el catálogo. No agrega prefijos ni comodines ni sustituye las confirmaciones sensibles de OMI.
+  - **No**, cerrar, una respuesta desconocida o cancelar antes del guardado no ejecutan ni agregan permisos. Un error de persistencia bloquea: no concede un grant temporal como fallback ni anuncia éxito. Si el envío ya salió a la KB y luego falla la confirmación/aceptación o se cancela, el documento remoto puede existir: el error distingue ese resultado parcial, sin ejecutar. Si ya se completaron el guardado y la aceptación local pero se cancela la ejecución, informa que el permiso sí quedó persistido para futuras sesiones.
+  - Una decisión desde un trabajo pausado o cambiado por otra ventana se rechaza al revalidar el estado durable, antes de guardar y antes de ejecutar.
+  Ejemplo: `npm run typecheck` aprobado por una persona como D5 corre igual como setup, sin otro diálogo.
+- Setup corre en cualquier etapa activa, también antes de aprobar la receta, con la misma autorización. Nunca acredita una prueba y sus errores se muestran.
+- Fuera de Implementar, un setup prepara lo que Git ignora (por ejemplo, `node_modules`). Si cambia archivos versionados, no ignorados o HEAD, devuelve un error. No se revierte solo; el cambio queda a la vista en `git status`. Es una detección con el fingerprint, no un sandbox: un comando autorizado que le esconde cambios a Git (por ejemplo, con `git update-index --assume-unchanged`) no se detecta.
+- La reproducción corre en Explorar, Resolver inferencias (donde se puede volver a registrar `explored`) y Diagnóstico.
 - El runner registra salida acotada a 12.000 caracteres, exit code, interrupción, HEAD, fingerprint y tiempos. No imprime el entorno ni mensajes internos potencialmente sensibles del backend. La salida del propio programa puede contener datos sensibles: no autorizar comandos que revelen secretos.
 - Un rojo que pasa, comando ausente, cancelación o contenido modificado durante el comando no se convierte en prueba válida. Los intentos fallidos quedan registrados sin habilitar pasos.
 - El fingerprint representa contenido cambiado desde la base y archivos nuevos no ignorados, incluidos modos/eliminaciones/symlinks. Permanece estable al hacer stage/commit del mismo contenido.
@@ -207,7 +214,7 @@ Los comandos del catálogo corren sin preguntar con cualquier etiqueta. Las regl
 
 3. Toda revisión nueva pide el sí, también si sólo quita permisos. La misma revisión en otro documento de perillas (alguien editó otra parte) no vuelve a preguntar.
 4. La aceptada se guarda en `<OMI_HOME>/agent/foundations/` (por defecto `~/.omi/agent/foundations/`), 0600, por KB, producto y repo.
-5. La revisión queda **fija toda la sesión**: un cambio en la KB a mitad de sesión no se aplica. Sobrevive a `/reload` y viaja a la sesión del worktree con `omi_work_begin`, sin otro diálogo. La sesión siguiente muestra la diferencia.
+5. La revisión queda **fija toda la sesión**: un cambio externo en la KB a mitad de sesión no se aplica. Sobrevive a `/reload` y viaja a la sesión del worktree con `omi_work_begin`, sin otro diálogo. La sesión siguiente muestra la diferencia. La excepción es una decisión propia de guardar Foundations o **Permitir siempre en este proyecto**: tras guardarse y aceptarse, reemplaza el pin inmediatamente.
 
 Rechazar o cancelar deja la última revisión aceptada. Sin ninguna, la política estricta: `ask` en los cuatro puntos y catálogo vacío.
 
@@ -225,7 +232,17 @@ OMI lee la KB por la conexión MCP de Pi, sin el modelo. Si `~/.omi/agent/mcp.js
 
 ### Qué escribe en la KB y cuándo
 
-Sólo una cosa, y sólo con tu sí: armar Foundations cuando falta.
+Sólo tras una decisión explícita de la persona: armar Foundations cuando falta, o agregar un comando desde su diálogo de autorización. El agente no recibe permiso para editar libremente la KB.
+
+**Agregar un comando con «Permitir siempre en este proyecto»**
+
+- Se guarda en el momento de elegir la opción, no al terminar el trabajo. Reutiliza el catálogo y la aceptación existentes; no hay una segunda lista ni una cola de sincronización.
+- Requiere KB disponible, producto accesible e identidad de KB/producto/repo igual a la de la sesión y del issue. Sin KB, con bloque inválido o catálogo lleno, informa el error y no ejecuta. Si falta el bloque y no hay uno aceptado, puede crear sólo ese comando con las cuatro políticas `ask`.
+- Relee el documento vigente y conserva byte a byte todo lo ajeno al bloque del repo, sus demás comandos y políticas. La expectativa de revisión se verifica también sobre el documento usado para componer; si el bloque cambió respecto del pin, desapareció o contiene una revisión no aceptada, aborta y pide revisarla en una sesión nueva. No acepta silenciosamente políticas ajenas por autorizar un comando.
+- Comprueba otra vez las perillas antes del envío, confirma el documento guardado y exige que siga siendo el vigente antes de aceptar localmente. Los conflictos detectados bloquean la ejecución; una respuesta perdida puede recuperarse con la misma clave idempotente, sin reintentar tras cancelar.
+- **Límite de concurrencia:** estos controles son optimistas, no una exclusión mutua ni CAS remoto. Otro escritor todavía puede guardar entre la última lectura y el envío. La exclusión global de la KB queda fuera de este cambio, a cargo de la persona según el acuerdo de #58. No se promete atomicidad.
+
+**Armar Foundations cuando falta**
 
 - Cuándo: al empezar el harness en la sesión del worktree, una vez por sesión, si la KB respondió, el producto existe, sus perillas no tienen bloque para el repo y no hay una revisión aceptada. Sólo en la TUI interactiva: en RPC no se ofrece.
 - Se ofrece con una pregunta: «Armar Foundations» (la recomendada, nunca elegida sola), «Ahora no» o «No ofrecer más para este repo» (queda en el registro local), cada una con lo que pasa. Esc es «Ahora no»: no se guarda nada.
@@ -237,7 +254,7 @@ Sólo una cosa, y sólo con tu sí: armar Foundations cuando falta.
 - Si las perillas cambiaron durante el diálogo, no se guarda. Una respuesta perdida se reintenta con la misma clave, sin duplicar el documento. La clave es determinista (repo, perillas previas y cuerpo), así que no se guarda en el registro local: un guardado que falla no deja nada ahí.
 - Lo guardado queda aceptado y vale en esa sesión.
 
-Para cambiarlo después, editá las perillas en la KB (o pedíselo al agente fuera del harness). No hay un comando para eso. `/omi-work status` y el detalle del progreso muestran la revisión vigente, su origen (KB, local o estricta), las cuatro políticas, el catálogo y los avisos.
+Para cambiar políticas, quitar comandos o editar libremente el catálogo, editá las perillas en la KB (o pedíselo al agente fuera del harness). El diálogo de autorización sólo puede sumar el comando exacto solicitado; no hay un comando de edición general. `/omi-work status` y el detalle del progreso muestran la revisión vigente, su origen (KB, local o estricta), las cuatro políticas, el catálogo y los avisos.
 
 ### Límites
 

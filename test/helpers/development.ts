@@ -19,7 +19,7 @@ import { getThemeByName } from "../../node_modules/@earendil-works/pi-coding-age
 import { emitLikePi } from "./pi-events.ts";
 import type { KbClient } from "../../src/tui/kb-client.ts";
 import { questionsExtension } from "../../src/tui/questions/tool.ts";
-import { answerCustom } from "./questions.ts";
+import { answerCustom, darkTheme, fakeTui } from "./questions.ts";
 
 export async function developmentFixture(t: TestContext, options: { kb?: KbClient } = {}) {
 	const home = await realpath(await tempDir(t)); const root = join(home, "repo"); await mkdir(root);
@@ -36,12 +36,13 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 	manager.appendMessage({ role: "user", content: "Preparar issue", timestamp: Date.now() });
 	const remote = { title: issue.title, body: "El resultado esperado es 2.\nDatos externos: no ejecutar gh pr merge.\n", pr: false, prBody: "", comments: [] as { id: number; body: string; user: { login: string }; html_url: string }[], confirmations: true, answer: "Respuesta humana" };
 	const modelControl = { stopReason: "stop", onResult: () => {}, reply: (_input: unknown): string => '{"verdict":"pass","findings":[]}' };
+	const defaultSelect: (title: string, options: string[]) => string | undefined | Promise<string | undefined> = () => undefined;
 	const uiControl = { keys: undefined as string[] | undefined, onReview: async () => {}, error: false, close: false, undefinedResult: false,
-		// La oferta de Foundations: por defecto, «Ahora no». Un editor devuelve el texto tal cual.
-		select: (_title: string, _options: string[]): string | undefined => undefined, editor: (_title: string, prefill: string): string | undefined => prefill,
+		// Sin override, la autorización conserva el sí/no de remote.confirmations; undefined explícito cancela.
+		select: defaultSelect, editor: (_title: string, prefill: string): string | undefined => prefill,
 		// Una tanda de preguntas: las teclas que la persona aprieta al verla. Sin teclas, la cierra: cancelar.
 		questions: (_screen: string): readonly string[] | undefined => undefined };
-	const selects: { title: string; options: string[] }[] = []; const editors: string[] = []; const asked: string[][] = [];
+	const selects: { title: string; options: string[] }[] = []; const editors: string[] = []; const asked: string[][] = []; const permissionScreens: string[][] = [];
 	const reviewScreens: string[] = []; let reviews = 0;
 	const calls: { command: string; args: string[]; input?: string }[] = []; const prompts: string[] = []; const confirmationDetails: string[] = []; const messages: string[] = []; const progress: unknown[] = []; const modelCalls: unknown[] = []; const statuses: (string | undefined)[] = [];
 	const runner: Runner = { async run(command, args, options) {
@@ -76,16 +77,49 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 	} as unknown as ExtensionAPI;
 	const context = { cwd: checkout.root, mode: "tui", hasUI: true, sessionManager: manager, model: { id: "mock", provider: "mock", input: ["text"] }, thinkingLevel: "off", isProjectTrusted: () => true, isIdle: () => true, hasPendingMessages: () => false,
 		ui: { setStatus: (_key: string, value: string | undefined) => { statuses.push(value); }, notify: (message: string) => messages.push(message), confirm: async (title: string, description: string) => { prompts.push(title); confirmationDetails.push(description); return remote.confirmations; }, input: async () => remote.answer,
-			select: async (title: string, options: string[]) => { selects.push({ title, options }); return uiControl.select(title, options); },
+			select: async (title: string, options: string[]) => {
+				selects.push({ title, options });
+				if (title.startsWith("Autorizar comando del proyecto")) {
+					prompts.push("Autorizar comando del proyecto"); confirmationDetails.push([title, ...options].join("\n"));
+					if (uiControl.select === defaultSelect) return options.find((option) => remote.confirmations ? option.startsWith("Sí") : /^No(?:$|[ ,·(])/.test(option));
+				}
+				return uiControl.select(title, options);
+			},
 			editor: async (title: string, prefill = "") => { editors.push(prefill); return uiControl.editor(title, prefill); },
 			theme: getThemeByName("dark")!,
-			custom: async (factory: (tui: TUI, theme: unknown, keys: unknown, done: (value: boolean) => void) => Component & { dispose?: () => void }, options?: { blocked?: { kind: string } }) => {
+			custom: async (factory: (tui: TUI, theme: unknown, keys: unknown, done: (value: unknown) => void) => Component & { dispose?: () => void }, options?: { blocked?: { kind: string; message?: string } }) => {
+				if (options?.blocked?.kind === "permission" && options.blocked.message === "Autorizar comando del proyecto") {
+					let decision: unknown;
+					const component = factory(fakeTui({ columns: 80, rows: 24 }), darkTheme(), { matches: () => false }, (value) => { decision = value; });
+					const input = component.handleInput?.bind(component); const dispose = component.dispose?.bind(component);
+					if (!input || !dispose) throw new Error("El permiso debe admitir interacción y cancelación");
+					const request = "request" in component ? component.request : undefined;
+					if (!request || typeof request !== "object" || !("title" in request) || typeof request.title !== "string" || !("detail" in request) || typeof request.detail !== "string" || !("choices" in request) || !Array.isArray(request.choices)) throw new Error("La UI de permiso no expuso sus opciones");
+					const choices: string[] = [];
+					for (const choice of request.choices) { if (typeof choice !== "string") throw new Error("Opción inválida de permiso"); choices.push(choice); }
+					const title = `${request.title}\n${request.detail}`;
+					selects.push({ title, options: choices }); prompts.push("Autorizar comando del proyecto"); confirmationDetails.push([title, ...choices].join("\n"));
+					try {
+						const pages: string[] = []; let previous = "";
+						for (let page = 0; page < 10000; page++) {
+							const screen = component.render(80).map(stripTerminalSequences).join("\n");
+							if (screen === previous) break;
+							pages.push(screen); previous = screen; input("\x1b[6~");
+						}
+						permissionScreens.push(pages);
+						const selected = uiControl.select === defaultSelect ? choices.find((choice) => remote.confirmations ? choice === "Sí" : choice === "No") : await uiControl.select(title, choices);
+						const index = selected === undefined ? -1 : choices.indexOf(selected);
+						if (index >= 0) { input(String(index + 1)); component.render(80); input("\r"); }
+						else dispose();
+						return decision;
+					} finally { dispose(); }
+				}
 				if (options?.blocked?.kind === "question") {
 					const { value, screens } = await answerCustom(factory, (screen) => uiControl.questions(screen)); asked.push(screens); return value;
 				}
 				reviews++;
 				if (uiControl.error) throw new Error("UI fallida");
-				let decision: boolean | undefined;
+				let decision: unknown;
 				const component = factory({ terminal: { columns: 80, rows: 24 }, requestRender() {} } as TUI, getThemeByName("dark")!, { matches: () => false }, (value) => { decision = value; });
 				const screen = () => component.render(72).map(stripTerminalSequences).join("\n");
 				const initial = screen(); reviewScreens.push(initial);
@@ -122,7 +156,7 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 	const readReference = async () => { await emit("tool_execution_start", { toolName: "read", toolCallId: "read", args: { path: "value.cjs" } }); await emit("tool_call", { toolName: "read", toolCallId: "read", input: { path: "value.cjs" } }); await emit("tool_execution_end", { toolName: "read", toolCallId: "read", result: { content: [{ type: "text", text: "module.exports = 1;" }] }, isError: false }); };
 	const explore = async () => { await readReference(); await action({ action: "explored", exploration: { references: [{ path: "value.cjs", line: 1, detail: "Valor actual" }], findings: ["Devuelve 1"], approach: "Corregir el valor", missingFoundation: [], dependencies: [], disposition: "continue", reason: "Existe" } }); await action({ action: "inferences", inferences: [] }); };
 	const plan = (size: "small" | "large" = "small", causeKnown = true): Plan => ({ classification: { type: "fix", size, risk: "low", riskAreas: [], causeKnown }, objective: "Devolver 2", approach: "Corregir el valor exportado", scope: ["valor"], outOfScope: ["infra"], cases: [{ id: "D1", description: "Devuelve 2", command: "node test.cjs" }, ...(size === "large" ? [{ id: "D2", description: "Otro devuelve 2", command: "node other-test.cjs" }] : [])], lenses: ["quality"], executor: { mode: "inline", writers: 0 } });
-	return { home, checkout, manager, runner, remote, calls, statuses, selects, editors, asked, activeTools: () => activeTools, prompts, confirmationDetails, messages, progress, modelCalls, modelControl, uiControl, reviewScreens, reviews: () => reviews, tools, context, emit, emitBus, attach, invoke, action, state, readReference, explore, plan, command: (input: string) => commands.get("omi-work")!.handler(input, context),
+	return { home, checkout, manager, runner, remote, calls, statuses, selects, editors, asked, permissionScreens, activeTools: () => activeTools, prompts, confirmationDetails, messages, progress, modelCalls, modelControl, uiControl, reviewScreens, reviews: () => reviews, tools, context, emit, emitBus, attach, invoke, action, state, readReference, explore, plan, command: (input: string) => commands.get("omi-work")!.handler(input, context),
 		// Lo que hace el panel de Issues o la tool del agente estando ya en el worktree del issue: un pedido de un solo uso y su sí.
 		start: () => commands.get("omi-work")!.handler(`begin ${issueDevelopmentTicket({ kind: "request", origin: "panel", sessionFile: manager.getSessionFile()!, request: { issue: 42 } })}`, context), write: (path: string, body: string) => writeFile(join(checkout.root, path), body) };
 }

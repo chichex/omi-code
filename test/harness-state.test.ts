@@ -24,6 +24,14 @@ test("exploration cannot invent foundations or skip blocked dependencies", () =>
  for (const changes of [{ references: [] }, { missingFoundation: ["schema"] }, { dependencies: [{ name: "api", blocking: true, ready: false }] }, { disposition: "needs-info" as const }]) { const s = send(fresh(), { type: "explored", exploration: { ...exploration, ...changes } }); assert.equal(s.status, "waiting"); assert.ok(s.blockedReason); assert.throws(() => send(s, { type: "planned", plan })); }
  const s = send(fresh(), { type: "explored", exploration: { ...exploration, disposition: "wontfix" } }); assert.equal(s.phase, "closed"); assert.equal(s.status, "complete");
 });
+test("decide accepts a new reproduction after preparing the base, and re-exploring unblocks it", () => {
+ const blocked = send(fresh(), { type: "explored", exploration: { ...exploration, missingFoundation: ["deps"] } }); assert.equal(blocked.phase, "decide"); assert.equal(blocked.status, "waiting");
+ const reproduced = send(blocked, { type: "evidence", evidence: evidence("reproduction", { stepId: null, exitCode: 1, outcome: "failed" }) }); assert.equal(reproduced.evidence.length, 1);
+ const attempt = send(blocked, { type: "check_failed", evidence: evidence("reproduction", { stepId: null, exitCode: 127, outcome: "failed" }) }); assert.equal(attempt.evidence.length, 1);
+ const unblocked = send(reproduced, { type: "explored", exploration }); assert.equal(unblocked.status, "active"); assert.equal(unblocked.blockedReason, "");
+ assert.throws(() => send(ready(), { type: "evidence", evidence: evidence("reproduction", { stepId: null }) }), /fase approve/);
+});
+
 test("decisions require explicit irreversible answers and supported how assumptions", () => {
  let s = send(fresh(), { type: "explored", exploration });
  s = send(s, { type: "inferences", inferences: [{ id: "I1", kind: "how", question: "how", recommended: "extend", confidence: 99, irreversible: false, references: [] }, { id: "I2", kind: "what", question: "delete?", recommended: "yes", confidence: 100, irreversible: true, references: [] }] });

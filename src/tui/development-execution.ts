@@ -4,25 +4,34 @@ import { realpath } from "node:fs/promises";
 import { dirname, relative } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isInside } from "../core/files.ts";
-import type { Evidence, EvidenceKind } from "../harness/model.ts";
-import { commandAuthorization, grantKey } from "../harness/authorization.ts";
+import type { Evidence, EvidenceKind, Workflow } from "../harness/model.ts";
+import { commandAuthorization } from "../harness/authorization.ts";
 import { expectedFailure, isApproved, recipeApprovalHash, successful } from "../harness/state.ts";
 import { inspectCheckout, assertStepCommit } from "../harness/git.ts";
 import { runWorkflowCommand, type WorkflowCommandResult } from "../harness/commands.ts";
 import { workflowWritePath } from "../harness/permissions.ts";
 import type { DevelopmentSession } from "./development-session.ts";
+import { authorizeProjectCommand } from "./development-command-authorization.ts";
 
 export interface CheckInput { kind: EvidenceKind | "setup"; command: string; stepId?: string; caseId?: string; timeoutSeconds?: number }
-export async function executeCheck(session: DevelopmentSession, input: CheckInput, ctx: ExtensionContext, signal: AbortSignal, run = runWorkflowCommand): Promise<Evidence | { setup: WorkflowCommandResult }> {
-	const state = session.current(ctx);
+/** En qué etapa corre cada etiqueta. Setup no acredita nada: prepara el checkout en cualquier etapa activa. */
+function assertCheckPhase(state: Workflow, kind: CheckInput["kind"]): void {
 	if (state.status === "paused" || state.status === "complete") throw new Error("El trabajo no está activo");
-	if (input.kind === "reproduction") {
-		if (!["explore", "diagnose"].includes(state.phase)) throw new Error("La reproducción corresponde a Explorar o Diagnóstico");
-	} else {
-		if (!isApproved(state)) throw new Error("Primero hace falta aprobar la receta vigente");
-		if (["red", "green", "setup"].includes(input.kind) && state.phase !== "implement") throw new Error("Ese comando corresponde a Implementar");
-		if (["verification", "gate"].includes(input.kind) && state.phase !== "verify") throw new Error("Ese comando corresponde a Verificar");
+	if (kind === "setup") return;
+	// Resolver inferencias admite volver a registrar explored: también puede volver a reproducir.
+	if (kind === "reproduction") {
+		if (!["explore", "decide", "diagnose"].includes(state.phase)) throw new Error("La reproducción corresponde a Explorar, Resolver inferencias o Diagnóstico");
+		return;
 	}
+	if (!isApproved(state)) throw new Error("Primero hace falta aprobar la receta vigente");
+	if ((kind === "red" || kind === "green") && state.phase !== "implement") throw new Error("Ese comando corresponde a Implementar");
+	if ((kind === "verification" || kind === "gate") && state.phase !== "verify") throw new Error("Ese comando corresponde a Verificar");
+}
+export async function executeCheck(session: DevelopmentSession, input: CheckInput, ctx: ExtensionContext, signal: AbortSignal, run = runWorkflowCommand): Promise<Evidence | { setup: WorkflowCommandResult }> {
+	signal = AbortSignal.any([signal, session.lifecycle.signal]);
+	signal.throwIfAborted();
+	const state = session.current(ctx);
+	assertCheckPhase(state, input.kind);
 	if (input.kind === "red" || input.kind === "green") {
 		const step = state.steps.find((s) => s.id === input.stepId && s.status === "active");
 		if (!step) throw new Error("Activá el paso C antes de registrar rojo/verde");
@@ -30,18 +39,24 @@ export async function executeCheck(session: DevelopmentSession, input: CheckInpu
 		if (input.kind === "green" && (!red || red.command !== input.command)) throw new Error("El verde debe ejecutar el mismo comando que el rojo observado");
 	}
 	if (input.kind === "verification" && !state.recipe?.cases.some((c) => c.id === input.caseId && c.command === input.command)) throw new Error("La verificación debe usar el caso D y comando exactos de la receta aprobada");
-	// La etiqueta no pide otro sí: un D aprobado corre igual como setup, y un permiso se guarda en el trabajo.
-	if (commandAuthorization(state, input.command, (await session.foundations.policy(ctx, state)).command) === "ask") {
-		if (!(await session.confirm(ctx, "Autorizar comando del proyecto", `${input.kind} · ${state.checkout.root}\n\n${input.command}\n\nEjecuta código del proyecto con permisos de tu usuario. No es una operación de sólo lectura ni un sandbox. No autoriza otros comandos. El permiso queda guardado para este trabajo, también al retomarlo, hasta que cambie el pedido.`))) throw new Error("Comando no autorizado; no se ejecutó");
-		await session.apply({ type: "command_granted", key: grantKey(state, input.command), command: input.command }, ctx);
-	}
+	// La etiqueta no pide otro sí: un D aprobado corre igual como setup. Sólo la persona puede ampliar el catálogo.
+	const authorized = commandAuthorization(state, input.command, (await session.foundations.policy(ctx, state)).command) === "ask"
+		? await authorizeProjectCommand(session, ctx, { state, command: input.command, kind: input.kind, signal }) : state;
 	const before = await inspectCheckout(state.checkout, session.runner, signal);
+	await session.assertUnchanged(authorized, ctx);
+	signal.throwIfAborted();
 	const startedAt = session.now(); session.emit(`${input.kind} · ${input.caseId ?? input.stepId ?? "comando"} · ${input.command}`);
 	const result = await run(state.checkout, input.command, signal, input.timeoutSeconds);
 	const after = await inspectCheckout(state.checkout, session.runner, session.lifecycle.signal);
 	const current = session.current(ctx);
 	if (current.id !== state.id || current.source.hash !== state.source.hash || recipeApprovalHash(current) !== recipeApprovalHash(state)) throw new Error("El pedido o la receta cambió durante el comando; su resultado no acredita este trabajo");
-	if (input.kind === "setup") { session.emit(); return { setup: result }; }
+	if (input.kind === "setup") {
+		session.emit();
+		// Fuera de Implementar, un setup prepara lo que Git ignora (por ejemplo, node_modules). Es una detección con el
+		// fingerprint, no un sandbox: un comando autorizado todavía puede esconderle cambios a Git.
+		if (state.phase !== "implement" && (before.fingerprint !== after.fingerprint || before.head !== after.head)) throw new Error(`El setup cambió el checkout fuera de Implementar: modificó archivos versionados, no ignorados o HEAD. Setup no acredita nada y fuera de Implementar no debe escribir código; el cambio no se revirtió: revisalo con git status. Exit ${result.exitCode ?? "—"}.`);
+		return { setup: result };
+	}
 	const interrupted = result.interrupted || signal.aborted || result.exitCode === null || result.exitCode >= 128 || before.fingerprint !== after.fingerprint || before.head !== after.head;
 	const evidence: Evidence = {
 		id: randomUUID(), kind: input.kind, command: input.command, stepId: input.stepId ?? null, caseId: input.caseId ?? null,

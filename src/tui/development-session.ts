@@ -26,6 +26,7 @@ import { showApprovalReview } from "./development-approval-view.ts";
 import type { KbClient } from "./kb-client.ts";
 import { FoundationsGate, foundationsLines } from "./development-foundations.ts";
 import { foundationsDir } from "../harness/foundations-trust.ts";
+import { showCommandChoices } from "./development-command-dialog.ts";
 
 export const DEVELOPMENT_ANCHOR = "omi-development-workflow";
 const AnchorSchema = Type.Object({ id: Type.String(), root: Type.String(), issue: Type.Integer({ minimum: 1 }), revision: Type.Integer({ minimum: 0 }), disabled: Type.Optional(Type.Boolean()) });
@@ -181,6 +182,28 @@ export class DevelopmentSession {
 		this.emit(`Esperando confirmación · ${title}`, true);
 		try { return await ctx.ui.confirm(title, description, { signal: this.lifecycle.signal }); }
 		finally { this.emit(); }
+	}
+	/** Un selector no autoriza nada por sí mismo; cada caller interpreta sólo sus opciones explícitas. */
+	async select(ctx: ExtensionContext, title: string, options: string[], signal: AbortSignal): Promise<string | undefined> {
+		this.checkContext(ctx);
+		if (!ctx.hasUI) throw new Error("Autorizar comando del proyecto: requiere confirmación humana interactiva");
+		const cancellation = AbortSignal.any([signal, this.lifecycle.signal]);
+		cancellation.throwIfAborted();
+		this.emit("Esperando autorización de comando", true);
+		try {
+			const choice = await showCommandChoices(ctx, title, options, cancellation);
+			cancellation.throwIfAborted();
+			return choice;
+		} finally { this.emit(); }
+	}
+	/** Evita usar una decisión desde una ventana vieja, también si no se escribe un grant en el trabajo. */
+	async assertUnchanged(expected: Workflow, ctx: ExtensionContext): Promise<void> {
+		await this.mutations;
+		this.lifecycle.signal.throwIfAborted();
+		const current = this.current(ctx);
+		const saved = await readWorkflow(expected.checkout, expected.source.number);
+		const same = (value: Workflow | undefined) => value?.id === expected.id && value.revision === expected.revision && value.source.hash === expected.source.hash && value.status === expected.status && value.phase === expected.phase && recipeApprovalHash(value) === recipeApprovalHash(expected);
+		if (!same(current) || !same(saved)) throw new Error("El trabajo cambió durante la autorización; retomá su estado vigente antes de continuar.");
 	}
 	// true sólo si la persona aprobó: un no no vuelve a disparar al modelo.
 	async approve(ctx: ExtensionContext, signal?: AbortSignal): Promise<boolean> {
