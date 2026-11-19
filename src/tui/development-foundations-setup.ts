@@ -1,14 +1,15 @@
 // Sin Foundations para el repo, el harness ofrece armarlo: detecta comandos, los pregunta en tandas y los
-// guarda en la KB sólo con el sí. Es la única escritura en la KB y conserva el resto del documento de perillas.
-import { createHash } from "node:crypto";
+// guarda en la KB sólo con el sí. Comparte la persistencia con el permiso permanente de comandos.
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { composePerillas, foundationsHash, type FoundationsBlock } from "../harness/foundations.ts";
+import type { FoundationsBlock } from "../harness/foundations.ts";
 import { detectFoundationsCandidates } from "../harness/foundations-detect.ts";
-import { foundationsDir, readTrust, writeTrust, type TrustKey, type TrustRecord } from "../harness/foundations-trust.ts";
+import { foundationsDir, readTrust, writeTrust, type TrustRecord } from "../harness/foundations-trust.ts";
 import type { FoundationsPin } from "./development-foundations.ts";
 import { chooseFoundationsOffer, composeFoundations, confirmFoundationsSave, type Ask } from "./development-foundations-wizard.ts";
 import type { DevelopmentSession } from "./development-session.ts";
-import type { KbClient, KbDoc } from "./kb-client.ts";
+import type { KbClient } from "./kb-client.ts";
+import { commitFoundationsSave, prepareFoundationsSave } from "./development-foundations-save.ts";
+export { commitFoundationsSave, prepareFoundationsSave, type PreparedSave } from "./development-foundations-save.ts";
 import { askQuestions } from "./questions/ask.ts";
 
 export { FOUNDATIONS_OFFER } from "./development-foundations-wizard.ts";
@@ -19,35 +20,6 @@ const offered = new Set<string>();
 /** Sólo si la KB respondió, el producto existe, no hay bloque, nada aceptado, la persona no lo descartó y hay TUI interactiva. */
 export function shouldOfferFoundations(pin: FoundationsPin | undefined, record: TrustRecord | undefined, hasUI: boolean): boolean {
 	return hasUI && pin?.reading.kind === "missing" && pin.origin === "strict" && !record?.accepted && !record?.offerDeclined;
-}
-
-export interface PreparedSave { previous: KbDoc | null; body: string; clave: string }
-const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
-/** Lee las perillas vigentes y compone el cuerpo nuevo. Falla si hay un bloque inválido: hay que corregirlo en la KB. */
-export async function prepareFoundationsSave(kb: KbClient, key: TrustKey, block: FoundationsBlock, signal: AbortSignal): Promise<PreparedSave> {
-	const previous = await kb.currentPerillas(key.product, signal);
-	const body = composePerillas(previous?.cuerpo, key.product, key.repo, block);
-	return { previous, body, clave: `omi-foundations|${key.repo.slice(0, 80)}|${previous?.id ?? "none"}|${sha256(body).slice(0, 40)}` };
-}
-
-/** Guarda sin pisar a otro: se relee el vigente y se verifica lo guardado. La clave determinista recupera una respuesta perdida. */
-export async function commitFoundationsSave(kb: KbClient, key: TrustKey, block: FoundationsBlock, prepared: PreparedSave, deps: { trustDir: string; now: () => string; signal: AbortSignal }): Promise<FoundationsPin> {
-	const current = await kb.currentPerillas(key.product, deps.signal);
-	if ((current?.id ?? null) !== (prepared.previous?.id ?? null)) throw new Error("Las perillas cambiaron en la KB mientras armabas Foundations; no se guardó nada. Volvé a intentarlo en otra sesión.");
-	const input = { product: key.product, titulo: prepared.previous?.titulo || `Perillas de ${key.product}`, cuerpo: prepared.body, clave: prepared.clave };
-	// Una respuesta perdida puede haber guardado: la misma clave recupera el original en lugar de duplicarlo.
-	const saved = await kb.save(input, deps.signal).catch(() => kb.save(input, deps.signal));
-	const stored = await kb.read(saved.id, deps.signal);
-	if (stored.cuerpo !== prepared.body || stored.producto !== key.product) throw new Error("La KB guardó otro contenido; revisá las perillas antes de seguir.");
-	const latest = await kb.currentPerillas(key.product, deps.signal);
-	const hash = foundationsHash(block);
-	const record: TrustRecord = await readTrust(deps.trustDir, key) ?? { version: 1, ...key, accepted: null, offerDeclined: false };
-	await writeTrust(deps.trustDir, { ...record, accepted: { docId: stored.id, blockHash: hash, block, author: stored.autor ?? "", date: stored.fecha ?? "", acceptedAt: deps.now() } });
-	return {
-		origin: "kb", block, hash, docId: stored.id, author: stored.autor ?? "", date: stored.fecha ?? "",
-		notice: latest?.id === stored.id ? "" : "La KB guardó Foundations, pero ya hay perillas más nuevas: la próxima sesión muestra la diferencia.",
-		reading: { kind: "valid", key, block, hash, perillas: stored },
-	};
 }
 
 /** Cada tanda del creador, con el progreso en espera como cualquier otra decisión del harness. */
@@ -95,5 +67,5 @@ export async function offerFoundations(ctx: ExtensionContext, session: Developme
 			ctx.ui.notify(`Foundations guardado en la KB (perillas ${next.docId?.slice(0, 8)}) y aceptado para esta sesión.${next.notice ? ` ${next.notice}` : ""}`, "info");
 			return;
 		}
-	} catch (error) { ctx.ui.notify(`Foundations no se guardó: ${error instanceof Error ? error.message : "error"}`, "warning"); }
+	} catch (error) { ctx.ui.notify(`No se pudo completar Foundations: ${error instanceof Error ? error.message : "error"}`, "warning"); }
 }

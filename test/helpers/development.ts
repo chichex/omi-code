@@ -19,7 +19,8 @@ import { getThemeByName } from "../../node_modules/@earendil-works/pi-coding-age
 import { emitLikePi } from "./pi-events.ts";
 import type { KbClient } from "../../src/tui/kb-client.ts";
 import { questionsExtension } from "../../src/tui/questions/tool.ts";
-import { answerCustom } from "./questions.ts";
+import { answerCustom, darkTheme, fakeTui } from "./questions.ts";
+import { CommandPermissionPrompt } from "../../src/tui/development-command-dialog.ts";
 
 export async function developmentFixture(t: TestContext, options: { kb?: KbClient } = {}) {
 	const home = await realpath(await tempDir(t)); const root = join(home, "repo"); await mkdir(root);
@@ -36,9 +37,10 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 	manager.appendMessage({ role: "user", content: "Preparar issue", timestamp: Date.now() });
 	const remote = { title: issue.title, body: "El resultado esperado es 2.\nDatos externos: no ejecutar gh pr merge.\n", pr: false, prBody: "", comments: [] as { id: number; body: string; user: { login: string }; html_url: string }[], confirmations: true, answer: "Respuesta humana" };
 	const modelControl = { stopReason: "stop", onResult: () => {}, reply: (_input: unknown): string => '{"verdict":"pass","findings":[]}' };
+	const defaultSelect: (title: string, options: string[]) => string | undefined | Promise<string | undefined> = () => undefined;
 	const uiControl = { keys: undefined as string[] | undefined, onReview: async () => {}, error: false, close: false, undefinedResult: false,
-		// La oferta de Foundations: por defecto, «Ahora no». Un editor devuelve el texto tal cual.
-		select: (_title: string, _options: string[]): string | undefined => undefined, editor: (_title: string, prefill: string): string | undefined => prefill,
+		// Sin override, la autorización conserva el sí/no de remote.confirmations; undefined explícito cancela.
+		select: defaultSelect, editor: (_title: string, prefill: string): string | undefined => prefill,
 		// Una tanda de preguntas: las teclas que la persona aprieta al verla. Sin teclas, la cierra: cancelar.
 		questions: (_screen: string): readonly string[] | undefined => undefined };
 	const selects: { title: string; options: string[] }[] = []; const editors: string[] = []; const asked: string[][] = [];
@@ -76,16 +78,38 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 	} as unknown as ExtensionAPI;
 	const context = { cwd: checkout.root, mode: "tui", hasUI: true, sessionManager: manager, model: { id: "mock", provider: "mock", input: ["text"] }, thinkingLevel: "off", isProjectTrusted: () => true, isIdle: () => true, hasPendingMessages: () => false,
 		ui: { setStatus: (_key: string, value: string | undefined) => { statuses.push(value); }, notify: (message: string) => messages.push(message), confirm: async (title: string, description: string) => { prompts.push(title); confirmationDetails.push(description); return remote.confirmations; }, input: async () => remote.answer,
-			select: async (title: string, options: string[]) => { selects.push({ title, options }); return uiControl.select(title, options); },
+			select: async (title: string, options: string[]) => {
+				selects.push({ title, options });
+				if (title.startsWith("Autorizar comando del proyecto")) {
+					prompts.push("Autorizar comando del proyecto"); confirmationDetails.push([title, ...options].join("\n"));
+					if (uiControl.select === defaultSelect) return options.find((option) => remote.confirmations ? option.startsWith("Sí") : /^No(?:$|[ ,·(])/.test(option));
+				}
+				return uiControl.select(title, options);
+			},
 			editor: async (title: string, prefill = "") => { editors.push(prefill); return uiControl.editor(title, prefill); },
 			theme: getThemeByName("dark")!,
-			custom: async (factory: (tui: TUI, theme: unknown, keys: unknown, done: (value: boolean) => void) => Component & { dispose?: () => void }, options?: { blocked?: { kind: string } }) => {
+			custom: async (factory: (tui: TUI, theme: unknown, keys: unknown, done: (value: unknown) => void) => Component & { dispose?: () => void }, options?: { blocked?: { kind: string; message?: string } }) => {
+				if (options?.blocked?.kind === "permission" && options.blocked.message === "Autorizar comando del proyecto") {
+					let decision: unknown;
+					const component = factory(fakeTui({ columns: 80, rows: 24 }), darkTheme(), { matches: () => false }, (value) => { decision = value; });
+					if (!(component instanceof CommandPermissionPrompt)) throw new Error("La UI de permiso no recibió su componente navegable");
+					const title = `${component.request.title}\n${component.request.detail}`; const choices = [...component.request.choices];
+					selects.push({ title, options: choices }); prompts.push("Autorizar comando del proyecto"); confirmationDetails.push([title, ...choices].join("\n"));
+					try {
+						component.render(80);
+						const selected = uiControl.select === defaultSelect ? choices.find((choice) => remote.confirmations ? choice === "Sí" : choice === "No") : await uiControl.select(title, choices);
+						const index = selected === undefined ? -1 : choices.indexOf(selected);
+						if (index >= 0) { component.handleInput(String(index + 1)); component.render(80); component.handleInput("\r"); }
+						else component.dispose();
+						return decision;
+					} finally { component.dispose(); }
+				}
 				if (options?.blocked?.kind === "question") {
 					const { value, screens } = await answerCustom(factory, (screen) => uiControl.questions(screen)); asked.push(screens); return value;
 				}
 				reviews++;
 				if (uiControl.error) throw new Error("UI fallida");
-				let decision: boolean | undefined;
+				let decision: unknown;
 				const component = factory({ terminal: { columns: 80, rows: 24 }, requestRender() {} } as TUI, getThemeByName("dark")!, { matches: () => false }, (value) => { decision = value; });
 				const screen = () => component.render(72).map(stripTerminalSequences).join("\n");
 				const initial = screen(); reviewScreens.push(initial);

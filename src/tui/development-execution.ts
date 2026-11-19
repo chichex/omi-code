@@ -5,15 +5,18 @@ import { dirname, relative } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isInside } from "../core/files.ts";
 import type { Evidence, EvidenceKind } from "../harness/model.ts";
-import { commandAuthorization, grantKey } from "../harness/authorization.ts";
+import { commandAuthorization } from "../harness/authorization.ts";
 import { expectedFailure, isApproved, recipeApprovalHash, successful } from "../harness/state.ts";
 import { inspectCheckout, assertStepCommit } from "../harness/git.ts";
 import { runWorkflowCommand, type WorkflowCommandResult } from "../harness/commands.ts";
 import { workflowWritePath } from "../harness/permissions.ts";
 import type { DevelopmentSession } from "./development-session.ts";
+import { authorizeProjectCommand } from "./development-command-authorization.ts";
 
 export interface CheckInput { kind: EvidenceKind | "setup"; command: string; stepId?: string; caseId?: string; timeoutSeconds?: number }
 export async function executeCheck(session: DevelopmentSession, input: CheckInput, ctx: ExtensionContext, signal: AbortSignal, run = runWorkflowCommand): Promise<Evidence | { setup: WorkflowCommandResult }> {
+	signal = AbortSignal.any([signal, session.lifecycle.signal]);
+	signal.throwIfAborted();
 	const state = session.current(ctx);
 	if (state.status === "paused" || state.status === "complete") throw new Error("El trabajo no está activo");
 	if (input.kind === "reproduction") {
@@ -30,12 +33,12 @@ export async function executeCheck(session: DevelopmentSession, input: CheckInpu
 		if (input.kind === "green" && (!red || red.command !== input.command)) throw new Error("El verde debe ejecutar el mismo comando que el rojo observado");
 	}
 	if (input.kind === "verification" && !state.recipe?.cases.some((c) => c.id === input.caseId && c.command === input.command)) throw new Error("La verificación debe usar el caso D y comando exactos de la receta aprobada");
-	// La etiqueta no pide otro sí: un D aprobado corre igual como setup, y un permiso se guarda en el trabajo.
-	if (commandAuthorization(state, input.command, (await session.foundations.policy(ctx, state)).command) === "ask") {
-		if (!(await session.confirm(ctx, "Autorizar comando del proyecto", `${input.kind} · ${state.checkout.root}\n\n${input.command}\n\nEjecuta código del proyecto con permisos de tu usuario. No es una operación de sólo lectura ni un sandbox. No autoriza otros comandos. El permiso queda guardado para este trabajo, también al retomarlo, hasta que cambie el pedido.`))) throw new Error("Comando no autorizado; no se ejecutó");
-		await session.apply({ type: "command_granted", key: grantKey(state, input.command), command: input.command }, ctx);
-	}
+	// La etiqueta no pide otro sí: un D aprobado corre igual como setup. Sólo la persona puede ampliar el catálogo.
+	const authorized = commandAuthorization(state, input.command, (await session.foundations.policy(ctx, state)).command) === "ask"
+		? await authorizeProjectCommand(session, ctx, { state, command: input.command, kind: input.kind, signal }) : state;
 	const before = await inspectCheckout(state.checkout, session.runner, signal);
+	await session.assertUnchanged(authorized, ctx);
+	signal.throwIfAborted();
 	const startedAt = session.now(); session.emit(`${input.kind} · ${input.caseId ?? input.stepId ?? "comando"} · ${input.command}`);
 	const result = await run(state.checkout, input.command, signal, input.timeoutSeconds);
 	const after = await inspectCheckout(state.checkout, session.runner, session.lifecycle.signal);

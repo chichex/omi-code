@@ -6,11 +6,12 @@ import { resolve } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Runner } from "../core/exec.ts";
 import type { Workflow } from "../harness/model.ts";
-import { foundationsDiff, parseFoundations, POLICY_LABELS, STRICT_POLICY, visibleText, type FoundationsBlock, type FoundationsPolicy, type PolicyPoint } from "../harness/foundations.ts";
+import { checkBlock, commandProblem, foundationsDiff, foundationsHash, parseFoundations, POLICY_LABELS, STRICT_POLICY, visibleText, type FoundationsBlock, type FoundationsPolicy, type PolicyPoint } from "../harness/foundations.ts";
 import { readTrust, writeTrust, type TrustKey, type TrustRecord } from "../harness/foundations-trust.ts";
 import type { CommandPolicy } from "../harness/authorization.ts";
 import type { KbClient, KbDoc } from "./kb-client.ts";
 import { HARNESS_KB_URL } from "./defaults.ts";
+import { commitFoundationsSave, prepareFoundationsSave } from "./development-foundations-save.ts";
 
 const READ_TIMEOUT_MS = 30_000;
 const MAX_SESSIONS = 50;
@@ -142,4 +143,29 @@ export class FoundationsGate {
 	/** Una persona armó Foundations en esta sesión: es su propio sí, no un cambio externo. */
 	replace(ctx: ExtensionContext, pin: FoundationsPin): void { const file = this.file(ctx); const entry = file && sessions.get(file); if (entry) entry.pin = pin; }
 	async policy(ctx: ExtensionContext, state?: Workflow): Promise<ReturnType<typeof effectivePolicy>> { return effectivePolicy(await this.pin(ctx), state); }
+	/** La persona eligió guardar este comando, no aceptar cambios ajenos en comandos o políticas. No reemplaza el pin. */
+	async saveCommand(ctx: ExtensionContext, state: Workflow, command: string, signal: AbortSignal, beforeAccept: () => Promise<void>): Promise<FoundationsPin> {
+		signal.throwIfAborted();
+		const problem = commandProblem(command);
+		if (problem) throw new Error(`Comando inválido para Foundations: ${problem}`);
+		const kb = this.deps.kb;
+		if (!kb) throw new Error("No se puede guardar el permiso permanente: KB no disponible.");
+		const pin = await this.pin(ctx);
+		const fresh = await readFoundations(kb, state.checkout.root, this.deps.runner, signal);
+		signal.throwIfAborted();
+		if (fresh.kind === "none" || fresh.kind === "unavailable") throw new Error(`No se puede guardar el permiso en la KB: ${fresh.reason}`);
+		if (fresh.kind === "invalid") throw new Error(`Foundations inválido en la KB: ${fresh.reason}`);
+		const key = fresh.key;
+		if (issueRepo(state.source.url) !== key.repo || pin.reading.kind === "none" || pin.reading.key.repo !== key.repo || pin.reading.key.product !== key.product || pin.reading.key.kbUrl !== key.kbUrl) throw new Error("Cambió la identidad de origin/KB/producto/repo respecto del trabajo o del pin; no se guardó el permiso.");
+		const expectedHash = pin.block ? foundationsHash(pin.block) : null;
+		if ((fresh.kind === "valid" ? fresh.hash : null) !== expectedHash) throw new Error("La revisión de Foundations cambió respecto de la aceptada en esta sesión. Revisala en una sesión nueva antes de guardar el comando.");
+		const base: FoundationsBlock = fresh.kind === "valid" ? fresh.block : { version: 1, repo: key.repo, comandos: [], politica: { ...STRICT_POLICY } };
+		const block = { ...base, comandos: [...new Set([...base.comandos, command])] };
+		const checked = checkBlock(block);
+		if ("reason" in checked) throw new Error(`No se puede agregar el comando al catálogo de Foundations: ${checked.reason}`);
+		// También verifica la expectativa sobre la relectura que realmente se usa para componer.
+		const prepared = await prepareFoundationsSave(kb, key, checked.block, signal, expectedHash);
+		await beforeAccept();
+		return commitFoundationsSave(kb, key, checked.block, prepared, { trustDir: this.deps.trustDir, now: this.deps.now, signal, requireLatest: true, beforeAccept });
+	}
 }
