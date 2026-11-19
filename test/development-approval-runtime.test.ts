@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { tempDir } from "./helpers/io.ts";
+import { acceptFoundations, ASK_ALL } from "./helpers/foundations.ts";
 
 const driver = String.raw`
 import fcntl, os, pty, re, select, signal, struct, sys, termios, time
@@ -62,6 +63,8 @@ for (const appearance of ["dark", "light"] as const) test(`approval_runtime: rev
 	const home = await realpath(await tempDir(t)); const root = join(home, "repo"); const agent = join(home, ".omi/agent"); await mkdir(root); await mkdir(agent, { recursive: true });
 	const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 	git("init", "-b", "main"); git("config", "user.name", "Test"); git("config", "user.email", "test@example.test");
+	// Sin Foundations la receta se aprueba sola: receta ask, aceptada localmente, para abrir la revisión.
+	git("remote", "add", "origin", "https://github.com/test/repo.git"); await acceptFoundations(join(agent, "foundations"), ASK_ALL);
 	await writeFile(join(root, "value.txt"), "initial\n"); git("add", "."); git("-c", "commit.gpgsign=false", "commit", "-m", "test: initial"); git("checkout", "-b", "improve/probe");
 	await writeFile(join(agent, "models.json"), JSON.stringify({ providers: { mock: { baseUrl: "http://127.0.0.1:9/v1", api: "openai-completions", apiKey: "test-not-a-key", models: [{ id: "probe", name: "Probe", contextWindow: 10000, maxTokens: 1024 }] } } }));
 	const extension = join(home, "probe.ts"); const framesPath = join(home, "frames.jsonl"); const resultsPath = join(home, "results.jsonl");

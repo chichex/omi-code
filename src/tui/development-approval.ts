@@ -14,7 +14,7 @@ const LENSES: Record<Lens, string> = { quality: "Calidad", reliability: "Confiab
 const line = (text: string): ApprovalLine => ({ kind: "text", text });
 const heading = (text: string): ApprovalLine => ({ kind: "heading", text });
 const bullets = (values: string[]): ApprovalLine[] => values.length ? values.map((v) => line(`• ${v}`)) : [line("Ninguno declarado.")];
-export const APPROVAL_AUTHORIZATION = "Autoriza implementar estos pasos, commits locales y comandos exactos de los casos D sin volver a preguntar, con cualquier etiqueta. La receta queda en la sección del harness al final del cuerpo del issue; el pedido de arriba no se toca. No autoriza push, merge, workflows ni deploy. Otros comandos, también de setup, piden permiso una vez por trabajo, salvo los del catálogo de Foundations.";
+export const APPROVAL_AUTHORIZATION = "Autoriza implementar estos pasos, commits locales y comandos exactos de los casos D sin volver a preguntar, con cualquier etiqueta. La receta queda en la sección del harness al final del cuerpo del issue; el pedido de arriba no se toca. No autoriza push, merge, workflows ni deploy. Otros comandos, también de setup, piden permiso una vez por trabajo sólo si Foundations dice fuera_de_catalogo: ask, salvo los del catálogo de Foundations.";
 
 // Escapes visibles y reversibles: jamás interpretar controles/ANSI/bidi de datos externos.
 // Los saltos lógicos se conservan. El backslash se duplica para distinguirlo de un escape.

@@ -5,13 +5,15 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { commandAuthorization } from "../src/harness/authorization.ts";
-import { MAX_COMMANDS, STRICT_POLICY, parseFoundations, renderFoundationsBlock } from "../src/harness/foundations.ts";
+import { DEFAULT_POLICY, MAX_COMMANDS, STRICT_POLICY, parseFoundations, renderFoundationsBlock } from "../src/harness/foundations.ts";
+import { ASK_ALL } from "./helpers/foundations.ts";
 import { foundationsDir, trustPath, writeTrust, type TrustRecord } from "../src/harness/foundations-trust.ts";
 import { commitFoundationsSave, prepareFoundationsSave } from "../src/tui/development-foundations-save.ts";
 import { FoundationsGate, decideFoundations, effectivePolicy, readFoundations } from "../src/tui/development-foundations.ts";
 import { COMMAND, HUMAN, KNOWN, REPO, accepted, authorizations, block, choose, commandFixture, key, noPermissionAdded, saves } from "./helpers/command-permissions.ts";
 
 const OTHER = 'node -e "process.exitCode = 0"';
+const APPLIED = /Foundations: se aplica la revisión nueva/;
 
 for (const reason of [undefined, new DOMException("Se agotó el tiempo de guardado", "TimeoutError")]) test(`command_catalog: ${reason ? "timeout" : "aborto"} durante la aceptación completada informa el permiso durable`, async (t) => {
 	const f = await commandFixture(t); const controller = new AbortController(); let writes = 0;
@@ -28,6 +30,7 @@ for (const reason of [undefined, new DOMException("Se agotó el tiempo de guarda
 	assert.deepEqual(f.executed, []); assert.deepEqual((await f.state()).grants ?? [], []);
 });
 
+// Sin bloque no hay diálogo (nada pregunta): la ausencia se prueba guardando directo, como haría el diálogo.
 for (const missing of [false, true]) test(`command_catalog: la revisión usada para componer también debe coincidir con el pin (${missing ? "ausencia" : "bloque"})`, async (t) => {
 	const f = await commandFixture(t, missing ? { body: null } : {}); choose(f, "always");
 	const previous = await accepted(f); const current = f.kb.currentPerillas.bind(f.kb); let reads = 0;
@@ -35,7 +38,7 @@ for (const missing of [false, true]) test(`command_catalog: la revisión usada p
 		if (++reads === 2) f.kb.perillas("repo", `${HUMAN}\n${renderFoundationsBlock(block([KNOWN, OTHER]))}\n`);
 		return current(product, signal);
 	};
-	await assert.rejects(f.check(), /cambi|revisi|Foundations|concurr/i);
+	await assert.rejects(missing ? f.save() : f.check(), /cambi|revisi|Foundations|concurr/i);
 	assert.equal(saves(f).length, 0); await noPermissionAdded(f); assert.deepEqual(await accepted(f), previous);
 	const remote = parseFoundations(f.kb.documents.at(-1)!.cuerpo, REPO);
 	assert.equal(remote.status, "valid"); assert.ok(remote.status === "valid");
@@ -51,33 +54,35 @@ test("command_catalog: la desaparición de un bloque aceptado no habilita recons
 
 test("command_catalog: una sesión nueva sin cache y otro trabajo del mismo repo usan el permiso sin preguntar", async (t) => {
 	const f = await commandFixture(t); choose(f, "always"); await f.check();
-	const confirmations: string[] = [];
+	const applied = () => f.messages.filter((message) => APPLIED.test(message)).length; const before = applied();
 	const ctx = { ...f.context, sessionManager: SessionManager.create(f.checkout.root, join(f.home, "new-sessions")) };
 	assert.notEqual(ctx.sessionManager.getSessionFile(), f.manager.getSessionFile(), "no reutiliza el pin cacheado por archivo de sesión");
-	const gate = new FoundationsGate({ kb: f.kb, runner: f.runner, trustDir: foundationsDir(f.home), now: () => "2026-11-19T00:00:00Z", confirm: async (_ctx, title) => { confirmations.push(title); return false; } });
+	const gate = new FoundationsGate({ kb: f.kb, runner: f.runner, trustDir: foundationsDir(f.home), now: () => "2026-11-19T00:00:00Z" });
 	const first = await f.state();
 	const otherWork = { ...first, id: "otro-trabajo", source: { ...first.source, number: 43, url: "https://github.com/test/repo/issues/43" }, grants: [] };
 	const policy = await gate.policy(ctx, otherWork);
 	assert.equal(commandAuthorization(otherWork, COMMAND, policy.command), "catalog");
-	assert.deepEqual(confirmations, [], "la aceptación durable evita otro diálogo en otra sesión/trabajo");
+	assert.equal(applied(), before, "la aceptación durable evita otro aviso en otra sesión/trabajo");
 	assert.equal(gate.current(ctx)?.docId, f.kb.documents.at(-1)!.id);
 	assert.equal(authorizations(f).length, 1); assert.equal(saves(f).length, 1);
 	// La lectura y decisión sin Gate simulan además un proceso sin ningún cache en memoria.
 	const reading = await readFoundations(f.kb, ctx.cwd, f.runner, AbortSignal.timeout(5000));
-	const pin = await decideFoundations(reading, ctx, { trustDir: foundationsDir(f.home), now: () => "2026-11-19T00:00:01Z", confirm: async () => { assert.fail("la revisión aceptada no vuelve a preguntar sin cache"); } });
-	assert.ok(pin.block?.comandos.includes(COMMAND)); assert.deepEqual(confirmations, []);
+	const pin = await decideFoundations(reading, ctx, { trustDir: foundationsDir(f.home), now: () => "2026-11-19T00:00:01Z" });
+	assert.ok(pin.block?.comandos.includes(COMMAND)); assert.equal(applied(), before, "la revisión aceptada no vuelve a avisar sin cache");
 });
 
 test("command_catalog: otro owner/repo con el mismo producto no hereda catálogo ni aceptación local", async (t) => {
 	const f = await commandFixture(t); choose(f, "always"); await f.check();
 	const ctx = { ...f.context, sessionManager: SessionManager.create(f.checkout.root, join(f.home, "foreign-sessions")) };
 	const runner = { run: async (...args: Parameters<typeof f.runner.run>) => args[0] === "git" && args[1].join(" ") === "remote get-url origin" ? { code: 0, stdout: "https://github.com/acme/repo.git\n", stderr: "" } : f.runner.run(...args) };
-	const gate = new FoundationsGate({ kb: f.kb, runner, trustDir: foundationsDir(f.home), now: () => "2026-11-19T00:00:00Z", confirm: async () => { assert.fail("no hay revisión de acme/repo para aceptar"); } });
+	const gate = new FoundationsGate({ kb: f.kb, runner, trustDir: foundationsDir(f.home), now: () => "2026-11-19T00:00:00Z" });
 	const state = await f.state(); const foreign = { ...state, source: { ...state.source, url: "https://github.com/acme/repo/issues/42" }, grants: [] };
+	const before = f.messages.filter((message) => APPLIED.test(message)).length;
 	const policy = await gate.policy(ctx, foreign);
-	assert.deepEqual(policy.command, { catalog: [], outside: "ask" });
-	assert.equal(commandAuthorization(foreign, COMMAND, policy.command), "ask");
-	assert.equal(gate.current(ctx)?.origin, "strict");
+	assert.deepEqual(policy.command, { catalog: [], outside: "auto" }, "sin catálogo heredado: vale el default");
+	assert.equal(commandAuthorization(foreign, COMMAND, policy.command), "auto");
+	assert.equal(gate.current(ctx)?.origin, "default");
+	assert.equal(f.messages.filter((message) => APPLIED.test(message)).length, before, "no hay revisión de acme/repo para aceptar");
 	assert.deepEqual(effectivePolicy(f.session.foundations.current(f.context), foreign).command.catalog, [], "tampoco alcanza arrastrar el pin del otro repo");
 });
 
@@ -108,14 +113,17 @@ test("command_catalog: una edición ajena fuera de Foundations se relee y se con
 	assert.equal(saves(f).length, 1); assert.deepEqual(f.executed, [COMMAND]);
 });
 
-for (const body of [null, `${HUMAN}\n${renderFoundationsBlock(block(["npm test"], { repo: "acme/repo" }))}\n`]) test(`command_catalog: sin bloque del repo crea sólo su comando y política estricta (${body === null ? "sin perillas" : "otro bloque"})`, async (t) => {
-	const f = await commandFixture(t, { body }); choose(f, "always"); await f.check();
+// Sin bloque no hay diálogo (nada pregunta): se guarda directo. Sumar un comando no cambia las políticas que valían.
+for (const body of [null, `${HUMAN}\n${renderFoundationsBlock(block(["npm test"], { repo: "acme/repo" }))}\n`]) test(`command_catalog: sin bloque del repo crea sólo su comando con las políticas del default (${body === null ? "sin perillas" : "otro bloque"})`, async (t) => {
+	const f = await commandFixture(t, { body }); await f.save();
 	const stored = f.kb.documents.at(-1)!; const result = parseFoundations(stored.cuerpo, REPO);
 	assert.equal(result.status, "valid"); assert.ok(result.status === "valid");
-	assert.deepEqual(result.block, block([COMMAND]));
+	assert.deepEqual(result.block, block([COMMAND], { politica: { ...DEFAULT_POLICY } }));
 	if (body !== null) assert.ok(stored.cuerpo.startsWith(body), "no toca el otro bloque");
 	else assert.ok(stored.cuerpo.startsWith("# Perillas de repo\n\n"));
-	assert.equal((await accepted(f))?.accepted?.docId, stored.id); assert.deepEqual(f.executed, [COMMAND]);
+	assert.equal((await accepted(f))?.accepted?.docId, stored.id);
+	await f.check();
+	assert.deepEqual(f.executed, [COMMAND]); assert.equal(authorizations(f).length, 0, "sin diálogo");
 });
 
 test("command_catalog: un bloque distinto del pin no acepta silenciosamente nuevos comandos ni políticas", async (t) => {
@@ -141,7 +149,8 @@ test("command_catalog: detecta una revisión posterior durante la verificación,
 });
 
 for (const failure of ["offline", "missing-product", "without-kb"] as const) test(`command_catalog: ${failure} no crea permisos ni productos de modo implícito`, async (t) => {
-	const f = await commandFixture(t, failure === "without-kb" ? { withoutKb: true } : {}); choose(f, "always");
+	// Sin KB y sin aceptada no hay diálogo: el ask aceptado localmente es el que lo abre.
+	const f = await commandFixture(t, failure === "without-kb" ? { withoutKb: true, foundations: ASK_ALL } : {}); choose(f, "always");
 	if (failure === "offline") f.kb.available = "sin conexión a la KB";
 	if (failure === "missing-product") f.kb.access = ["otro"];
 	await assert.rejects(f.check(), /KB|producto|acceso|disponible|conexión/i);
@@ -158,7 +167,8 @@ test("command_catalog: un origin distinto del repo del issue no permite guardar 
 });
 
 for (const body of ["```omi-foundations\n{ roto\n```\n", `${renderFoundationsBlock(block())}\n${renderFoundationsBlock(block())}\n`]) test("command_catalog: un bloque inválido o ambiguo no se sobrescribe para conceder el permiso", async (t) => {
-	const f = await commandFixture(t, { body }); choose(f, "always");
+	// Un bloque inválido no vale: sin una revisión aceptada no habría diálogo. Con el ask aceptado, sí.
+	const f = await commandFixture(t, { body, foundations: ASK_ALL }); choose(f, "always");
 	await assert.rejects(f.check(), /inválid|Foundations|bloque/i);
 	assert.equal(saves(f).length, 0); assert.equal(f.kb.documents.at(-1)!.cuerpo, body); await noPermissionAdded(f);
 });

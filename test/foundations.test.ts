@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { checkBlock, composePerillas, foundationsDiff, foundationsHash, parseFoundations, readFoundationsText, renderFoundationsBlock, STRICT_POLICY, type FoundationsBlock } from "../src/harness/foundations.ts";
+import { AUTO_WARNINGS, checkBlock, composePerillas, DEFAULT_POLICY, foundationsDiff, foundationsHash, parseFoundations, readFoundationsText, renderFoundationsBlock, STRICT_POLICY, type FoundationsBlock } from "../src/harness/foundations.ts";
 
 const REPO = "chichex/omi-code";
 const block = (overrides: Partial<FoundationsBlock> = {}): FoundationsBlock => ({ version: 1, repo: REPO, comandos: ["npm ci", "npm run typecheck", "npm test"], politica: { arranque: "ask", receta: "ask", fuera_de_catalogo: "ask", push_pr: "ask" }, ...overrides });
@@ -95,12 +95,21 @@ test("foundations: la diferencia muestra comandos agregados, quitados y avisos d
 	assert.match(text, /push \+ PR draft: ask → auto .*sin preguntar/);
 });
 
-test("foundations: sin revisión aceptada la diferencia parte de la política estricta", () => {
+test("foundations: sin revisión aceptada la diferencia parte del default: todo auto", () => {
 	const text = foundationsDiff(undefined, block(), { product: "omi-code", kbUrl: "https://kb.example.test/mcp" });
-	assert.match(text, /Antes: política estricta/);
+	assert.match(text, /Antes: sin Foundations \(por defecto: todo auto\)/);
+	assert.doesNotMatch(text, /estricta|todo pregunta/);
 	for (const command of block().comandos) assert.match(text, new RegExp(`^  \\+ ${command}$`, "m"));
-	assert.match(text, /^ {2}arranque: ask$/m);
-	assert.deepEqual(STRICT_POLICY, { arranque: "ask", receta: "ask", fuera_de_catalogo: "ask", push_pr: "ask" });
+	assert.match(text, /^ {2}arranque: auto → ask$/m);
+	assert.match(foundationsDiff(undefined, block({ politica: { ...block().politica, receta: "auto" } }), { product: "omi-code", kbUrl: "https://kb.example.test/mcp" }), /^ {2}receta: auto {3}⚠ /m, "un auto igual al default no muestra flecha");
+	assert.deepEqual(DEFAULT_POLICY, { arranque: "auto", receta: "auto", fuera_de_catalogo: "auto", push_pr: "auto" });
+	assert.deepEqual(STRICT_POLICY, { arranque: "ask", receta: "ask", fuera_de_catalogo: "ask", push_pr: "ask" }, "lo que propone el creador de Foundations");
+});
+
+test("foundations: el aviso de receta auto dice que sus comandos corren sin preguntar", () => {
+	assert.match(AUTO_WARNINGS.receta, /aprueba su propia receta/);
+	assert.match(AUTO_WARNINGS.receta, /sus comandos corren sin preguntar/);
+	assert.doesNotMatch(AUTO_WARNINGS.receta, /siguen la política de fuera del catálogo/);
 });
 
 test("foundations: la diferencia escapa controles de los datos de la KB", () => {

@@ -7,6 +7,7 @@ import { delimiter, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { tempDir } from "./helpers/io.ts";
+import { acceptFoundations, ASK_ALL } from "./helpers/foundations.ts";
 import { plainTerminal } from "./helpers/workspace-pty.ts";
 
 // Camino del agente en Pi real: un pedido en el chat, la tool, el sí, el issue nuevo y el harness en su worktree.
@@ -57,6 +58,8 @@ for (const mode of ["harness", "chat", "needs-info"] as const) test(`development
 	for (const path of [root, agent, bin]) await mkdir(path, { recursive: true });
 	const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 	git("init", "-b", "main"); git("config", "user.email", "test@example.test"); git("config", "user.name", "Test");
+	// Sin Foundations el arranque no pregunta: arranque ask, aceptado localmente, para probar el sí.
+	git("remote", "add", "origin", "https://github.com/test/repo.git"); await acceptFoundations(join(agent, "foundations"), ASK_ALL);
 	await writeFile(join(root, "main.txt"), "MAIN\n"); git("add", "."); git("-c", "commit.gpgsign=false", "commit", "-m", "main"); const main = git("rev-parse", "main");
 	const created = join(home, "created.json"); const confirmed = join(home, "confirmed"); const ready = join(home, "ready"); const reply = join(home, "reply");
 	await writeFile(join(bin, "gh"), `#!${process.execPath}

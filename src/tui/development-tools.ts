@@ -52,7 +52,7 @@ async function currentExploration(session: DevelopmentSession, ctx: ExtensionCon
 export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentSession): void {
 	pi.registerTool({
 		name: "omi_workflow", label: "Desarrollo: flujo", defaultActive: false, exposure: "model-only", executionMode: "sequential", parameters: ActionSchema,
-		description: "Avanza el harness de desarrollo activo. Explorar, resolver inferencias, receta, diagnóstico/spec, aprobación humana, pasos, verificar y PR draft. No acepta evidencia ni aprobaciones declaradas por el modelo. status consulta; pause bloquea. stack actualiza un stack de PRs publicado (merge y push normal, con permiso). agreed registra un acuerdo de alcance dicho por la persona en el chat, con la cita textual de su mensaje (OMI la verifica). start/resume son comandos humanos /omi-work.",
+		description: "Avanza el harness de desarrollo activo. Explorar, resolver inferencias, receta, diagnóstico/spec, aprobación (humana o de Foundations), pasos, verificar y PR draft. No acepta evidencia ni aprobaciones declaradas por el modelo. status consulta; pause bloquea. stack actualiza un stack de PRs publicado (merge y push normal; pide el sí sólo con push_pr: ask). agreed registra un acuerdo de alcance dicho por la persona en el chat, con la cita textual de su mensaje (OMI la verifica). start/resume son comandos humanos /omi-work.",
 		promptSnippet: "Registrar el trabajo de desarrollo y su receta; pedir decisiones y permisos humanos",
 		async execute(_id, input, signal, _onUpdate, ctx) {
 			if (input.action === "status") return result(session);
@@ -93,10 +93,13 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 				}
 				case "retry": await session.apply({ type: "retry", reason: checked(text(), input.reason) }, ctx); break;
 				case "pause": await session.apply({ type: "pause", reason: checked(text(), input.reason) }, ctx); terminate = true; break;
-				case "refresh":
-					// Descarta aprobación y evidencia: el modelo lo propone, la persona lo confirma.
-					if (!(await session.confirm(ctx, "Volver a explorar", "Se descartan exploración, receta, aprobación, pasos y evidencia de este trabajo, y los comandos autorizados. No borra archivos ni commits."))) { terminate = true; break; }
+				case "refresh": {
+					// Descarta aprobación y evidencia: el modelo lo propone; con receta: ask, la persona lo confirma.
+					const discards = "Se descartan exploración, receta, aprobación, pasos y evidencia de este trabajo, y los comandos autorizados. No borra archivos ni commits.";
+					if ((await session.foundations.policy(ctx, session.current(ctx))).politica.receta === "auto") ctx.ui.notify(`Foundations · receta auto: vuelve a explorar sin preguntar. ${discards}`, "info");
+					else if (!(await session.confirm(ctx, "Volver a explorar", discards))) { terminate = true; break; }
 					await session.refresh(ctx); break;
+				}
 				case "publish": await session.publish(ctx); terminate = true; break;
 				case "stack": await syncWorkStack(session, ctx); terminate = true; break;
 				case "agreed": note = await registerAgreement(session, { quote: checked(text(2000), input.quote), summary: checked(text(2000), input.agreement), replan: input.replan === true }, ctx); break;
@@ -108,7 +111,7 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 	});
 	pi.registerTool({
 		name: "omi_workflow_check", label: "Desarrollo: ejecutar prueba", defaultActive: false, executionMode: "sequential", parameters: CheckSchema,
-		description: "Ejecuta un comando en el checkout del trabajo y registra salida/exit real para reproducción, rojo, verde o casos D. setup prepara el checkout (por ejemplo, instalar dependencias) en cualquier etapa activa y no acredita pruebas. Los comandos del catálogo de Foundations y los D de una receta aprobada por una persona corren sin preguntar; otro comando pide autorización humana. Salida limitada a 12.000 caracteres. No es sandbox.",
+		description: "Ejecuta un comando en el checkout del trabajo y registra salida/exit real para reproducción, rojo, verde o casos D. setup prepara el checkout (por ejemplo, instalar dependencias) en cualquier etapa activa y no acredita pruebas. Los comandos del catálogo de Foundations y los D de la receta aprobada corren sin preguntar; otro comando pide autorización humana sólo si Foundations dice fuera_de_catalogo: ask. Salida limitada a 12.000 caracteres. No es sandbox.",
 		async execute(_id, input, signal, _update, ctx) {
 			const observation = await executeCheck(session, input, ctx, AbortSignal.any([signal ?? new AbortController().signal, session.lifecycle.signal]));
 			if ("setup" in observation) return { content: [{ type: "text", text: `Comando auxiliar; no acredita pruebas ni casos.\n${JSON.stringify(observation.setup)}` }], details: { setup: observation.setup }, isError: observation.setup.interrupted || observation.setup.exitCode !== 0 };

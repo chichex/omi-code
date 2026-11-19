@@ -6,6 +6,8 @@ import { developmentFixture } from "./helpers/development.ts";
 import { beginFixture } from "./helpers/development-begin.ts";
 import { memoryKb } from "./helpers/mock-kb.ts";
 import { effectivePolicy } from "../src/tui/development-foundations.ts";
+import { DEFAULT_POLICY } from "../src/harness/foundations.ts";
+import { foundationsDir, readTrust } from "../src/harness/foundations-trust.ts";
 
 const AUTHORIZE = "Autorizar comando del proyecto";
 const OK = "node -e \"process.exit(0)\"";
@@ -42,9 +44,10 @@ test("foundations_policy: fuera del catálogo con ask pregunta una vez y queda g
 
 test("foundations_policy: fuera del catálogo con auto no pregunta", async (t) => {
 	const f = await fixture(t, block([], { fuera_de_catalogo: "auto" })); await f.start();
-	assert.match(f.confirmationDetails.find((text) => text.includes("fuera del catálogo: ask → auto"))!, /corre cualquier comando sin preguntar/, "el diálogo de aceptación lo marca");
+	assert.match(f.messages.find((text) => text.includes("fuera del catálogo: auto"))!, /corre cualquier comando sin preguntar/, "el aviso de aceptación lo marca");
 	await f.invoke("omi_workflow_check", { kind: "reproduction", command: OTHER });
 	await approve(f);
+	assert.equal(f.reviews(), 1, "receta ask: la revisión sigue");
 	await f.invoke("omi_workflow_check", { kind: "setup", command: OK });
 	assert.equal(f.asked(), 0);
 	assert.deepEqual((await f.state()).grants ?? [], []);
@@ -66,7 +69,7 @@ test("foundations_policy: un issue de otro repo no usa el Foundations de este", 
 	const state = await f.state();
 	assert.deepEqual(effectivePolicy(pin, state).command.catalog, [OK]);
 	const foreign = { ...state, source: { ...state.source, url: "https://github.com/acme/repo/issues/42" } };
-	assert.deepEqual(effectivePolicy(pin, foreign), { politica: ASK, command: { catalog: [], outside: "ask" }, hash: null });
+	assert.deepEqual(effectivePolicy(pin, foreign), { politica: DEFAULT_POLICY, command: { catalog: [], outside: "auto" }, hash: null }, "vale el default: ni el catálogo ni los ask de otro repo");
 });
 
 // Las bloquea workflowToolAllowed, como a toda tool fuera de las del flujo: también implementando, con receta aprobada.
@@ -91,8 +94,6 @@ test("foundations_policy: el agente ve el catálogo como datos, con los comandos
 	assert.doesNotMatch(section, /kind setup con permiso humano/);
 });
 
-const ACCEPT = "Aceptar Foundations";
-const others = (prompts: string[]) => prompts.filter((title) => title !== ACCEPT);
 test("foundations_policy: simple no acepta Foundations ni crea recursos aunque arranque sea auto", async (t) => {
 	const kb = memoryKb({ products: ["repo"] }); kb.perillas("repo", renderFoundationsBlock(block([], { arranque: "auto", fuera_de_catalogo: "auto" })));
 	const f = await beginFixture(t, { kb });
@@ -100,6 +101,7 @@ test("foundations_policy: simple no acepta Foundations ni crea recursos aunque a
 	await f.ask({ title: "Errata", body: "Cambiar holaa por hola", reason: "Texto" });
 	assert.deepEqual(f.prompts, []); assert.deepEqual(f.remote.created, []); assert.deepEqual(f.switches, []); assert.equal(f.continuations.length, 1);
 	assert.ok(!kb.calls.some((call) => call.tool === "guardar"));
+	assert.equal(await readTrust(foundationsDir(f.home), { kbUrl: kb.url, product: "repo", repo: "test/repo" }), undefined, "no registra la revisión");
 });
 
 test("foundations_policy: arranque auto empieza sin el sí y las guardas sin efectos fallan antes", async (t) => {
@@ -110,19 +112,19 @@ test("foundations_policy: arranque auto empieza sin el sí y las guardas sin efe
 	assert.deepEqual(blocked.remote.created, []);
 	const f = await beginFixture(t, { kb }); const origin = f.current();
 	await f.ask({ title: "Arreglar el valor", body: "Debe dar 2.", reason: "Bug" });
-	assert.deepEqual(f.prompts.map((p) => p.title), [ACCEPT], "sólo la aceptación de la revisión nueva");
+	assert.deepEqual(f.prompts.map((p) => p.title), [], "ni la aceptación de la revisión nueva ni el sí");
 	assert.equal(f.remote.created.length, 1);
 	assert.ok(origin.notices.some((n) => /Foundations · arranque auto: Crear issue y empezar el trabajo/.test(n)), "se avisa lo que se hizo sin preguntar");
 	assert.notEqual(f.current().manager.getSessionFile(), f.main.getSessionFile());
 });
 
-test("foundations_policy: receta auto aprueba sola, lo registra y sus D fuera del catálogo preguntan", async (t) => {
+test("foundations_policy: receta auto aprueba sola, lo registra y sus D corren sin preguntar aunque fuera del catálogo sea ask", async (t) => {
 	const f = await fixture(t, block([], { receta: "auto" })); await f.start();
 	await approve(f);
 	const state = await f.state();
 	assert.equal(state.phase, "implement");
 	assert.equal(state.approval?.by, "foundations"); assert.match(state.approval?.foundations ?? "", /^[0-9a-f]{64}$/);
-	assert.deepEqual(others(f.prompts), ["Empezar el trabajo del issue #42"]);
+	assert.deepEqual(f.prompts, ["Empezar el trabajo del issue #42"]);
 	assert.equal(f.reviews(), 0, "no abre la revisión de la receta");
 	assert.equal(f.remote.comments.length, 0);
 	assert.match(f.remote.body, /<!-- omi:harness:start -->/, "la receta igual queda en la sección del issue");
@@ -130,7 +132,9 @@ test("foundations_policy: receta auto aprueba sola, lo registra y sus D fuera de
 	await f.action({ action: "step", id: "C1" });
 	await f.write("test.cjs", "require(\"node:assert/strict\").equal(require(\"./value.cjs\"), 2);\n");
 	await f.invoke("omi_workflow_check", { kind: "red", command: "node test.cjs", stepId: "C1" });
-	assert.equal(f.asked(), 1, "una receta que se aprobó sola no autoriza sus comandos");
+	assert.equal(f.asked(), 0, "la receta aprobada por Foundations autoriza sus D");
+	await f.invoke("omi_workflow_check", { kind: "setup", command: OK });
+	assert.equal(f.asked(), 1, "otro comando fuera del catálogo y de la receta sigue preguntando");
 });
 
 async function toPr(f: Fixture) {
@@ -160,7 +164,7 @@ test("foundations_policy: push y PR draft en auto publican sin preguntar, sin fo
 test("foundations_policy: con todo en ask cada punto sigue preguntando", async (t) => {
 	const f = await fixture(t, block(["node test.cjs"])); await f.start(); await approve(f); await toPr(f);
 	await f.action({ action: "publish" });
-	assert.deepEqual(others(f.prompts), ["Empezar el trabajo del issue #42", "Aprobar receta y sincronizar issue", "Subir rama y abrir PR draft"]);
+	assert.deepEqual(f.prompts, ["Empezar el trabajo del issue #42", "Aprobar receta y sincronizar issue", "Subir rama y abrir PR draft"]);
 });
 
 test("foundations_policy: con receta auto, la receta rehecha tras un replan también se aprueba sola", async (t) => {

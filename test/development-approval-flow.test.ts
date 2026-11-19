@@ -3,10 +3,11 @@ import { test } from "node:test";
 import { developmentFixture } from "./helpers/development.ts";
 import { updateWorkflow } from "../src/harness/store.ts";
 import { isApproved, transition } from "../src/harness/state.ts";
+import { ASK_ALL } from "./helpers/foundations.ts";
 
 type Fixture = Awaited<ReturnType<typeof developmentFixture>>;
 async function ready(t: import("node:test").TestContext): Promise<Fixture> {
-	const f = await developmentFixture(t); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); return f;
+	const f = await developmentFixture(t, { foundations: ASK_ALL }); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); return f;
 }
 function noWrites(f: Fixture): void {
 	assert.equal(f.remote.comments.length, 0);
@@ -32,7 +33,7 @@ for (const kind of ["escape", "ctrl-c", "close", "undefined", "error", "abort"] 
 	assert.equal(f.reviews(), 1); assert.equal((await f.state()).approval, null); noWrites(f);
 });
 test("approval_flow: volver conserva exploración/respuestas y exige otro sí tras planned", async (t) => {
-	const f = await developmentFixture(t); await f.start(); await f.readReference();
+	const f = await developmentFixture(t, { foundations: ASK_ALL }); await f.start(); await f.readReference();
 	await f.action({ action: "explored", exploration: { references: [{ path: "value.cjs", line: 1, detail: "Valor" }], findings: [], approach: "Corregir", missingFoundation: [], dependencies: [], disposition: "continue", reason: "Listo" } });
 	await f.action({ action: "inferences", inferences: [{ id: "I1", kind: "what", question: "¿Qué valor?", recommended: "2", confidence: 10, irreversible: false, references: [] }] });
 	await f.action({ action: "ask", id: "I1" }); await f.action({ action: "planned", plan: f.plan() });

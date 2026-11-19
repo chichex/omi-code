@@ -1,5 +1,5 @@
 // Foundations: el bloque `omi-foundations` de las perillas de un producto en la KB. Sin I/O.
-// Un bloque inválido, ausente o de otro repo no autoriza nada: decide quien lo usa con qué revisión quedarse.
+// Un bloque inválido, ausente o de otro repo no vale: decide quien lo usa con qué revisión quedarse. Sin ninguna, el default.
 import { createHash } from "node:crypto";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
@@ -25,12 +25,14 @@ export type ParsedFoundations =
 	| { status: "invalid"; reason: string };
 
 export const FOUNDATIONS_INFO = "omi-foundations";
-/** La política de hoy: nada corre ni avanza sin preguntar. */
+/** Sin Foundations: nada pregunta. Cada punto se pone en ask desde Foundations. */
+export const DEFAULT_POLICY: FoundationsPolicy = Object.freeze({ arranque: "auto", receta: "auto", fuera_de_catalogo: "auto", push_pr: "auto" });
+/** Todo pregunta: la primera propuesta del creador de Foundations. */
 export const STRICT_POLICY: FoundationsPolicy = Object.freeze({ arranque: "ask", receta: "ask", fuera_de_catalogo: "ask", push_pr: "ask" });
 export const POLICY_LABELS: Record<PolicyPoint, string> = { arranque: "arranque", receta: "receta", fuera_de_catalogo: "fuera del catálogo", push_pr: "push + PR draft" };
 export const AUTO_WARNINGS: Record<PolicyPoint, string> = {
 	arranque: "crea el issue, el worktree y la sesión sin preguntar, con el texto del agente",
-	receta: "el agente aprueba su propia receta; sus comandos fuera del catálogo siguen la política de fuera del catálogo",
+	receta: "el agente aprueba su propia receta y sus comandos corren sin preguntar",
 	fuera_de_catalogo: "corre cualquier comando sin preguntar: equivale a shell sin permiso",
 	push_pr: "hace push de la rama y abre el PR draft sin preguntar; nunca mergea ni fuerza",
 };
@@ -130,18 +132,18 @@ export function visibleText(value: string): string {
 export interface FoundationsMeta { product: string; kbUrl: string; docId?: string; author?: string; date?: string }
 function host(url: string): string { try { return new URL(url).host; } catch { return url; } }
 
-/** Diferencia en texto plano contra la última revisión aceptada, o contra la política estricta. */
+/** Diferencia en texto plano contra la última revisión aceptada, o contra el default (todo auto). */
 export function foundationsDiff(previous: FoundationsBlock | undefined, next: FoundationsBlock, meta: FoundationsMeta): string {
 	const before = new Set(previous?.comandos ?? []); const after = new Set(next.comandos);
 	const commands = [...next.comandos.map((c) => `  ${before.has(c) ? "  " : "+ "}${c}`), ...[...before].filter((c) => !after.has(c)).map((c) => `  - ${c}`)];
 	const policies = POINTS.map((point) => {
-		const was = previous?.politica[point] ?? STRICT_POLICY[point]; const now = next.politica[point];
+		const was = previous?.politica[point] ?? DEFAULT_POLICY[point]; const now = next.politica[point];
 		return `  ${POLICY_LABELS[point]}: ${was === now ? now : `${was} → ${now}`}${now === "auto" ? `   ⚠ ${AUTO_WARNINGS[point]}` : ""}`;
 	});
 	return [
 		visibleText(`Foundations · ${next.repo} · KB ${meta.product} (${host(meta.kbUrl)})`),
 		...(meta.docId ? [visibleText(`Perillas ${meta.docId.slice(0, 8)} · ${meta.author ?? "autor desconocido"} · ${meta.date ?? "sin fecha"}`)] : []),
-		previous ? `Antes: última revisión aceptada ${foundationsHash(previous).slice(0, 8)}` : "Antes: política estricta (nada aceptado: todo pregunta)",
+		previous ? `Antes: última revisión aceptada ${foundationsHash(previous).slice(0, 8)}` : "Antes: sin Foundations (por defecto: todo auto)",
 		"Comandos que corren sin preguntar:", ...(commands.length ? commands.map(visibleText) : ["  (ninguno)"]),
 		"Políticas:", ...policies,
 	].join("\n");
