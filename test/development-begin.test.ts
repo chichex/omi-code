@@ -51,6 +51,18 @@ for (const failure of ["cancel", "error", "length", "incomplete", "aborted-sessi
 	assert.equal(f.git("branch", "--list"), "* main");
 });
 
+test("development_begin cancelar una clasificación iniciada ignora una respuesta válida tardía", async (t) => {
+	const f = await beginFixture(t); let entered!: () => void; let release!: () => void;
+	f.remote.classifyStarted = new Promise<void>((resolve) => { entered = resolve; });
+	const late = new Promise<void>((resolve) => { release = resolve; });
+	f.remote.onClassify = async () => { entered(); await late; }; f.remote.cancelInFlight = true;
+	f.remote.requestClassify = JSON.stringify(simple);
+	await f.ask(request); assert.equal(f.modelCalls.length, 1, "la llamada comenzó antes de cancelar");
+	release(); await f.waitCancelled();
+	assert.deepEqual(f.prompts, []); assert.deepEqual(f.remote.created, []); assert.deepEqual(f.continuations, []); assert.deepEqual(f.switches, []);
+	assert.equal(await preparation(f.root, 43), undefined); assert.equal(f.git("worktree", "list").split("\n").length, 1);
+});
+
 test("development_begin un pedido nuevo del chat crea el issue, el worktree y la sesión con un solo sí y sigue en Explorar", async (t) => {
 	const f = await beginFixture(t);
 	const result = await f.ask(request);

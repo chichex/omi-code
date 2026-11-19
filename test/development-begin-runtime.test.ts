@@ -69,8 +69,8 @@ else if (args[0] === 'issue' || args[0] === 'run') out([]);
 else out({ currentBranch: null });
 `, { mode: 0o755 });
 	const worktree = join(home, "repo-worktrees/issue-43"); const extension = join(home, "probe.ts");
-	await writeFile(extension, `import {writeFile} from 'node:fs/promises';
-export default function(pi) { pi.on('session_start', async (_event, ctx) => { await writeFile(${JSON.stringify(ready)}, JSON.stringify({ cwd: ctx.cwd, session: ctx.sessionManager.getSessionFile() })); }); }\n`);
+	await writeFile(extension, `import {appendFile} from 'node:fs/promises';
+export default function(pi) { pi.on('session_start', async (_event, ctx) => { await appendFile(${JSON.stringify(ready)}, JSON.stringify({ cwd: ctx.cwd, session: ctx.sessionManager.getSessionFile() }) + '\\n'); }); }\n`);
 	const kinds: string[] = []; const requests: string[] = []; let classifiedAfterYes = false; let classifiedBeforeIssue = false;
 	const server = createServer((request, response) => {
 		if (request.method !== "POST" || request.url !== "/v1/chat/completions") { request.resume(); response.writeHead(404); response.end(); return; }
@@ -116,9 +116,13 @@ export default function(pi) { pi.on('session_start', async (_event, ctx) => { aw
 	assert.ok(toolNames(requests[0]!).includes("omi_work_begin"), "el chat normal ofrece empezar");
 	assert.equal(classifiedAfterYes, false, "clasifica antes del sí de creación");
 	assert.equal(classifiedBeforeIssue, true, "clasifica antes de gh issue create");
+	const observed = (await readFile(ready, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as { cwd: string; session: string });
+	assert.equal(observed[0]!.cwd, root); assert.ok(observed[0]!.session);
 	if (mode !== "harness") {
 		await assert.rejects(access(created)); await assert.rejects(access(confirmed));
-		assert.equal(JSON.parse(await readFile(ready, "utf8")).cwd, root);
+		assert.equal(observed.length, 1, "no abrió ninguna sesión adicional");
+		assert.equal(observed.at(-1)!.session, observed[0]!.session, "conserva la identidad original, no sólo el cwd");
+		assert.equal(observed.at(-1)!.cwd, root);
 		assert.equal(git("worktree", "list").split("\n").length, 1);
 		const returnedTools = toolNames(requests[2]!);
 		for (const name of ["read", "bash", "write", "edit", "omi_work_begin"]) assert.ok(returnedTools.includes(name), name);
@@ -133,7 +137,8 @@ export default function(pi) { pi.on('session_start', async (_event, ctx) => { aw
 	const kickoff = toolNames(requests[2]!);
 	for (const name of ["read", "omi_workflow"]) assert.ok(kickoff.includes(name), name);
 	for (const name of ["bash", "write", "edit", "omi_work_begin"]) assert.ok(!kickoff.includes(name), `${name} no se ofrece en Explorar`);
-	assert.equal(JSON.parse(await readFile(ready, "utf8")).cwd, worktree);
+	assert.equal(observed.at(-1)!.cwd, worktree);
+	assert.notEqual(observed.at(-1)!.session, observed[0]!.session);
 	assert.equal(execFileSync("git", ["branch", "--show-current"], { cwd: worktree, encoding: "utf8" }).trim(), "feat/issue-43-mostrar-el-total-del-carrito");
 	assert.equal(git("branch", "--show-current"), "main"); assert.equal(git("rev-parse", "main"), main);
 	for (const expected of [/Crear issue y empezar el trabajo/, /Motivo del agente: Cambio de código con criterio verificable/, /PROGRESO · #43/, /KICKOFF_OK/]) assert.match(plain, expected);

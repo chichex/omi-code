@@ -20,7 +20,8 @@ const PolicySchema = Type.Object({
 }, { additionalProperties: false });
 export type TriagePolicy = Static<typeof PolicySchema>;
 export const DEFAULT_TRIAGE_POLICY: TriagePolicy = { enabled: true, maxScope: "localized", allowedImpacts: ["cosmetic", "documentation", "local-behavior"] };
-const BlockSchema = Type.Object({ version: Type.Literal(1), repo: Type.String({ pattern: "^[a-z0-9_.-]+/[a-z0-9_.-]+$", maxLength: 200 }), chat: PolicySchema }, { additionalProperties: false });
+const RepoSchema = Type.String({ pattern: "^[a-z0-9_.-]+/[a-z0-9_.-]+$", maxLength: 200 });
+const BlockSchema = Type.Object({ version: Type.Literal(1), repo: RepoSchema, chat: PolicySchema }, { additionalProperties: false });
 export interface TriagePolicyPin { origin: "kb" | "default"; policy: TriagePolicy; hash: string | null; notice: string }
 export type ParsedTriagePolicy = { status: "valid"; policy: TriagePolicy; hash: string } | { status: "missing" } | { status: "invalid"; reason: string };
 export function parseDevelopmentTriagePolicy(body: string, repo: string): ParsedTriagePolicy {
@@ -30,7 +31,7 @@ export function parseDevelopmentTriagePolicy(body: string, repo: string): Parsed
 		let value: unknown;
 		try { value = JSON.parse(body.slice(fence.contentStart, fence.contentEnd)); }
 		catch { return { status: "invalid", reason: "JSON de triage inválido" }; }
-		if (!value || typeof value !== "object" || !("repo" in value) || typeof value.repo !== "string") return { status: "invalid", reason: "triage sin repo identificable" };
+		if (!value || typeof value !== "object" || !("repo" in value) || !Value.Check(RepoSchema, value.repo)) return { status: "invalid", reason: "triage sin repo identificable" };
 		if (value.repo.toLowerCase() !== repo.toLowerCase()) continue;
 		found = value; count++;
 	}

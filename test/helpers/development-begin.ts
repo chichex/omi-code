@@ -27,11 +27,13 @@ export async function beginFixture(t: TestContext, options: { args?: readonly st
 		issues: new Map<number, { title: string; body: string; labels: string[] }>([[42, { title: "Corregir resultado", body: "El resultado esperado es 2.", labels: ["bug"] }]]),
 		created: [] as { title: string; body: string }[], confirm: true, failCreate: false, classify: TRIAGE, cancelSwitch: false,
 		requestClassify: JSON.stringify({ triage: JSON.parse(TRIAGE), assessment: ASSESSMENT }), cancelClassify: false, failClassify: false, stopReason: "stop", onClassify: undefined as (() => Promise<void>) | undefined,
+		cancelInFlight: false, classifyStarted: undefined as Promise<void> | undefined,
 		// Retiene la respuesta del diálogo para probar un segundo arranque mientras el primero espera el sí.
 		hold: undefined as Promise<void> | undefined,
 	};
 	const prompts: { title: string; description: string }[] = []; const switches: string[] = []; const modelCalls: unknown[] = []; const calls: string[][] = [];
 	const order: string[] = []; const continuations: { customType: string; content: string; details?: unknown }[] = [];
+	let cancelledWork: Promise<void> | undefined;
 	const runner: Runner = { async run(command, args, runOptions) {
 		if (command !== "gh") return processRunner.run(command, args, runOptions);
 		calls.push(args);
@@ -88,7 +90,13 @@ export async function beginFixture(t: TestContext, options: { args?: readonly st
 				return { cancelled: false };
 			},
 		} as unknown as ExtensionCommandContext;
-		const extension = developmentHarnessExtension(testIo({ homeDir: home, cwd: manager.getCwd() }), [...(options.args ?? []), "--session-dir", sessions], { runner, loader: async (_ctx, _title, work) => remote.cancelClassify ? undefined : work(new AbortController().signal), ...(options.kb ? { kb: options.kb } : {}) });
+		const extension = developmentHarnessExtension(testIo({ homeDir: home, cwd: manager.getCwd() }), [...(options.args ?? []), "--session-dir", sessions], { runner, loader: async (_ctx, _title, work) => {
+			if (remote.cancelClassify) return undefined;
+			const controller = new AbortController(); const pending = work(controller.signal);
+			if (!remote.cancelInFlight) return pending;
+			cancelledWork = pending.then(() => {}, () => {});
+			await remote.classifyStarted; controller.abort(); return undefined;
+		}, ...(options.kb ? { kb: options.kb } : {}) });
 		if (typeof extension === "function") await extension(pi); else await extension.factory(pi);
 		for (const handler of events.get("session_start") ?? []) await handler({}, instance.ctx);
 		return instance;
@@ -116,5 +124,5 @@ export async function beginFixture(t: TestContext, options: { args?: readonly st
 	const command = async (input: string) => { await current.commands.get("omi-work")!.handler(input, current.ctx); await flush(); };
 	const openMain = async () => { for (const handler of current.events.get("session_shutdown") ?? []) await handler({}, current.ctx); current.stale = true; current = await attach(SessionManager.open(main.getSessionFile()!)); };
 	const reload = async () => { for (const handler of current.events.get("session_shutdown") ?? []) await handler({}, current.ctx); current.stale = true; current = await attach(SessionManager.open(current.manager.getSessionFile()!)); };
-	return { home, root, sessions, remote, prompts, switches, modelCalls, calls, order, continuations, main, git, ask, invoke, emit, flush, command, reload, openMain, current: () => current, kickoffs: () => current.sent.filter((message) => !message.options?.expandPromptTemplates).map((message) => message.text) };
+	return { home, root, sessions, remote, prompts, switches, modelCalls, calls, order, continuations, waitCancelled: async () => { await cancelledWork; }, main, git, ask, invoke, emit, flush, command, reload, openMain, current: () => current, kickoffs: () => current.sent.filter((message) => !message.options?.expandPromptTemplates).map((message) => message.text) };
 }

@@ -14,10 +14,10 @@ function reader(gate: FoundationsGate) {
 }
 async function fixture(t: import("node:test").TestContext, text?: string) {
 	const home = await tempDir(t); const kb = memoryKb({ products: ["repo"] }); if (text !== undefined) kb.perillas("repo", text);
-	let prompts = 0;
-	const gate = new FoundationsGate({ kb, trustDir: home, now: () => "now", confirm: async () => { prompts++; return true; }, runner: { run: async () => ({ code: 0, stdout: "https://github.com/test/repo.git\n", stderr: "" }) } });
+	let prompts = 0; const identity = { origin: "https://github.com/test/repo.git\n" };
+	const gate = new FoundationsGate({ kb, trustDir: home, now: () => "now", confirm: async () => { prompts++; return true; }, runner: { run: async () => ({ code: 0, stdout: identity.origin, stderr: "" }) } });
 	const ctx = { hasUI: true, cwd: home, sessionManager: { getSessionFile: () => `${home}/session.jsonl` } } as unknown as ExtensionContext;
-	return { gate, ctx, kb, prompts: () => prompts };
+	return { gate, ctx, kb, identity, prompts: () => prompts };
 }
 
 test("triage_policy: lee el bloque de perillas por repo una vez, sin guardar ni aceptar Foundations", async (t) => {
@@ -39,10 +39,22 @@ test("triage_policy: ausente, ajeno y KB caída tienen default explícito conser
 });
 
 test("triage_policy: formato inválido, duplicado, repo ambiguo o cerca abierta detiene en vez de asumir simpleza", async (t) => {
-	for (const text of ["```omi-development-triage\n{ roto\n```", block() + "\n" + block(), "```omi-development-triage\n{}\n```", block().replace(/\n```$/, ""), block({ ...policy, extra: true }), block({ ...policy, maxScope: "anything" }), block({ ...policy, allowedImpacts: ["public-contract"] }), block({ ...policy, allowedImpacts: ["cosmetic", "cosmetic"] })]) {
+	for (const text of ["```omi-development-triage\n{ roto\n```", block() + "\n" + block(), "```omi-development-triage\n{}\n```", block().replace(/\n```$/, ""), block({ ...policy, extra: true }), block({ ...policy, maxScope: "anything" }), block({ ...policy, allowedImpacts: ["public-contract"] }), block({ ...policy, allowedImpacts: ["cosmetic", "cosmetic"] }), ...["", "sin-owner", "test/repo ", "test//repo", "test/repo/extra"].map((repo) => block(policy, repo))]) {
 		const f = await fixture(t, text); await assert.rejects(reader(f.gate)(f.ctx), /triage|clasific|política/i); assert.equal(f.prompts(), 0);
 		assert.ok(!f.kb.calls.some((call) => call.tool === "guardar"));
 	}
+});
+
+test("triage_policy: el pin no se comparte con otras sesiones ni repositorios", async (t) => {
+	const f = await fixture(t, block()); const read = reader(f.gate); const first = await read(f.ctx);
+	f.kb.perillas("repo", block({ ...policy, enabled: false }));
+	const other = { ...f.ctx, sessionManager: { getSessionFile: () => `${f.ctx.cwd}/other.jsonl` } } as unknown as ExtensionContext;
+	assert.equal((await read(other)).policy.enabled, false);
+	f.identity.origin = "https://github.com/other/repo.git\n"; f.kb.perillas("repo", block({ ...policy, maxScope: "module" }, "other/repo"));
+	const foreign = { ...f.ctx, sessionManager: { getSessionFile: () => `${f.ctx.cwd}/foreign.jsonl` } } as unknown as ExtensionContext;
+	assert.equal((await read(foreign)).policy.maxScope, "module");
+	assert.deepEqual(await read(f.ctx), first, "la sesión original conserva su propia revisión");
+	assert.equal((await read(other)).policy.enabled, false);
 });
 
 test("triage_policy: cambiar criterio no altera las cuatro políticas de autorización", async (t) => {
