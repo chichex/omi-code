@@ -1,5 +1,5 @@
-// Un pedido de desarrollo que vale la pena arranca el harness con un único sí humano: crear el issue
-// si hace falta, clasificar, preparar worktree y sesión, cambiar de sesión y seguir en Explorar.
+// Un pedido nuevo se clasifica antes de crear recursos: simple/dudas vuelven al chat; harness
+// confirma, crea issue, reutiliza triage, prepara worktree/sesión y sigue en Explorar.
 // Lo que se puede comprobar sin efectos (tamaño, identidad, repo, main local) falla antes de preguntar.
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -212,25 +212,25 @@ export const borderedLoader: BeginLoader = async <T>(ctx: ExtensionContext, titl
 
 const BeginToolSchema = Type.Object({
 	issue: Type.Optional(Type.Integer({ minimum: 1, description: "Número de un issue existente de este repo (#N). Si el pedido lo nombra, usalo en lugar de crear otro." })),
-	title: Type.Optional(Type.String({ minLength: 1, maxLength: 256, pattern: "\\S", description: "Título del issue nuevo, si el pedido no tiene issue" })),
-	body: Type.Optional(Type.String({ minLength: 1, maxLength: 60000, pattern: "\\S", description: "Pedido completo para el issue nuevo: qué, por qué, contexto y criterios que surgieron en el chat" })),
-	reason: Type.String({ minLength: 1, maxLength: 600, pattern: "\\S", description: "Por qué este pedido vale la pena seguirlo con el harness" }),
+	title: Type.Optional(Type.String({ minLength: 1, maxLength: 256, pattern: "\\S", description: "Título del pedido nuevo para clasificar antes de crear un issue, si amerita harness" })),
+	body: Type.Optional(Type.String({ minLength: 1, maxLength: 60000, pattern: "\\S", description: "Pedido completo para clasificar: qué, por qué, contexto y criterios del chat; será el cuerpo del issue sólo si amerita harness" })),
+	reason: Type.String({ minLength: 1, maxLength: 600, pattern: "\\S", description: "Por qué este pedido vale la pena evaluar para el harness" }),
 }, { additionalProperties: false });
 export interface BeginToolHost { offline: boolean; busy: () => boolean; onRequest: (token: string) => void }
 export function registerBeginTool(pi: ExtensionAPI, host: BeginToolHost): void {
 	pi.registerTool({
 		name: "omi_work_begin", label: "Desarrollo: empezar trabajo", executionMode: "sequential", parameters: BeginToolSchema,
-		description: "Propone empezar el harness de desarrollo para un pedido de cambio de código de este repo que vale la pena seguir: feature, fix, mejora o chore con impacto. Con issue usa un issue existente de GitHub; con title y body propone crear uno nuevo. No crea nada por sí misma: termina el turno (si llega junto con otras tools, el modelo recibe una respuesta más, con todas las tools bloqueadas) y OMI le pide confirmación a la persona, prepara un worktree desde main local en una sesión nueva y el trabajo sigue en Explorar. La sesión nueva no hereda este chat: el body tiene que traer el pedido completo, el contexto y los criterios que surgieron acá.",
-		promptSnippet: "Empezar el harness de desarrollo ante un pedido de cambio de código que vale la pena seguir",
+		description: "Evalúa un pedido de código que vale la pena seguir. Con title y body, OMI clasifica antes de crear issue o recursos: un cambio simple sigue en el chat original; si falta información, vuelve con preguntas sin crear nada. Si requiere harness, pide confirmación (o aplica Foundations), crea el issue con el texto mostrado y reutiliza el triage para preparar worktree desde main local y sesión nueva en Explorar. Con issue existente siempre usa harness y ese mismo número; retoma sin reclasificar. La tool termina el turno y bloquea otras tools hasta resolver la clasificación/confirmación; no crea nada por sí misma. No autoriza comandos o acciones sensibles. La sesión nueva no hereda el chat: body debe traer pedido, contexto y criterios completos.",
+		promptSnippet: "Clasificar un pedido antes de crear issue o empezar el harness; los cambios simples vuelven al chat",
 		promptGuidelines: [
-			"Cuando la persona pide un cambio de código en este repo que vale la pena seguir (feature, fix, mejora o chore con impacto), llamá a omi_work_begin en lugar de editar archivos directo. Si nombra un issue (#N), pasá issue; si no, title y body para crear uno.",
+			"Cuando la persona pide un cambio de código que vale la pena seguir, llamá a omi_work_begin en lugar de editar directo. Si nombra un issue (#N), pasá issue (siempre harness); si no, title y body para clasificar ANTES de crear un issue. OMI puede devolver un cambio simple o preguntas al chat: no repitas el mismo pedido sin información nueva. Clasificar no autoriza acciones ni sustituye las reglas y permisos del proyecto.",
 			"No llames a omi_work_begin para preguntas, explicaciones, operaciones de OMI ni un cambio trivial que la persona pidió hacer directo: eso sigue en el chat.",
 		],
 		async execute(_id, input, _signal, _update, ctx) {
 			assertBeginRequest(input); assertCanBegin(ctx, host.offline);
 			if (host.busy()) throw new Error("Esta sesión ya tiene un trabajo de desarrollo activo; seguí con ese o salí con /omi-work stop.");
 			host.onRequest(issueDevelopmentTicket({ kind: "request", origin: "agent", sessionFile: ctx.sessionManager.getSessionFile()!, request: input }));
-			return { content: [{ type: "text", text: "Pedido registrado. Al terminar este turno OMI le pide confirmación a la persona y, si acepta, el trabajo sigue en el worktree del issue. No llames otras tools: quedan bloqueadas hasta la respuesta. Si hace falta, respondé sólo con un resumen breve." }], details: { request: input }, terminate: true };
+			return { content: [{ type: "text", text: "Pedido registrado. Al terminar el turno OMI clasifica los pedidos nuevos antes de crear recursos. Puede devolver un cambio simple o preguntas a este chat, sin activar harness; si lo requiere, confirma la creación y reutiliza el triage. Un issue existente siempre sigue por harness. No llames otras tools: quedan bloqueadas hasta resolver el pedido. La clasificación no concede permisos. Si hace falta, respondé sólo con un resumen breve." }], details: { request: input }, terminate: true };
 		},
 	});
 }
