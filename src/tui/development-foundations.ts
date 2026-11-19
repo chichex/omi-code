@@ -12,6 +12,7 @@ import type { CommandPolicy } from "../harness/authorization.ts";
 import type { KbClient, KbDoc } from "./kb-client.ts";
 import { HARNESS_KB_URL } from "./defaults.ts";
 import { commitFoundationsSave, prepareFoundationsSave } from "./development-foundations-save.ts";
+import { DEFAULT_TRIAGE_POLICY, parseDevelopmentTriagePolicy, type TriagePolicyPin } from "../harness/triage-policy.ts";
 
 const READ_TIMEOUT_MS = 30_000;
 const MAX_SESSIONS = 50;
@@ -105,7 +106,7 @@ export function foundationsLines(pin: FoundationsPin | undefined): string[] {
 }
 
 // Por archivo de sesión y en memoria del proceso: sobrevive /reload y el cambio de sesión. Reabrir OMI vuelve a leer.
-interface Entry { reading: Promise<FoundationsReading>; pin?: FoundationsPin | undefined; deciding?: Promise<FoundationsPin> | undefined }
+interface Entry { reading: Promise<FoundationsReading>; pin?: FoundationsPin | undefined; deciding?: Promise<FoundationsPin> | undefined; triage?: Promise<TriagePolicyPin> }
 const sessions = new Map<string, Entry>();
 function remember(file: string, entry: Entry): void {
 	sessions.set(file, entry);
@@ -138,6 +139,20 @@ export class FoundationsGate {
 		entry.deciding ??= entry.reading.then((reading) => decideFoundations(reading, ctx, this.deps)).finally(() => { entry.deciding = undefined; });
 		entry.pin = await entry.deciding;
 		return entry.pin;
+	}
+	/** Sólo criterios, no autorizaciones: comparte la lectura de perillas sin aceptar Foundations ni guardar nada. */
+	async triage(ctx: ExtensionContext): Promise<TriagePolicyPin> {
+		const fallback = (notice: string): TriagePolicyPin => ({ origin: "default", policy: structuredClone(DEFAULT_TRIAGE_POLICY), hash: null, notice });
+		const file = this.file(ctx);
+		if (!file) return fallback("Sin sesión persistente: criterios de triage por defecto.");
+		this.load(ctx); const entry = sessions.get(file)!;
+		entry.triage ??= entry.reading.then((reading) => {
+			if (reading.kind === "none" || reading.kind === "unavailable") return fallback(`Triage: ${reading.reason}; se usan criterios conservadores por defecto.`);
+			const parsed = parseDevelopmentTriagePolicy(reading.perillas?.cuerpo ?? "", reading.key.repo);
+			if (parsed.status === "invalid") throw new Error(`Política de triage inválida: ${parsed.reason}. No se creó ningún recurso.`);
+			return parsed.status === "missing" ? fallback("Sin bloque de triage para este repo: criterios conservadores por defecto.") : { origin: "kb" as const, policy: parsed.policy, hash: parsed.hash, notice: "" };
+		});
+		return structuredClone(await entry.triage);
 	}
 	current(ctx: ExtensionContext): FoundationsPin | undefined { const file = this.file(ctx); return file ? sessions.get(file)?.pin : undefined; }
 	/** Una persona armó Foundations en esta sesión: es su propio sí, no un cambio externo. */

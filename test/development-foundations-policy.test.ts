@@ -93,6 +93,15 @@ test("foundations_policy: el agente ve el catálogo como datos, con los comandos
 
 const ACCEPT = "Aceptar Foundations";
 const others = (prompts: string[]) => prompts.filter((title) => title !== ACCEPT);
+test("foundations_policy: simple no acepta Foundations ni crea recursos aunque arranque sea auto", async (t) => {
+	const kb = memoryKb({ products: ["repo"] }); kb.perillas("repo", renderFoundationsBlock(block([], { arranque: "auto", fuera_de_catalogo: "auto" })));
+	const f = await beginFixture(t, { kb });
+	f.remote.requestClassify = JSON.stringify({ triage: { type: "chore", summary: "Errata", rationale: "Texto", scope: [], acceptanceCriteria: [], questions: [] }, assessment: { scope: "localized", impact: "documentation", reversible: "yes", verification: "clear", risk: "low", riskAreas: [], rationale: "Sólo texto" } });
+	await f.ask({ title: "Errata", body: "Cambiar holaa por hola", reason: "Texto" });
+	assert.deepEqual(f.prompts, []); assert.deepEqual(f.remote.created, []); assert.deepEqual(f.switches, []); assert.equal(f.continuations.length, 1);
+	assert.ok(!kb.calls.some((call) => call.tool === "guardar"));
+});
+
 test("foundations_policy: arranque auto empieza sin el sí y las guardas sin efectos fallan antes", async (t) => {
 	const kb = memoryKb({ products: ["repo"] }); kb.perillas("repo", renderFoundationsBlock(block([], { arranque: "auto" })));
 	const blocked = await beginFixture(t, { kb, noMain: true });

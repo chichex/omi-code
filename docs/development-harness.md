@@ -7,10 +7,17 @@ Primer corte para **repos existentes con issues de GitHub**, sobre sesiones y to
 1. Pedí en el chat un cambio de código del repo que valga la pena seguir: feature, fix, mejora o chore con impacto. Preguntas, explicaciones, operaciones de OMI y cambios triviales que pedís hacer directo siguen en el chat normal, sin harness ni issue.
 2. El agente propone empezar con la tool `omi_work_begin`:
    - si el pedido nombra un issue (`#N`), con ese issue;
-   - si no, con un título y un cuerpo para crear uno. La sesión nueva no hereda el chat, así que el cuerpo tiene que traer el pedido completo.
+   - si no, con un título y un cuerpo para clasificar antes de crear un issue. La sesión nueva no hereda el chat, así que el cuerpo tiene que traer el pedido completo.
 
    La tool no crea nada: deja un pedido de un solo uso, ligado a la sesión, y termina el turno. Si el agente la llamó junto con otras tools, Pi le da una respuesta más antes de terminar. Mientras el pedido espera el sí, el resto de las tools del agente quedan bloqueadas. Un Esc en ese turno descarta el pedido sin preguntar.
-3. OMI te pide **un solo sí**, salvo que Foundations diga `arranque: auto`: entonces avisa lo que hace, sin preguntar. Si Foundations tiene una revisión nueva, antes muestra la diferencia y pide aceptarla. El diálogo dice primero qué va a pasar. Si el issue es nuevo, lo muestra completo al final (repo, título y cuerpo). Dice también quién lo pidió: el motivo del agente, o que vino del panel de Issues. Lo que se puede comprobar sin efectos falla antes de preguntar:
+3. Para un pedido nuevo sin issue, OMI primero clasifica en una llamada aislada al modelo, sin tools. Estima alcance, impacto, reversibilidad, verificación y riesgo usando el pedido completo, no líneas medidas ni código inspeccionado. Una política determinista aplica los [criterios configurables](#criterios-de-clasificación-previa):
+   - **Chat:** continúa en la misma sesión sin issue, rama, worktree, sesión nueva ni harness. La evaluación es orientativa: siguen las reglas y permisos normales, y descubrir mayor impacto o riesgo exige volver a proponer harness.
+   - **Falta información:** vuelve al chat con preguntas; hay que aclarar las ambigüedades antes de seguir. No se considera simple ni crea recursos.
+   - **Harness:** reutiliza el triage obtenido y pasa al sí de creación.
+
+   Esc, error, timeout o salida inválida detienen sin crear recursos, sin asumir trivialidad ni continuar automáticamente con cambios. Clasificar no concede permisos. Un issue existente siempre va por harness con su número; nunca se cierra, borra ni crea otro por esta decisión.
+
+   Sólo si corresponde harness, OMI te pide **un solo sí**, salvo que Foundations diga `arranque: auto`: entonces avisa lo que hace, sin preguntar. Si Foundations tiene una revisión nueva, antes muestra la diferencia y pide aceptarla. El diálogo dice primero qué va a pasar. Si el issue es nuevo, lo muestra completo al final (repo, título y cuerpo). Dice también quién lo pidió: el motivo del agente, o que vino del panel de Issues. Lo que se puede comprobar sin efectos falla antes de preguntar:
    - el tamaño del pedido;
    - caracteres invisibles o de dirección de texto en el título o el cuerpo;
    - la identidad de una preparación guardada (también una anterior al registro, que se reconoce por su sesión), y que su worktree y su sesión sigan ahí;
@@ -20,7 +27,7 @@ Primer corte para **repos existentes con issues de GitHub**, sobre sesiones y to
    - la falta de modelo o de confianza.
 4. Si aceptás:
    - se crea el issue, si hace falta;
-   - se clasifica el issue;
+   - se reutiliza la clasificación previa del pedido nuevo; para un issue existente sin preparación se clasifica su tipo, y al retomar no se reclasifica;
    - se prepara un worktree desde `main` local, con su propia sesión;
    - se cambia a esa sesión y el trabajo sigue en Explorar.
 
@@ -45,6 +52,33 @@ No hay un comando para empezar: `/omi-triage` y `/omi-work start` ya no existen.
 | `/omi-progress` | Detalle del progreso en el workspace TUI, también con la lateral oculta. |
 
 Restaurar una sesión o recargar OMI **no ejecuta** pruebas, modelo, commits ni publicaciones. `resume` es una acción humana explícita. En offline se puede restaurar/consultar el estado local; empezar, contrastar el pedido, aprobar una receta nueva o publicar necesita GitHub. Para abrir offline la sesión de un issue preparado, usá `/resume` de Pi. En el modo clásico se conserva el status y `/omi-work status`, no el panel del workspace.
+
+## Criterios de clasificación previa
+
+Los criterios viven en las **perillas del producto de la KB de Harness**, igual que las otras perillas del repo. Son datos, no instrucciones ni permisos. Bloque independiente de `omi-foundations`, con identidad de repo y versión:
+
+````md
+```omi-development-triage
+{
+  "version": 1,
+  "repo": "chichex/omi-code",
+  "chat": {
+    "enabled": true,
+    "maxScope": "localized",
+    "allowedImpacts": ["cosmetic", "documentation", "local-behavior"]
+  }
+}
+```
+````
+
+- `enabled: false` exige harness para todo pedido nuevo suficientemente definido. Un issue existente siempre lo exige.
+- `maxScope`: `localized` (un punto, default) o `module` (un módulo). Trabajo transversal siempre requiere harness. Es una estimación motivada desde el pedido, no una cantidad verificada de archivos o líneas.
+- `allowedImpacts`: lista única de cero a tres valores `cosmetic`, `documentation`, `local-behavior`. Sólo esos impactos pueden seguir en chat. La lista vacía no habilita ninguno.
+- Reversibilidad y verificación clara son requisitos fijos. Seguridad, auth, permisos, secretos, pagos, datos personales, migraciones, infraestructura, contratos públicos y el propio harness siempre requieren seguimiento aunque cambie una línea. Incertidumbre, dimensiones desconocidas o preguntas pendientes primero vuelven para aclararse, sin recursos.
+- JSON estricto, todos los campos obligatorios y sin extras. Bloque duplicado, JSON inválido, repo no identificable o cerca sin cerrar detiene el pedido sin recursos. Un bloque identificable de otro repo no aplica.
+- La lectura reutiliza la conexión y las perillas ya leídas por el host, sin tools del modelo ni escrituras KB. Se fija en la sesión y sobrevive `/reload`. No acepta Foundations, escribe confianza ni cambia sus cuatro políticas, hashes o revisiones. Cambiar estas perillas se hace en la KB; este flujo sólo las lee, sin wizard ni guardado automático.
+- Sin bloque aplicable, sin producto, sin KB/login, MCP desactivado o KB caída, usa el **default conservador del ejemplo**, con aviso explícito. No usa un resultado de clasificación fallido como default: una evaluación inválida siempre detiene. No guarda un caché persistente nuevo de criterios; al abrir otra sesión vuelve a leerlos.
+- La clasificación no es una frontera de seguridad y no inspecciona código: puede estimar mal. Nunca sustituye las reglas y permisos del proyecto. Si al continuar el chat aparece mayor alcance o riesgo, el agente debe proponer el harness. La ruta **Directa** es distinta: sigue dentro del harness, con receta, evidencia y seguimiento.
 
 ## Revisar y aprobar una receta
 
@@ -272,7 +306,7 @@ Los cambios externos del filesystem no se revierten. Una operación ejecutada si
 
 ## GitHub sin sobrescribir el pedido
 
-Crear el issue de un pedido nuevo es la única escritura en GitHub antes de Explorar. Pasa sólo con el sí, una vez, con el título y el cuerpo que mostró el diálogo. Si GitHub no confirma la creación, no se reintenta: hay que revisar el repo antes de volver a pedirlo, para no duplicarlo.
+Crear el issue de un pedido nuevo es la única escritura en GitHub antes de Explorar. Pasa después de clasificar y decidir harness, sólo con el sí (o `arranque: auto` de Foundations), una vez, con el título y el cuerpo que mostró el diálogo. Si GitHub no confirma la creación, no se reintenta: hay que revisar el repo antes de volver a pedirlo, para no duplicarlo.
 
 El harness no crea comentarios en el issue. Su estado va en una **sección administrada al final del cuerpo**, entre `<!-- omi:harness:start -->` y `<!-- omi:harness:end -->`. El pedido humano queda arriba, intacto byte a byte. La sección es markdown: ruta y etapa, receta con sus casos D, pasos, decisiones, acuerdos del chat, una tabla de evidencia (caso, resultado, HEAD) y los avisos de los lentes con sus hallazgos. Ejemplo:
 
@@ -320,4 +354,4 @@ El panel sólo pertenece al cwd/worktree/rama correctos, se reinicia al cambiar 
 
 ## Verificación del cambio
 
-El arranque tiene sus propios tests, con Git, worktrees y sesiones reales y con GitHub y modelo falsos: pedido nuevo con un solo sí, issue existente sin duplicar, decir que no, token de un solo uso, guardas sin efectos y recarga sin kickoff. Dos tests de pty real recorren los dos caminos. El del panel: Enter en Issues, el sí, Esc en la clasificación y el harness arrancado en el worktree. El del agente: un pedido en el chat, la tool, un turno que termina sin seguir, el sí antes de crear el issue y de clasificar, y el harness en el worktree del issue nuevo. Los lentes tienen tests con Git real: la evidencia que reciben, los avisos que no frenan el PR draft, el bloqueo por un fail de Seguridad y un diff de más de 200.000 caracteres revisado por partes sin truncar, y ninguna llamada por encima del presupuesto, con la evidencia resumida y explícita cuando no entra. Los tests del flujo cubren las tres rutas con Git y comandos reales en repos temporales, modelos/GitHub falsos, consentimientos, invalidación, evidencia, recuperación, concurrencia, cancelación y panel estrecho/claro/oscuro. La sección del issue tiene cobertura del pedido byte a byte, marcadores rotos, contraste que la ignora, escape de contenido hostil (sin links, imágenes, autolinks, HTML ni menciones activos) y escrituras no confirmadas. Los acuerdos del chat, de citas aceptadas y rechazadas (modelo, tools, mensajes de OMI, inventadas y triviales). Las preguntas en tanda tienen tests del componente (lo que dibuja y cada tecla, también respuesta libre, elección múltiple, pestañas y cancelar), del contrato de `omi_ask` (esquema, sin UI, cancelar, opción frente a texto libre y el harness) y un PTY real que abre una tanda dentro del workspace, con resize y Esc. El creador de Foundations tiene tests del flujo con una UI falsa, sin KB, y los del arranque recorren sus tandas con teclas. Foundations tiene tests con un MCP falso por HTTP y el `createMcpExtension` real de Pi, que fallan si un bump de Pi cambia cómo se registran o ejecutan las tools MCP o cómo se reemplaza `builtin:mcp`; y cuentan los diálogos de aceptación, reutilización de permisos, cambio de etiqueta, `resume`, `replan`, rechazo, KB caída y bloque inválido o ajeno. La aprobación tiene cobertura específica de documento íntegro, comandos largos/multilínea y caracteres de control, navegación/resize/temas, decisiones negativas y revalidación durante la revisión. Una prueba con Pi en PTY real recorre 80×24, resize a 132×40 y vuelta, temas claro/oscuro, navegación hasta el final del comando, cancelar y aprobar explícitamente con GitHub falso; no es una evaluación visual humana. El empaquetado comprueba el binario instalado. No equivalen a una prueba contra GitHub/OMI real ni a una evaluación de calidad de modelos: esas pruebas requieren una persona.
+El arranque tiene sus propios tests, con Git, worktrees y sesiones reales y con GitHub y modelo falsos: pedido nuevo con un solo sí, issue existente sin duplicar, decir que no, token de un solo uso, guardas sin efectos y recarga sin kickoff. Los tests de pty real recorren el panel de issue existente y los tres resultados del pedido nuevo: harness, chat y falta de información. El del panel: Enter en Issues, el sí, Esc en la clasificación y el harness arrancado en el worktree. El del agente: un pedido en el chat, la tool, un turno que termina sin seguir, clasificar antes de crear el issue y antes del sí, reutilizar ese resultado y arrancar el harness en el worktree sólo después de confirmar. Los otros dos resultados continúan en el chat original sin recursos, con las tools normales y sin permisos nuevos. Los lentes tienen tests con Git real: la evidencia que reciben, los avisos que no frenan el PR draft, el bloqueo por un fail de Seguridad y un diff de más de 200.000 caracteres revisado por partes sin truncar, y ninguna llamada por encima del presupuesto, con la evidencia resumida y explícita cuando no entra. Los tests del flujo cubren las tres rutas con Git y comandos reales en repos temporales, modelos/GitHub falsos, consentimientos, invalidación, evidencia, recuperación, concurrencia, cancelación y panel estrecho/claro/oscuro. La sección del issue tiene cobertura del pedido byte a byte, marcadores rotos, contraste que la ignora, escape de contenido hostil (sin links, imágenes, autolinks, HTML ni menciones activos) y escrituras no confirmadas. Los acuerdos del chat, de citas aceptadas y rechazadas (modelo, tools, mensajes de OMI, inventadas y triviales). Las preguntas en tanda tienen tests del componente (lo que dibuja y cada tecla, también respuesta libre, elección múltiple, pestañas y cancelar), del contrato de `omi_ask` (esquema, sin UI, cancelar, opción frente a texto libre y el harness) y un PTY real que abre una tanda dentro del workspace, con resize y Esc. El creador de Foundations tiene tests del flujo con una UI falsa, sin KB, y los del arranque recorren sus tandas con teclas. Foundations tiene tests con un MCP falso por HTTP y el `createMcpExtension` real de Pi, que fallan si un bump de Pi cambia cómo se registran o ejecutan las tools MCP o cómo se reemplaza `builtin:mcp`; y cuentan los diálogos de aceptación, reutilización de permisos, cambio de etiqueta, `resume`, `replan`, rechazo, KB caída y bloque inválido o ajeno. La aprobación tiene cobertura específica de documento íntegro, comandos largos/multilínea y caracteres de control, navegación/resize/temas, decisiones negativas y revalidación durante la revisión. Una prueba con Pi en PTY real recorre 80×24, resize a 132×40 y vuelta, temas claro/oscuro, navegación hasta el final del comando, cancelar y aprobar explícitamente con GitHub falso; no es una evaluación visual humana. El empaquetado comprueba el binario instalado. No equivalen a una prueba contra GitHub/OMI real ni a una evaluación de calidad de modelos: esas pruebas requieren una persona.
