@@ -4,6 +4,7 @@ import { developmentFixture } from "./helpers/development.ts";
 import { developmentProgress } from "../src/tui/development-view.ts";
 import { parseWorkflow, type Workflow } from "../src/harness/model.ts";
 import { transition } from "../src/harness/state.ts";
+import { ASK_ALL } from "./helpers/foundations.ts";
 
 const stage = (s: Workflow, id: string) => { const value = developmentProgress(s).stages?.find(s => s.id === id); assert.ok(value); return value; };
 const batch = (id: string, phase: string, status: string, turns = 0) => ({ id, phase, args: { agent: "scout", task: "PRIVATE TASK" }, details: { mode: "single", results: [{ agent: "scout", status, turns, output: "PRIVATE OUTPUT" }] } });
@@ -103,7 +104,7 @@ test("nested tools do not masquerade as inline; concurrent observations serializ
 });
 
 test("waiting overlays target the current stage without changing durable execution or gates", async t => {
- const f = await developmentFixture(t); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() });
+ const f = await developmentFixture(t, { foundations: ASK_ALL }); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() });
  f.remote.confirmations = false; await f.action({ action: "approve" });
  const events = f.progress as { progress?: ReturnType<typeof developmentProgress> }[];
  assert.ok(events.some(e => e.progress?.status === "waiting" && e.progress.stages?.some(s => s.current && s.status === "waiting")));

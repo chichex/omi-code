@@ -1,5 +1,6 @@
-// Sin Foundations para el repo, el harness ofrece armarlo: detecta comandos, los pregunta en tandas y los
-// guarda en la KB sólo con el sí. Comparte la persistencia con el permiso permanente de comandos.
+// Armar Foundations para un repo que no lo tiene: detecta comandos, los pregunta en tandas y los guarda en la KB
+// sólo con el sí. El harness ya no lo ofrece solo al arrancar: sin Foundations nada pregunta. Comparte la
+// persistencia con el permiso permanente de comandos.
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { FoundationsBlock } from "../harness/foundations.ts";
 import { detectFoundationsCandidates } from "../harness/foundations-detect.ts";
@@ -18,7 +19,7 @@ const offered = new Set<string>();
 
 /** Sólo si la KB respondió, el producto existe, no hay bloque, nada aceptado, la persona no lo descartó y hay TUI interactiva. */
 export function shouldOfferFoundations(pin: FoundationsPin | undefined, record: TrustRecord | undefined, hasUI: boolean): boolean {
-	return hasUI && pin?.reading.kind === "missing" && pin.origin === "strict" && !record?.accepted && !record?.offerDeclined;
+	return hasUI && pin?.reading.kind === "missing" && pin.origin === "default" && !record?.accepted && !record?.offerDeclined;
 }
 
 /** Cada tanda del creador y del editor, con el progreso en espera como cualquier otra decisión del harness. */
@@ -33,7 +34,7 @@ export function asker(ctx: ExtensionContext, session: DevelopmentSession): Ask {
 /** Cada tramo con la KB tiene su propio tope: lo que tarde la persona en una tanda no lo consume. */
 export const saveSignal = (session: DevelopmentSession): AbortSignal => AbortSignal.any([session.lifecycle.signal, AbortSignal.timeout(SAVE_TIMEOUT_MS)]);
 
-/** En la sesión del worktree, al empezar el harness. Un no o un error nunca guardan nada en la KB. */
+/** En la sesión del worktree, con un trabajo activo. Un no o un error nunca guardan nada en la KB. */
 export async function offerFoundations(ctx: ExtensionContext, session: DevelopmentSession, kb: KbClient | undefined): Promise<void> {
 	const file = ctx.sessionManager.getSessionFile();
 	if (!kb || !file || offered.has(file) || !session.state) return;

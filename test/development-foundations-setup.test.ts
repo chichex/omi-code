@@ -1,4 +1,5 @@
-// Sin Foundations, el harness ofrece armarlo y lo guarda en la KB sólo con el sí. Nunca la KB real.
+// El creador de Foundations arma el bloque por preguntas y lo guarda en la KB sólo con el sí. Nunca la KB real.
+// Arrancar el harness sin Foundations no lo ofrece: sin Foundations nada pregunta.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile } from "node:fs/promises";
@@ -6,14 +7,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { DevelopmentSession } from "../src/tui/development-session.ts";
 import { parseFoundations, foundationsHash, type FoundationsBlock } from "../src/harness/foundations.ts";
 import { foundationsDir, readTrust, trustPath } from "../src/harness/foundations-trust.ts";
-import { shouldOfferFoundations, FOUNDATIONS_OFFER } from "../src/tui/development-foundations-setup.ts";
+import { offerFoundations, shouldOfferFoundations, FOUNDATIONS_OFFER } from "../src/tui/development-foundations-setup.ts";
 import { commitFoundationsSave, prepareFoundationsSave } from "../src/tui/development-foundations-save.ts";
 import { createKbClient } from "../src/tui/kb-client.ts";
 import { developmentFixture } from "./helpers/development.ts";
 import { memoryKb, mockKb, type MemoryKb } from "./helpers/mock-kb.ts";
-import { tempDir } from "./helpers/io.ts";
+import { tempDir, testIo } from "./helpers/io.ts";
 import { KEYS, typed } from "./helpers/questions.ts";
 
 process.env.PI_CODING_AGENT_DIR = await mkdtemp(join(tmpdir(), "omi-kb-agent-"));
@@ -25,7 +27,13 @@ async function fixture(t: TestContext, options: { products?: string[]; body?: st
 	const kb = memoryKb({ products: options.products ?? ["repo"] });
 	if (options.body !== null) kb.perillas("repo", options.body ?? HUMAN);
 	const f = await developmentFixture(t, { kb });
-	return Object.assign(f, { kb });
+	// La oferta no sale sola al arrancar: se la llama con la sesión del trabajo, como haría quien la ofrezca.
+	const offer = async () => {
+		const pi = { appendEntry: (name: string, data: unknown) => f.manager.appendCustomEntry(name, data), events: { emit() {} } } as unknown as ExtensionAPI;
+		const session = new DevelopmentSession(pi, testIo({ homeDir: f.home, cwd: f.checkout.root }), [], { runner: f.runner, kb });
+		await session.restore(f.context); await offerFoundations(f.context, session, kb);
+	};
+	return Object.assign(f, { kb, offer });
 }
 // Las teclas de cada tanda, en orden: la oferta y, al armar, comandos, políticas y resumen.
 const batches = (...keys: string[][]) => () => keys.shift();
@@ -36,8 +44,17 @@ const ALL_ASK = ["1", "1", "1", "1", KEYS.enter];
 // El sí sensible: el número sólo lleva el cursor, Enter guarda.
 const SAVE = ["1", KEYS.enter];
 
+test("foundations_setup: arrancar el harness sin Foundations no ofrece armarlo ni pregunta nada", async (t) => {
+	for (const options of [{}, { body: null }]) {
+		const f = await fixture(t, options); f.uiControl.questions = batches(BUILD);
+		await f.start();
+		assert.equal(f.asked.length, 0, "sin la oferta"); assert.equal(f.selects.length, 0); assert.deepEqual(f.prompts, []);
+		assert.equal(saves(f.kb), 0); assert.equal(await readTrust(foundationsDir(f.home), KEY(f)), undefined, "nada en el registro local");
+	}
+});
+
 test("foundations_setup: la oferta es una pregunta con «Armar» recomendada y lo que pasa con cada opción", async (t) => {
-	const f = await fixture(t); await f.start();
+	const f = await fixture(t); await f.start(); await f.offer();
 	assert.equal(f.selects.length, 0, "sin el selector de antes");
 	assert.equal(f.asked.length, 1);
 	// Sin los cortes de línea del ancho de la terminal.
@@ -53,10 +70,10 @@ test("foundations_setup: la oferta es una pregunta con «Armar» recomendada y l
 test("foundations_setup: se ofrece una vez por sesión; «Ahora no» y Esc no guardan nada", async (t) => {
 	for (const keys of [["2"], [KEYS.esc]]) {
 		const f = await fixture(t); f.uiControl.questions = batches(keys);
-		await f.start();
+		await f.start(); await f.offer();
 		assert.equal(f.asked.length, 1, JSON.stringify(keys));
 		assert.equal(await readTrust(foundationsDir(f.home), KEY(f)), undefined, "nada en el registro local");
-		await f.attach(); await f.command("resume"); await f.start();
+		await f.attach(); await f.command("resume"); await f.start(); await f.offer();
 		assert.equal(f.asked.length, 1, "no se vuelve a ofrecer en la misma sesión");
 		assert.equal(saves(f.kb), 0);
 	}
@@ -64,11 +81,11 @@ test("foundations_setup: se ofrece una vez por sesión; «Ahora no» y Esc no gu
 
 test("foundations_setup: «No ofrecer más» queda registrado y no vuelve", async (t) => {
 	const f = await fixture(t); f.uiControl.questions = batches(["3"]);
-	await f.start();
+	await f.start(); await f.offer();
 	assert.equal(f.asked.length, 1);
 	const record = await readTrust(foundationsDir(f.home), KEY(f));
 	assert.equal(record?.offerDeclined, true); assert.equal(record?.accepted, null);
-	const pin = { origin: "strict" as const, block: null, hash: null, docId: null, author: null, date: null, notice: "", reading: { kind: "missing" as const, key: { kbUrl: f.kb.url, product: "repo", repo: REPO }, perillas: null } };
+	const pin = { origin: "default" as const, block: null, hash: null, docId: null, author: null, date: null, notice: "", reading: { kind: "missing" as const, key: { kbUrl: f.kb.url, product: "repo", repo: REPO }, perillas: null } };
 	assert.equal(shouldOfferFoundations(pin, record, true), false);
 	assert.equal(shouldOfferFoundations(pin, undefined, true), true);
 	assert.equal(shouldOfferFoundations(pin, undefined, false), false, "sin UI no se ofrece");
@@ -79,7 +96,7 @@ test("foundations_setup: «No ofrecer más» queda registrado y no vuelve", asyn
 test("foundations_setup: el sí guarda una vez, conserva el resto de las perillas y vale en la sesión", async (t) => {
 	const f = await fixture(t);
 	f.uiControl.questions = batches(BUILD, NODE_TEST, ALL_ASK, [KEYS.pageDown, KEYS.pageDown, ...SAVE]);
-	await f.start();
+	await f.start(); await f.offer();
 	assert.equal(f.editors.length, 0, "sin editor de JSON");
 	assert.equal(f.asked.length, 4);
 	assert.equal(saves(f.kb), 1);
@@ -95,11 +112,13 @@ test("foundations_setup: el sí guarda una vez, conserva el resto de las perilla
 	assert.match(f.messages.at(-1)!, /Foundations: KB · revisión/);
 	await f.invoke("omi_workflow_check", { kind: "reproduction", command: "node test.cjs" });
 	assert.equal(f.prompts.filter((p) => p === "Autorizar comando del proyecto").length, 0, "el catálogo nuevo vale en esta sesión");
+	await f.invoke("omi_workflow_check", { kind: "reproduction", command: "node other-test.cjs" });
+	assert.equal(f.prompts.filter((p) => p === "Autorizar comando del proyecto").length, 1, "y su fuera del catálogo: ask también");
 });
 
 test("foundations_setup: sin perillas crea el documento del producto", async (t) => {
 	const f = await fixture(t, { body: null }); f.uiControl.questions = batches(BUILD, [KEYS.enter], ALL_ASK, SAVE);
-	await f.start();
+	await f.start(); await f.offer();
 	assert.equal(saves(f.kb), 1);
 	assert.ok(f.kb.documents.at(-1)!.cuerpo.startsWith("# Perillas de repo\n\n## Foundations de omi · test/repo\n"));
 });
@@ -107,7 +126,7 @@ test("foundations_setup: sin perillas crea el documento del producto", async (t)
 test("foundations_setup: un comando libre inválido vuelve al texto con el motivo", async (t) => {
 	const f = await fixture(t);
 	f.uiControl.questions = batches(BUILD, [KEYS.space, ...typed("node test.cjs"), KEYS.newLine, ...typed("  npm x"), KEYS.enter, KEYS.esc, ...NODE_TEST], ALL_ASK, SAVE);
-	await f.start();
+	await f.start(); await f.offer();
 	assert.ok(f.asked[1]!.some((screen) => /Línea 2: un comando tiene espacios al borde/.test(screen)), "muestra el motivo");
 	assert.equal(saves(f.kb), 1);
 	const parsed = parseFoundations(f.kb.documents.at(-1)!.cuerpo, REPO);
@@ -117,7 +136,7 @@ test("foundations_setup: un comando libre inválido vuelve al texto con el motiv
 test("foundations_setup: «Cancelar» o Esc en el resumen, o Esc en una pregunta, no guardan", async (t) => {
 	for (const keys of [[NODE_TEST, ALL_ASK, ["3", KEYS.enter]], [NODE_TEST, ALL_ASK, [KEYS.esc]], [NODE_TEST, [KEYS.esc]], [[KEYS.esc]]]) {
 		const f = await fixture(t); f.uiControl.questions = batches(BUILD, ...keys);
-		await f.start();
+		await f.start(); await f.offer();
 		assert.equal(saves(f.kb), 0, JSON.stringify(keys));
 		assert.equal(f.asked.length, keys.length + 1);
 	}
@@ -125,7 +144,7 @@ test("foundations_setup: «Cancelar» o Esc en el resumen, o Esc en una pregunta
 
 test("foundations_setup: en el resumen un número sólo mueve el cursor; guarda recién con Enter", async (t) => {
 	const f = await fixture(t); f.uiControl.questions = batches(BUILD, NODE_TEST, ALL_ASK, ["1"]);
-	await f.start();
+	await f.start(); await f.offer();
 	assert.equal(saves(f.kb), 0, "un «1» suelto no guarda en la KB");
 	assert.match(f.asked[3]!.at(-1)!, /› 1\. Guardar en la KB/, "el cursor quedó en Guardar");
 	assert.match(f.asked[3]!.at(-1)!, /1–3 moverse · Enter confirmar/, "la ayuda lo dice");
@@ -134,7 +153,7 @@ test("foundations_setup: en el resumen un número sólo mueve el cursor; guarda 
 test("foundations_setup: «Cambiar respuestas» vuelve a las preguntas con lo elegido y guarda lo nuevo", async (t) => {
 	const f = await fixture(t);
 	f.uiControl.questions = batches(BUILD, [KEYS.enter], ALL_ASK, ["2", KEYS.enter], NODE_TEST, [KEYS.enter, KEYS.enter], SAVE);
-	await f.start();
+	await f.start(); await f.offer();
 	assert.equal(f.asked.length, 7);
 	assert.match(f.asked[5]![0]!, /■ Arranque/, "las políticas vuelven respondidas");
 	assert.equal(saves(f.kb), 1);
@@ -147,7 +166,7 @@ test("foundations_setup: los comandos detectados del repo son opciones a marcar,
 	await f.write("package.json", JSON.stringify({ scripts: { test: "node test.cjs", deploy: "x" } })); await f.write("package-lock.json", "{}");
 	for (const args of [["add", "."], ["commit", "-m", "chore: scripts"]]) execFileSync("git", args, { cwd: f.checkout.root, stdio: "ignore" });
 	await f.attach(); f.uiControl.questions = batches(BUILD, ["2", KEYS.enter], ALL_ASK, SAVE);
-	await f.start();
+	await f.start(); await f.offer();
 	const screen = f.asked[1]![0]!;
 	assert.match(screen, /1\. \[ \] npm ci/); assert.match(screen, /Instala las dependencias según package-lock\.json/);
 	assert.match(screen, /2\. \[ \] npm test/); assert.match(screen, /Script «test» de package\.json/);
@@ -158,7 +177,7 @@ test("foundations_setup: los comandos detectados del repo son opciones a marcar,
 
 test("foundations_setup: sin la TUI interactiva (RPC) no se ofrece", async (t) => {
 	const f = await fixture(t); Reflect.set(f.context, "mode", "rpc"); f.uiControl.questions = batches(BUILD);
-	await f.start();
+	await f.start(); await f.offer();
 	assert.equal(f.selects.length, 0); assert.equal(f.asked.length, 0); assert.equal(saves(f.kb), 0);
 });
 
@@ -166,14 +185,14 @@ test("foundations_setup: si las perillas cambian durante el diálogo no se guard
 	const f = await fixture(t); f.uiControl.questions = batches(BUILD, NODE_TEST, ALL_ASK, SAVE);
 	let searches = 0;
 	f.kb.hook = (tool) => { if (tool === "buscar" && ++searches === 3) f.kb.perillas("repo", "Otra persona guardó."); };
-	await f.start();
+	await f.start(); await f.offer();
 	assert.equal(saves(f.kb), 0);
 	assert.ok(f.messages.some((m) => /cambiaron/.test(m)));
 });
 
 test("foundations_setup: un producto fuera de mis_productos no se ofrece ni se guarda", async (t) => {
 	const f = await fixture(t, { products: ["otro"] }); f.uiControl.questions = batches(BUILD);
-	await f.start();
+	await f.start(); await f.offer();
 	assert.equal(f.selects.length, 0); assert.equal(f.asked.length, 0); assert.equal(saves(f.kb), 0);
 });
 

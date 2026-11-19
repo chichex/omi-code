@@ -1,5 +1,5 @@
-// Harness sobre el runtime de Pi. Un pedido de desarrollo lo arranca con un único sí humano
-// (development-begin); sus tools empiezan inactivas y sólo omi_work_begin se ofrece en el chat normal.
+// Harness sobre el runtime de Pi. Un pedido de desarrollo lo arranca (development-begin) sin preguntar, salvo
+// que Foundations diga arranque: ask; sus tools empiezan inactivas y sólo omi_work_begin se ofrece en el chat normal.
 import { lstat, realpath } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, InlineExtension } from "@earendil-works/pi-coding-agent";
@@ -17,7 +17,6 @@ import { beginCommand, BEGIN_SUBCOMMAND, holdSessionSwitch, revokeDevelopmentTic
 import { restoreIssueTriage } from "./workspace/issue-triage.ts";
 import { IssuePreparationBusyError } from "./workspace/issue-registry.ts";
 import { effectivePolicy, foundationsLines } from "./development-foundations.ts";
-import { offerFoundations } from "./development-foundations-setup.ts";
 import { editFoundations } from "./development-foundations-edit.ts";
 import { HeldLoadout } from "./development-loadout.ts";
 
@@ -59,18 +58,17 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 		trackExtensionMessages(pi, session, [KICKOFF]);
 		let pendingBegin: string | undefined;
 		registerBeginTool(pi, { offline: session.offline, busy: () => !!session.state || !!session.lockedReason, onRequest: (token) => { pendingBegin = token; } });
-		// Sin el sí humano no se llama al modelo: un trabajo pausado o terminado sólo informa su estado.
+		// Sin arrancar no se llama al modelo: un trabajo pausado o terminado sólo informa su estado.
 		const proceed = (ctx: ExtensionContext) => {
 			if (!session.state || session.state.status === "paused" || session.state.status === "complete") { ctx.ui.notify(session.status(), "info"); return; }
 			if (!ctx.model || !ctx.modelRegistry.hasConfiguredAuth(ctx.model)) { ctx.ui.notify("Trabajo guardado. Elegí un modelo autenticado para continuar.", "warning"); return; }
 			pi.sendUserMessage(KICKOFF);
 		};
-		// Sólo después del sí de begin: ese sí también reanuda un trabajo pausado, como dijo el diálogo.
+		// Sólo después del arranque de begin (el sí o arranque: auto), que también reanuda un trabajo pausado.
+		// Sin Foundations no se ofrece armarlo: sin Foundations nada pregunta.
 		const startHere = async (ctx: ExtensionContext) => {
 			await session.start(ctx);
 			if (session.state?.status === "paused") await session.apply({ type: "resume" }, ctx);
-			// Sin Foundations para el repo, se ofrece armarlo una vez por sesión; sólo se guarda con el sí.
-			await offerFoundations(ctx, session, deps.kb).catch((error: unknown) => ctx.ui.notify(`Foundations: ${error instanceof Error ? error.message : "no se pudo ofrecer"}`, "warning"));
 			loadout(); proceed(ctx);
 		};
 		async function begin(token: string, ctx: ExtensionCommandContext): Promise<void> {

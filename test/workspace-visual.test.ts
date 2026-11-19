@@ -732,7 +732,7 @@ test("workspace_OMI muestra Foundations vigente con su procedencia; f y la palet
 		assert.match(empty, /f Foundations/, "la tecla está en la ayuda de la vista");
 	} finally { await plain.stop(); }
 	// El pin vive en el harness, otra extensión: se fija con su propia API, como lo haría una sesión.
-	const gate = new FoundationsGate({ kb: undefined, runner: { run: async () => ({ code: 1, stdout: "", stderr: "" }) }, trustDir: join(home, "trust"), now: () => "", confirm: async () => false });
+	const gate = new FoundationsGate({ kb: undefined, runner: { run: async () => ({ code: 1, stdout: "", stderr: "" }) }, trustDir: join(home, "trust"), now: () => "" });
 	const session = { cwd: home, hasUI: false, sessionManager: { getSessionFile: () => sessionFile } } as unknown as ExtensionContext;
 	gate.load(session); const base = await gate.pin(session);
 	const block = { version: 1 as const, repo: "test/repo", comandos: ["npm test"], politica: { arranque: "ask" as const, receta: "ask" as const, fuera_de_catalogo: "ask" as const, push_pr: "auto" as const } };

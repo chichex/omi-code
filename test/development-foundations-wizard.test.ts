@@ -98,7 +98,8 @@ test("foundations_wizard: el resumen es legible, sin JSON, sin elegir nada por d
 		assert.deepEqual(question.options.map((o) => o.label), [...SAVE_CHOICES]);
 		assert.equal(question.recommended, false, "un sí sensible no tiene recomendada"); assert.equal(question.freeText, false); assert.equal(question.initial, undefined);
 		const detail = question.detail ?? "";
-		assert.match(detail, /Comandos que corren sin preguntar:\n.*npm test/); assert.match(detail, /fuera del catálogo: ask → auto\s+⚠ corre cualquier comando/);
+		assert.match(detail, /Comandos que corren sin preguntar:\n.*npm test/); assert.match(detail, /fuera del catálogo: auto\s+⚠ corre cualquier comando/);
+		assert.match(detail, /Antes: sin Foundations \(por defecto: todo auto\)/); assert.match(detail, /arranque: auto → ask/, "lo que pasa a preguntar se ve contra el default");
 		assert.ok(detail.includes(where)); assert.match(detail, /kb\.example\.test/);
 		assert.doesNotMatch(detail, /[{}]|"politica"|"comandos"/, "no es JSON");
 	}
