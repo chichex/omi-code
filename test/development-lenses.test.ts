@@ -64,7 +64,7 @@ test("development_lenses un unknown o fail de un lente asesor queda como aviso: 
 	assert.ok(progress.warnings.some((w) => /reliability/.test(w) && /fail/.test(w) && /caso 0/.test(w)));
 	await f.action({ action: "publish" });
 	assert.equal((await f.state()).phase, "done");
-	assert.match(f.remote.prBody, /Avisos de los lentes/); assert.match(f.remote.prBody, /compliance.*unknown/); assert.match(f.remote.prBody, /falta el caso 0/);
+	assert.match(f.remote.prBody, /^## Advertencias$/m); assert.match(f.remote.prBody, /^ {2}- \*\*Cumplimiento:\*\* ⚠️ unknown$/m); assert.match(f.remote.prBody, /^ {2}- \*\*Confiabilidad:\*\* ❌ fail\n {4}- test\.cjs:1 · falta el caso 0$/m);
 });
 
 test("development_lenses un fail del lente de seguridad sí bloquea Verificar", async (t) => {

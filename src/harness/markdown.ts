@@ -1,7 +1,8 @@
 // Markdown seguro para GitHub, compartido por la sección del issue y el cuerpo del PR draft. Todo dato
 // (modelo, receta, comandos, persona) pasa por text, code, cell o codeBlock: en GitHub nada queda activo.
-import type { Evidence, Lens } from "./model.ts";
-import { expectedFailure } from "./state.ts";
+import type { Agreement, Evidence, Lens, Recipe, Workflow } from "./model.ts";
+import { PHASE_LABELS } from "./phases.ts";
+import { expectedFailure, isApproved } from "./state.ts";
 
 export const TYPES = { add: "Nueva capacidad", fix: "Corrección", improve: "Mejora", chore: "Mantenimiento" };
 export const ROUTES = { direct: "Directa", diagnostic: "Diagnóstico", spec: "Con spec" };
@@ -31,8 +32,18 @@ export function codeBlock(value: string): string[] {
 	return [fence, ...content, fence].map((l) => `  ${l}`.trimEnd() || "  ");
 }
 export const list = (label: string, values: string[]) => values.length ? [`- **${label}:**`, ...values.map((v) => `  - ${text(v)}`)] : [];
+// Un caso D de la receta; un comando multilínea va en un bloque con una cerca más larga.
+export const caseLines = (d: Recipe["cases"][number]): string[] => d.command.includes("\n") ? [`- **${text(d.id)}** ${text(d.description)}`, ...codeBlock(d.command)] : [`- **${text(d.id)}** ${code(d.command)} · ${text(d.description)}`];
+export const agreementLine = (a: Agreement): string => `- «${text(a.quote)}» → ${text(a.summary)} _(${PHASE_LABELS[a.phase]}${a.replan ? "; rehízo la receta" : ""})_`;
+export const VERDICTS = { pass: "✅ pass", fail: "❌ fail", unknown: "⚠️ unknown", "not-run": "sin correr" };
 export function evidenceResult(e: Evidence): string {
 	if (e.outcome === "interrupted") return "⚠️ interrumpido";
 	if (e.outcome === "passed") return `✅ exit ${e.exitCode}`;
 	return e.kind === "red" && expectedFailure(e) ? `🔴 exit ${e.exitCode} · rojo esperado` : `❌ exit ${e.exitCode ?? "—"}`;
+}
+// Un acuerdo del chat que cambió el alcance con receta ya armada la deja en revisión hasta el nuevo sí.
+export const revising = (w: Workflow) => !isApproved(w) && (w.agreements ?? []).some((a) => a.replan && !["explore", "decide"].includes(a.phase));
+export function recipeApproval(w: Workflow): string {
+	if (w.approval && isApproved(w)) return w.approval.by === "foundations" ? "aprobada por Foundations (receta: auto), sin revisión humana" : "aprobada por la persona en OMI";
+	return revising(w) ? "en revisión: un acuerdo del chat cambió el alcance; la receta se rehace y se vuelve a aprobar" : "pendiente";
 }

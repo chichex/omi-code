@@ -2,8 +2,8 @@
 // nobody reviews it before publishing and it may print credentials.
 import { processRunner, type CommandOptions, type Runner } from "../core/exec.ts";
 import { gitRead, inspectCheckout } from "./git.ts";
-import { artifactHash, issueRepository, sourceHash, type Workflow } from "./model.ts";
-import { githubBody, renderWorkflowArtifact } from "./pr-body.ts";
+import { issueRepository, sourceHash, type Workflow } from "./model.ts";
+import { pullRequestBody } from "./pr-body.ts";
 import { ISSUE_BODY_LIMIT, issueSectionVariants, parseIssueBody, withIssueSection, type IssueBody } from "./issue-section.ts";
 
 const START = "<!-- omi-development:start -->";
@@ -60,11 +60,13 @@ export async function syncIssueSection(workflow: Workflow, runner: Runner = proc
  if ((await readIssue(workflow.checkout, workflow.source.number, runner, signal)).parts.section !== `\n${content}\n`) throw new Error("No se pudo confirmar la sección del harness en el issue; revisalo en GitHub antes de reintentar");
  return true;
 }
+// Sólo el cuerpo del recibo pendiente: un recibo de otro cuerpo (formato anterior u otro estado) no se publica
+// ni con su cuerpo ni con el nuevo. La sesión lo renueva según push_pr antes de llegar acá.
 export function renderPullRequestBody(workflow: Workflow): string {
- const artifact = renderWorkflowArtifact(workflow);
- if (workflow.publication.status !== "pending" || workflow.publication.bodyHash !== artifactHash(artifact)) throw new Error("El artefacto de publicación cambió; requiere nueva aprobación");
- const identity = { workflowId: workflow.id, sourceHash: workflow.source.hash, head: workflow.publication.head, bodyHash: workflow.publication.bodyHash };
- return githubBody(`<!-- omi-development:pr identity=${artifactHash(identity)} source=${identity.sourceHash} head=${identity.head} artifact=${identity.bodyHash} -->\nRefs #${workflow.source.number}\n\n${workflow.source.url}\n\n${artifact}`);
+ if (workflow.publication.status !== "pending") throw new Error("No hay una publicación pendiente");
+ const proposal = pullRequestBody(workflow, workflow.publication.head);
+ if (proposal.bodyHash !== workflow.publication.bodyHash) throw new Error("El cuerpo del PR cambió desde el recibo pendiente; volvé a publicar para renovarlo con la política push_pr vigente");
+ return proposal.body;
 }
 function remoteRepo(remote: string): string {
  const match = /^(?:git@github\.com:|https:\/\/github\.com\/|ssh:\/\/git@github\.com\/)([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+?)(?:\.git)?$/.exec(remote);
@@ -85,7 +87,7 @@ async function recover(workflow: Workflow, repo: string, runner: Runner, signal?
  if (!raw.length) return null;
  if (raw.length !== 1) throw new Error("Hay varios PRs para el branch; requiere revisión humana");
  const pr = object(raw[0]);
- if (workflow.publication.status !== "pending" || pr.state !== "OPEN" || pr.isDraft !== true || pr.isCrossRepository !== false || pr.headRefName !== workflow.checkout.branch || pr.baseRefName !== "main" || pr.headRefOid !== workflow.publication.head || pr.body !== renderPullRequestBody(workflow) || typeof pr.number !== "number" || !Number.isSafeInteger(pr.number) || pr.number < 1 || pr.url !== `https://github.com/${repo}/pull/${pr.number}`) throw new Error("PR existente ajeno, cerrado, no draft o con otro HEAD; no se duplica");
+ if (workflow.publication.status !== "pending" || pr.state !== "OPEN" || pr.isDraft !== true || pr.isCrossRepository !== false || pr.headRefName !== workflow.checkout.branch || pr.baseRefName !== "main" || pr.headRefOid !== workflow.publication.head || pr.body !== renderPullRequestBody(workflow) || typeof pr.number !== "number" || !Number.isSafeInteger(pr.number) || pr.number < 1 || pr.url !== `https://github.com/${repo}/pull/${pr.number}`) throw new Error("PR existente ajeno, editado, de una publicación anterior, cerrado, no draft o con otro HEAD; no se edita ni se duplica: revisalo en GitHub");
  return { number: pr.number, url: String(pr.url), head: String(pr.headRefOid) };
 }
 export async function publishDraft(workflow: Workflow, runner: Runner = processRunner, signal?: AbortSignal): Promise<Published> {

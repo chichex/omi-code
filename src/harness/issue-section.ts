@@ -2,10 +2,9 @@
 // intacto byte a byte; la sección se reescribe entera y nunca se toca texto fuera de sus marcadores.
 import type { Evidence, Workflow } from "./model.ts";
 import { PHASE_LABELS } from "./phases.ts";
-import { isApproved } from "./state.ts";
 import { lensStatuses } from "./lenses.ts";
 import { fences } from "./fences.ts";
-import { cell, code, codeBlock, evidenceResult, LENSES, list, ROUTES, text, TYPES } from "./markdown.ts";
+import { agreementLine, caseLines, cell, code, evidenceResult, LENSES, list, recipeApproval, revising, ROUTES, text, TYPES, VERDICTS } from "./markdown.ts";
 export const SECTION_START = "<!-- omi:harness:start -->";
 export const SECTION_END = "<!-- omi:harness:end -->";
 // Lo que OMI agrega entre el pedido y la sección; se descuenta al leer el pedido.
@@ -57,12 +56,6 @@ function stage(w: Workflow): string {
 	const status = w.status === "paused" ? " · **Pausado**" : w.status === "waiting" ? ` · **En espera:** ${text(w.blockedReason || "intervención humana")}` : "";
 	return `**Ruta:** ${w.recipe ? ROUTES[w.recipe.route] : "pendiente"} · **Etapa:** ${PHASE_LABELS[w.phase]}${detail}${status}`;
 }
-// Un acuerdo del chat que cambió el alcance con receta ya armada la deja en revisión hasta el nuevo sí.
-const revising = (w: Workflow) => !isApproved(w) && (w.agreements ?? []).some((a) => a.replan && !["explore", "decide"].includes(a.phase));
-function approval(w: Workflow): string {
-	if (w.approval && isApproved(w)) return w.approval.by === "foundations" ? "aprobada por Foundations (receta: auto), sin revisión humana" : "aprobada por la persona en OMI";
-	return revising(w) ? "en revisión: un acuerdo del chat cambió el alcance; la receta se rehace y se vuelve a aprobar" : "pendiente";
-}
 function recipe(w: Workflow): string[] {
 	const r = w.recipe; if (!r) return [];
 	const c = r.classification;
@@ -71,9 +64,9 @@ function recipe(w: Workflow): string[] {
 		...(c.riskAreas.length ? [`- **Áreas de riesgo:** ${c.riskAreas.map(text).join("; ")}`] : []),
 		...(w.diagnosis ? [`- **Causa:** ${text(w.diagnosis.cause)}`] : []), ...(w.spec ? [`- **Por qué:** ${text(w.spec.why)}`] : []),
 		...list("Alcance", r.scope), ...list("Fuera de alcance", r.outOfScope),
-		...r.cases.flatMap((d) => d.command.includes("\n") ? [`- **${text(d.id)}** ${text(d.description)}`, ...codeBlock(d.command)] : [`- **${text(d.id)}** ${code(d.command)} · ${text(d.description)}`]),
+		...r.cases.flatMap(caseLines),
 		...(r.lenses.length ? [`- **Lentes:** ${r.lenses.map((l) => LENSES[l]).join(", ")}`] : []),
-		`- **Aprobación:** ${approval(w)}`];
+		`- **Aprobación:** ${recipeApproval(w)}`];
 }
 function steps(w: Workflow): string[] {
 	if (!w.steps.length) return [];
@@ -87,7 +80,7 @@ function decisions(w: Workflow): string[] {
 }
 function agreements(w: Workflow): string[] {
 	const all = w.agreements ?? [];
-	return all.length ? ["", "### Acuerdos del chat", ...all.map((a) => `- «${text(a.quote)}» → ${text(a.summary)} _(${PHASE_LABELS[a.phase]}${a.replan ? "; rehízo la receta" : ""})_`)] : [];
+	return all.length ? ["", "### Acuerdos del chat", ...all.map(agreementLine)] : [];
 }
 function evidence(w: Workflow, detail: Detail): string[] {
 	// Último resultado por prueba: un intento viejo no se muestra como el estado actual. Resumida, sólo
@@ -103,11 +96,10 @@ function evidence(w: Workflow, detail: Detail): string[] {
 function lenses(w: Workflow, detail: Detail | "verdicts"): string[] {
 	const statuses = lensStatuses(w);
 	if (!statuses.length || (!w.reviews.length && !["verify", "pr", "done"].includes(w.phase))) return [];
-	const verdict = { pass: "✅ pass", fail: "❌ fail", unknown: "⚠️ unknown", "not-run": "sin correr" };
 	const findings = (all: string[]) => detail === "verdicts" ? [] : detail === "full" || all.length <= 1 ? all.map((f) => `  - ${text(f)}`)
 		: [`  - ${text(all[0]!)}`, `  - _y ${all.length - 1} hallazgos más en OMI_`];
 	return ["", "### Avisos de los lentes", "Los lentes asesoran: unknown y fail quedan como aviso y no bloquean Verificar ni el PR draft. Sólo un fail de seguridad bloquea.",
-		...statuses.flatMap((st) => [`- **${LENSES[st.lens]}:** ${verdict[st.verdict]}${st.blocking ? " · bloquea" : ""}`, ...findings(st.findings)])];
+		...statuses.flatMap((st) => [`- **${LENSES[st.lens]}:** ${VERDICTS[st.verdict]}${st.blocking ? " · bloquea" : ""}`, ...findings(st.findings)])];
 }
 const FOOTER = "<sub>Sección administrada por OMI: se reescribe entera y lo que se edite acá se pierde. El pedido es el texto de arriba.</sub>";
 const DETAIL = "El detalle completo está en OMI (`/omi-progress`) y en el PR draft.";

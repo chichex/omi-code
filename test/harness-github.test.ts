@@ -126,7 +126,8 @@ test("publication creates draft with immutable SHA/stdin and recovers ambiguous 
  assert.deepEqual(await publishDraft(f.workflow, f.runner), { number: 3, url: f.pr.url, head: f.pr.headRefOid });
  assert.equal(f.calls.filter(c => c.args[0] === "pr" && c.args[1] === "create").length, 1);
  const push = f.calls.find(c => c.args.includes("push")); assert.ok(push); assert.ok(push.args.includes(`${"b".repeat(40)}:refs/heads/feat/task`)); assert.ok(!push.args.includes("--force"));
- const create = f.calls.find(c => c.args[1] === "create"); assert.ok(create?.args.includes("--draft")); assert.ok(create?.options?.input?.includes("Refs #42")); assert.ok(!create?.options?.input?.includes("Closes"));
+ const create = f.calls.find(c => c.args[1] === "create"); assert.ok(create?.args.includes("--draft"));
+ const sent = create?.options?.input ?? ""; assert.equal(sent.split("\n")[1], "Closes #42", "cierra el issue validado al merge humano, en su propia línea"); assert.doesNotMatch(sent, /Refs #/);
  assert.ok(f.calls.filter(c => c.args[0] === "pr" && c.args[1] === "list").every(c => c.args[c.args.indexOf("--json") + 1]?.split(",").includes("body")));
  assert.ok(f.calls.every(c => !["sh", "bash"].includes(c.command)));
 });
@@ -148,6 +149,7 @@ test("publication refuses wrong remote, nonpending phase and unrelated same-SHA 
 test("publication identity binds workflow, source, head and exact artifact; human PR edits are not recovered", async (t) => {
  const f = await fixture(t); await publishDraft(f.workflow, f.runner);
  const body = f.pr.body; assert.equal(body, renderPullRequestBody(f.workflow)); assert.ok(body.includes(f.workflow.source.hash)); assert.ok(body.includes("b".repeat(40))); assert.ok(body.includes(artifactHash(renderWorkflowArtifact(f.workflow))));
+ assert.ok(f.workflow.publication.status === "pending" && artifactHash(body.slice(body.indexOf("\n") + 1)) === f.workflow.publication.bodyHash, "el hash cubre todo lo que sigue al marcador, también el Closes");
  f.pr.body += "human edit"; await assert.rejects(publishDraft(f.workflow, f.runner)); f.pr.body = body;
  await assert.rejects(publishDraft({ ...f.workflow, id: "another-workflow" }, f.runner));
  f.workflow.inferences.push({ id: "I1", kind: "what", question: "Q", recommended: "R", confidence: 90, irreversible: false, references: [], resolution: "answered", answer: "A" });
@@ -175,24 +177,29 @@ test("mandatory recipe and inferences are never silently bounded by presentation
  const body = renderWorkflowArtifact(f.workflow); assert.ok(body.includes(objective)); assert.ok(body.includes(answer));
 });
 
-test("GitHub body limit includes the PR ownership wrapper before any remote write", async (t) => {
+test("GitHub body limit includes the PR ownership marker before any remote write", async (t) => {
  const f = await fixture(t); f.workflow.source.body = "";
- const base = Buffer.byteLength(renderWorkflowArtifact(f.workflow)); f.workflow.source.body = "x".repeat(65530 - base);
- assert.equal(Buffer.byteLength(renderWorkflowArtifact(f.workflow)), 65530);
- if (f.workflow.publication.status === "pending") f.workflow.publication.bodyHash = artifactHash(renderWorkflowArtifact(f.workflow));
+ const base = Buffer.byteLength(renderWorkflowArtifact(f.workflow));
+ // El marcador más largo posible: hashes y HEAD de 64 caracteres.
+ const marker = "<!-- omi-development:pr identity= source= head= artifact= -->".length + 4 * 64;
+ f.workflow.source.body = "x".repeat(65536 - base - 1 - marker);
+ assert.ok(Buffer.byteLength(renderWorkflowArtifact(f.workflow)) < 65536 - marker, "con el marcador entra justo");
+ f.workflow.source.body += "x";
+ assert.ok(base + f.workflow.source.body.length < 65536, "sin el marcador entraría");
+ assert.throws(() => renderWorkflowArtifact(f.workflow), /dividir/i);
  await assert.rejects(publishDraft(f.workflow, f.runner), /dividir/i);
  assert.equal(f.calls.length, 0);
 });
 
 test("large evidence lists may be summarized explicitly without losing mandatory artifact", async (t) => {
- const f = await fixture(t); f.workflow.evidence = Array.from({ length: 120 }, (_, i) => ({ id: `E${i}`, kind: "verification" as const, command: "npm test", stepId: null, caseId: null, exitCode: 0, outcome: "passed" as const, output: "z".repeat(12000), fingerprint: "fp", head: "b".repeat(40), startedAt: "now", finishedAt: "now" }));
+ const f = await fixture(t); f.workflow.evidence = Array.from({ length: 1000 }, (_, i) => ({ id: `E${i}`, kind: "verification" as const, command: "npm test", stepId: null, caseId: null, exitCode: 0, outcome: "passed" as const, output: "z".repeat(12000), fingerprint: "fp", head: "b".repeat(40), startedAt: "now", finishedAt: "now" }));
  const body = renderWorkflowArtifact(f.workflow); assert.ok(body.includes("estado local completo")); assert.ok(body.includes("npm test")); assert.ok(body.length < 65536);
 });
 
 test("command output never leaves the machine: the issue section and the PR carry exit codes, not output", async (t) => {
  const f = await fixture(t); f.workflow.evidence = [{ id: "E1", kind: "verification", command: "npm test", stepId: null, caseId: "D1", exitCode: 0, outcome: "passed", output: "GITHUB_TOKEN=ghp_PRINTED_BY_A_TEST\nok", fingerprint: "fp", head: "b".repeat(40), startedAt: "now", finishedAt: "now" }];
  const body = renderWorkflowArtifact(f.workflow);
- assert.ok(body.includes("npm test")); assert.match(body, /"exitCode": 0/); assert.doesNotMatch(body, /ghp_PRINTED_BY_A_TEST|"output"/);
+ assert.ok(body.includes("npm test")); assert.match(body, /✅ exit 0/); assert.doesNotMatch(body, /ghp_PRINTED_BY_A_TEST|GITHUB_TOKEN/);
  const section = renderIssueSection(f.workflow); assert.match(section, /\| D1 \| ✅ exit 0 \|/); assert.doesNotMatch(section, /ghp_PRINTED_BY_A_TEST/);
 });
 
@@ -213,8 +220,24 @@ test("lens warnings are listed in a readable section that says they do not block
  f.workflow.evidence = [{ id: "E1", kind: "verification", command: "npm test", stepId: null, caseId: "D1", exitCode: 0, outcome: "passed", output: "ok", fingerprint: "fp", head: "b".repeat(40), startedAt: "now", finishedAt: "now" }];
  f.workflow.reviews = [{ lens: "compliance", fingerprint: "fp", verdict: "unknown", findings: ["No hay historial rojo/verde"], at: "now" }, { lens: "security", fingerprint: "fp", verdict: "pass", findings: [], at: "now" }];
  const body = renderWorkflowArtifact(f.workflow);
- assert.match(body, /## Avisos de los lentes/); assert.match(body, /no bloquean/i);
- assert.match(body, /compliance · unknown/); assert.match(body, /No hay historial rojo\/verde/); assert.match(body, /security · pass/); assert.match(body, /quality · sin correr/);
+ assert.match(body, /^## Advertencias$/m); assert.match(body, /no bloquean/i);
+ assert.match(body, /^ {2}- \*\*Cumplimiento:\*\* ⚠️ unknown\n {4}- No hay historial rojo\/verde$/m); assert.match(body, /^ {2}- \*\*Seguridad:\*\* ✅ pass$/m); assert.match(body, /^ {2}- \*\*Calidad:\*\* sin correr$/m);
  f.workflow.reviews = [{ lens: "compliance", fingerprint: "fp", verdict: "fail", findings: Array.from({ length: 100 }, () => "h".repeat(4000)), at: "now" }];
- const bounded = renderWorkflowArtifact(f.workflow); assert.match(bounded, /Avisos de los lentes/); assert.ok(bounded.includes("estado local completo")); assert.ok(Buffer.byteLength(bounded) < 65536);
+ const bounded = renderWorkflowArtifact(f.workflow); assert.match(bounded, /^## Advertencias$/m); assert.match(bounded, /^ {2}- \*\*Cumplimiento:\*\* ❌ fail$/m); assert.ok(bounded.includes("estado local completo")); assert.ok(Buffer.byteLength(bounded) < 65536);
+});
+
+test("a pending receipt for an older body (old format) is never published, neither with the old body nor with the new one", async (t) => {
+ const f = await fixture(t);
+ if (f.workflow.publication.status === "pending") f.workflow.publication.bodyHash = artifactHash("# OMI · Desarrollo asistido\nformato anterior");
+ assert.throws(() => renderPullRequestBody(f.workflow), /renov/i);
+ await assert.rejects(publishDraft(f.workflow, f.runner), /renov/i);
+ assert.equal(f.calls.length, 0, "ni push ni PR: el recibo se renueva en la sesión, según push_pr");
+});
+
+test("a draft already opened with an older body blocks: it is not edited, closed or duplicated", async (t) => {
+ const f = await fixture(t);
+ f.state.prs = [{ ...f.pr, body: `<!-- omi-development:pr identity=${"0".repeat(64)} source=${f.workflow.source.hash} head=${"b".repeat(40)} artifact=${"0".repeat(64)} -->\nRefs #42\n\nhttps://github.com/acme/repo/issues/42\n\n# OMI · Desarrollo asistido` }];
+ await assert.rejects(publishDraft(f.workflow, f.runner), /no se edita ni se duplica/);
+ assert.ok(!f.calls.some(c => c.command === "gh" && c.args[0] === "pr" && ["create", "edit", "close", "merge"].includes(c.args[1] ?? "")));
+ assert.ok(!f.calls.some(c => c.args.includes("push")));
 });
