@@ -11,6 +11,7 @@ export const FOUNDATIONS_OFFER = ["Armar Foundations", "Ahora no", "No ofrecer m
 export type OfferDecision = "build" | "later" | "never";
 export const SAVE_CHOICES = ["Guardar en la KB", "Cambiar respuestas", "Cancelar"] as const;
 export type SaveDecision = "save" | "change" | "cancel";
+export const RETRY_CHOICES = ["Reintentar", "Dejar así"] as const;
 
 const POINTS: readonly PolicyPoint[] = ["arranque", "receta", "fuera_de_catalogo", "push_pr"];
 const MODES = { ask: "Preguntar (ask)", auto: "Sin preguntar (auto)" } as const;
@@ -33,10 +34,10 @@ function linesProblem(text: string): string | undefined {
 	return undefined;
 }
 
-function commandsQuestion(detected: readonly DetectedCommand[], previous: readonly string[] | undefined, problem: string): Question {
+function commandsQuestion(detected: readonly DetectedCommand[], previous: readonly string[] | undefined, problem: string, notice: string): Question {
 	const offered = new Set(detected.map((entry) => entry.command));
 	return {
-		id: "comandos", header: "Comandos", question: "¿Qué comandos corren sin preguntar?", detail: problem ? `⚠ ${problem}\n\n${COMMANDS_DETAIL}` : COMMANDS_DETAIL,
+		id: "comandos", header: "Comandos", question: "¿Qué comandos corren sin preguntar?", detail: [notice, problem && `⚠ ${problem}`, COMMANDS_DETAIL].filter(Boolean).join("\n\n"),
 		options: detected.map((entry) => ({ label: entry.command, description: entry.source })), multiSelect: true, recommended: false,
 		freeText: { multiline: true, validate: linesProblem },
 		...(previous ? { initial: { options: previous.filter((c) => offered.has(c)), text: previous.filter((c) => !offered.has(c)).join("\n") || null } } : {}),
@@ -69,11 +70,11 @@ export async function chooseFoundationsOffer(ask: Ask, target: { repo: string; p
 	return choice === FOUNDATIONS_OFFER[0] ? "build" : choice === FOUNDATIONS_OFFER[2] ? "never" : "later";
 }
 
-/** El bloque que armó la persona, o `undefined` si canceló. Con `previous`, vuelve con lo que ya había elegido. */
-export async function composeFoundations(ask: Ask, input: { repo: string; detected: readonly DetectedCommand[]; previous?: FoundationsBlock }): Promise<FoundationsBlock | undefined> {
+/** El bloque que armó la persona, o `undefined` si canceló. Con `previous`, vuelve con lo que ya había elegido. `notice` encabeza los comandos. */
+export async function composeFoundations(ask: Ask, input: { repo: string; detected: readonly DetectedCommand[]; previous?: FoundationsBlock; notice?: string }): Promise<FoundationsBlock | undefined> {
 	let previous = input.previous?.comandos; let problem = ""; let comandos: string[];
 	for (;;) {
-		const result = await ask({ title: title(input.repo), questions: [commandsQuestion(input.detected, previous, problem)] });
+		const result = await ask({ title: title(input.repo), questions: [commandsQuestion(input.detected, previous, problem, input.notice ?? "")] });
 		if (result.status !== "answered") return undefined;
 		const answer = answerOf(result, "comandos");
 		comandos = [...new Set([...(answer?.options ?? []), ...lines(answer?.text ?? null)])];
@@ -89,10 +90,10 @@ export async function composeFoundations(ask: Ask, input: { repo: string; detect
 	return checked.block;
 }
 
-/** El resumen en texto, el destino y un sí explícito: nada viene elegido. Cancelar es no guardar. */
-export async function confirmFoundationsSave(ask: Ask, block: FoundationsBlock, target: Pick<FoundationsMeta, "product" | "kbUrl"> & { where: string }): Promise<SaveDecision> {
+/** El resumen en texto, el destino y un sí explícito: nada viene elegido. Cancelar es no guardar. Con `previous`, la diferencia es contra esa revisión. */
+export async function confirmFoundationsSave(ask: Ask, block: FoundationsBlock, target: Pick<FoundationsMeta, "product" | "kbUrl"> & { where: string; previous?: FoundationsBlock | undefined }): Promise<SaveDecision> {
 	const result = await ask({ title: title(block.repo), questions: [{
-		id: "guardar", header: "Guardar", question: "¿Guardar Foundations en la KB?", detail: `${foundationsDiff(undefined, block, { product: target.product, kbUrl: target.kbUrl })}\n\n${target.where}`,
+		id: "guardar", header: "Guardar", question: "¿Guardar Foundations en la KB?", detail: `${foundationsDiff(target.previous, block, { product: target.product, kbUrl: target.kbUrl })}\n\n${target.where}`,
 		options: [
 			{ label: SAVE_CHOICES[0], description: "Guarda esta revisión en las perillas y queda aceptada para este repo" },
 			{ label: SAVE_CHOICES[1], description: "Volvés a las preguntas con lo que elegiste; todavía no se guarda nada" },
@@ -102,4 +103,18 @@ export async function confirmFoundationsSave(ask: Ask, block: FoundationsBlock, 
 	}] });
 	const choice = result.status === "answered" ? answerOf(result, "guardar")?.options[0] : undefined;
 	return choice === SAVE_CHOICES[0] ? "save" : choice === SAVE_CHOICES[1] ? "change" : "cancel";
+}
+
+/** Tras un guardado a medias: el estado real y un reintento explícito. Esc o «Dejar así» no tocan nada. */
+export async function confirmFoundationsRetry(ask: Ask, repo: string, status: string): Promise<boolean> {
+	const result = await ask({ title: title(repo), questions: [{
+		id: "reintentar", header: "Reintentar", question: "Foundations no quedó vigente. ¿Reintentar?",
+		detail: `Sigue valiendo la política anterior en esta sesión.\n\n${status}\n\nReintentar vuelve a leer la KB: si ya tiene tu revisión, la acepta; si tiene otra, te muestra la más reciente para confirmar de nuevo.`,
+		options: [
+			{ label: RETRY_CHOICES[0], description: "Vuelve a leer la KB y completa lo que faltó" },
+			{ label: RETRY_CHOICES[1], description: "No revierte la KB; sigue valiendo la política anterior" },
+		],
+		multiSelect: false, recommended: false, freeText: false,
+	}] });
+	return result.status === "answered" && answerOf(result, "reintentar")?.options[0] === RETRY_CHOICES[0];
 }

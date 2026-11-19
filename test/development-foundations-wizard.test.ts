@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { AUTO_WARNINGS, checkBlock, STRICT_POLICY, type FoundationsBlock } from "../src/harness/foundations.ts";
-import { composeFoundations, confirmFoundationsSave, SAVE_CHOICES, type Ask } from "../src/tui/development-foundations-wizard.ts";
+import { composeFoundations, confirmFoundationsRetry, confirmFoundationsSave, RETRY_CHOICES, SAVE_CHOICES, type Ask } from "../src/tui/development-foundations-wizard.ts";
 import type { AskResult, Question, QuestionAnswer, QuestionBatch } from "../src/tui/questions/batch.ts";
 import { batchProblem } from "../src/tui/questions/batch.ts";
 
@@ -101,5 +101,33 @@ test("foundations_wizard: el resumen es legible, sin JSON, sin elegir nada por d
 		assert.match(detail, /Comandos que corren sin preguntar:\n.*npm test/); assert.match(detail, /fuera del catálogo: ask → auto\s+⚠ corre cualquier comando/);
 		assert.ok(detail.includes(where)); assert.match(detail, /kb\.example\.test/);
 		assert.doesNotMatch(detail, /[{}]|"politica"|"comandos"/, "no es JSON");
+	}
+});
+
+test("foundations_wizard: al editar, el resumen compara contra lo vigente: lo que sale, lo que entra y cada política cambiada", async () => {
+	const previous: FoundationsBlock = { version: 1, repo: "test/repo", comandos: ["npm test", "make check"], politica: { ...STRICT_POLICY, push_pr: "ask" } };
+	const next: FoundationsBlock = { ...previous, comandos: ["npm test", "npm ci"], politica: { ...previous.politica, push_pr: "auto" } };
+	const ui = fakeUi((batch) => answered([reply(batch.questions[0]!, [SAVE_CHOICES[0]])]));
+	assert.equal(await confirmFoundationsSave(ui.ask, next, { product: "repo", kbUrl: "https://kb.example.test/mcp", where: "Destino.", previous }), "save");
+	const detail = ui.batches[0]!.questions[0]!.detail ?? "";
+	assert.match(detail, /Antes: última revisión aceptada [0-9a-f]{8}/);
+	assert.match(detail, /^ {2}- make check$/m); assert.match(detail, /^ {2}\+ npm ci$/m); assert.match(detail, /^ {4}npm test$/m);
+	assert.match(detail, /push \+ PR draft: ask → auto/);
+});
+
+test("foundations_wizard: un aviso del que llama encabeza la tanda de comandos", async () => {
+	const ui = fakeUi();
+	await composeFoundations(ui.ask, { repo: REPO, detected, notice: "Foundations: KB · revisión 1234abcd" });
+	assert.match(ui.batches[0]!.questions[0]!.detail ?? "", /^Foundations: KB · revisión 1234abcd\n\n/);
+});
+
+test("foundations_wizard: reintentar es una pregunta cerrada, sin recomendada, con el estado real; Esc es dejarlo así", async () => {
+	for (const [label, expected] of [[RETRY_CHOICES[0], true], [RETRY_CHOICES[1], false], [undefined, false]] as const) {
+		const ui = fakeUi((batch) => label === undefined ? { status: "cancelled" } : answered([reply(batch.questions[0]!, [label])]));
+		assert.equal(await confirmFoundationsRetry(ui.ask, "test/repo", "Foundations se guardó en la KB, pero no se aceptó."), expected, String(label));
+		const question = ui.batches[0]!.questions[0]!;
+		assert.deepEqual(question.options.map((o) => o.label), [...RETRY_CHOICES]);
+		assert.equal(question.recommended, false); assert.equal(question.freeText, false);
+		assert.match(question.detail ?? "", /Sigue valiendo la política anterior/); assert.match(question.detail ?? "", /se guardó en la KB, pero no se aceptó/);
 	}
 });
