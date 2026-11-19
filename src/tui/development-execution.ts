@@ -20,10 +20,12 @@ export async function executeCheck(session: DevelopmentSession, input: CheckInpu
 	const state = session.current(ctx);
 	if (state.status === "paused" || state.status === "complete") throw new Error("El trabajo no está activo");
 	if (input.kind === "reproduction") {
-		if (!["explore", "diagnose"].includes(state.phase)) throw new Error("La reproducción corresponde a Explorar o Diagnóstico");
-	} else {
+		// Resolver inferencias admite volver a registrar explored: también puede volver a reproducir.
+		if (!["explore", "decide", "diagnose"].includes(state.phase)) throw new Error("La reproducción corresponde a Explorar, Resolver inferencias o Diagnóstico");
+	} else if (input.kind !== "setup") {
+		// Setup no acredita nada: prepara el checkout en cualquier etapa activa, con la autorización de siempre.
 		if (!isApproved(state)) throw new Error("Primero hace falta aprobar la receta vigente");
-		if (["red", "green", "setup"].includes(input.kind) && state.phase !== "implement") throw new Error("Ese comando corresponde a Implementar");
+		if (["red", "green"].includes(input.kind) && state.phase !== "implement") throw new Error("Ese comando corresponde a Implementar");
 		if (["verification", "gate"].includes(input.kind) && state.phase !== "verify") throw new Error("Ese comando corresponde a Verificar");
 	}
 	if (input.kind === "red" || input.kind === "green") {
@@ -44,7 +46,12 @@ export async function executeCheck(session: DevelopmentSession, input: CheckInpu
 	const after = await inspectCheckout(state.checkout, session.runner, session.lifecycle.signal);
 	const current = session.current(ctx);
 	if (current.id !== state.id || current.source.hash !== state.source.hash || recipeApprovalHash(current) !== recipeApprovalHash(state)) throw new Error("El pedido o la receta cambió durante el comando; su resultado no acredita este trabajo");
-	if (input.kind === "setup") { session.emit(); return { setup: result }; }
+	if (input.kind === "setup") {
+		session.emit();
+		// Antes de aprobar no se escribe código: un setup sólo prepara lo que Git ignora (por ejemplo, node_modules).
+		if (state.phase !== "implement" && (before.fingerprint !== after.fingerprint || before.head !== after.head)) throw new Error(`El setup cambió el checkout fuera de Implementar: modificó archivos versionados, no ignorados o HEAD. No acredita nada y el código no se escribe antes de aprobar la receta; revisá el cambio con git status. Exit ${result.exitCode ?? "—"}.`);
+		return { setup: result };
+	}
 	const interrupted = result.interrupted || signal.aborted || result.exitCode === null || result.exitCode >= 128 || before.fingerprint !== after.fingerprint || before.head !== after.head;
 	const evidence: Evidence = {
 		id: randomUUID(), kind: input.kind, command: input.command, stepId: input.stepId ?? null, caseId: input.caseId ?? null,

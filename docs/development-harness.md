@@ -77,7 +77,7 @@ En RPC, donde Pi no ofrece componentes TUI, se conserva una confirmación humana
   - **Corridas.** Un lente que falló no se repite sobre el mismo contenido, salvo que un `refuter` posterior apruebe: así un aviso no se borra repitiendo el lente y el fail de Seguridad no se esquiva. Por contenido, cada lente admite tres veredictos y diez corridas: cancelar o un error del proveedor no gasta veredictos.
 - **PR:** sólo con cambio limpio y verificado, confirmación humana remota y un SHA autorizado. Termina en un draft; no mergea ni cierra el issue.
 
-Base incompleta, dependencia bloqueante, información insuficiente, inferencia nueva o imposibilidad de verificar deben quedar como espera/pausa. En este corte, Fundación no se ejecuta: la persona completa la base y usa `refresh`.
+Dependencia bloqueante, información insuficiente, inferencia nueva o imposibilidad de verificar deben quedar como espera/pausa. Una base que se arma con un comando no es una espera: el agente la prepara con `setup`, en cualquier etapa activa. Ejemplo: un worktree nuevo sin `node_modules` corre `npm ci` en Explorar (sin preguntar si está en el catálogo), vuelve a reproducir y registra `explored` de nuevo, sin `refresh`. Sólo queda como base faltante lo que un comando no resuelve, por ejemplo una credencial o un servicio externo.
 
 ## Evidencia y permisos
 
@@ -95,7 +95,9 @@ Base incompleta, dependencia bloqueante, información insuficiente, inferencia n
   - **No**, cerrar, una respuesta desconocida o cancelar antes del guardado no ejecutan ni agregan permisos. Un error de persistencia bloquea: no concede un grant temporal como fallback ni anuncia éxito. Si el envío ya salió a la KB y luego falla la confirmación/aceptación o se cancela, el documento remoto puede existir: el error distingue ese resultado parcial, sin ejecutar. Si ya se completaron el guardado y la aceptación local pero se cancela la ejecución, informa que el permiso sí quedó persistido para futuras sesiones.
   - Una decisión desde un trabajo pausado o cambiado por otra ventana se rechaza al revalidar el estado durable, antes de guardar y antes de ejecutar.
   Ejemplo: `npm run typecheck` aprobado por una persona como D5 corre igual como setup, sin otro diálogo.
-- Setup nunca acredita una prueba y sus errores se muestran.
+- Setup corre en cualquier etapa activa, también antes de aprobar la receta, con la misma autorización. Nunca acredita una prueba y sus errores se muestran.
+- Fuera de Implementar, un setup sólo puede tocar lo que Git ignora (por ejemplo, `node_modules`). Si cambia archivos versionados, no ignorados o HEAD, devuelve un error: el código no se escribe antes de aprobar. No se revierte solo; el cambio queda a la vista en `git status`.
+- La reproducción corre en Explorar, Resolver inferencias (donde se puede volver a registrar `explored`) y Diagnóstico.
 - El runner registra salida acotada a 12.000 caracteres, exit code, interrupción, HEAD, fingerprint y tiempos. No imprime el entorno ni mensajes internos potencialmente sensibles del backend. La salida del propio programa puede contener datos sensibles: no autorizar comandos que revelen secretos.
 - Un rojo que pasa, comando ausente, cancelación o contenido modificado durante el comando no se convierte en prueba válida. Los intentos fallidos quedan registrados sin habilitar pasos.
 - El fingerprint representa contenido cambiado desde la base y archivos nuevos no ignorados, incluidos modos/eliminaciones/symlinks. Permanece estable al hacer stage/commit del mismo contenido.
