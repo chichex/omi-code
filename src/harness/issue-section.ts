@@ -5,6 +5,7 @@ import { PHASE_LABELS } from "./phases.ts";
 import { expectedFailure, isApproved } from "./state.ts";
 import { lensStatuses } from "./lenses.ts";
 import { fences } from "./fences.ts";
+import { STACK_STATUS, stackRows } from "./stack.ts";
 export const SECTION_START = "<!-- omi:harness:start -->";
 export const SECTION_END = "<!-- omi:harness:end -->";
 // Lo que OMI agrega entre el pedido y la sección; se descuenta al leer el pedido.
@@ -106,6 +107,14 @@ function steps(w: Workflow): string[] {
 	return ["", "### Pasos", ...w.steps.map((s) => `- ${mark[s.status]} **${text(s.id)}** ${text(s.title)}${s.commit ? ` · ${code(s.commit.slice(0, 7))}` : ""}`),
 		...(w.spec?.playbook.length ? ["", "**Playbook humano**", ...w.spec.playbook.map((p, i) => `${i + 1}. ${text(p)}`)] : [])];
 }
+// Cada PR del stack con su número (link sólo si es un PR del repo del issue), base, pasos y estado.
+function stack(w: Workflow): string[] {
+	const rows = stackRows(w); if (!rows.length) return [];
+	const repo = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/issues\/\d+$/.exec(w.source.url)?.[1];
+	const pr = (url: string | null, number: number | null) => url === null || number === null ? STACK_STATUS.planned : repo && url === `https://github.com/${repo}/pull/${number}` ? url : code(url);
+	const below = (base: string) => { const r = rows.find((row) => row.branch === base); return !r ? "" : r.number === null ? ` (PR ${r.index + 1})` : ` (#${r.number})`; };
+	return ["", "### Stack de PRs", ...rows.map((r) => [`- **PR ${r.index + 1} de ${r.total}**`, pr(r.url, r.number), `base ${code(r.base)}${below(r.base)}`, `pasos ${r.steps.map(text).join(", ")}`, ...(r.number === null ? [] : [STACK_STATUS[r.status]]), text(r.title)].join(" · "))];
+}
 function decisions(w: Workflow): string[] {
 	const resolution = { pending: "pendiente", assumed: "asumida", answered: "respondida" };
 	return w.inferences.length ? ["", "### Decisiones", ...w.inferences.map((i) => `- **${text(i.id)}** ${text(i.question)} → ${i.answer === null ? "_sin respuesta_" : text(i.answer)} _(${resolution[i.resolution]})_`)] : [];
@@ -151,11 +160,11 @@ function link(w: Workflow): string[] {
 }
 function render(w: Workflow, detail: Detail): string {
 	const note = detail === "summary" ? ["", `> **Resumida** para entrar en el límite de 65.536 caracteres de GitHub: la evidencia muestra sólo la última prueba de cada caso y cada lente su primer hallazgo. ${DETAIL}`] : [];
-	return [...header(w), ...note, ...recipe(w), ...steps(w), ...decisions(w), ...agreements(w), ...evidence(w, detail), ...lenses(w, detail), ...link(w), "", FOOTER].join("\n");
+	return [...header(w), ...note, ...recipe(w), ...steps(w), ...stack(w), ...decisions(w), ...agreements(w), ...evidence(w, detail), ...lenses(w, detail), ...link(w), "", FOOTER].join("\n");
 }
 export function renderIssueSection(w: Workflow): string { return render(w, "full"); }
 // De la más completa a la mínima. Cada una que resume lo dice; nada se corta en silencio.
 export function issueSectionVariants(w: Workflow): string[] {
-	const minimal = [...header(w), "", `La sección completa no entra en el cuerpo del issue (límite de 65.536 caracteres de GitHub): se omiten receta, pasos, decisiones, acuerdos, evidencia y hallazgos de los lentes. ${DETAIL}`, ...lenses(w, "verdicts"), ...link(w), "", FOOTER].join("\n");
+	const minimal = [...header(w), "", `La sección completa no entra en el cuerpo del issue (límite de 65.536 caracteres de GitHub): se omiten receta, pasos, decisiones, acuerdos, evidencia y hallazgos de los lentes. ${DETAIL}`, ...stack(w), ...lenses(w, "verdicts"), ...link(w), "", FOOTER].join("\n");
 	return [render(w, "full"), render(w, "summary"), minimal];
 }

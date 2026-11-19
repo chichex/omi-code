@@ -14,7 +14,8 @@ import type { ReadReceipt } from "../harness/references.ts";
 import { createWorkflow, recipeApprovalHash, transition, type WorkflowEvent } from "../harness/state.ts";
 import { readWorkflow, updateWorkflow } from "../harness/store.ts";
 import { inspectCheckout } from "../harness/git.ts";
-import { publishDraft, readIssueSource, renderWorkflowArtifact } from "../harness/github.ts";
+import { readIssueSource, renderWorkflowArtifact } from "../harness/github.ts";
+import { publishTargets, publishWork } from "./development-stack.ts";
 import { updateIssueSection } from "./development-issue.ts";
 import { restoreIssueTriage } from "./workspace/issue-triage.ts";
 import { readGit } from "./workspace/data.ts";
@@ -253,11 +254,11 @@ export class DevelopmentSession {
 		// Revalidar evidencia con el fingerprint actual, también al recuperar una publicación pendiente.
 		transition({ ...state, phase: "verify", publication: { status: "none" } }, { type: "verified", fingerprint: snapshot.fingerprint }, this.now());
 		renderWorkflowArtifact(state); // Falla antes del sí si el artefacto no entra en GitHub.
-		const remote = `${state.checkout.branch} → main\nCommit ${snapshot.head}\nIssue #${state.source.number}\n\nHace push normal sólo de esta rama, crea o recupera su PR draft y actualiza la sección del harness en el cuerpo del issue con la evidencia. No mergea, no fuerza pushes ni ejecuta workflows.`;
+		const remote = `${publishTargets(state, snapshot.head)}\nIssue #${state.source.number}\n\nHace push normal sólo de ${state.spec?.stack ? "las ramas del stack, crea o recupera sus PR draft en orden" : "esta rama, crea o recupera su PR draft"} y actualiza la sección del harness en el cuerpo del issue con la evidencia. No mergea, no fuerza pushes ni ejecuta workflows.`;
 		if ((await this.foundations.policy(ctx, state)).politica.push_pr === "auto") ctx.ui.notify(`Foundations · push + PR draft auto: sin preguntar.\n${remote}`, "info");
 		else if (!(await this.confirm(ctx, "Subir rama y abrir PR draft", remote))) return;
 		if (state.publication.status === "none") state = await this.apply({ type: "publishing", head: snapshot.head, bodyHash: artifactHash(renderWorkflowArtifact(state)) }, ctx);
-		const receipt = await publishDraft(state, this.runner, this.lifecycle.signal);
+		const receipt = await publishWork(state, this.runner, this.lifecycle.signal);
 		await this.apply({ type: "published", ...receipt }, ctx);
 		await updateIssueSection(this, ctx);
 	}
