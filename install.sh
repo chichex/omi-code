@@ -1,9 +1,13 @@
 #!/bin/sh
 # Instala omi en ~/.omi/bin/omi y sus assets en ~/.omi/runtime. No hace falta Node ni Bun.
+# Si ~/.omi/bin no está en el PATH, lo agrega al archivo de inicio del shell de $SHELL.
 #
 #   curl -fsSL https://github.com/chichex/omi-code/releases/latest/download/install.sh | sh
 #
 # OMI_INSTALL_BASE cambia el origen de los assets; OMI_HOME, el destino.
+# OMI_NO_MODIFY_PATH=1 no toca ningún archivo del shell. Va del lado de sh, no de curl:
+#
+#   curl -fsSL https://github.com/chichex/omi-code/releases/latest/download/install.sh | OMI_NO_MODIFY_PATH=1 sh
 
 set -eu
 
@@ -99,8 +103,159 @@ if ! "$TARGET/bin/omi" --version >/dev/null 2>&1; then
 	"$TARGET/bin/omi" --version >/dev/null 2>&1 || die "omi no arranca en esta máquina"
 fi
 
-echo "omi $("$TARGET/bin/omi" --version) instalado en $TARGET/bin/omi"
-case ":$PATH:" in
-	*":$TARGET/bin:"*) ;;
-	*) echo "Agregá $TARGET/bin a tu PATH." ;;
-esac
+# Sin echo: el de algunos sh interpreta las barras de una ruta.
+say() {
+	printf '%s\n' "$*"
+}
+
+say "omi $("$TARGET/bin/omi" --version): binario instalado en $TARGET/bin/omi"
+
+# --- PATH persistente --------------------------------------------------------
+# Un instalador corrido con sh no puede cambiar el PATH de la terminal que lo lanzó: escribe el
+# archivo que lee una terminal nueva y dice qué correr en la actual.
+
+BIN="$TARGET/bin"
+MARK_START="# >>> omi >>>"
+MARK_END="# <<< omi <<<"
+shell_path=${SHELL:-}
+shell_name=${shell_path##*/}
+
+# Cita fish: entre comillas simples sólo \ y ' llevan escape.
+fish_quote() {
+	printf "'%s'" "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e "s/'/\\\\'/g")"
+}
+
+# El archivo que lee una terminal nueva del shell de $SHELL; vacío si no se soporta.
+# - zsh: .zshrc lo lee toda sesión interactiva, login o no, después de /etc/zprofile, así que el
+#   path_helper de macOS no lo reordena.
+# - bash en macOS: Terminal abre un login shell, que lee el primero que exista de .bash_profile,
+#   .bash_login y .profile. Crear otro taparía al que ya se usa.
+# - bash en Linux: la terminal abre un shell interactivo no login, que lee .bashrc.
+# - fish: un archivo propio en conf.d, que fish lee siempre.
+shell_rc() {
+	case "$shell_name" in
+		zsh) say "${ZDOTDIR:-$HOME}/.zshrc" ;;
+		bash)
+			if [ "$os" = linux ]; then
+				say "$HOME/.bashrc"
+				return
+			fi
+			for name in .bash_profile .bash_login .profile; do
+				if [ -e "$HOME/$name" ]; then
+					say "$HOME/$name"
+					return
+				fi
+			done
+			say "$HOME/.bash_profile"
+			;;
+		fish) say "${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/omi.fish" ;;
+	esac
+}
+
+# La línea que agrega BIN al PATH: va en el archivo y sirve tal cual en la terminal actual.
+path_line() {
+	if [ "$shell_name" = fish ]; then
+		printf 'set -gx PATH %s $PATH\n' "$(fish_quote "$BIN")"
+	else
+		printf 'export PATH=%s:"$PATH"\n' "$(shell_quote "$BIN")"
+	fi
+}
+
+# El bloque entre marcadores, que reinstalar reemplaza entero. No repite BIN en shells anidados.
+path_block() {
+	printf '%s\n' "$MARK_START" "# Lo agregó el instalador de omi: reinstalar reemplaza este bloque."
+	if [ "$shell_name" = fish ]; then
+		printf 'if not contains -- %s $PATH\n\t%s\nend\n' "$(fish_quote "$BIN")" "$(path_line)"
+	else
+		printf 'case ":$PATH:" in\n\t*:%s:*) ;;\n\t*) %s ;;\nesac\n' "$(shell_quote "$BIN")" "$(path_line)"
+	fi
+	say "$MARK_END"
+}
+
+# none, one o bad. Un bloque es un inicio seguido de su fin: cualquier otra cosa no se toca.
+block_state() {
+	awk -v start="$MARK_START" -v end="$MARK_END" '
+		$0 == start { s++; if (s != e + 1) bad = 1 }
+		$0 == end { e++; if (e != s) bad = 1 }
+		END { if (bad || s > 1 || s != e) print "bad"; else if (s) print "one"; else print "none" }
+	' "$1"
+}
+
+# Reemplaza el bloque en su lugar o lo agrega al final, y deja igual el resto del archivo.
+# Escribe sobre el archivo, sin mv, para seguir un symlink (dotfiles) y conservar sus permisos.
+write_block() {
+	path_block >"$work/path-block"
+	if [ "$2" = one ]; then
+		OMI_BLOCK="$work/path-block" awk -v start="$MARK_START" -v end="$MARK_END" '
+			$0 == start { while ((getline line < ENVIRON["OMI_BLOCK"]) > 0) print line; skip = 1; next }
+			skip && $0 == end { skip = 0; next }
+			!skip { print }
+		' "$1" >"$work/rc" && cat "$work/rc" >"$1"
+		return
+	fi
+	{
+		if [ -s "$1" ]; then
+			[ -z "$(tail -c 1 "$1")" ] || printf '\n'
+			printf '\n'
+		fi
+		cat "$work/path-block"
+	} >>"$1"
+}
+
+# Sin configurar: dice por qué y deja la línea lista para copiar.
+manual() {
+	say "PATH: sin configurar. $1"
+	say "Agregá esta línea a $rc y corré la misma en esta terminal:"
+	say "  $(path_line)"
+}
+
+can_write() {
+	if [ -e "$1" ]; then
+		[ -f "$1" ] && [ -r "$1" ] && [ -w "$1" ]
+	else
+		mkdir -p "$(dirname "$1")" 2>/dev/null && [ -w "$(dirname "$1")" ]
+	fi
+}
+
+configure_path() {
+	case ":$PATH:" in
+		*":$BIN:"*)
+			say "PATH: ya incluye $BIN. No se tocó ningún archivo."
+			return
+			;;
+	esac
+	rc=$(shell_rc)
+	if [ -z "$rc" ]; then
+		say "PATH: sin configurar. No sé configurar tu shell (SHELL=$shell_path): soporto zsh, bash y fish."
+		say "Agregá $BIN al PATH en el archivo de inicio de tu shell. En sh, dash o ksh, agregá esta línea a $HOME/.profile y corré la misma en esta terminal:"
+		say "  $(path_line)"
+		return
+	fi
+	case "${OMI_NO_MODIFY_PATH:-}" in
+		"" | 0) ;;
+		*)
+			manual "Lo pediste con OMI_NO_MODIFY_PATH=$OMI_NO_MODIFY_PATH."
+			return
+			;;
+	esac
+	if ! can_write "$rc"; then
+		manual "No se puede escribir $rc."
+		return
+	fi
+	state=none
+	# Con set -e, un awk que falla cortaría el instalador con el binario ya puesto.
+	if [ -e "$rc" ]; then state=$(block_state "$rc") || state=bad; fi
+	if [ "$state" = bad ]; then
+		manual "$rc tiene un bloque de omi incompleto o repetido; no se tocó."
+		return
+	fi
+	if ! write_block "$rc" "$state" 2>/dev/null; then
+		manual "No se pudo escribir $rc."
+		return
+	fi
+	say "PATH: configurado en $rc."
+	say "Las terminales nuevas ya lo ven. En esta, corré:"
+	say "  $(path_line)"
+}
+
+configure_path
