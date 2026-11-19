@@ -1,12 +1,12 @@
-// Foundations de la sesión: se lee de la KB al arrancar, se acepta una vez por revisión y queda fijo
-// toda la sesión, también a través de /reload y del cambio a la sesión del worktree. Vale la última
-// revisión que la persona aceptó; un bloque inválido, ausente o sin KB no autoriza nada por sí mismo.
+// Foundations de la sesión: se lee de la KB al arrancar, una revisión válida se acepta sola (con aviso) y
+// queda fija toda la sesión, también a través de /reload y del cambio a la sesión del worktree. Sin KB, vale
+// la última revisión aceptada; sin ninguna, el default: nada pregunta. Un bloque inválido o ausente no vale.
 // Sin imports de Pi en tiempo de carga: development-begin lo importa.
 import { resolve } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Runner } from "../core/exec.ts";
 import type { Workflow } from "../harness/model.ts";
-import { checkBlock, commandProblem, foundationsDiff, foundationsHash, parseFoundations, POLICY_LABELS, STRICT_POLICY, visibleText, type FoundationsBlock, type FoundationsPolicy, type PolicyPoint } from "../harness/foundations.ts";
+import { checkBlock, commandProblem, DEFAULT_POLICY, foundationsDiff, foundationsHash, parseFoundations, POLICY_LABELS, visibleText, type FoundationsBlock, type FoundationsPolicy, type PolicyPoint } from "../harness/foundations.ts";
 import { readTrust, writeTrust, type TrustKey, type TrustRecord } from "../harness/foundations-trust.ts";
 import type { CommandPolicy } from "../harness/authorization.ts";
 import type { KbClient, KbDoc } from "./kb-client.ts";
@@ -23,11 +23,11 @@ export type FoundationsReading =
 	| { kind: "invalid"; key: TrustKey; reason: string; perillas: KbDoc }
 	| { kind: "valid"; key: TrustKey; block: FoundationsBlock; hash: string; perillas: KbDoc };
 export interface FoundationsPin {
-	origin: "kb" | "local" | "strict";
+	origin: "kb" | "local" | "default";
 	block: FoundationsBlock | null; hash: string | null; docId: string | null; author: string | null; date: string | null;
 	notice: string; reading: FoundationsReading;
 }
-export interface DecideDeps { trustDir: string; now: () => string; confirm: (ctx: ExtensionContext, title: string, description: string) => Promise<boolean> }
+export interface DecideDeps { trustDir: string; now: () => string }
 
 /** `owner/name` en minúsculas, sólo para github.com. */
 export function parseRepoIdentity(url: string): string | undefined {
@@ -57,15 +57,16 @@ export async function readFoundations(kb: KbClient | undefined, cwd: string, run
 	} catch (error) { return { kind: "unavailable", key, reason: error instanceof Error ? error.message : "falló la lectura" }; }
 }
 
-const strictPin = (reading: FoundationsReading, notice: string): FoundationsPin => ({ origin: "strict", block: null, hash: null, docId: null, author: null, date: null, notice, reading });
-/** Qué vale en la sesión. Sólo pregunta por una revisión nueva y válida; sólo escribe el registro con un sí. */
+const DEFAULT_NOTICE = "vale el default: nada pregunta (todo auto)";
+const defaultPin = (reading: FoundationsReading, notice: string): FoundationsPin => ({ origin: "default", block: null, hash: null, docId: null, author: null, date: null, notice, reading });
+/** Qué vale en la sesión. Nunca pregunta: una revisión nueva y válida se acepta sola, se registra y se avisa. */
 export async function decideFoundations(reading: FoundationsReading, ctx: ExtensionContext, deps: DecideDeps): Promise<FoundationsPin> {
-	if (reading.kind === "none") return strictPin(reading, reading.reason);
+	if (reading.kind === "none") return defaultPin(reading, `${reading.reason}: ${DEFAULT_NOTICE}.`);
 	const record = await readTrust(deps.trustDir, reading.key);
 	const accepted = record?.accepted ?? null;
 	const fallback = (why: string): FoundationsPin => accepted
 		? { origin: "local", block: accepted.block, hash: accepted.blockHash, docId: accepted.docId, author: accepted.author, date: accepted.date, notice: `${why}: vale la última revisión aceptada.`, reading }
-		: strictPin(reading, `${why}: vale la política estricta.`);
+		: defaultPin(reading, `${why}: ${DEFAULT_NOTICE}.`);
 	if (reading.kind === "unavailable") return fallback(`KB no disponible (${reading.reason})`);
 	if (reading.kind === "missing") return fallback(`Las perillas de ${reading.key.product} no tienen Foundations para ${reading.key.repo}`);
 	if (reading.kind === "invalid") return fallback(`Foundations inválido en la KB (${reading.reason})`);
@@ -79,28 +80,33 @@ export async function decideFoundations(reading: FoundationsReading, ctx: Extens
 		if (accepted.docId !== doc.id) await save({ ...base, accepted: { ...accepted, ...revision } }).catch(() => {});
 		return pin;
 	}
-	if (!ctx.hasUI) return fallback("Hay una revisión nueva de Foundations y aceptarla requiere UI");
-	const description = `${foundationsDiff(accepted?.block, reading.block, { product: reading.key.product, kbUrl: reading.key.kbUrl, docId: doc.id, ...(doc.autor ? { author: doc.autor } : {}), ...(doc.fecha ? { date: doc.fecha } : {}) })}\n\nCon el sí, esta revisión vale en esta sesión y en las siguientes hasta que cambie en la KB. Con un no, sigue valiendo ${accepted ? "la última revisión aceptada" : "la política estricta: todo pregunta"}. Nunca habilita merge, tags, workflows, deploys ni secretos.`;
-	if (!(await deps.confirm(ctx, "Aceptar Foundations", description))) return fallback("Rechazaste la revisión nueva de Foundations");
+	// La persona la escribió en la KB: se aplica sin preguntar, también sin UI, y el aviso dice qué cambió.
+	const diff = foundationsDiff(accepted?.block, reading.block, { product: reading.key.product, kbUrl: reading.key.kbUrl, docId: doc.id, ...(doc.autor ? { author: doc.autor } : {}), ...(doc.fecha ? { date: doc.fecha } : {}) });
+	const applied = `Foundations: se aplica la revisión nueva de la KB, sin preguntar.\n\n${diff}\n\nVale en esta sesión y en las siguientes hasta que cambie en la KB. Nunca habilita merge, tags, workflows, deploys ni secretos.`;
 	try { await save({ ...base, accepted: { ...revision, acceptedAt: deps.now() } }); }
-	catch { return { ...pin, notice: "No se pudo guardar la aceptación: vale en esta sesión y se vuelve a preguntar en la próxima." }; }
+	catch {
+		const notice = "No se pudo registrar la aceptación: vale en esta sesión y se vuelve a avisar en la próxima.";
+		ctx.ui.notify(`${applied}\n\n${notice}`, "warning"); return { ...pin, notice };
+	}
+	ctx.ui.notify(applied, "info");
 	return pin;
 }
 
-/** Política vigente para un trabajo: la del pin, si el issue es del mismo repo; si no, la estricta. */
+/** Política vigente para un trabajo: la del pin, si el issue es del mismo repo; si no, el default (todo auto). */
 export function effectivePolicy(pin: FoundationsPin | undefined, state?: Workflow): { politica: FoundationsPolicy; command: CommandPolicy; hash: string | null } {
 	const block = pin?.block && (!state || issueRepo(state.source.url) === pin.block.repo) ? pin.block : null;
-	return { politica: block?.politica ?? STRICT_POLICY, command: { catalog: block?.comandos ?? [], outside: block?.politica.fuera_de_catalogo ?? "ask" }, hash: block ? pin?.hash ?? null : null };
+	const politica = block?.politica ?? DEFAULT_POLICY;
+	return { politica, command: { catalog: block?.comandos ?? [], outside: politica.fuera_de_catalogo }, hash: block ? pin?.hash ?? null : null };
 }
-const ORIGINS = { kb: "KB", local: "local (última aceptada)", strict: "estricta" };
+const ORIGINS = { kb: "KB", local: "local (última aceptada)", default: "por defecto (sin Foundations: nada pregunta)" };
 /** Para /omi-work status y el detalle del progreso. Sin I/O. */
 export function foundationsLines(pin: FoundationsPin | undefined): string[] {
 	if (!pin) return ["Foundations: se lee de la KB; se decide en el primer punto del harness."];
-	const policy = pin.block?.politica ?? STRICT_POLICY;
+	const policy = pin.block?.politica ?? DEFAULT_POLICY;
 	return [
 		visibleText(`Foundations: ${ORIGINS[pin.origin]}${pin.hash ? ` · revisión ${pin.hash.slice(0, 8)}` : ""}${pin.docId ? ` · perillas ${pin.docId.slice(0, 8)}${pin.author ? ` · ${pin.author}` : ""}` : ""}`),
 		`Políticas: ${(Object.keys(POLICY_LABELS) as PolicyPoint[]).map((point) => `${POLICY_LABELS[point]} ${policy[point]}`).join(" · ")}`,
-		`Catálogo: ${pin.block?.comandos.length ? pin.block.comandos.join(" | ") : "sin comandos (todo comando fuera de la receta pregunta)"}`,
+		`Catálogo: ${pin.block?.comandos.length ? pin.block.comandos.join(" | ") : `sin comandos${policy.fuera_de_catalogo === "ask" ? " (todo comando fuera de la receta pregunta)" : ""}`}`,
 		...(pin.notice ? [visibleText(`Aviso: ${pin.notice}`)] : []),
 	];
 }
@@ -129,10 +135,10 @@ export class FoundationsGate {
 		if (!file || sessions.has(file)) return;
 		remember(file, { reading: readFoundations(this.deps.kb, ctx.cwd, this.deps.runner, AbortSignal.timeout(READ_TIMEOUT_MS)) });
 	}
-	/** El primer punto que necesita la política espera la lectura y, si hace falta, pide el sí. Después queda fijo. */
+	/** El primer punto que necesita la política espera la lectura y la decide, sin preguntar. Después queda fija. */
 	async pin(ctx: ExtensionContext): Promise<FoundationsPin> {
 		const file = this.file(ctx);
-		if (!file) return strictPin({ kind: "none", reason: "sin sesión persistente" }, "Sin sesión persistente: vale la política estricta.");
+		if (!file) return defaultPin({ kind: "none", reason: "sin sesión persistente" }, `Sin sesión persistente: ${DEFAULT_NOTICE}.`);
 		this.load(ctx);
 		const entry = sessions.get(file)!;
 		if (entry.pin) return entry.pin;
@@ -174,7 +180,8 @@ export class FoundationsGate {
 		if (issueRepo(state.source.url) !== key.repo || pin.reading.kind === "none" || pin.reading.key.repo !== key.repo || pin.reading.key.product !== key.product || pin.reading.key.kbUrl !== key.kbUrl) throw new Error("Cambió la identidad de origin/KB/producto/repo respecto del trabajo o del pin; no se guardó el permiso.");
 		const expectedHash = pin.block ? foundationsHash(pin.block) : null;
 		if ((fresh.kind === "valid" ? fresh.hash : null) !== expectedHash) throw new Error("La revisión de Foundations cambió respecto de la aceptada en esta sesión. Revisala en una sesión nueva antes de guardar el comando.");
-		const base: FoundationsBlock = fresh.kind === "valid" ? fresh.block : { version: 1, repo: key.repo, comandos: [], politica: { ...STRICT_POLICY } };
+		// Sumar un comando no cambia políticas: sin bloque, se crea con las del default que ya valían.
+		const base: FoundationsBlock = fresh.kind === "valid" ? fresh.block : { version: 1, repo: key.repo, comandos: [], politica: { ...DEFAULT_POLICY } };
 		const block = { ...base, comandos: [...new Set([...base.comandos, command])] };
 		const checked = checkBlock(block);
 		if ("reason" in checked) throw new Error(`No se puede agregar el comando al catálogo de Foundations: ${checked.reason}`);

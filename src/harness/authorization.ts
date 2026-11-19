@@ -13,8 +13,8 @@ export const grantKey = (state: Workflow, command: string): string => artifactHa
 
 export function commandAuthorization(state: Workflow, command: string, policy: CommandPolicy = NO_CATALOG): CommandAuthorization {
 	if (policy.catalog.includes(command)) return "catalog";
-	// Una receta que se aprobó sola (receta: auto) no autoriza sus comandos: el modelo se aprobaría su propio shell.
-	if (isApproved(state) && state.approval?.by !== "foundations" && state.recipe?.cases.some((c) => c.command === command)) return "recipe";
+	// También la que aprobó Foundations (receta: auto): quien pone receta en auto acepta que sus D corran sin preguntar.
+	if (isApproved(state) && state.recipe?.cases.some((c) => c.command === command)) return "recipe";
 	const key = grantKey(state, command);
 	if (state.grants?.some((g) => g.key === key)) return "grant";
 	return policy.outside === "auto" ? "auto" : "ask";

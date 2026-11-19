@@ -1,5 +1,5 @@
-// Un pedido nuevo se clasifica antes de crear recursos: simple/dudas vuelven al chat; harness
-// confirma, crea issue, reutiliza triage, prepara worktree/sesión y sigue en Explorar.
+// Un pedido nuevo se clasifica antes de crear recursos: simple/dudas vuelven al chat; harness crea el issue
+// (con el sí sólo si Foundations dice arranque: ask), reutiliza triage, prepara worktree/sesión y sigue en Explorar.
 // Lo que se puede comprobar sin efectos (tamaño, identidad, repo, main local) falla antes de preguntar.
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -35,7 +35,7 @@ const MAX_ISSUE = 999_999_999;
 // Formato invisible (bidi, ancho cero, tags) y selectores de variación suplementarios: lo publicado
 // se leería distinto de lo que se mostró, y el texto vuelve como contexto de un modelo.
 const INVISIBLE = /[\p{Cf}\u{E0100}-\u{E01EF}]/u;
-const TAIL = "No se escribe código hasta que apruebes la receta; los comandos y los cambios remotos piden permiso aparte. Termina en un PR draft, sin merge ni deploy.";
+const TAIL = "No se escribe código hasta aprobar la receta. Qué pide tu sí (receta, comandos, push y PR) lo decide Foundations. Termina en un PR draft, sin merge ni deploy.";
 const FRESH = "Se clasifica y se prepara un worktree nuevo desde main local, en una sesión nueva, y se explora el código.";
 const shown = (value: string) => value.split("\n").map(safeText).join("\n");
 
@@ -46,7 +46,8 @@ export function assertBeginRequest(request: BeginRequest): void {
 	if (INVISIBLE.test(`${request.title ?? ""}${request.body ?? ""}`)) throw new Error("El título o el cuerpo traen caracteres invisibles o de dirección de texto; quitalos para que lo publicado sea lo que se muestra.");
 }
 export function assertCanBegin(ctx: ExtensionContext, offline: boolean): void {
-	if (!ctx.hasUI) throw new Error("Empezar un trabajo requiere confirmación humana interactiva");
+	// También con arranque: auto: la clasificación se muestra con Esc para cancelar y el trabajo cambia de sesión.
+	if (!ctx.hasUI) throw new Error("Empezar un trabajo requiere la TUI o RPC: muestra la clasificación (Esc la cancela) y cambia a la sesión del worktree.");
 	if (!ctx.isProjectTrusted()) throw new Error("El harness de desarrollo requiere un proyecto de confianza");
 	if (!ctx.sessionManager.getSessionFile()) throw new Error("El worktree del trabajo requiere una sesión persistente. Volvé a abrir OMI sin --no-session.");
 	if (offline) throw new Error("Empezar o retomar un trabajo necesita GitHub: quitá --offline o PI_OFFLINE.");
@@ -220,7 +221,7 @@ export interface BeginToolHost { offline: boolean; busy: () => boolean; onReques
 export function registerBeginTool(pi: ExtensionAPI, host: BeginToolHost): void {
 	pi.registerTool({
 		name: "omi_work_begin", label: "Desarrollo: empezar trabajo", executionMode: "sequential", parameters: BeginToolSchema,
-		description: "Evalúa un pedido de código que vale la pena seguir. Con title y body, OMI clasifica antes de crear issue o recursos: un cambio simple sigue en el chat original; si falta información, vuelve con preguntas sin crear nada. Si requiere harness, pide confirmación (o aplica Foundations), crea el issue con el texto mostrado y reutiliza el triage para preparar worktree desde main local y sesión nueva en Explorar. Con issue existente siempre usa harness y ese mismo número; retoma sin reclasificar. La tool termina el turno y bloquea otras tools hasta resolver la clasificación/confirmación; no crea nada por sí misma. No autoriza comandos o acciones sensibles. La sesión nueva no hereda el chat: body debe traer pedido, contexto y criterios completos.",
+		description: "Evalúa un pedido de código que vale la pena seguir. Con title y body, OMI clasifica antes de crear issue o recursos: un cambio simple sigue en el chat original; si falta información, vuelve con preguntas sin crear nada. Si requiere harness, crea el issue con el texto del pedido sin preguntar, salvo que Foundations diga arranque: ask (entonces pide el sí), y reutiliza el triage para preparar worktree desde main local y sesión nueva en Explorar. Con issue existente siempre usa harness y ese mismo número; retoma sin reclasificar. La tool termina el turno y bloquea otras tools hasta resolver la clasificación/confirmación; no crea nada por sí misma. No autoriza comandos o acciones sensibles. La sesión nueva no hereda el chat: body debe traer pedido, contexto y criterios completos.",
 		promptSnippet: "Clasificar un pedido antes de crear issue o empezar el harness; los cambios simples vuelven al chat",
 		promptGuidelines: [
 			"Cuando la persona pide un cambio de código que vale la pena seguir, llamá a omi_work_begin en lugar de editar directo. Si nombra un issue (#N), pasá issue (siempre harness); si no, title y body para clasificar ANTES de crear un issue. OMI puede devolver un cambio simple o preguntas al chat: no repitas el mismo pedido sin información nueva. Clasificar no autoriza acciones ni sustituye las reglas y permisos del proyecto.",
@@ -230,7 +231,7 @@ export function registerBeginTool(pi: ExtensionAPI, host: BeginToolHost): void {
 			assertBeginRequest(input); assertCanBegin(ctx, host.offline);
 			if (host.busy()) throw new Error("Esta sesión ya tiene un trabajo de desarrollo activo; seguí con ese o salí con /omi-work stop.");
 			host.onRequest(issueDevelopmentTicket({ kind: "request", origin: "agent", sessionFile: ctx.sessionManager.getSessionFile()!, request: input }));
-			return { content: [{ type: "text", text: "Pedido registrado. Al terminar el turno OMI clasifica los pedidos nuevos antes de crear recursos. Puede devolver un cambio simple o preguntas a este chat, sin activar harness; si lo requiere, confirma la creación y reutiliza el triage. Un issue existente siempre sigue por harness. No llames otras tools: quedan bloqueadas hasta resolver el pedido. La clasificación no concede permisos. Si hace falta, respondé sólo con un resumen breve." }], details: { request: input }, terminate: true };
+			return { content: [{ type: "text", text: "Pedido registrado. Al terminar el turno OMI clasifica los pedidos nuevos antes de crear recursos. Puede devolver un cambio simple o preguntas a este chat, sin activar harness; si lo requiere, crea el issue (con el sí de la persona sólo si Foundations dice arranque: ask) y reutiliza el triage. Un issue existente siempre sigue por harness. No llames otras tools: quedan bloqueadas hasta resolver el pedido. La clasificación no concede permisos. Si hace falta, respondé sólo con un resumen breve." }], details: { request: input }, terminate: true };
 		},
 	});
 }
