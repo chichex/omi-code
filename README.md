@@ -47,7 +47,7 @@ Escribe un bloque entre `# >>> omi >>>` y `# <<< omi <<<`. Reinstalar lo reempla
 La terminal desde la que instalaste no cambia: abrí una nueva o corré la línea que muestra el instalador, por ejemplo `export PATH='/Users/ana/.omi/bin':"$PATH"`.
 Con otro shell, o si el archivo no se puede escribir, no toca nada y muestra la línea para copiar. `omi upgrade` nunca toca estos archivos.
 
-Para que no toque ningún archivo del shell, usá `OMI_NO_MODIFY_PATH=1`. Va del lado de `sh`, no de `curl`:
+Para que no toque ningún archivo del shell, usá `OMI_NO_MODIFY_PATH=1`. Vacío, `0`, `false` o `no` (sin importar mayúsculas) sí lo configuran; cualquier otro valor, no. Va del lado de `sh`, no de `curl`:
 
 ```sh
 OMI_NO_MODIFY_PATH=1 sh "$tmp/install.sh"

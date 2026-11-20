@@ -1,7 +1,9 @@
 // install.sh contra una release falsa en disco: sin red y sin la config de shell de quien corre el test.
 
+import assert from "node:assert/strict";
 import { execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -52,10 +54,10 @@ export function installerEnv(home: string, base: string, extra: NodeJS.ProcessEn
 }
 
 /** Corre install.sh. Con `piped`, el script entra por stdin, como en `curl … | sh`. */
-export async function runInstaller(base: string, home: string, extra: NodeJS.ProcessEnv = {}, piped = false): Promise<SpawnSyncReturns<string>> {
+export function runInstaller(base: string, home: string, extra: NodeJS.ProcessEnv = {}, piped = false): SpawnSyncReturns<string> {
 	const env = installerEnv(home, base, extra);
 	if (!piped) return spawnSync("sh", [INSTALL_SCRIPT], { encoding: "utf8", env });
-	return spawnSync("sh", [], { encoding: "utf8", env, input: await readFile(INSTALL_SCRIPT, "utf8") });
+	return spawnSync("sh", [], { encoding: "utf8", env, input: readFileSync(INSTALL_SCRIPT, "utf8") });
 }
 
 /** Un `uname` que dice ser otra plataforma, para probar la rama de macOS o de Linux en cualquier host. */
@@ -81,4 +83,35 @@ export function hostCommand(name: string): string | undefined {
  */
 export function newShell(shell: string, flags: string[], home: string, extra: NodeJS.ProcessEnv = {}): SpawnSyncReturns<string> {
 	return spawnSync(shell, [...flags, "command -v omi && omi --version"], { encoding: "utf8", env: { HOME: home, PATH: "/usr/bin:/bin", TERM: "dumb", ...extra } });
+}
+
+export interface NewShellCheck {
+	/** Comando del shell, por ejemplo `zsh`. */
+	shell: string;
+	flags: string[];
+	home: string;
+	/** Carpeta donde tiene que encontrar `omi`. */
+	bin: string;
+	env?: NodeJS.ProcessEnv;
+	/** Sin el shell en el host, falla en vez de dejarlo dicho. Por defecto, `OMI_REQUIRE_SHELLS=1` (la CI). */
+	required?: boolean;
+}
+
+/**
+ * Abre un shell nuevo y exige que encuentre el `omi` instalado. Deja en el log si corrió o no:
+ * sin el shell en el host, sólo se verificó el archivo generado.
+ */
+export function assertNewShellFinds(t: Pick<TestContext, "diagnostic">, check: NewShellCheck): void {
+	const shell = hostCommand(check.shell);
+	if (shell === undefined) {
+		const required = check.required ?? process.env.OMI_REQUIRE_SHELLS === "1";
+		if (required) assert.fail(`${check.shell} no está instalado y OMI_REQUIRE_SHELLS=1 exige correr el shell nuevo`);
+		t.diagnostic(`shell nuevo NO corrió: ${check.shell} no está instalado en este host. Sólo se verificó el archivo generado; OMI_REQUIRE_SHELLS=1 lo vuelve un fallo`);
+		return;
+	}
+	const omi = join(check.bin, "omi");
+	const opened = newShell(shell, check.flags, check.home, check.env);
+	assert.equal(opened.status, 0, opened.stderr);
+	assert.equal(opened.stdout, `${omi}\n1.0.0\n`);
+	t.diagnostic(`shell nuevo corrió: ${shell} ${check.flags.join(" ")} encontró ${omi}`);
 }

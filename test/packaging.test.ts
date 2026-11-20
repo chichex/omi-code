@@ -10,7 +10,7 @@ const read = (path: string): Promise<string> => readFile(new URL(`../${path}`, i
 
 test("install.sh_instala binario y runtime en ~/.omi", async (t) => {
 	const home = await tempDir(t);
-	const result = await runInstaller(await fakeRelease(t), home);
+	const result = runInstaller(await fakeRelease(t), home);
 	assert.equal(result.status, 0, result.stderr);
 	assert.equal(execFileSync(join(home, ".omi/bin/omi"), ["--version"], { encoding: "utf8" }), "1.0.0\n");
 	assert.equal((await stat(join(home, ".omi/runtime/theme/dark.json"))).isFile(), true);
@@ -47,7 +47,7 @@ exit 1
 
 test("install.sh_cae al bundle si el binario suelto no arranca", async (t) => {
 	const home = await tempDir(t);
-	const result = await runInstaller(await fakeRelease(t, { binary: "#!/bin/sh\nexit 137\n" }), home);
+	const result = runInstaller(await fakeRelease(t, { binary: "#!/bin/sh\nexit 137\n" }), home);
 	assert.equal(result.status, 0, result.stderr);
 	assert.match(await readFile(join(home, ".omi/bin/omi"), "utf8"), /exec .*runtime\/omi/);
 	assert.equal(execFileSync(join(home, ".omi/bin/omi"), ["--version"], { encoding: "utf8" }), "1.0.0\n");
@@ -55,7 +55,7 @@ test("install.sh_cae al bundle si el binario suelto no arranca", async (t) => {
 
 test("install.sh fallback no interpreta caracteres de shell del HOME", async (t) => {
 	const home = join(await tempDir(t), "home $unknown ' \" \\ `false`");
-	const result = await runInstaller(await fakeRelease(t, { binary: "#!/bin/sh\nexit 137\n" }), home);
+	const result = runInstaller(await fakeRelease(t, { binary: "#!/bin/sh\nexit 137\n" }), home);
 	assert.equal(result.status, 0, result.stderr);
 	assert.equal(execFileSync(join(home, ".omi/bin/omi"), ["--version"], { encoding: "utf8" }), "1.0.0\n");
 });
@@ -63,17 +63,26 @@ test("install.sh fallback no interpreta caracteres de shell del HOME", async (t)
 test("install.sh_falla con un mensaje claro si nada arranca", async (t) => {
 	const home = await tempDir(t);
 	const broken = "#!/bin/sh\nexit 137\n";
-	const result = await runInstaller(await fakeRelease(t, { binary: broken, bundled: broken }), home);
+	const result = runInstaller(await fakeRelease(t, { binary: broken, bundled: broken }), home);
 	assert.equal(result.status, 1);
 	assert.match(result.stderr, /no arranca/);
 });
 
 test("install.sh_no instala nada si el checksum no coincide", async (t) => {
 	const home = await tempDir(t);
-	const result = await runInstaller(await fakeRelease(t, { tamper: true }), home);
+	const result = runInstaller(await fakeRelease(t, { tamper: true }), home);
 	assert.equal(result.status, 1);
 	assert.match(result.stderr, /SHA-256/);
 	await assert.rejects(stat(join(home, ".omi/bin/omi")));
+});
+
+test("ci.yml_instala zsh y fish y exige que los tests del instalador abran sus shells nuevos", async () => {
+	const workflow = await read(".github/workflows/ci.yml");
+	const install = /apt-get[^\n]* install [^\n]*/.exec(workflow)?.[0] ?? "";
+	for (const shell of ["zsh", "fish"]) assert.match(install, new RegExp(`\\s${shell}(\\s|$)`), shell);
+	assert.match(workflow, /OMI_REQUIRE_SHELLS: "1"/);
+	// release.yml corre npm test sin zsh ni fish: ahí faltar un shell se deja dicho, no falla.
+	assert.doesNotMatch(await read(".github/workflows/release.yml"), /OMI_REQUIRE_SHELLS/);
 });
 
 test("bump-pi.yml_es programado y sólo abre el PR después de los tests", async () => {
