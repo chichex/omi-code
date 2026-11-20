@@ -18,7 +18,7 @@ Todos corren desde la raíz del repo. Un worktree nuevo no trae `node_modules`: 
 |---|---|---|
 | deps | `npm ci` | ~5 s |
 | typecheck | `npm run typecheck` | ~2 s |
-| test | `npm test` | ~8 s. Mock de omi-api en `test/helpers/mock-omi.ts`. `smoke.test.ts` usa Pi y procesos reales y necesita `python3`. Necesita `fd` (o `fdfind`) y `rg` en el `PATH`: sin ellos Pi los baja de github.com y el guard de red falla. Los 3 smoke de empaquetado se corren aparte |
+| test | `npm test` | ~8 s. Mock de omi-api en `test/helpers/mock-omi.ts`. `smoke.test.ts` usa Pi y procesos reales y necesita `python3`. Necesita `fd` (o `fdfind`) y `rg` en el `PATH`: sin ellos Pi los baja de github.com y el guard de red falla. Los tests de `install.sh` abren zsh, bash y fish nuevos: sin uno, lo dejan dicho (`shell nuevo NO corrió`); con `OMI_REQUIRE_SHELLS=1`, como en `ci.yml`, fallan. Los 3 smoke de empaquetado se corren aparte |
 | empaquetado | `npm run test:packaging` | ~45 s. Necesita `bun` y `python3`. Compila para el host, instala en un HOME temporal y verifica versión, assets de Pi, fd y rg incluidos, entorno de los hijos y cancelar el prompt en un pty. La primera vez baja fd y rg del host a `~/.cache/omi-code/tools` |
 | censo de protocolo | `OMI_REPO=<checkout de chichex/omi> npm test` | ~6 s. Compara `src/protocol/constants.ts` con el código Go. Usarlo si cambió `src/protocol/` o el contrato con omi-api |
 | release local | `node scripts/build-release.ts --out <dir>` | ~25 s. Las cuatro plataformas; `--targets` acota. Sin cache, baja los 8 assets de fd y rg (~14 MB); `--cache <dir>` cambia dónde quedan |

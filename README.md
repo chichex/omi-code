@@ -32,6 +32,28 @@ curl -fsSL https://github.com/chichex/omi-code/releases/latest/download/install.
 
 Se instala en `~/.omi`; `OMI_HOME=/ruta/absoluta` permite otra raíz. El binario instalado la infiere de su ubicación.
 
+### PATH
+
+Si `~/.omi/bin` (o `$OMI_HOME/bin`) no está en el `PATH`, el instalador lo agrega al archivo que lee una terminal nueva del shell de `$SHELL`:
+
+| Shell | Archivo |
+|---|---|
+| zsh | `${ZDOTDIR:-$HOME}/.zshrc` |
+| bash en macOS | `~/.bash_profile`, salvo que bash ya use `~/.bash_login` o `~/.profile` |
+| bash en Linux | `~/.bashrc` |
+| fish | `${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/omi.fish` |
+
+Escribe un bloque entre `# >>> omi >>>` y `# <<< omi <<<`. Reinstalar lo reemplaza entero y deja igual el resto del archivo. La salida dice qué archivo tocó.
+La terminal desde la que instalaste no cambia: abrí una nueva o corré la línea que muestra el instalador, por ejemplo `export PATH='/Users/ana/.omi/bin':"$PATH"`.
+Con otro shell, o si el archivo no se puede escribir, no toca nada y muestra la línea para copiar. `omi upgrade` nunca toca estos archivos.
+
+Para que no toque ningún archivo del shell, usá `OMI_NO_MODIFY_PATH=1`. Vacío, `0`, `false` o `no` (sin importar mayúsculas) sí lo configuran; cualquier otro valor, no. Va del lado de `sh`, no de `curl`:
+
+```sh
+OMI_NO_MODIFY_PATH=1 sh "$tmp/install.sh"
+curl -fsSL https://github.com/chichex/omi-code/releases/latest/download/install.sh | OMI_NO_MODIFY_PATH=1 sh
+```
+
 ### Integraciones por defecto
 
 Una instalación nueva trae estas integraciones **en la distribución de OMI**, sin descargar paquetes ni requerir Pi, Node o npm aparte. También quedan disponibles al actualizar una instalación existente, sin reemplazar sus ajustes.
