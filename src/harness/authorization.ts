@@ -1,21 +1,26 @@
-// Autorizar un comando no depende de su etiqueta (setup, rojo, gate): sólo del comando exacto y del trabajo.
-// La etiqueta decide qué acredita la evidencia y en qué etapa corre, no si hace falta otro sí.
+// Esta política sólo decide si falta el sí al comando; nunca dispensa guardas independientes del host/proyecto.
 import { artifactHash, type Workflow } from "./model.ts";
-import { isApproved } from "./state.ts";
-import type { PolicyMode } from "./foundations.ts";
+import { checkBlock, matchCommandPattern, type FoundationsBlock } from "./foundations.ts";
 
-export type CommandAuthorization = "catalog" | "recipe" | "grant" | "auto" | "ask";
-export interface CommandPolicy { catalog: readonly string[]; outside: PolicyMode }
-export const NO_CATALOG: CommandPolicy = Object.freeze({ catalog: [], outside: "ask" });
-
-/** Un permiso vale para este trabajo y este pedido: cambiar el pedido lo invalida, aprobar la receta no. */
+export type CommandAuthorization = "grant" | "auto" | "ask";
+export interface CommandPolicy { block: FoundationsBlock | null; accepted: boolean }
+export const NO_FOUNDATIONS: CommandPolicy = Object.freeze({ block: null, accepted: false });
+/** Cambiar la receta no invalida el sí; cambiar el trabajo o pedido sí. Nunca prefijos ni globs. */
 export const grantKey = (state: Workflow, command: string): string => artifactHash({ id: state.id, source: state.source.hash, command });
 
-export function commandAuthorization(state: Workflow, command: string, policy: CommandPolicy = NO_CATALOG): CommandAuthorization {
-	if (policy.catalog.includes(command)) return "catalog";
-	// Una receta que se aprobó sola (receta: auto) no autoriza sus comandos: el modelo se aprobaría su propio shell.
-	if (isApproved(state) && state.approval?.by !== "foundations" && state.recipe?.cases.some((c) => c.command === command)) return "recipe";
+const RESERVED = new Set(["if", "then", "elif", "else", "fi", "for", "while", "until", "do", "done", "case", "esac", "in", "select", "function", "time", "coproc", "eval", "exec", "command", "builtin", "source", "."]);
+/** Puerta explícita de sintaxis, no un parser ni una evaluación semántica de ejecutables o wrappers. */
+export function isSimpleCommand(command: string): boolean {
+	if (!/^[A-Za-z0-9_./:@%+=,-]+(?: +[A-Za-z0-9_./:@%+=,-]+)*$/.test(command)) return false;
+	const first = command.split(" ", 1)[0]!;
+	return !first.includes("=") && !RESERVED.has(first);
+}
+export function commandAuthorization(state: Workflow, command: string, policy: CommandPolicy = NO_FOUNDATIONS): CommandAuthorization {
 	const key = grantKey(state, command);
-	if (state.grants?.some((g) => g.key === key)) return "grant";
-	return policy.outside === "auto" ? "auto" : "ask";
+	if (state.grants?.some((grant) => grant.key === key && grant.command === command)) return "grant";
+	// Validación en runtime también para pins de /reload anteriores al corte, sin crashes ni defaults permisivos.
+	if (policy?.accepted !== true) return "ask";
+	const checked = checkBlock(policy.block);
+	if ("reason" in checked || !isSimpleCommand(command)) return "ask";
+	return checked.block.confirmar.some((pattern) => matchCommandPattern(pattern, command)) ? "ask" : "auto";
 }

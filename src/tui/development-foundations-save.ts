@@ -1,6 +1,6 @@
-// Persistencia compartida del creador de Foundations y del permiso permanente. Sin UI ni imports runtime de Pi.
+// Guardado explícito de Foundations v2. Sin UI, ejecución de comandos ni imports runtime de Pi.
 import { createHash } from "node:crypto";
-import { composePerillas, foundationsHash, parseFoundations, type FoundationsBlock } from "../harness/foundations.ts";
+import { checkBlock, composePerillas, foundationsHash, parseFoundations, type FoundationsBlock } from "../harness/foundations.ts";
 import { readTrust, writeTrust, type TrustKey, type TrustRecord } from "../harness/foundations-trust.ts";
 import type { FoundationsPin } from "./development-foundations.ts";
 import type { KbClient, KbDoc } from "./kb-client.ts";
@@ -31,6 +31,11 @@ interface SaveDeps {
 export async function commitFoundationsSave(kb: KbClient, key: TrustKey, block: FoundationsBlock, prepared: PreparedSave, deps: SaveDeps): Promise<FoundationsPin> {
 	const { signal } = deps;
 	signal.throwIfAborted();
+	const checked = checkBlock(block);
+	const persisted = parseFoundations(prepared.body, key.repo);
+	if ("reason" in checked || persisted.status !== "valid" || checked.block.repo !== key.repo || foundationsHash(checked.block) !== persisted.hash) throw new Error("El bloque o el documento preparado de Foundations es inválido o cambió; no se guardó nada.");
+	// Aceptar exactamente lo persistido, no un objeto mutable que cambie durante el I/O.
+	block = structuredClone(persisted.block);
 	const current = await kb.currentPerillas(key.product, signal);
 	signal.throwIfAborted();
 	if ((current?.id ?? null) !== (prepared.previous?.id ?? null) || current?.cuerpo !== prepared.previous?.cuerpo) throw new Error("Las perillas cambiaron en la KB antes de guardar Foundations; no se guardó nada. Revisá la revisión vigente.");
@@ -46,16 +51,16 @@ export async function commitFoundationsSave(kb: KbClient, key: TrustKey, block: 
 		confirmed = true;
 		const latest = await kb.currentPerillas(key.product, signal);
 		signal.throwIfAborted();
-		if (deps.requireLatest && (latest?.id !== stored.id || latest.cuerpo !== prepared.body)) throw new Error("Las perillas cambiaron durante la confirmación: hay una revisión más nueva. Revisala antes de continuar.");
+		if ((deps.requireLatest ?? true) && (latest?.id !== stored.id || latest.cuerpo !== prepared.body)) throw new Error("Las perillas cambiaron durante la confirmación: hay una revisión más nueva. Revisala antes de continuar.");
 		await deps.beforeAccept?.();
 		signal.throwIfAborted();
 		const hash = foundationsHash(block);
-		const record: TrustRecord = await readTrust(deps.trustDir, key) ?? { version: 1, ...key, accepted: null, offerDeclined: false };
+		const record: TrustRecord = await readTrust(deps.trustDir, key) ?? { version: 2, ...key, accepted: null, offerDeclined: false };
 		signal.throwIfAborted();
 		await (deps.writeAcceptance ?? writeTrust)(deps.trustDir, { ...record, accepted: { docId: stored.id, blockHash: hash, block, author: stored.autor ?? "", date: stored.fecha ?? "", acceptedAt: deps.now() } });
 		accepted = true;
 		const pin: FoundationsPin = {
-			origin: "kb", block, hash, docId: stored.id, author: stored.autor ?? "", date: stored.fecha ?? "",
+			version: 2, origin: "kb", block, hash, docId: stored.id, author: stored.autor ?? "", date: stored.fecha ?? "",
 			notice: latest?.id === stored.id ? "" : "La KB guardó Foundations, pero ya hay perillas más nuevas: la próxima sesión muestra la diferencia.",
 			reading: { kind: "valid", key, block, hash, perillas: stored },
 		};

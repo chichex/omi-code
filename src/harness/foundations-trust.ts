@@ -12,13 +12,13 @@ import { checkBlock, foundationsHash, type FoundationsBlock } from "./foundation
 const MAX_BYTES = 1024 * 1024;
 const Text = (max = 2000) => Type.String({ maxLength: max });
 const RecordSchema = Type.Object({
-	version: Type.Literal(1), kbUrl: Text(), product: Text(200), repo: Text(200),
+	version: Type.Literal(2), kbUrl: Text(), product: Text(200), repo: Text(200),
 	accepted: Type.Union([Type.Object({ docId: Text(200), blockHash: Type.String({ pattern: "^[0-9a-f]{64}$" }), block: Type.Unknown(), author: Text(400), date: Text(100), acceptedAt: Text(100) }, { additionalProperties: false }), Type.Null()]),
 	offerDeclined: Type.Boolean(),
 }, { additionalProperties: false });
 export interface TrustKey { kbUrl: string; product: string; repo: string }
 export interface AcceptedRevision { docId: string; blockHash: string; block: FoundationsBlock; author: string; date: string; acceptedAt: string }
-export interface TrustRecord extends TrustKey { version: 1; accepted: AcceptedRevision | null; offerDeclined: boolean }
+export interface TrustRecord extends TrustKey { version: 2; accepted: AcceptedRevision | null; offerDeclined: boolean }
 
 export const foundationsDir = (homeDir: string): string => join(agentDir(homeDir), "foundations");
 export function trustPath(dir: string, key: TrustKey): string {
@@ -59,7 +59,11 @@ export async function readTrust(dir: string, key: TrustKey): Promise<TrustRecord
 
 /** Escritura atómica, 0600, sin seguir symlinks. Sólo después de una decisión de la persona. */
 export async function writeTrust(dir: string, record: TrustRecord): Promise<void> {
-	if (!Value.Check(RecordSchema, record)) throw new Error("Registro de Foundations inválido");
+	if (!Value.Check(RecordSchema, record)) throw new Error("Registro de Foundations inválido u obsoleto; configurá v2 de nuevo");
+	if (record.accepted) {
+		const checked = checkBlock(record.accepted.block);
+		if ("reason" in checked || checked.block.repo !== record.repo || foundationsHash(checked.block) !== record.accepted.blockHash) throw new Error("Aceptación de Foundations inválida: bloque, repo o hash no coinciden");
+	}
 	const serialized = `${JSON.stringify(record, null, 2)}\n`;
 	if (Buffer.byteLength(serialized) > MAX_BYTES) throw new Error("Registro de Foundations demasiado grande");
 	await safeDirectory(dir, true);
