@@ -106,7 +106,7 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 	});
 	pi.registerTool({
 		name: "omi_workflow_check", label: "Desarrollo: ejecutar prueba", defaultActive: false, executionMode: "sequential", parameters: CheckSchema,
-		description: "Ejecuta un comando en el checkout del trabajo y registra salida/exit real para reproducción, rojo, verde o casos D. setup prepara el checkout (por ejemplo, instalar dependencias) en cualquier etapa activa y no acredita pruebas. Los comandos del catálogo de Foundations y los D de una receta aprobada por una persona corren sin preguntar; otro comando pide autorización humana. Salida limitada a 12.000 caracteres. No es sandbox.",
+		description: "Ejecuta un comando en el checkout del trabajo y registra salida/exit real para reproducción, rojo, verde o casos D. setup prepara el checkout (por ejemplo, instalar dependencias) en cualquier etapa activa y no acredita pruebas. Foundations v2 válida aceptada permite auto sólo a líneas simples no coincidentes; patrones y sintaxis no soportada requieren sí salvo un grant humano exacto del trabajo/pedido. Aprobar la receta no dispensa esa confirmación. Salida limitada a 12.000 caracteres. No es sandbox.",
 		async execute(_id, input, signal, _update, ctx) {
 			const observation = await executeCheck(session, input, ctx, AbortSignal.any([signal ?? new AbortController().signal, session.lifecycle.signal]));
 			if ("setup" in observation) return { content: [{ type: "text", text: `Comando auxiliar; no acredita pruebas ni casos.\n${JSON.stringify(observation.setup)}` }], details: { setup: observation.setup }, isError: observation.setup.interrupted || observation.setup.exitCode !== 0 };

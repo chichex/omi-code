@@ -18,7 +18,7 @@ async function mount(initial: unknown = undefined, appearance: "light" | "dark" 
 	assert.ok(existsSync(url), "falta el panel dedicado Foundations");
 	const loaded: unknown = await import(url.href);
 	assert.ok(loaded && typeof loaded === "object" && "FoundationsPanel" in loaded, "falta el panel dedicado Foundations");
-	const constructor = Reflect.get(loaded, "FoundationsPanel"); assert.equal(typeof constructor, "function");
+	const constructor: unknown = Reflect.get(loaded, "FoundationsPanel"); assert.ok(typeof constructor === "function");
 	const size = { columns: 80, rows: 24 }; let theme = getThemeByName(appearance)!;
 	const results: (FoundationsBlock | undefined)[] = [];
 	const panel: unknown = Reflect.construct(constructor, [{ repo: "test/repo", initial, previousAccepted, product: "repo", kbUrl: "https://kb.test/mcp", tui: fakeTui(size), theme: () => theme, rows: () => size.rows, done: (value: FoundationsBlock | undefined) => results.push(value) }]);

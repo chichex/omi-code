@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { checkBlock, composePerillas, foundationsHash, parseFoundations, type FoundationsBlock } from "../harness/foundations.ts";
 import { readTrust, writeTrust, type TrustKey, type TrustRecord } from "../harness/foundations-trust.ts";
 import type { FoundationsPin } from "./development-foundations.ts";
-import type { KbClient, KbDoc } from "./kb-client.ts";
+import { MAX_KB_DOCUMENT_LENGTH, type KbClient, type KbDoc } from "./kb-client.ts";
 
 export interface PreparedSave { previous: KbDoc | null; body: string; clave: string }
 const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -17,12 +17,13 @@ export async function prepareFoundationsSave(kb: KbClient, key: TrustKey, block:
 		if (parsed.status === "invalid" || (parsed.status === "valid" ? parsed.hash : null) !== expectedHash) throw new Error("La revisión de Foundations cambió antes de componer las perillas; no se guardó nada. Revisá la KB en una sesión nueva.");
 	}
 	const body = composePerillas(previous?.cuerpo, key.product, key.repo, block);
+	if (body.length > MAX_KB_DOCUMENT_LENGTH) throw new Error(`Las perillas resultantes exceden el límite legible de KB (${MAX_KB_DOCUMENT_LENGTH} caracteres); no se guardó nada.`);
 	return { previous, body, clave: `omi-foundations|${key.repo.slice(0, 80)}|${previous?.id ?? "none"}|${sha256(body).slice(0, 40)}` };
 }
 
 interface SaveDeps {
 	trustDir: string; now: () => string; signal: AbortSignal;
-	requireLatest?: boolean; beforeAccept?: () => Promise<void>;
+	beforeAccept?: () => Promise<void>;
 	/** Recibe el pin apenas la aceptación local quedó escrita, aunque después se cancele: es durable. */
 	onAccepted?: (pin: FoundationsPin) => void;
 	writeAcceptance?: typeof writeTrust;
@@ -31,6 +32,7 @@ interface SaveDeps {
 export async function commitFoundationsSave(kb: KbClient, key: TrustKey, block: FoundationsBlock, prepared: PreparedSave, deps: SaveDeps): Promise<FoundationsPin> {
 	const { signal } = deps;
 	signal.throwIfAborted();
+	if (prepared.body.length > MAX_KB_DOCUMENT_LENGTH) throw new Error(`Las perillas exceden el límite legible de KB (${MAX_KB_DOCUMENT_LENGTH} caracteres); no se guardó nada.`);
 	const checked = checkBlock(block);
 	const persisted = parseFoundations(prepared.body, key.repo);
 	if ("reason" in checked || persisted.status !== "valid" || checked.block.repo !== key.repo || foundationsHash(checked.block) !== persisted.hash) throw new Error("El bloque o el documento preparado de Foundations es inválido o cambió; no se guardó nada.");
@@ -43,7 +45,15 @@ export async function commitFoundationsSave(kb: KbClient, key: TrustKey, block: 
 	let confirmed = false; let accepted = false;
 	try {
 		// Una respuesta perdida puede haber guardado; jamás reintentar después de un aborto.
-		const saved = await kb.save(input, signal).catch(() => { signal.throwIfAborted(); return kb.save(input, signal); });
+		const saved = await kb.save(input, signal).catch(async () => {
+			signal.throwIfAborted();
+			const latest = await kb.currentPerillas(key.product, signal);
+			signal.throwIfAborted();
+			const unchanged = (latest?.id ?? null) === (prepared.previous?.id ?? null) && latest?.cuerpo === prepared.previous?.cuerpo;
+			// La misma clave recupera un envío ya persistido; si no, sólo reintentar sobre la base comprobada.
+			if (!unchanged && latest?.cuerpo !== prepared.body) throw new Error("Las perillas cambiaron durante el primer fallo; no se reenvió sobre una revisión concurrente.");
+			return kb.save(input, signal);
+		});
 		signal.throwIfAborted();
 		const stored = await kb.read(saved.id, signal);
 		signal.throwIfAborted();
@@ -51,7 +61,7 @@ export async function commitFoundationsSave(kb: KbClient, key: TrustKey, block: 
 		confirmed = true;
 		const latest = await kb.currentPerillas(key.product, signal);
 		signal.throwIfAborted();
-		if ((deps.requireLatest ?? true) && (latest?.id !== stored.id || latest.cuerpo !== prepared.body)) throw new Error("Las perillas cambiaron durante la confirmación: hay una revisión más nueva. Revisala antes de continuar.");
+		if (latest?.id !== stored.id || latest.cuerpo !== prepared.body) throw new Error("Las perillas cambiaron durante la confirmación: hay una revisión más nueva. Revisala antes de continuar.");
 		await deps.beforeAccept?.();
 		signal.throwIfAborted();
 		const hash = foundationsHash(block);
@@ -61,7 +71,7 @@ export async function commitFoundationsSave(kb: KbClient, key: TrustKey, block: 
 		accepted = true;
 		const pin: FoundationsPin = {
 			version: 2, origin: "kb", block, hash, docId: stored.id, author: stored.autor ?? "", date: stored.fecha ?? "",
-			notice: latest?.id === stored.id ? "" : "La KB guardó Foundations, pero ya hay perillas más nuevas: la próxima sesión muestra la diferencia.",
+			notice: "",
 			reading: { kind: "valid", key, block, hash, perillas: stored },
 		};
 		deps.onAccepted?.(pin);

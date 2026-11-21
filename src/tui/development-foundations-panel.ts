@@ -237,6 +237,6 @@ export async function showFoundationsPanel(ctx: ExtensionContext, input: Foundat
 			if (signal?.aborted) panel.dispose();
 			return panel;
 		}, { overlay: true, overlayOptions: () => ({ anchor: "center", width: "100%", maxHeight: "100%", margin: { top: 1, bottom: 1 } }),
-			blocked: { kind: "question", message: `Foundations · ${visibleText(input.repo)}` } });
+			blocked: { kind: "question", message: "Configurar Foundations" } });
 	} finally { signal?.removeEventListener("abort", cancel); }
 }

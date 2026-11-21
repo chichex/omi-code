@@ -75,10 +75,13 @@ export class DevelopmentSession {
 	readonly io: Io;
 	/** Foundations fijo de esta sesión: decide qué corre o avanza sin preguntar. */
 	readonly foundations: FoundationsGate;
+	/** Sólo el host usa este cliente para el guardado explícito desde el panel; no es una tool del modelo. */
+	readonly kb: KbClient | undefined;
 	constructor(pi: ExtensionAPI, io: Io, args: readonly string[], deps: DevelopmentDeps = {}) {
 		this.pi = pi; this.io = io;
 		this.runner = deps.runner ?? processRunner; this.now = deps.now ?? (() => new Date().toISOString());
 		this.offline = developmentOffline(args, io.env);
+		this.kb = deps.kb;
 		this.foundations = new FoundationsGate({ kb: deps.kb, runner: this.runner, trustDir: foundationsDir(io.homeDir), now: this.now, confirm: (ctx, title, description) => this.confirm(ctx, title, description) });
 	}
 	private anchor(): void {
@@ -236,7 +239,7 @@ export class DevelopmentSession {
 		await this.apply({ type: "approved", ...(auto ? { by: "foundations" as const, ...(foundations.hash ? { foundations: foundations.hash } : {}) } : {}) }, ctx);
 		// También con receta: auto la sección del issue muestra la receta aprobada.
 		await updateIssueSection(this, ctx);
-		if (auto) ctx.ui.notify("Foundations · receta auto: la receta se aprobó sin revisión humana. Sus comandos fuera del catálogo siguen pidiendo permiso.", "info");
+		if (auto) ctx.ui.notify("Foundations · receta auto: la receta se aprobó sin revisión humana. Sus comandos siguen Foundations v2: sintaxis no soportada o patrones coincidentes piden sí, salvo grant humano exacto vigente.", "info");
 		return true;
 	}
 	// Volver a explorar descarta receta, aprobación y pruebas; también las lecturas y comandos autorizados.

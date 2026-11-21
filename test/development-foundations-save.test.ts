@@ -190,7 +190,7 @@ test("foundations_save: fallo al releer la revisión enviada informa estado inci
 	assert.equal(saves(f.kb).length, 1); assert.deepEqual(await readdir(f.trustDir), []);
 });
 
-test("foundations_save: requireLatest es true por defecto; si cambió antes de aceptar no se acepta una revisión vieja", async (t) => {
+test("foundations_save: exige revisión vigente; si cambió antes de aceptar no se acepta una revisión vieja", async (t) => {
 	const f = await fixture(t); const prepared = await prepareFoundationsSave(f.kb, f.key, f.block, f.deps.signal);
 	let changed = false; const pins: FoundationsPin[] = [];
 	f.kb.hook = (tool) => {

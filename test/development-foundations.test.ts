@@ -14,7 +14,7 @@ import { processRunner } from "../src/core/exec.ts";
 
 const ACCEPT = "Aceptar Foundations";
 const REPO = "test/repo";
-const block = (overrides: Partial<FoundationsBlock> = {}): FoundationsBlock => ({ version: 1, repo: REPO, comandos: ["node test.cjs"], politica: { arranque: "ask", receta: "ask", fuera_de_catalogo: "ask", push_pr: "ask" }, ...overrides });
+const block = (overrides: Partial<FoundationsBlock> = {}): FoundationsBlock => ({ version: 2, repo: REPO, confirmar: ["node test.cjs"], politica: { arranque: "ask", receta: "ask", push_pr: "ask" }, ...overrides });
 const perillas = (kb: MemoryKb, value: FoundationsBlock | string) => kb.perillas("repo", `# Perillas de repo\n\nTono: formal.\n\n${typeof value === "string" ? value : renderFoundationsBlock(value)}\n`);
 const kbWith = (value?: FoundationsBlock | string) => { const kb = memoryKb({ products: ["repo"] }); if (value) perillas(kb, value); return kb; };
 const key = (kbUrl: string) => ({ kbUrl, product: "repo", repo: REPO });
@@ -64,24 +64,24 @@ test("foundations_session: una revisión nueva muestra la diferencia, pide un s�
 	assert.equal(again.prompts.length, 0, "proceso nuevo con el mismo hash: sin diálogo");
 });
 
-test("foundations_session: rechazar deja la última aceptada, o la estricta si no hay", async (t) => {
+test("foundations_session: rechazar una revisión v2 no la activa ni usa otra como autorización", async (t) => {
 	const dir = foundationsDir(await tempDir(t)); const kb = kbWith(block());
 	const strict = ctx([false]);
 	const none = await decideFoundations(await reading(t, kb), strict.ctx, strict.deps(dir));
 	assert.equal(none.origin, "strict"); assert.equal(none.block, null);
 	assert.equal(await readTrust(dir, key(kb.url)), undefined, "un no no registra nada");
 	await decideFoundations(await reading(t, kb), ctx([true]).ctx, ctx([true]).deps(dir));
-	const newer = block({ comandos: ["node test.cjs", "node other-test.cjs"], politica: { ...block().politica, fuera_de_catalogo: "auto" } });
+	const newer = block({ confirmar: ["node test.cjs", "node other-test.cjs"], politica: { ...block().politica, receta: "auto" } });
 	perillas(kb, newer);
 	const reject = ctx([false]);
 	const pin = await decideFoundations(await reading(t, kb), reject.ctx, reject.deps(dir));
 	assert.match(reject.prompts[0]!.description, /^ {2}\+ node other-test\.cjs$/m);
-	assert.match(reject.prompts[0]!.description, /corre cualquier comando sin preguntar/);
-	assert.equal(pin.origin, "local"); assert.deepEqual(pin.block, block());
+	assert.match(reject.prompts[0]!.description, /aprueba su propia receta/);
+	assert.equal(pin.origin, "strict"); assert.equal(pin.block, null);
 	assert.match(pin.notice, /rechaz/i);
 });
 
-test("foundations_session: inválido, ausente o sin KB no preguntan y usan la aceptada local, con aviso", async (t) => {
+test("foundations_session: inválido, ausente o sin KB no preguntan y fallan cerrados, aun con aceptación previa", async (t) => {
 	const dir = foundationsDir(await tempDir(t)); const kb = kbWith(block());
 	const cases: [string, MemoryKb][] = [["inválido", kbWith("```omi-foundations\n{ roto\n```")], ["sin bloque", kbWith()]];
 	const offline = kbWith(block()); offline.available = "sin login"; cases.push(["sin KB", offline]);
@@ -94,7 +94,7 @@ test("foundations_session: inválido, ausente o sin KB no preguntan y usan la ac
 	for (const [name, other] of cases) {
 		const empty = ctx([]);
 		const local = await decideFoundations(await reading(t, other), empty.ctx, empty.deps(dir));
-		assert.equal(local.origin, "local", name); assert.deepEqual(local.block, block(), name); assert.equal(empty.prompts.length, 0, name);
+		assert.equal(local.origin, "strict", name); assert.equal(local.block, null, name); assert.equal(empty.prompts.length, 0, name);
 	}
 	const invalid = await decideFoundations(await reading(t, Object.assign(kbWith("```omi-foundations\n{ roto\n```"), { url: kb.url })), ctx([]).ctx, ctx([]).deps(dir));
 	assert.match(invalid.notice, /inválid/);
@@ -137,14 +137,14 @@ test("foundations_session: un diálogo por revisión nueva, fijo toda la sesión
 	await f.start();
 	assert.equal(accepts(f.prompts), 1);
 	assert.ok(f.prompts.indexOf(ACCEPT) < f.prompts.indexOf("Empezar el trabajo del issue #42"), "se acepta antes del sí del arranque");
-	perillas(kb, block({ comandos: ["node test.cjs", "node -e 1"] }));
+	perillas(kb, block({ confirmar: ["node test.cjs", "node -e 1"] }));
 	await f.command("resume"); await f.command("status");
 	assert.equal(accepts(f.prompts), 1);
 	const status = f.messages.at(-1)!;
 	assert.match(status, /Foundations: KB · revisión [0-9a-f]{8}/);
 	assert.match(status, new RegExp(foundationsHash(block()).slice(0, 8)), "la sesión sigue con la revisión que leyó al arrancar");
-	assert.match(status, /arranque ask · receta ask · fuera del catálogo ask · push \+ PR draft ask/);
-	assert.match(status, /Catálogo: node test\.cjs/);
+	assert.match(status, /arranque: ask\n  receta: ask\n  push \+ PR draft: ask/);
+	assert.match(status, /Patrones que requieren confirmación:\n  node test\.cjs/);
 	const detail = (f.progress.at(-1) as { progress?: { details: string[] } }).progress?.details ?? [];
 	assert.ok(detail.some((line) => /^Foundations: KB · revisión/.test(line)), "el detalle del progreso muestra Foundations");
 });

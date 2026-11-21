@@ -24,7 +24,7 @@ export interface FoundationsPin {
 	block: FoundationsBlock | null; hash: string | null; docId: string | null; author: string | null; date: string | null;
 	notice: string; reading: FoundationsReading;
 }
-export interface DecideDeps { trustDir: string; now: () => string; confirm: (ctx: ExtensionContext, title: string, description: string) => Promise<boolean> }
+export interface DecideDeps { trustDir: string; now: () => string; confirm: (ctx: ExtensionContext, title: string, description: string) => Promise<boolean>; isCurrent?: () => boolean }
 export function parseRepoIdentity(url: string): string | undefined {
 	const match = /^(?:https:\/\/github\.com\/|ssh:\/\/git@github\.com\/|git@github\.com:)([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(url.trim());
 	return match ? `${match[1]}/${match[2]}`.toLowerCase() : undefined;
@@ -75,13 +75,19 @@ export async function decideFoundations(reading: FoundationsReading, ctx: Extens
 	if (reading.kind === "invalid") return strictPin(reading, `Foundations inválido u obsoleto (${reading.reason}): volvé a configurar v2.`);
 	const checked = checkBlock(reading.block);
 	if ("reason" in checked || foundationsHash(checked.block) !== reading.hash) return strictPin(reading, "Foundations inválido u obsoleto: configurá v2 de nuevo.");
+	if (deps.isCurrent?.() === false) return strictPin(reading, "La decisión de Foundations quedó obsoleta durante la lectura.");
 	const record = await readTrust(deps.trustDir, reading.key); const accepted = record?.accepted ?? null;
 	const doc = reading.perillas;
 	const pin: FoundationsPin = { version: 2, origin: "kb", block: checked.block, hash: reading.hash, docId: doc.id, author: doc.autor ?? "", date: doc.fecha ?? "", notice: "", reading };
-	if (accepted?.blockHash === reading.hash) return pin;
+	if (record && accepted?.blockHash === reading.hash) {
+		// Mismo bloque aceptado en otro documento: sólo se actualiza metadata local, nunca permisos ni KB.
+		if (accepted.docId !== doc.id && deps.isCurrent?.() !== false) await writeTrust(deps.trustDir, { ...record, accepted: { ...accepted, docId: doc.id, author: doc.autor ?? "", date: doc.fecha ?? "" } }).catch(() => {});
+		return pin;
+	}
 	if (!ctx.hasUI) return strictPin(reading, "Hay una revisión de Foundations v2 no aceptada; aceptarla requiere UI.");
 	const description = `${foundationsDiff(accepted?.block, checked.block, { product: reading.key.product, kbUrl: reading.key.kbUrl, docId: doc.id, ...(doc.autor ? { author: doc.autor } : {}), ...(doc.fecha ? { date: doc.fecha } : {}) })}\n\nCon el sí se acepta esta revisión; con no o cancelar, todo comando requiere confirmación salvo su grant humano exacto. Nunca habilita merge, tags, workflows, deploys ni secretos; no es un sandbox.`;
 	if (!(await deps.confirm(ctx, "Aceptar Foundations", description))) return strictPin(reading, "Rechazaste la revisión de Foundations v2: no está aceptada.");
+	if (deps.isCurrent?.() === false) return strictPin(reading, "La decisión de Foundations quedó obsoleta; no se aceptó esa revisión anterior.");
 	const base: TrustRecord = record ?? { version: 2, ...reading.key, accepted: null, offerDeclined: false };
 	try { await writeTrust(deps.trustDir, { ...base, accepted: { docId: doc.id, blockHash: reading.hash, block: checked.block, author: doc.autor ?? "", date: doc.fecha ?? "", acceptedAt: deps.now() } }); }
 	catch { return strictPin(reading, "No se pudo guardar la aceptación local; esta revisión no quedó activada."); }
@@ -104,7 +110,7 @@ export function foundationsLines(pin: FoundationsPin | undefined): string[] {
 		...(pin.notice ? [visibleText(`Aviso: ${pin.notice}`)] : []), "Editar: /omi-work foundations",
 	];
 }
-interface Entry { reading: Promise<FoundationsReading>; pin?: FoundationsPin | undefined; deciding?: Promise<FoundationsPin> | undefined; triage?: Promise<TriagePolicyPin> }
+interface Entry { reading: Promise<FoundationsReading>; generation?: number; pin?: FoundationsPin | undefined; deciding?: Promise<FoundationsPin> | undefined; triage?: Promise<TriagePolicyPin> }
 const sessions = new Map<string, Entry>();
 function remember(file: string, entry: Entry): void {
 	sessions.set(file, entry);
@@ -135,8 +141,11 @@ export class FoundationsGate {
 		if (!file) return strictPin({ kind: "none", reason: "sin sesión persistente" }, "Sin sesión persistente: política estricta.");
 		this.load(ctx); const entry = sessions.get(file)!;
 		if (entry.pin) { entry.pin = safePin(entry.pin); return entry.pin; }
-		entry.deciding ??= entry.reading.then((reading) => decideFoundations(reading, ctx, this.deps)).finally(() => { entry.deciding = undefined; });
-		entry.pin = safePin(await entry.deciding);
+		const generation = entry.generation ?? 0;
+		entry.deciding ??= entry.reading.then((reading) => decideFoundations(reading, ctx, { ...this.deps, isCurrent: () => (entry.generation ?? 0) === generation })).finally(() => { entry.deciding = undefined; });
+		const decided = safePin(await entry.deciding);
+		// Un guardado propio explícito tiene precedencia sobre un diálogo que quedó pendiente.
+		entry.pin ??= decided;
 		return entry.pin;
 	}
 	async triage(ctx: ExtensionContext): Promise<TriagePolicyPin> {
@@ -158,7 +167,7 @@ export class FoundationsGate {
 	}
 	replace(ctx: ExtensionContext, pin: FoundationsPin): void {
 		const file = this.file(ctx); const entry = file && sessions.get(file);
-		if (entry) { entry.pin = safePin(pin); entry.reading = Promise.resolve(entry.pin.reading); }
+		if (entry) { entry.generation = (entry.generation ?? 0) + 1; entry.pin = safePin(pin); entry.reading = Promise.resolve(entry.pin.reading); }
 	}
 	async policy(ctx: ExtensionContext, state?: Workflow): Promise<ReturnType<typeof effectivePolicy>> { return effectivePolicy(await this.pin(ctx), state); }
 }

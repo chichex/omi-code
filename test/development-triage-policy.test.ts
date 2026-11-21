@@ -60,6 +60,6 @@ test("triage_policy: el pin no se comparte con otras sesiones ni repositorios", 
 test("triage_policy: cambiar criterio no altera las cuatro políticas de autorización", async (t) => {
 	const f = await fixture(t, block({ ...policy, enabled: false, maxScope: "module" }));
 	const pin = await reader(f.gate)(f.ctx); assert.equal(pin.policy.enabled, false); assert.equal(pin.policy.maxScope, "module");
-	const permissions = await f.gate.policy(f.ctx); assert.deepEqual(permissions.politica, { arranque: "ask", receta: "ask", fuera_de_catalogo: "ask", push_pr: "ask" });
+	const permissions = await f.gate.policy(f.ctx); assert.deepEqual(permissions.politica, { arranque: "ask", receta: "ask", push_pr: "ask" });
 	assert.equal(f.prompts(), 0);
 });
