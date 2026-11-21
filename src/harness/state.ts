@@ -1,4 +1,4 @@
-import { artifactHash, MAX_AGREEMENTS, MAX_ATTEMPTS, MAX_EVIDENCE, MAX_GRANTS, MAX_HISTORY, MAX_REVIEWS, MAX_STEPS, parseWorkflow, sourceHash, type Workflow, type Exploration, type InferenceInput, type Plan, type Spec, type Evidence, type Review, type Step } from "./model.ts";
+import { artifactHash, MAX_AGREEMENTS, MAX_ATTEMPTS, MAX_EVIDENCE, MAX_GRANTS, MAX_HISTORY, MAX_REVIEWS, MAX_STEPS, parseWorkflow, sourceHash, type Workflow, type WorkflowV2, type Exploration, type InferenceInput, type Plan, type Spec, type Evidence, type Review, type Step } from "./model.ts";
 
 import { recipeNextPhase, recipeRoute } from "./phases.ts";
 
@@ -29,11 +29,11 @@ function requireCondition(condition: unknown, message: string): asserts conditio
  if (!condition) throw new Error(`Harness: ${message}`);
 }
 function nonempty(value: string): boolean { return typeof value === "string" && value.trim().length > 0; }
-function validate(state: Workflow): Workflow { return parseWorkflow(JSON.stringify(state)); }
+function validate(state: Workflow): WorkflowV2 { return parseWorkflow(JSON.stringify(state)); }
 
-export function createWorkflow(source: Workflow["source"], checkout: Workflow["checkout"], id: string, at: string): Workflow {
+export function createWorkflow(source: Workflow["source"], checkout: Workflow["checkout"], id: string, at: string): WorkflowV2 {
  requireCondition(nonempty(at), "falta fecha");
- return validate({ version: 1, id, revision: 0, source: { ...source, hash: sourceHash(source.title, source.body) }, checkout: { ...checkout },
+ return validate({ version: 2, lifecycle: { status: "disabled" }, pullRequest: null, publicationFormat: 1, id, revision: 0, source: { ...source, hash: sourceHash(source.title, source.body) }, checkout: { ...checkout },
   phase: "explore", status: "active", blockedReason: "", activity: "Explorar el issue", exploration: null, inferences: [], recipe: null,
   diagnosis: null, spec: null, steps: [], evidence: [], reviews: [], round: 0, maxRounds: 3, approval: null, publication: { status: "none" }, attempts: [], agreements: [], history: [] });
 }
@@ -289,7 +289,9 @@ function recordReview(state: Workflow, review: Review): void {
 }
 // La UI/adapter es la única autoridad que puede emitir approved o autorizar una reproducción.
 // Este reducer puro no ejecuta comandos, verifica Git ni obtiene consentimiento.
-export function transition(original: Workflow, event: WorkflowEvent, at: string): Workflow {
+export function transition(original: WorkflowV2, event: WorkflowEvent, at: string): WorkflowV2;
+export function transition(original: Workflow, event: WorkflowEvent, at: string): Workflow;
+export function transition(original: Workflow, event: WorkflowEvent, at: string): WorkflowV2 {
  const state = validate(original);
  requireCondition(nonempty(at), "falta fecha");
  // Un cierre sin cambio lo decide el modelo; volver a leer el pedido es la salida humana.
@@ -372,7 +374,9 @@ function applyEvent(state: Workflow, event: WorkflowEvent, at: string): void {
   }
   case "published":
    requirePhase(state, "pr"); requireCondition(state.publication.status === "pending" && state.publication.head === event.head, "head no coincide con publicación pendiente");
-   state.publication = { status: "opened", head: event.head, url: event.url, number: event.number }; state.phase = "done"; state.status = "complete"; return;
+   state.publication = { status: "opened", head: event.head, url: event.url, number: event.number };
+   if (state.version === 2) state.pullRequest = { number: event.number, url: event.url, head: event.head, branch: state.checkout.branch, base: "main", ownership: "unadopted" };
+   state.phase = "done"; state.status = "complete"; return;
   default: { const unhandled: never = event; throw new Error(`Evento desconocido: ${JSON.stringify(unhandled)}`); }
  }
 }

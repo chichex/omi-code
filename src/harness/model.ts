@@ -2,13 +2,14 @@
 import { createHash } from "node:crypto";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
-import { PHASES } from "./phases.ts";
+import { PHASES, PHASES_V1 } from "./phases.ts";
 
 // Topes compartidos por el esquema y el reducer: el reducer los respeta antes de validar.
 export const MAX_HISTORY = 1000; export const MAX_STEPS = 50; export const MAX_ATTEMPTS = 100; export const MAX_EVIDENCE = 1000; export const MAX_REVIEWS = 100; export const MAX_AGREEMENTS = 50; export const MAX_GRANTS = 200;
 export const text = (maxLength = 4000) => Type.String({ minLength: 1, maxLength, pattern: "\\S" });
 const list = () => Type.Array(text(), { maxItems: 100 });
 const nullableText = () => Type.Union([text(8192), Type.Null()]);
+const LegacyPhaseSchema = Type.Enum(PHASES_V1.map(p => p.id));
 export const PhaseSchema = Type.Enum(PHASES.map(p => p.id));
 export type Phase = Static<typeof PhaseSchema>;
 export const LensSchema = Type.Union([Type.Literal("compliance"), Type.Literal("security"), Type.Literal("reliability"), Type.Literal("quality"), Type.Literal("resilience"), Type.Literal("refuter")]);
@@ -71,11 +72,12 @@ export const PublicationSchema = Type.Union([
 	Type.Object({ status: Type.Literal("pending"), head: text(128), bodyHash: text(128), at: text(100) }, { additionalProperties: false }),
 	Type.Object({ status: Type.Literal("opened"), head: text(128), url: text(2048), number: Type.Integer({ minimum: 1 }) }, { additionalProperties: false }),
 ]);
-export const WorkflowSchema = Type.Object({
+// Esquema del binario anterior: cerrado y sin fases/campos de lifecycle.
+export const WorkflowV1Schema = Type.Object({
 	version: Type.Literal(1), id: text(100), revision: Type.Integer({ minimum: 0 }),
 	source: Type.Object({ number: Type.Integer({ minimum: 1 }), title: text(2000), url: text(2048), body: Type.String({ maxLength: 100000 }), hash: text(128) }, { additionalProperties: false }),
 	checkout: Type.Object({ root: text(8192), commonDir: text(8192), branch: text(128), baseCommit: text(128) }, { additionalProperties: false }),
-	phase: PhaseSchema, status: Type.Union([Type.Literal("active"), Type.Literal("waiting"), Type.Literal("paused"), Type.Literal("complete")]),
+	phase: LegacyPhaseSchema, status: Type.Union([Type.Literal("active"), Type.Literal("waiting"), Type.Literal("paused"), Type.Literal("complete")]),
 	blockedReason: Type.String({ maxLength: 4000 }), activity: text(),
 	exploration: Type.Union([ExplorationSchema, Type.Null()]), inferences: Type.Array(InferenceSchema, { maxItems: 100 }), recipe: Type.Union([RecipeSchema, Type.Null()]),
 	diagnosis: Type.Union([Type.Object({ cause: text(), reproduction: text(100), size: Type.Union([Type.Literal("small"), Type.Literal("large")]) }, { additionalProperties: false }), Type.Null()]),
@@ -88,17 +90,39 @@ export const WorkflowSchema = Type.Object({
 	grants: Type.Optional(Type.Array(Type.Object({ key: text(128), command: text(8192), at: text(100) }, { additionalProperties: false }), { maxItems: MAX_GRANTS })),
 	publication: PublicationSchema,
 	// Opcional para estados previos. Sobrevive a refresh: son palabras de la persona, no del pedido.
-	agreements: Type.Optional(Type.Array(AgreementSchema, { maxItems: MAX_AGREEMENTS })),
+	agreements: Type.Optional(Type.Array(Type.Object({ ...AgreementSchema.properties, phase: LegacyPhaseSchema }, { additionalProperties: false }), { maxItems: MAX_AGREEMENTS })),
 	// Sólo hechos de ejecución, nunca inputs/outputs privados. Opcional para estados previos.
-	observations: Type.Optional(Type.Array(Type.Object({ phase: PhaseSchema, round: Type.Integer({ minimum: 0, maximum: 10 }), inline: Type.Boolean(), subagent: Type.Boolean(), lens: Type.Boolean() }, { additionalProperties: false }), { maxItems: 121 })),
-	history: Type.Array(Type.Object({ at: text(100), phase: PhaseSchema, activity: text() }, { additionalProperties: false }), { maxItems: MAX_HISTORY }),
+	observations: Type.Optional(Type.Array(Type.Object({ phase: LegacyPhaseSchema, round: Type.Integer({ minimum: 0, maximum: 10 }), inline: Type.Boolean(), subagent: Type.Boolean(), lens: Type.Boolean() }, { additionalProperties: false }), { maxItems: 121 })),
+	history: Type.Array(Type.Object({ at: text(100), phase: LegacyPhaseSchema, activity: text() }, { additionalProperties: false }), { maxItems: MAX_HISTORY }),
 }, { additionalProperties: false });
-export type Workflow = Omit<Static<typeof WorkflowSchema>, "inferences"> & { inferences: Inference[] };
+const PullRequestSchema = Type.Union([Type.Null(), Type.Object({ number: Type.Integer({ minimum: 1 }), url: text(2048), head: text(128), branch: text(128), base: text(128), ownership: Type.Literal("unadopted") }, { additionalProperties: false })]);
+export const WorkflowV2Schema = Type.Object({
+ ...WorkflowV1Schema.properties, version: Type.Literal(2), phase: PhaseSchema,
+ // Disabled no significa omitido/no-aplica ni permiso: habilitar/adoptar es una operación host explícita.
+ lifecycle: Type.Object({ status: Type.Literal("disabled") }, { additionalProperties: false }),
+ pullRequest: PullRequestSchema,
+ // El renderer v1 permanece ligado al pending legacy y no se cambia al migrar/reanudar.
+ publicationFormat: Type.Literal(1),
+ agreements: Type.Optional(Type.Array(AgreementSchema, { maxItems: MAX_AGREEMENTS })),
+ observations: Type.Optional(Type.Array(Type.Object({ phase: PhaseSchema, round: Type.Integer({ minimum: 0, maximum: 10 }), inline: Type.Boolean(), subagent: Type.Boolean(), lens: Type.Boolean() }, { additionalProperties: false }), { maxItems: 121 })),
+ history: Type.Array(Type.Object({ at: text(100), phase: PhaseSchema, activity: text() }, { additionalProperties: false }), { maxItems: MAX_HISTORY }),
+}, { additionalProperties: false });
+export const WorkflowSchema = Type.Union([WorkflowV1Schema, WorkflowV2Schema]);
+export type WorkflowV1 = Omit<Static<typeof WorkflowV1Schema>, "inferences"> & { inferences: Inference[] };
+export type WorkflowV2 = Omit<Static<typeof WorkflowV2Schema>, "inferences"> & { inferences: Inference[] };
+export type Workflow = WorkflowV1 | WorkflowV2;
+/** Migración pura: validar antes de convertir, sin I/O, nuevos efectos ni avance de revisión. */
+export function migrateWorkflow(value: unknown): WorkflowV2 {
+ if (Value.Check(WorkflowV2Schema, value)) return structuredClone(value);
+ if (!Value.Check(WorkflowV1Schema, value)) throw new Error("Estado del harness inválido; no se reemplaza ni se reinicia automáticamente");
+ const old = structuredClone(value);
+ return { ...old, version: 2, lifecycle: { status: "disabled" }, publicationFormat: 1,
+  pullRequest: old.publication.status === "opened" ? { number: old.publication.number, url: old.publication.url, head: old.publication.head, branch: old.checkout.branch, base: "main", ownership: "unadopted" } : null };
+}
 export const sourceHash = (title: string, body: string): string => createHash("sha256").update(JSON.stringify({ title, body })).digest("hex");
 export const artifactHash = (value: unknown): string => createHash("sha256").update(JSON.stringify(value)).digest("hex");
-export function parseWorkflow(raw: string): Workflow {
+export function parseWorkflow(raw: string): WorkflowV2 {
 	let value: unknown;
 	try { value = JSON.parse(raw); } catch { throw new Error("Estado del harness inválido: no es JSON"); }
-	if (!Value.Check(WorkflowSchema, value)) throw new Error("Estado del harness inválido; no se reemplaza ni se reinicia automáticamente");
-	return value;
+	return migrateWorkflow(value);
 }

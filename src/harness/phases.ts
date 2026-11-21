@@ -1,11 +1,13 @@
 // Catálogo del proceso real, compartido por esquema, reducer, instrucciones y presentación.
 import type { Plan, Recipe } from "./model.ts";
-export const PHASES = [
+// Catálogo v1 congelado para validar estados legacy sin inventarles etapas nuevas.
+export const PHASES_V1 = [
  { id: "explore", label: "Explorar" }, { id: "decide", label: "Resolver inferencias" }, { id: "recipe", label: "Preparar receta" },
  { id: "diagnose", label: "Diagnóstico" }, { id: "spec", label: "Escribir spec" }, { id: "approve", label: "Aprobar receta" },
  { id: "implement", label: "Implementar" }, { id: "verify", label: "Verificar" }, { id: "pr", label: "Abrir PR draft" },
  { id: "done", label: "PR draft abierto" }, { id: "closed", label: "Cerrado sin cambio" },
 ] as const;
+export const PHASES = PHASES_V1;
 export type Phase = typeof PHASES[number]["id"];
 export const PHASE_LABELS = Object.fromEntries(PHASES.map(p => [p.id, p.label])) as Record<Phase, string>;
 export function recipeRoute(c: Plan["classification"]): Recipe["route"] {
