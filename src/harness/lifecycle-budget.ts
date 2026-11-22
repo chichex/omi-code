@@ -4,10 +4,10 @@ import { lifecycleAssert } from "./lifecycle-invariants.ts";
 export function currentLifecyclePin(s: EnabledLifecycle) {
  const pin = s.pins.find(p => p.accepted.blockHash === s.pinHash); lifecycleAssert(pin, "falta pin vigente"); return pin;
 }
-const TARGET_KINDS = new Set<OperationKind>(["ship", "publish", "deploy", "promote", "rollback", "fix-forward"]);
+const TARGET_KINDS = new Set<OperationKind>(["ship", "publish", "deploy", "promote", "rollback", "fix-forward", "fix-forward-push"]);
 const STAGES: Record<EnabledLifecycle["stage"], readonly OperationKind[]> = {
  review: ["review", "ready"], corrections: ["correction", "push"], ready: ["ready", "land"], land: ["land"],
- ship: ["ship", "publish", "deploy", "promote", "rollback", "fix-forward"], paused: [], delivered: [], complete: [],
+ ship: ["ship", "publish", "deploy", "promote", "rollback", "fix-forward", "fix-forward-push"], paused: [], delivered: [], complete: [],
 };
 export function lifecycleBudgetBlock(s: EnabledLifecycle, intent: LifecycleIntent, owner: string): string {
  const block = currentLifecyclePin(s).accepted.block;
@@ -39,8 +39,8 @@ export function assertLifecycleDecision(s: EnabledLifecycle, intent: LifecycleIn
  const mode = intent.kind === "review" ? block.review.mode : intent.kind === "correction" ? block.corrections.mode
   : intent.kind === "land" || intent.kind === "ready" ? block.land.mode
    : intent.kind === "rollback" || intent.kind === "fix-forward" ? target?.onFailure.mode
-    : intent.kind === "push" ? "ask" : target?.mode;
- // Foundations de push se observa por el host: no deriva de corrections:auto.
- const foundationsPush = intent.kind === "push" && decision.source === "policy" && !!decision.authorityHash;
+    : intent.kind === "push" || intent.kind === "fix-forward-push" ? "ask" : target?.mode;
+ // Foundations de push se observa por el host: no deriva de corrections:auto ni de onFailure:auto.
+ const foundationsPush = (intent.kind === "push" || intent.kind === "fix-forward-push") && decision.source === "policy" && !!decision.authorityHash;
  lifecycleAssert(decision.source === "person" || mode === "auto" || foundationsPush, "falta decisión humana específica; ask no admite auto implícito");
 }

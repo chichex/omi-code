@@ -38,5 +38,9 @@ export function validateRecoveryFacts(s: EnabledLifecycle): void {
 }
 export function assertRecoveryContinuity(before: EnabledLifecycle, after: EnabledLifecycle): void {
  for (const [old, next] of [[before.recoveryBaselines ?? [], after.recoveryBaselines ?? []], [before.recoveryObservations ?? [], after.recoveryObservations ?? []]] as const) fact(next.length >= old.length && old.every((item, index) => sameData(item, next[index])), "no borrar/reescribir baselines ni recibos");
- for (const op of before.operations) if (op.recoveryRequest) fact(sameData(op.recoveryRequest, after.operations.find(o => o.id === op.id)?.recoveryRequest), "request recovery no se reemplaza");
+ for (const op of before.operations) {
+  const next = after.operations.find(o => o.id === op.id);
+  if (op.recoveryRequest) fact(sameData(op.recoveryRequest, next?.recoveryRequest), "request recovery no se reemplaza");
+  if (op.fixForwardRequest || op.fixForwardPush) fact(sameData(op.fixForwardRequest, next?.fixForwardRequest) && sameData(op.fixForwardPush, next?.fixForwardPush), "claim fix-forward no se reemplaza");
+ }
 }

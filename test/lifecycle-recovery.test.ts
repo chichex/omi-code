@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createWorkflow, recipeApprovalHash, transition } from "../src/harness/state.ts";
-import { prepareFixForwardWorkspace, verifyFixForwardWorkspace } from "../src/harness/fix-forward.ts";
+import { prepareFixForwardWorkspace, verifyFixForwardWorkspace, publishFixForward, acceptFixForwardPull } from "../src/harness/fix-forward.ts";
+import { activePullRequest } from "../src/harness/workflow-context.ts";
+import type { Runner } from "../src/core/exec.ts";
 import { sourceHash, parseWorkflow, type Evidence } from "../src/harness/model.ts";
 import { defaultLifecycleConfig, defaultLifecycleTarget, lifecycleHash } from "../src/harness/lifecycle-config.ts";
 import * as life from "../src/harness/lifecycle-state.ts";
@@ -9,7 +11,8 @@ import { acceptObservedMerge } from "../src/harness/lifecycle-land.ts";
 import { recordShipVerification, completeShip } from "../src/harness/ship-state.ts";
 import { recoveryPlan, stopShipRecovery, reconcileOmiOperation, captureOmiRecoveryBaseline, recordRecoveryBaseline, recordRecoveryVerification, rollbackOmiVersion, rollbackGhaTarget } from "../src/harness/lifecycle-recovery.ts";
 import { Value } from "typebox/value";
-import { mkdir } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readWorkflow, updateWorkflow } from "../src/harness/store.ts";
 import { claimOmi } from "../src/harness/omi-operation.ts";
@@ -109,4 +112,58 @@ test("reconciliar deployment conocido fallido sólo lee; no reenvía POST ni dev
  state.lifecycle = life.markLifecycleUnknown(state.lifecycle, "deploy1", "respuesta perdida", at);
  linked.omi.route("GET /api/v1/organizations/{organizationID}/projects/{projectSlug}/services/{serviceName}/environments/{environmentName}/deployments", () => ({ status: 200, body: { deployments: [{ id: "dep_failed", service: "api", environment: "stage", from_version: "1.0.0", to_version: "1.1.0", status: "fallido", steps: [], target_instances: 1, created_at: at }] } }));
  const before = structuredClone(state.lifecycle.budget), result = await reconcileOmiOperation(state, "deploy1", p); assert.equal(result.state, "confirmed"); assert.ok(result.receipt); assert.equal(result.receipt.outcome, "failed"); assert.deepEqual(state.lifecycle.budget, before); assert.equal(linked.mutations().length, 0);
+});
+
+async function verifiedFixForward(t: import("node:test").TestContext) {
+ const root = await mkdtemp(join(tmpdir(), "omi-fix-forward-")); await mkdir(join(root, ".git")); t.after(() => rm(root, { recursive: true, force: true })); const checkout = { root, commonDir: join(root, ".git"), branch: "fix/recovery-43", baseCommit: merge };
+ let state = fixture("fix-forward"); state.recipe = { classification: { type: "fix", size: "small", risk: "low", riskAreas: [], causeKnown: true }, objective: "Restaurar entrega aprobada", approach: "Corregir app", scope: ["app"], outOfScope: ["nuevo alcance"], cases: [{ id: "D1", description: "contrato", command: "npm test" }], lenses: [], executor: { mode: "inline", writers: 0 }, route: "direct" }; state.exploration = { references: [{ path: "app.ts", line: 1, detail: "contrato" }], findings: [], approach: "fix", missingFoundation: [], dependencies: [], disposition: "continue", reason: "ready" }; state.approval = { sourceHash: state.source.hash, recipeHash: recipeApprovalHash(state), by: "person", at };
+ assert.ok(state.lifecycle.status === "enabled"); const subjectId = state.lifecycle.currentSubject; assert.ok(subjectId);
+ state.lifecycle = life.reserveLifecycleOperation(state.lifecycle, { id: "fix1", key: "fix1", kind: "fix-forward", subjectId, targetId: "delivery", correlationId: nonce + "fix", retryOf: null }, { id: "fix-decision", kind: "fix-forward", subjectId, targetId: "delivery", configHash: state.lifecycle.pinHash, source: "person", at }, "process", at);
+ state = parseWorkflow(JSON.stringify(prepareFixForwardWorkspace(state, "fix1", { id: "workspace1", failureDeliveryId: "delivery:ship1:1", checkout, base: "main", baseSha: merge, clean: true, containsMerge: true, scope: { source: "person", withinScope: true, risk: "low", scopeHash: recipeApprovalHash(state) }, at })));
+ const stepId = state.steps.at(-1)!.id; state = transition(state, { type: "step_started", id: stepId }, at);
+ const evidence = (kind: Evidence["kind"], sha = merge): Evidence => ({ id: `fix-${kind}`, kind, command: "npm test", stepId: kind === "verification" ? null : stepId, caseId: "D1", exitCode: kind === "red" ? 1 : 0, outcome: kind === "red" ? "failed" : "passed", output: "fixture observed", head: sha, fingerprint: "f".repeat(64), startedAt: at, finishedAt: at });
+ state = transition(state, { type: "evidence", evidence: evidence("red") }, at); state = transition(state, { type: "evidence", evidence: evidence("green") }, at); state = transition(state, { type: "step_completed", id: stepId, commit: previous, fingerprint: "f".repeat(64) }, at); state = transition(state, { type: "evidence", evidence: evidence("verification", previous) }, at); state = transition(state, { type: "verified", fingerprint: "f".repeat(64) }, at);
+ return { state: parseWorkflow(JSON.stringify(verifyFixForwardWorkspace(state, "workspace1", { head: previous, fingerprint: "f".repeat(64), clean: true, ancestor: true }, at))), checkout };
+}
+// GitHub simulado: checkout de recuperación limpio en HEAD previo, issue #42 intacto y PRs por branch.
+function fakeGitHub(checkout: { root: string; commonDir: string; branch: string }) {
+ const calls: { command: string; args: string[] }[] = [], pull = { number: 43, url: `https://github.com/${repo}/pull/43`, state: "OPEN", isDraft: true, isCrossRepository: false, headRefName: checkout.branch, baseRefName: "main", headRefOid: previous, body: "" };
+ const github = { calls, pull, prs: [] as unknown[], runner: { async run(command, args, options) {
+  calls.push({ command, args }); let stdout = "";
+  if (command === "git") { const a = args.slice(args.indexOf("-C") + 2); if (a[0] === "rev-parse") stdout = a.includes("--show-toplevel") ? checkout.root : a.includes("--git-common-dir") ? checkout.commonDir : previous; else if (a[0] === "symbolic-ref") stdout = `refs/heads/${checkout.branch}`; else if (a[0] === "remote") stdout = `git@github.com:${repo}.git`; }
+  else if (args[0] === "issue" && args[1] === "view") stdout = JSON.stringify({ number: 42, title: "Change", body: "Scope", url: `https://github.com/${repo}/issues/42` });
+  else if (args[0] === "repo") stdout = JSON.stringify({ nameWithOwner: repo, url: `https://github.com/${repo}` });
+  else if (args[0] === "pr" && args[1] === "list") stdout = JSON.stringify(github.prs);
+  else if (args[0] === "pr" && args[1] === "create") { pull.body = options?.input ?? ""; github.prs = [pull]; stdout = pull.url; }
+  else throw new Error(`Llamada remota inesperada: ${command} ${args.join(" ")}`);
+  return { code: 0, stdout, stderr: "" };
+ } } as Runner };
+ return github;
+}
+
+test("fix-forward publica PR43 nuevo ligado a raíz42 con el mismo presupuesto, sin replay ni reabrir PR42", async t => {
+ let { state, checkout } = await verifiedFixForward(t); assert.ok(state.lifecycle.status === "enabled"); const subjectId = state.lifecycle.currentSubject; assert.ok(subjectId);
+ const push = { id: "push1", key: "push1", kind: "fix-forward-push", subjectId, targetId: "delivery", correlationId: nonce + "push", retryOf: null } as const, decision = { id: "push-decision", kind: "fix-forward-push", subjectId, targetId: "delivery", configHash: state.lifecycle.pinHash, source: "policy", at } as const;
+ assert.throws(() => life.reserveLifecycleOperation(state.lifecycle, push, decision, "process", at), /humana|decisión/i, "fix-forward reservado no autoriza push/PR: permiso independiente");
+ state.lifecycle = life.reserveLifecycleOperation(state.lifecycle, push, { ...decision, source: "person" }, "process", at); assert.equal(state.lifecycle.budget.attemptsUsed, 3);
+ const before = structuredClone(state), github = fakeGitHub(checkout), order: string[] = []; let claimed: unknown = null;
+ const deps = { signal: AbortSignal.timeout(5000), runner: { run: (command, args, options) => { if (args.includes("push")) order.push("push"); return github.runner.run(command, args, options); } } as Runner, persistClaim: async (s: unknown) => { order.push("claim"); claimed = s; } };
+ const result = await publishFixForward(state, "workspace1", "push1", deps); assert.equal(result.state, "opened"); assert.ok(result.pullRequest); assert.equal(result.pullRequest.number, 43); assert.deepEqual(order, ["claim", "push"], "claim durable antes del efecto");
+ const pushes = github.calls.filter(c => c.args.includes("push")), creates = github.calls.filter(c => c.args[0] === "pr" && c.args[1] === "create");
+ assert.equal(pushes.length, 1); assert.ok(pushes[0]?.args.includes(`${previous}:refs/heads/fix/recovery-43`)); assert.equal(creates.length, 1); assert.ok(creates[0]?.args.includes("--draft")); assert.ok(creates[0]?.args.includes("main"));
+ assert.ok(!github.calls.some(c => c.args.some(a => /^(reopen|ready|merge|edit|close)$/.test(a)) || (c.args[0] === "pr" && c.args.includes("42"))), "PR42 mergeado no se reabre ni edita");
+ assert.ok(claimed); state = parseWorkflow(JSON.stringify(claimed)); assert.ok(state.lifecycle.status === "enabled"); assert.equal(state.lifecycle.operations.find(o => o.id === "fix1")?.fixForwardRequest?.sourcePr, 42); assert.equal(state.lifecycle.operations.find(o => o.id === "fix1")?.fixForwardRequest?.rootWorkflowId, "root");
+ github.prs = []; assert.equal((await publishFixForward(state, "workspace1", "push1", deps)).state, "unknown", "respuesta perdida sin PR visible: observar, no replay");
+ github.prs = [github.pull]; assert.deepEqual((await publishFixForward(state, "workspace1", "push1", deps)).pullRequest, result.pullRequest);
+ assert.equal(github.calls.filter(c => c.args.includes("push")).length, 1); assert.equal(github.calls.filter(c => c.args[0] === "pr" && c.args[1] === "create").length, 1);
+ assert.throws(() => acceptFixForwardPull(state, "workspace1", "push1", { ...result.pullRequest, number: 42, url: `https://github.com/${repo}/pull/42` }, at), /mergead|reabr|conocido/i);
+ assert.throws(() => acceptFixForwardPull(state, "workspace1", "push1", { ...result.pullRequest, head: merge }, at), /HEAD|ajeno/i);
+ state = parseWorkflow(JSON.stringify(acceptFixForwardPull(state, "workspace1", "push1", result.pullRequest, at))); assert.ok(state.lifecycle.status === "enabled" && before.lifecycle.status === "enabled");
+ assert.deepEqual(state.lifecycle.root, before.lifecycle.root); assert.deepEqual(state.lifecycle.budget, before.lifecycle.budget); assert.equal(state.lifecycle.budget.fixForwardPRsUsed, 1);
+ assert.deepEqual(state.pullRequest, before.pullRequest); assert.deepEqual(state.publication, before.publication); assert.deepEqual(state.checkout, before.checkout); assert.deepEqual(state.lifecycle.merges, before.lifecycle.merges);
+ const current = state.lifecycle.subjects.find(x => x.id === (state.lifecycle.status === "enabled" ? state.lifecycle.currentSubject : null)); assert.equal(current?.number, 43); assert.equal(current?.mergedSha, null); assert.equal(current?.headSha, previous);
+ assert.ok(state.lifecycle.subjects.some(x => x.number === 42 && x.mergedSha === merge)); assert.equal(state.lifecycle.stage, "review"); assert.equal(state.lifecycle.recoveryWorkspaces?.[0]?.status, "opened");
+ assert.deepEqual(activePullRequest(state), { number: 43, url: result.pullRequest.url, head: previous, branch: "fix/recovery-43", base: "main", ownership: "adopted" });
+ assert.ok(["fix1", "push1"].every(id => { const op = state.lifecycle.status === "enabled" ? state.lifecycle.operations.find(o => o.id === id) : undefined; return op?.status === "confirmed" && op.receipt.outcome === "succeeded"; }));
+ assert.deepEqual(parseWorkflow(JSON.stringify(acceptFixForwardPull(state, "workspace1", "push1", result.pullRequest, at))), state, "aceptar dos veces no duplica sujeto ni recibos");
 });
