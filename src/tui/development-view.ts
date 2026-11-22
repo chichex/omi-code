@@ -7,6 +7,7 @@ import { workflowStages } from "../harness/progress.ts";
 import { executionEvidence } from "../harness/execution-scope.ts";
 import { lensWarningLine, lensWarnings } from "../harness/lenses.ts";
 import { stackLines } from "../harness/stack.ts";
+import { lifecycleLines, lifecycleSummary } from "../harness/lifecycle-progress.ts";
 export { PHASE_LABELS } from "../harness/phases.ts";
 const ROUTES = { direct: "Directa", diagnostic: "Diagnóstico", spec: "Con spec" };
 export function developmentProgress(state: Workflow, activity = state.activity, foundations: string[] = []): WorkflowProgress {
@@ -17,7 +18,7 @@ export function developmentProgress(state: Workflow, activity = state.activity, 
 		return latest && latest.command === c.command && latest.fingerprint === fingerprint && latest.outcome === "passed" && latest.exitCode === 0;
 	}).map((c) => c.id));
 	const route = state.recipe ? ROUTES[state.recipe.route] : "Sin receta";
-	const stack = stackLines(state);
+	const stack = stackLines(state); const lifecycle = lifecycleLines(state); const summary = lifecycleSummary(state);
 	return {
 		id: state.id, issueNumber: state.source.number, worktree: state.checkout.root, branch: state.checkout.branch,
 		phaseLabel: PHASE_LABELS[state.phase], routeLabel: state.diagnosis && state.recipe?.route !== "diagnostic" ? `Diagnóstico → ${route}` : route,
@@ -25,6 +26,7 @@ export function developmentProgress(state: Workflow, activity = state.activity, 
 		activity, status: state.status, completedSteps: state.steps.filter((s) => s.status === "done").length, totalSteps: state.steps.length,
 		passedChecks: state.recipe?.cases.filter((c) => passed.has(c.id)).length ?? 0, totalChecks: state.recipe?.cases.length ?? 0,
 		blockedReason: state.blockedReason, warnings: lensWarnings(state).map(lensWarningLine), ...(stack.length ? { stack } : {}),
+		...(lifecycle.length ? { lifecycle } : {}), ...(summary ? { lifecycleSummary: summary } : {}),
 		details: [
 			`Issue #${state.source.number} · ${state.source.title}`, `Etapa: ${PHASE_LABELS[state.phase]} · ${state.status}`, `Ruta: ${route}`, ...foundations, `Actividad: ${activity}`,
 			...state.steps.map((s) => `${s.id} · ${s.status} · ${s.title}`), ...state.inferences.filter((i) => i.resolution === "pending").map((i) => `${i.id} · pregunta: ${i.question}`),

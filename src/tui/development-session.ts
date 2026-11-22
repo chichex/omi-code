@@ -29,6 +29,7 @@ import type { KbClient } from "./kb-client.ts";
 import { FoundationsGate, foundationsLines } from "./development-foundations.ts";
 import { foundationsDir } from "../harness/foundations-trust.ts";
 import { showCommandChoices } from "./development-command-dialog.ts";
+import { lifecycleLines } from "../harness/lifecycle-progress.ts";
 
 export const DEVELOPMENT_ANCHOR = "omi-development-workflow";
 const AnchorSchema = Type.Object({ id: Type.String(), root: Type.String(), issue: Type.Integer({ minimum: 1 }), revision: Type.Integer({ minimum: 0 }), disabled: Type.Optional(Type.Boolean()) });
@@ -316,5 +317,5 @@ export class DevelopmentSession {
 		this.state = undefined; this.lockedReason = ""; this.emit();
 	}
 	shutdown(): void { this.alive = false; this.epoch++; this.lifecycle.abort(); }
-	status(): string { return this.lockedReason || (this.state ? `${PHASE_LABELS[this.state.phase]} · ${this.state.status}\n${this.state.activity}\n${this.state.blockedReason}\nDetalle: /omi-progress` : "Sin harness activo. Pedí un cambio en el chat o elegí un issue en Issues. /omi-work resume | approve | pause | refresh | pr | stop"); }
+	status(): string { return this.lockedReason || (this.state ? [`${PHASE_LABELS[this.state.phase]} · ${this.state.status}`, this.state.activity, this.state.blockedReason, ...lifecycleLines(this.state), "Detalle: /omi-progress"].filter(Boolean).join("\n") : "Sin harness activo. Pedí un cambio en el chat o elegí un issue en Issues. /omi-work resume | approve | pause | refresh | pr | stop"); }
 }

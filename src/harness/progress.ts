@@ -20,7 +20,8 @@ function completed(s: Workflow, id: Phase): boolean {
   case "spec": return s.spec !== null;
   case "approve": return isApproved(s);
   case "implement": return s.steps.length > 0 && s.steps.every(step => step.status === "done");
-  case "verify": return s.phase === "pr" || s.phase === "done";
+  // Después de adoptar el PR, Verificar ya se cumplió salvo que una corrección lo vuelva a abrir (etapa actual).
+  case "verify": return s.phase === "pr" || s.phase === "done" || ["review", "land", "ship", "delivered"].includes(s.phase);
   case "pr": return s.publication.status === "opened";
   case "review": return s.version === 2 && s.lifecycle.status === "enabled" && ["ready", "land", "ship", "delivered"].includes(s.lifecycle.stage);
   case "land": return s.version === 2 && s.lifecycle.status === "enabled" && !!s.lifecycle.merges?.length;
@@ -32,6 +33,8 @@ function completed(s: Workflow, id: Phase): boolean {
 }
 function applicability(s: Workflow, id: Phase): "pending" | "conditional" | "not-applicable" {
  if (s.phase === "closed" && id !== "explore" && id !== "closed") return "not-applicable";
+ // Con lifecycle el PR draft ya no es el final: el «PR draft abierto» histórico no aplica.
+ if (id === "done" && s.version === 2 && s.lifecycle.status === "enabled") return "not-applicable";
  if (id === "closed") return s.recipe ? "not-applicable" : "conditional";
  if (id !== "diagnose" && id !== "spec") return "pending";
  if (!s.recipe) return "conditional";
