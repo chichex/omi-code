@@ -398,6 +398,23 @@ Frena y pide una persona si:
 - No hay lock con GitHub: otro puede escribir entre la lectura y el push. El push normal lo rechaza y se vuelve a correr.
 - La línea «sobre #N» del cuerpo queda como al abrir el PR. La base vigente la muestran GitHub y la sección del issue.
 
+## Si el modelo corta solo
+
+Un modelo a veces cierra el turno con el trabajo a medio hacer. Por ejemplo: «C12 sigue incompleto» y nada más. Antes el harness quedaba quieto hasta que la persona escribiera.
+
+Ahora, antes de que Pi dé por terminada la corrida, OMI le agrega un mensaje propio (`omi-development-continue`) y la corrida sigue: «El trabajo #N sigue en «Implementar» y nadie lo pausó: seguí con el próximo paso». No es un mensaje de la persona: no vale como cita ni como permiso.
+
+Retoma sólo si se cumple todo esto:
+
+- La corrida terminó bien: no con Esc ni con un error.
+- El trabajo está activo, sin pausa, espera ni bloqueo, en una etapa del modelo: explorar, resolver inferencias, receta, diagnóstico, spec, implementar, verificar o abrir el PR draft. Aprobar la receta, Review, Land y Ship esperan a la persona.
+- Ninguna tool del harness cerró el turno a propósito, por ejemplo al pausar, publicar el PR o recibir un no.
+- No hay subagentes en background corriendo: su aviso ya relanza el turno.
+
+Tope: dos vueltas seguidas sin que el estado durable avance. A la tercera frena y avisa «El modelo cortó dos veces sin avanzar el trabajo #N». Avanzar una etapa o un mensaje de la persona renuevan el tope.
+
+Los avisos de subagentes en background también cambiaron. Si un trabajo termina con el agente corriendo, su aviso espera al cierre del turno. Si el modelo ya leyó el resultado con `action:result`, no hay aviso ni turno nuevo. Varios terminados van en un solo aviso. Antes cada aviso viejo abría su propio turno: en el #69 fueron 16 avisos, 38 llamadas y 16,7 M tokens.
+
 ## Persistencia, sesiones y recuperación
 
 El trabajo se guarda en `<git-common-dir>/omi/development/N.json`, separado de `.omi/project.json` y del registro de preparación del worktree (`<git-common-dir>/omi/issue-workspaces/N.json`). No requiere vincular el repo a un proyecto de infraestructura OMI.

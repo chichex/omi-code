@@ -106,6 +106,7 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 			}
 			const output = result(session);
 			if (note) output.content.push({ type: "text", text: note });
+			if (terminate) session.turnYielded = true;
 			return { ...output, terminate };
 		},
 	});

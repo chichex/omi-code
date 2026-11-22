@@ -10,6 +10,7 @@ import { createAgentSession, createCodemodeExtension, DefaultResourceLoader, par
 import { codemodeDefaultExtension } from "../src/tui/defaults.ts";
 import { updateWorkflow } from "../src/harness/store.ts";
 import { developmentHarnessExtension } from "../src/tui/development.ts";
+import { MAX_IDLE_CONTINUATIONS } from "../src/tui/development-continue.ts";
 import { LOADOUT_ENTRY } from "../src/tui/development-loadout.ts";
 import { issueDevelopmentTicket } from "../src/tui/development-tickets.ts";
 import { developmentFixture } from "./helpers/development.ts";
@@ -23,11 +24,11 @@ const WITHHELD = ["bash", "edit", "write", "codemode"];
 async function harnessRuntime(t: TestContext) {
 	const f = await developmentFixture(t);
 	// Las tools que declaró cada request al modelo.
-	const requests: string[][] = [];
+	const requests: string[][] = []; const bodies: string[] = [];
 	const server = createServer((request, response) => {
 		let body = ""; request.on("data", (chunk: Buffer) => { body += chunk.toString("utf8"); });
 		request.on("end", () => {
-			requests.push(((JSON.parse(body) as { tools?: { function: { name: string } }[] }).tools ?? []).map((tool) => tool.function.name));
+			bodies.push(body); requests.push(((JSON.parse(body) as { tools?: { function: { name: string } }[] }).tools ?? []).map((tool) => tool.function.name));
 			response.writeHead(200, { "content-type": "text/event-stream" }); response.end(completion());
 		});
 	});
@@ -57,19 +58,22 @@ async function harnessRuntime(t: TestContext) {
 		return session;
 	};
 	// El comando despacha un request aparte (el arranque del harness): se espera a que termine.
-	const run = async (session: AgentSession, text: string) => {
-		const expected = requests.length + 1; await session.prompt(text);
+	// count: los requests que dispara el mensaje. Al arrancar el harness, este modelo sólo contesta «ok»
+	// en Explorar: OMI retoma el turno MAX_IDLE_CONTINUATIONS veces y frena.
+	const run = async (session: AgentSession, text: string, count = 1) => {
+		const expected = requests.length + count; await session.prompt(text);
 		for (let tries = 0; requests.length < expected && tries < 500; tries++) await new Promise((resolve) => setTimeout(resolve, 10));
 		await session.waitForIdle(); assert.equal(requests.length, expected, `sin request: ${notices.join(" | ")}`);
 	};
 	const begin = async (session: AgentSession) => {
-		await run(session, `/omi-work begin ${issueDevelopmentTicket({ kind: "start", sessionFile: f.manager.getSessionFile()!, issue: 42 })}`);
-		// Precondición del bug: Pi declaró al modelo, y guardó en el transcript, el loadout restringido.
-		for (const name of WITHHELD) assert.ok(!requests.at(-1)!.includes(name), `el harness declaró ${name}`);
+		const first = requests.length;
+		await run(session, `/omi-work begin ${issueDevelopmentTicket({ kind: "start", sessionFile: f.manager.getSessionFile()!, issue: 42 })}`, 1 + MAX_IDLE_CONTINUATIONS);
+		// Precondición del bug: Pi declaró al modelo, y guardó en el transcript, el loadout restringido; también al retomar.
+		for (const request of requests.slice(first)) for (const name of WITHHELD) assert.ok(!request.includes(name), `el harness declaró ${name}`);
 	};
 	const stop = async (session: AgentSession) => { await session.prompt("/omi-work stop"); assert.match(notices.at(-1) ?? "", /Sin harness activo/); };
 	const resume = () => open(SessionManager.open(f.manager.getSessionFile()!));
-	return { f, requests, notices, open, run, begin, stop, resume };
+	return { f, requests, bodies, notices, open, run, begin, stop, resume };
 }
 
 async function started(t: TestContext) {
@@ -192,4 +196,16 @@ for (const [label, args, settings, expected] of [
 	const resumed = await r.open(SessionManager.open(r.f.manager.getSessionFile()!), [...args], settings);
 	await r.stop(resumed);
 	assert.deepEqual(sorted(resumed.getActiveToolNames()), sorted(expected([...r.normal])));
+});
+
+test("harness real · si el modelo corta en Explorar, Pi vuelve a llamarlo con el aviso de OMI dos veces y frena", { timeout: 30000 }, async (t) => {
+	const r = await harnessRuntime(t);
+	const session = await r.open(r.f.manager);
+	await r.begin(session);
+	const harness = r.bodies.slice(-1 - MAX_IDLE_CONTINUATIONS);
+	assert.doesNotMatch(harness[0]!, /nadie lo pausó/);
+	for (const body of harness.slice(1)) assert.match(body, /El trabajo #42 sigue en «Explorar» y nadie lo pausó/);
+	assert.ok(r.notices.some((notice) => /cortó dos veces sin avanzar el trabajo #42/.test(notice)));
+	// Un mensaje de la persona renueva el tope: otra respuesta y dos vueltas más.
+	await r.run(session, "seguí explorando", 1 + MAX_IDLE_CONTINUATIONS);
 });

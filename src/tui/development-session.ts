@@ -41,6 +41,8 @@ export class DevelopmentSession {
 	state: Workflow | undefined;
 	onChange: (() => void) | undefined;
 	lockedReason = "";
+	/** Una tool del harness cerró el turno a propósito (pausa, PR, un no de la persona): no se retoma solo. */
+	turnYielded = false;
 	readonly reads = new Map<string, ReadReceipt>();
 	readonly runner: Runner;
 	readonly now: () => string;

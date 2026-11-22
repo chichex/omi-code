@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { tempDir } from "./helpers/io.ts";
 import { acceptFoundations, ASK_ALL } from "./helpers/foundations.ts";
 import { plainTerminal } from "./helpers/workspace-pty.ts";
+import { MAX_IDLE_CONTINUATIONS } from "../src/tui/development-continue.ts";
 
 // Camino del agente en Pi real: un pedido en el chat, la tool, el sí, el issue nuevo y el harness en su worktree.
 const driver = `
@@ -51,6 +52,8 @@ const pedido = { title: "Mostrar el total del carrito", body: "Pedido: mostrar e
 function chunk(delta: unknown, finish: string | null): string {
 	return `data: ${JSON.stringify({ id: "begin", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: finish }], ...(finish ? { usage: { prompt_tokens: 64, completion_tokens: 64, total_tokens: 128 } } : {}) })}\n\n`;
 }
+// La continuación de OMI llega como último mensaje: el historial ya trae el kickoff.
+const continuation = (request: string) => JSON.stringify((JSON.parse(request) as { messages?: unknown[] }).messages?.at(-1) ?? "").includes("nadie lo pausó");
 const toolNames = (request: string) => ((JSON.parse(request).tools ?? []) as { function: { name: string } }[]).map((tool) => tool.function.name);
 
 for (const mode of ["harness", "chat", "needs-info"] as const) test(`development_begin real: clasificación previa y continuación ${mode}`,  { skip: process.platform === "win32", timeout: 60000 }, async (t) => {
@@ -80,7 +83,12 @@ export default function(pi) { pi.on('session_start', async (_event, ctx) => { aw
 		let body = ""; request.on("data", (data: Buffer) => { body += data; });
 		request.on("end", async () => {
 			requests.push(body); response.writeHead(200, { "content-type": "text/event-stream" });
-			if (body.includes("clasificador de issues")) {
+			if (continuation(body)) {
+				// El modelo vuelve a cortar en Explorar: OMI retoma dos veces y frena; recién ahí terminó el turno.
+				kinds.push("continue");
+				response.end(chunk({ role: "assistant", content: "CONTINUE_OK" }, null) + chunk({}, "stop") + "data: [DONE]\n\n");
+				if (kinds.filter((kind) => kind === "continue").length === MAX_IDLE_CONTINUATIONS) await writeFile(reply, "done");
+			} else if (body.includes("clasificador de issues")) {
 				kinds.push("classify");
 				try { await access(confirmed); classifiedAfterYes = true; } catch { /* se espera clasificar antes del sí */ }
 				try { await access(created); } catch { classifiedBeforeIssue = true; }
@@ -89,7 +97,7 @@ export default function(pi) { pi.on('session_start', async (_event, ctx) => { aw
 				response.end(chunk({ role: "assistant", content: JSON.stringify({ triage, assessment }) }, null) + chunk({}, "stop") + "data: [DONE]\n\n");
 			} else if (body.includes("Continuá el harness de desarrollo")) {
 				kinds.push("kickoff");
-				response.end(chunk({ role: "assistant", content: "KICKOFF_OK" }, null) + chunk({}, "stop") + "data: [DONE]\n\n"); await writeFile(reply, "done");
+				response.end(chunk({ role: "assistant", content: "KICKOFF_OK" }, null) + chunk({}, "stop") + "data: [DONE]\n\n");
 			} else if (body.includes("El pedido continúa en el chat original")) {
 				kinds.push("chat-return");
 				response.end(chunk({ role: "assistant", content: "CHAT_RETURN_OK" }, null) + chunk({}, "stop") + "data: [DONE]\n\n"); await writeFile(reply, "done");
@@ -115,7 +123,7 @@ export default function(pi) { pi.on('session_start', async (_event, ctx) => { aw
 	});
 	const plain = plainTerminal(result.output);
 	assert.equal(result.code, 0, plain); assert.match(plain, /BEGIN_DRIVER_PHASE=4\b/, plain);
-	assert.deepEqual(kinds, ["turn", "classify", mode === "harness" ? "kickoff" : "chat-return"], "no duplica clasificación ni continúa sin resultado");
+	assert.deepEqual(kinds, ["turn", "classify", ...(mode === "harness" ? ["kickoff", ...Array<string>(MAX_IDLE_CONTINUATIONS).fill("continue")] : ["chat-return"])], "no duplica clasificación ni continúa sin resultado");
 	assert.ok(toolNames(requests[0]!).includes("omi_work_begin"), "el chat normal ofrece empezar");
 	assert.equal(classifiedAfterYes, false, "clasifica antes del sí de creación");
 	assert.equal(classifiedBeforeIssue, true, "clasifica antes de gh issue create");
