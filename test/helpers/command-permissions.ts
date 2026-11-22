@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import type { TestContext } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { STRICT_POLICY, renderFoundationsBlock, type FoundationsBlock } from "../../src/harness/foundations.ts";
+import { STRICT_POLICY, renderFoundationsBlock, type FoundationsBlock, type FoundationsPolicy } from "../../src/harness/foundations.ts";
 import { foundationsDir, readTrust } from "../../src/harness/foundations-trust.ts";
 import { executeCheck } from "../../src/tui/development-execution.ts";
 import { DevelopmentSession } from "../../src/tui/development-session.ts";
@@ -15,12 +15,13 @@ export const REPO = "test/repo";
 export const COMMAND = 'node -e "process.exit(0)"';
 export const KNOWN = "node test.cjs";
 export const HUMAN = '# Perillas de repo\n\nTono: formal.\n\n```json\n{ "otra": "perilla" }\n```\n';
-export const block = (comandos: string[] = [KNOWN], overrides: Partial<FoundationsBlock> = {}): FoundationsBlock => ({ version: 1, repo: REPO, comandos, politica: { ...STRICT_POLICY }, ...overrides });
+export const block = (confirmar: string[] = ["git push *"], overrides: Partial<FoundationsBlock> = {}): FoundationsBlock => ({ version: 2, repo: REPO, confirmar, politica: { ...STRICT_POLICY }, ...overrides });
 
-export async function commandFixture(t: TestContext, options: { body?: string | null; value?: FoundationsBlock; products?: string[]; withoutKb?: boolean } = {}) {
+/** `foundations`: además, una revisión v2 aceptada localmente con `*` (la que vale si la KB no da una válida). */
+export async function commandFixture(t: TestContext, options: { body?: string | null; value?: FoundationsBlock; products?: string[]; withoutKb?: boolean; foundations?: FoundationsPolicy } = {}) {
 	const kb = memoryKb({ products: options.products ?? ["repo"] });
 	if (options.body !== null) kb.perillas("repo", options.body ?? `${HUMAN}\n${renderFoundationsBlock(options.value ?? block())}\n`);
-	const f = await developmentFixture(t, options.withoutKb ? {} : { kb });
+	const f = await developmentFixture(t, { ...(options.withoutKb ? {} : { kb }), ...(options.foundations ? { foundations: options.foundations } : {}) });
 	await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" });
 	assert.equal((await f.state()).phase, "implement", "la fixture llega a la etapa que permite setup");
 	// Frontera Pi mínima: el propio DevelopmentSession sigue validando contexto, permisos y estado durable.
@@ -39,17 +40,15 @@ export const saves = (f: CommandFixture) => f.kb.calls.filter((call) => call.too
 export const authorizations = (f: CommandFixture) => f.selects.filter((call) => call.title.startsWith(AUTHORIZE));
 export const accepted = (f: CommandFixture) => readTrust(foundationsDir(f.home), key(f));
 
-export function option(options: string[], decision: "yes" | "no" | "always"): string {
-	const selected = options.find((value) => decision === "yes" ? value.startsWith("Sí") : decision === "no" ? /^No(?:$|[ ,·(])/.test(value) : /siempre.*(?:proyecto|repo)/i.test(value));
+export function option(options: string[], decision: "yes" | "no" | "edit"): string {
+	const selected = options.find((value) => decision === "yes" ? value === "Sí" : decision === "no" ? value === "No" : value === "Editar reglas");
 	assert.ok(selected, `falta la decisión ${decision}: ${JSON.stringify(options)}`);
 	return selected;
 }
-export function choose(f: CommandFixture, decision: "yes" | "no" | "always" | "cancel"): void {
+export function choose(f: CommandFixture, decision: "yes" | "no" | "edit" | "cancel"): void {
 	f.uiControl.select = (_title, options) => decision === "cancel" ? undefined : option(options, decision);
 }
-export async function noPermissionAdded(f: CommandFixture, command = COMMAND): Promise<void> {
+export async function noPermissionAdded(f: CommandFixture, _command = COMMAND): Promise<void> {
 	assert.deepEqual(f.executed, [], "no llegó al ejecutor, ni siquiera como comando interrumpido");
-	assert.deepEqual((await f.state()).grants ?? [], [], "no hay fallback temporal");
-	assert.ok(!(await accepted(f))?.accepted?.block.comandos.includes(command), "no aceptó localmente el comando");
-	assert.ok(!f.session.foundations.current(f.context)?.block?.comandos.includes(command), "no cambió el pin a una revisión no confirmada");
+	assert.deepEqual((await f.state()).grants ?? [], [], "no hay fallback temporal: editar reglas no concede un grant");
 }

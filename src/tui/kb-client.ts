@@ -11,7 +11,8 @@ import type { ExtensionAPI, InlineExtension, ToolDefinition } from "@earendil-wo
 export const KB_SERVER = "harness-kb";
 const READ_TOOLS = ["mis_productos", "buscar", "leer"];
 const POLL_MS = 50;
-const DocSchema = Type.Object({ id: Type.String({ minLength: 1, maxLength: 200 }), producto: Type.String(), tipo: Type.String(), titulo: Type.String(), cuerpo: Type.String({ maxLength: 400_000 }), autor: Type.Optional(Type.String()), fecha: Type.Optional(Type.String()) });
+export const MAX_KB_DOCUMENT_LENGTH = 400_000;
+const DocSchema = Type.Object({ id: Type.String({ minLength: 1, maxLength: 200 }), producto: Type.String(), tipo: Type.String(), titulo: Type.String(), cuerpo: Type.String({ maxLength: MAX_KB_DOCUMENT_LENGTH }), autor: Type.Optional(Type.String()), fecha: Type.Optional(Type.String()) });
 export type KbDoc = Static<typeof DocSchema>;
 const ProductsSchema = Type.Object({ productos: Type.Array(Type.String(), { maxItems: 1000 }) });
 const SearchSchema = Type.Object({ resultados: Type.Array(Type.Object({ id: Type.String({ minLength: 1, maxLength: 200 }), tipo: Type.Optional(Type.String()) }), { maxItems: 50 }) });

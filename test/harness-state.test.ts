@@ -113,6 +113,15 @@ test("publication persists pending and rejects wrong head before completion", ()
  let s = pr(); s = send(s, { type: "publishing", head: "head", bodyHash: "body" }); assert.equal(s.publication.status, "pending"); assert.throws(() => send(s, { type: "published", head: "other", url: "https://example.test/pr", number: 9 }));
  s = send(s, { type: "published", head: "head", url: "https://example.test/pr", number: 9 }); assert.equal(s.phase, "done"); assert.equal(s.status, "complete");
 });
+test("a pending receipt for another body is renewed only by naming the body it replaces, on the same HEAD", () => {
+ const s = send(pr(), { type: "publishing", head: "head", bodyHash: "old" });
+ assert.throws(() => send(s, { type: "publishing", head: "head", bodyHash: "new" }), /pendiente distinta/, "sin nombrar el recibo que reemplaza no se pisa");
+ assert.throws(() => send(s, { type: "publishing", head: "head", bodyHash: "new", replaces: "other" }), /pendiente distinta/, "ni nombrando otro");
+ assert.throws(() => send(s, { type: "publishing", head: "other", bodyHash: "new", replaces: "old" }), /HEAD|verificaci/, "ni con otro HEAD");
+ const renewed = send(s, { type: "publishing", head: "head", bodyHash: "new", replaces: "old" });
+ assert.deepEqual(renewed.publication, { status: "pending", head: "head", bodyHash: "new", at });
+ assert.throws(() => send(pr(), { type: "publishing", head: "head", bodyHash: "new", replaces: "old" }), /no hay publicación pendiente/, "sin recibo no hay nada que renovar");
+});
 
 test("high risk alone forces both safety lenses and preserves configured lenses", () => {
  const s = ready({ ...plan, lenses: ["quality", "security"], classification: { ...plan.classification, risk: "high", riskAreas: [] } });

@@ -32,6 +32,28 @@ curl -fsSL https://github.com/chichex/omi-code/releases/latest/download/install.
 
 Se instala en `~/.omi`; `OMI_HOME=/ruta/absoluta` permite otra raíz. El binario instalado la infiere de su ubicación.
 
+### PATH
+
+Si `~/.omi/bin` (o `$OMI_HOME/bin`) no está en el `PATH`, el instalador lo agrega al archivo que lee una terminal nueva del shell de `$SHELL`:
+
+| Shell | Archivo |
+|---|---|
+| zsh | `${ZDOTDIR:-$HOME}/.zshrc` |
+| bash en macOS | `~/.bash_profile`, salvo que bash ya use `~/.bash_login` o `~/.profile` |
+| bash en Linux | `~/.bashrc` |
+| fish | `${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/omi.fish` |
+
+Escribe un bloque entre `# >>> omi >>>` y `# <<< omi <<<`. Reinstalar lo reemplaza entero y deja igual el resto del archivo. La salida dice qué archivo tocó.
+La terminal desde la que instalaste no cambia: abrí una nueva o corré la línea que muestra el instalador, por ejemplo `export PATH='/Users/ana/.omi/bin':"$PATH"`.
+Con otro shell, o si el archivo no se puede escribir, no toca nada y muestra la línea para copiar. `omi upgrade` nunca toca estos archivos.
+
+Para que no toque ningún archivo del shell, usá `OMI_NO_MODIFY_PATH=1`. Vacío, `0`, `false` o `no` (sin importar mayúsculas) sí lo configuran; cualquier otro valor, no. Va del lado de `sh`, no de `curl`:
+
+```sh
+OMI_NO_MODIFY_PATH=1 sh "$tmp/install.sh"
+curl -fsSL https://github.com/chichex/omi-code/releases/latest/download/install.sh | OMI_NO_MODIFY_PATH=1 sh
+```
+
 ### Integraciones por defecto
 
 Una instalación nueva trae estas integraciones **en la distribución de OMI**, sin descargar paquetes ni requerir Pi, Node o npm aparte. También quedan disponibles al actualizar una instalación existente, sin reemplazar sus ajustes.
@@ -147,7 +169,7 @@ el historial y la edición siguen usando el renderer de Pi; no hay un segundo pr
   Los errores se muestran por separado y conservan la última lista como desactualizada, no como una lista vacía exitosa.
   Las listas no crean issues ni cierran o fusionan PRs. El detalle de PR sigue siendo de sólo lectura.
   **Trabajar en un issue:** **Enter en la lista siempre abre el detalle**, también si el issue ya está preparado. **Esc** sólo lo cierra, sin cambiar de workspace.
-  Sin preparación guardada, el detalle ofrece **Enter iniciar trabajo**: le pide al [harness de desarrollo](#harness-de-desarrollo-hasta-pr-draft) que empiece, y el harness pide tu confirmación antes de tocar nada. Con el sí, usa el modelo seleccionado (sin tools) para clasificarlo como **Nuevo feature**, **Fix**, **Mejora** o **Chore**, con objetivo, alcance inicial, criterios de aceptación sugeridos y dudas.
+  Sin preparación guardada, el detalle ofrece **Enter iniciar trabajo**: le pide al [harness de desarrollo](#harness-de-desarrollo-hasta-pr-draft) que empiece. Arranca sin preguntar; con `arranque: ask` en Foundations, antes pide tu confirmación. Al arrancar, usa el modelo seleccionado (sin tools) para clasificarlo como **Nuevo feature**, **Fix**, **Mejora** o **Chore**, con objetivo, alcance inicial, criterios de aceptación sugeridos y dudas.
   Crea una rama `feat/issue-N-título`, `fix/issue-N-título`, `improve/issue-N-título` o `chore/issue-N-título` desde el commit de **`main` local**, no desde HEAD ni `origin/main`.
   El worktree queda en `<repo-principal>-worktrees/issue-N`, fuera del checkout original. No hace fetch, pull, stash, commit ni push; tampoco mueve la rama, índice o cambios del origen.
   Abre una sesión nueva en ese directorio, con el issue y su triage en el contexto, y el harness sigue en **Explorar**. La lateral muestra **PROGRESO · #N** (o **ISSUE ACTIVO** si no hay un trabajo) debajo de **Recursos**; se restaura con `/reload` y `/resume`.
@@ -232,7 +254,8 @@ el historial y la edición siguen usando el renderer de Pi; no hay un segundo pr
 | Ctrl 2 o `/omi-issues` | Issues abiertos de GitHub |
 | Ctrl 3 o `/omi-prs` | PRs abiertos de GitHub |
 | Ctrl 4 o `/omi-changes` | Cambios locales |
-| Ctrl 5 o `/omi-platform` | OMI: proyecto, servicios y ambientes |
+| Ctrl 5 o `/omi-platform` | OMI: proyecto, servicios, ambientes y Foundations vigente con su origen |
+| **f** en OMI o `/omi-foundations` | Editar Foundations en el panel vertical: patrones que requieren confirmación y políticas `ask`/`auto`; Guardar vale ya en la sesión ([detalle](docs/development-harness.md#foundations-comandos-y-permisos-por-repo)) |
 | Ctrl 6 o `/omi-workflow` | Progreso: recorrido completo del harness y modo previsto/real por etapa |
 | Ctrl K o `/omi` | Paleta de comandos (Ctrl K reemplaza borrar hasta fin de línea en el editor) |
 | F4 o `/omi-sidebar` | Mostrar / ocultar lateral |
@@ -283,15 +306,15 @@ si cambia su contrato, conserva la vista base y avisa. No parchea archivos de `n
 
 ### Harness de desarrollo hasta PR draft
 
-**Clasifica antes de crear.** Ante un pedido de código que vale la pena seguir, el agente llama a `omi_work_begin` con el pedido completo. Sin issue, OMI clasifica **antes de crear issue, rama, worktree o sesión**. Si es un cambio simple, continúa en el chat original sin activar harness; si falta información, vuelve con preguntas para aclararla antes de seguir. Siguen vigentes las reglas y permisos del proyecto: clasificar no autoriza comandos ni cambios sensibles. Error, resultado inválido o cancelación no crean recursos ni se interpretan como simpleza. Si amerita harness, muestra qué va a crear y pide **un solo sí** (salvo `arranque: auto` de Foundations), crea el issue y reutiliza el triage para preparar worktree desde `main` local, cambiar a su sesión y seguir en **Explorar**. Rechazar no crea nada. Con un issue existente (`#N`), siempre usa harness y ese mismo número; retoma sin reclasificar ni duplicar recursos. **Enter iniciar trabajo** en Issues conserva ese camino. Preguntas, explicaciones y operaciones de OMI siguen en el chat normal.
+**Clasifica antes de crear.** Ante un pedido de código que vale la pena seguir, el agente llama a `omi_work_begin` con el pedido completo. Sin issue, OMI clasifica **antes de crear issue, rama, worktree o sesión**. Si es un cambio simple, continúa en el chat original sin activar harness; si falta información, vuelve con preguntas para aclararla antes de seguir. Siguen vigentes las reglas y permisos del proyecto: clasificar no autoriza comandos ni cambios sensibles. Error, resultado inválido o cancelación no crean recursos ni se interpretan como simpleza. Si amerita harness, crea el issue sin preguntar (avisa qué creó) y reutiliza el triage para preparar worktree desde `main` local, cambiar a su sesión y seguir en **Explorar**. Con `arranque: ask` en Foundations, antes muestra qué va a crear y pide **un solo sí**; rechazar no crea nada. Con un issue existente (`#N`), siempre usa harness y ese mismo número; retoma sin reclasificar ni duplicar recursos. **Enter iniciar trabajo** en Issues conserva ese camino. Preguntas, explicaciones y operaciones de OMI siguen en el chat normal.
 
 Los criterios son configurables por repo en un bloque **`omi-development-triage` de las perillas del producto en la KB**: salida chat habilitada, alcance máximo e impactos permitidos. La evaluación estima alcance, impacto, reversibilidad, verificación y riesgo desde el pedido; no mide líneas del diff ni inspecciona código. El default exige un cambio localizado, reversible, verificable y sin riesgo sensible. La ruta **Directa** sigue siendo trabajo dentro del harness, no sinónimo de simpleza. [Formato, fallback y límites](docs/development-harness.md#criterios-de-clasificación-previa).
 
-Explora código, resuelve inferencias y deja una receta persistente. Tiene tres rutas: **Directa**, **Diagnóstico** para bugs sin causa confirmada y **Con spec** para trabajo grande. Antes de escribir pide aprobación humana de la receta completa. Registra rojo/verde reales, commits por paso, verificación por caso y lentes; sólo entonces puede pedir permiso separado para subir la rama y abrir un **PR draft**. No mergea, dispara workflows ni despliega.
+Explora código, resuelve inferencias y deja una receta persistente. Tiene tres rutas: **Directa**, **Diagnóstico** para bugs sin causa confirmada y **Con spec** para trabajo grande. Antes de escribir aprueba la receta completa: sola por defecto, o con tu revisión si Foundations dice `receta: ask`. Registra rojo/verde reales, commits por paso, verificación por caso y lentes; sólo entonces sube la rama y abre un **PR draft** (con `push_pr: ask`, antes pide permiso). No mergea, dispara workflows ni despliega.
 
 La lateral muestra **PROGRESO · #N** con ruta, etapa, actividad, pasos, checks y bloqueos, y el recorrido completo cuando hay altura. En compacto conserva los demás bloques y anuncia **Ctrl 6**: **6 · Progreso** (`/omi-workflow`) muestra todas las etapas, también pendientes, con estado textual y ejecución prevista separada de la real. Se desplaza con flechas, PgUp/PgDn o rueda; Esc vuelve a Chat. `?`/«sin observar» no atribuye una delegación: la receta sólo informa lo previsto; los lentes se identifican como llamadas aisladas, y los trabajos antiguos conservan modo desconocido. Clic o **`/omi-progress`** abre el detalle, también con la lateral oculta. El avance sale del estado y de resultados observados, no de frases del modelo. `/omi-work status`, `pause`, `resume`, `refresh`, `approve`, `pr` y `stop` permiten controlarlo; no hay un comando para empezar. Cargar una sesión no reejecuta efectos automáticamente.
 
-**Foundations** decide por repo, en las perillas del producto en la KB de Harness, qué comandos corren sin preguntar y si el arranque, la receta, los comandos fuera del catálogo y el PR draft piden un sí (`ask`) o no (`auto`). Cada revisión nueva se acepta una vez y queda fija en la sesión; sin KB vale la última aceptada o la política de siempre. Si el repo no lo tiene, el harness ofrece armarlo con [preguntas](docs/development-harness.md#preguntas-en-tanda): los comandos detectados para marcar, una por política con `ask` recomendada y un resumen antes de guardar. Sólo lo guarda con tu sí. Un comando ya autorizado no vuelve a preguntar por cambiar de etiqueta (setup o caso D), ni al retomar.
+**Foundations v2** configura por repo, en las perillas del producto en la KB de Harness, **patrones glob que requieren confirmación**, no una allowlist, y si el arranque, la receta y el push + PR draft piden un sí (`ask`) o no (`auto`). **Sin Foundations v2 aceptada, nada pregunta:** los tres puntos van en `auto` y los comandos corren sin preguntar; un bloque v1 o inválido cuenta como ausente. Con v2, sólo los comandos simples que no coinciden con un patrón corren sin preguntar; la sintaxis compuesta o no soportada pide sí, y la receta aprobada no dispensa esa confirmación. Ejemplo: con `git push *`, `npm test` corre solo y `git push origin main` o `npm test && npm run build` piden sí. Cada revisión nueva de la KB se aplica sola, con un aviso de qué cambió, y queda fija en la sesión; sin KB vale la última aceptada o, si no hay, el default. El [panel vertical dedicado](docs/development-harness.md#foundations-comandos-y-permisos-por-repo) se abre con **f** en la vista OMI (`/omi-foundations`), `/omi-work foundations` o **Editar reglas**: precarga lo vigente, conserva borradores y sólo persiste/acepta con Guardar explícito. Abrir, cancelar o guardar no ejecuta un comando pendiente ni concede grants: se debe reintentar. El sí humano recuerda únicamente el comando exacto para ese trabajo/pedido, también al retomar; cambiar pedido/refresh lo invalida. Es sólo del harness, no del shell general, y no es un sandbox.
 
 La descripción humana del issue se conserva: receta, evidencia y acuerdos van en una **sección administrada al final del cuerpo**, entre `<!-- omi:harness:start -->` y `<!-- omi:harness:end -->`, que el harness reescribe sin tocar el pedido. No crea comentarios. Lo que la persona dice en el chat vale como autorización de alcance: el agente lo registra con su cita textual, sin editar el issue. El estado local vive bajo el Git common-dir, independiente del vínculo de infraestructura OMI. Este corte es para repos existentes; quedan afuera la etapa Fundación, prototipos, perfiles avanzados de modelos, Review externa, Land y Ship.
 

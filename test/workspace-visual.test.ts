@@ -22,6 +22,10 @@ import { linkedProject } from "./helpers/project.ts";
 import { WORKSPACE_VIEWS, workspaceTabs } from "../src/tui/workspace/navigation.ts";
 import { agentDir } from "../src/core/paths.ts";
 import { OmiSidebarSettings } from "../src/tui/workspace/sidebar-settings.ts";
+import { FoundationsGate } from "../src/tui/development-foundations.ts";
+import type { KbDoc } from "../src/tui/kb-client.ts";
+import { omiViewLines } from "../src/tui/workspace/read-views.ts";
+import { foundationsHash } from "../src/harness/foundations.ts";
 
 const theme = { fg: (_role: string, value: string) => value, bold: (value: string) => value, style: (value: string) => value, getColorMode: () => "truecolor" } as unknown as Theme;
 
@@ -710,4 +714,39 @@ test("workspace_SUBAGENTS: no instala panel ni listener en classic, RPC, JSON o 
 		assert.equal(ui.hasLayout(), false); assert.equal(ui.subscriptions(), 0); assert.equal(ui.renders(), 0);
 		assert.deepEqual(ui.prompts, []); assert.deepEqual(ui.notices, []);
 	}
+});
+
+test("workspace_OMI: un catálogo largo de Foundations se parte en líneas, no se corta", () => {
+	const catalog = `Catálogo: ${Array.from({ length: 8 }, (_, i) => `npm run check:${i}`).join(" | ")}`;
+	const lines = omiViewLines(theme, { project: undefined, services: [], environments: [], error: undefined, at: 1, now: 1, foundations: [catalog] }, 40).map(stripTerminalSequences);
+	assert.ok(lines.every((line) => visibleWidth(line) <= 40));
+	assert.match(lines.join(" ").replace(/\s+/g, " "), /npm run check:7/, "el último comando también se ve");
+});
+
+test("workspace_OMI muestra Foundations vigente con su procedencia; f y la paleta abren el editor del harness", async (t) => {
+	const home = await tempDir(t); const sessionFile = join(home, "sesion.jsonl");
+	const plain = await visualHarness(home);
+	try {
+		await plain.command("omi-platform");
+		const empty = plain.frame().lines.map((line) => stripTerminalSequences(sliceByColumn(line, 0, 91))).join("\n");
+		assert.match(empty, /FOUNDATIONS/); assert.match(empty, /Foundations: se lee de la KB/, "sin pin todavía, lo dice");
+		assert.match(empty, /f Foundations/, "la tecla está en la ayuda de la vista");
+	} finally { await plain.stop(); }
+	// El pin vive en el harness, otra extensión: se fija con su propia API, como lo haría una sesión.
+	const gate = new FoundationsGate({ kb: undefined, runner: { run: async () => ({ code: 1, stdout: "", stderr: "" }) }, trustDir: join(home, "trust"), now: () => "" });
+	const session = { cwd: home, hasUI: false, sessionManager: { getSessionFile: () => sessionFile } } as unknown as ExtensionContext;
+	gate.load(session); const base = await gate.pin(session);
+	const block = { version: 2 as const, repo: "test/repo", confirmar: ["npm test"], politica: { arranque: "ask" as const, receta: "ask" as const, push_pr: "auto" as const } };
+	const hash = foundationsHash(block); const perillas = { id: "abcdef0123456789", titulo: "Perillas", cuerpo: "", producto: "repo", tipo: "perillas" } as unknown as KbDoc;
+	gate.replace(session, { ...base, origin: "kb", block, hash, docId: "abcdef0123456789", author: "ana@example.test", date: "", notice: "", reading: { kind: "valid", key: { kbUrl: "https://kb.example.test/mcp", product: "repo", repo: "test/repo" }, block, hash, perillas } });
+	const ui = await visualHarness(home, { sessionFile, paletteAction: "Foundations" }); t.after(ui.stop);
+	await ui.command("omi-platform");
+	const screen = ui.frame().lines.map((line) => stripTerminalSequences(sliceByColumn(line, 0, 91))).join("\n");
+	assert.match(screen, new RegExp(`Foundations: KB · revisión ${foundationsHash(block).slice(0, 8)} · perillas abcdef01 · ana@example\\.test`));
+	assert.match(screen, /push \+ PR draft: auto/); assert.match(screen, /Patrones que requieren confirmación:\s+npm test/);
+	ui.input("f");
+	assert.deepEqual(ui.dispatched.at(-1), { text: "/omi-foundations", options: { expandPromptTemplates: true } });
+	await ui.command("omi");
+	assert.ok(ui.paletteOptions.at(-1)?.includes("Foundations"));
+	assert.equal(ui.dispatched.filter((entry) => entry.text === "/omi-foundations").length, 2, "la paleta lleva al mismo comando");
 });

@@ -41,7 +41,7 @@ export async function executeCheck(session: DevelopmentSession, input: CheckInpu
 		if (input.kind === "green" && (!red || red.command !== input.command)) throw new Error("El verde debe ejecutar el mismo comando que el rojo observado");
 	}
 	if (input.kind === "verification" && !state.recipe?.cases.some((c) => c.id === input.caseId && c.command === input.command)) throw new Error("La verificación debe usar el caso D y comando exactos de la receta aprobada");
-	// La etiqueta no pide otro sí: un D aprobado corre igual como setup. Sólo la persona puede ampliar el catálogo.
+	// La etiqueta y la receta no dispensan confirmaciones: decidir por v2 aceptada, sintaxis y grant exacto.
 	const authorized = commandAuthorization(state, input.command, (await session.foundations.policy(ctx, state)).command) === "ask"
 		? await authorizeProjectCommand(session, ctx, { state, command: input.command, kind: input.kind, signal }) : state;
 	const before = await inspectCheckout(state.checkout, session.runner, signal);

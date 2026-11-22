@@ -1,6 +1,6 @@
 # Harness de desarrollo · hasta PR draft
 
-Primer corte para **repos existentes con issues de GitHub**, sobre sesiones y tools nativas de Pi. Implementa Directa, Diagnóstico y Con spec, con [Foundations](#foundations-comandos-y-permisos-por-repo) para decidir por repo qué corre o avanza sin preguntar. No incluye la etapa Fundación (completar una base faltante), prototipos descartables, perfiles/fallbacks de modelos, Review externa, Land ni Ship.
+Primer corte para **repos existentes con issues de GitHub**, sobre sesiones y tools nativas de Pi. Implementa Directa, Diagnóstico y Con spec. Por defecto no pregunta nada: arranca, aprueba su receta, corre los comandos y abre el PR draft solo. [Foundations](#foundations-comandos-y-permisos-por-repo) pone por repo cada uno de esos puntos en `ask`. No incluye la etapa Fundación (completar una base faltante), prototipos descartables, perfiles/fallbacks de modelos, Review externa, Land ni Ship.
 
 ## Empezar y continuar
 
@@ -9,15 +9,15 @@ Primer corte para **repos existentes con issues de GitHub**, sobre sesiones y to
    - si el pedido nombra un issue (`#N`), con ese issue;
    - si no, con un título y un cuerpo para clasificar antes de crear un issue. La sesión nueva no hereda el chat, así que el cuerpo tiene que traer el pedido completo.
 
-   La tool no crea nada: deja un pedido de un solo uso, ligado a la sesión, y termina el turno. Si el agente la llamó junto con otras tools, Pi le da una respuesta más antes de terminar. Mientras el pedido espera el sí, el resto de las tools del agente quedan bloqueadas. Un Esc en ese turno descarta el pedido sin preguntar.
+   La tool no crea nada: deja un pedido de un solo uso, ligado a la sesión, y termina el turno. Si el agente la llamó junto con otras tools, Pi le da una respuesta más antes de terminar. Mientras el pedido se resuelve (la clasificación y, con `arranque: ask`, el sí), el resto de las tools del agente quedan bloqueadas. Un Esc en ese turno descarta el pedido sin preguntar.
 3. Para un pedido nuevo sin issue, OMI primero clasifica en una llamada aislada al modelo, sin tools. Estima alcance, impacto, reversibilidad, verificación y riesgo usando el pedido completo, no líneas medidas ni código inspeccionado. Una política determinista aplica los [criterios configurables](#criterios-de-clasificación-previa):
    - **Chat:** continúa en la misma sesión sin issue, rama, worktree, sesión nueva ni harness. La evaluación es orientativa: siguen las reglas y permisos normales, y descubrir mayor impacto o riesgo exige volver a proponer harness.
    - **Falta información:** vuelve al chat con preguntas; hay que aclarar las ambigüedades antes de seguir. No se considera simple ni crea recursos.
-   - **Harness:** reutiliza el triage obtenido y pasa al sí de creación.
+   - **Harness:** reutiliza el triage obtenido y pasa a crear el issue.
 
    Esc, error, timeout o salida inválida detienen sin crear recursos, sin asumir trivialidad ni continuar automáticamente con cambios. Clasificar no concede permisos. Un issue existente siempre va por harness con su número; nunca se cierra, borra ni crea otro por esta decisión.
 
-   Sólo si corresponde harness, OMI te pide **un solo sí**, salvo que Foundations diga `arranque: auto`: entonces avisa lo que hace, sin preguntar. Si Foundations tiene una revisión nueva, antes muestra la diferencia y pide aceptarla. El diálogo dice primero qué va a pasar. Si el issue es nuevo, lo muestra completo al final (repo, título y cuerpo). Dice también quién lo pidió: el motivo del agente, o que vino del panel de Issues. Lo que se puede comprobar sin efectos falla antes de preguntar:
+   Sólo si corresponde harness, OMI crea el issue, el worktree y la sesión sin preguntar, y avisa lo que hace. Con `arranque: ask` en Foundations, antes te pide **un solo sí**. Si Foundations tiene una revisión nueva, la aplica sola y avisa la diferencia. El diálogo (o el aviso) dice primero qué va a pasar. Si el issue es nuevo, lo muestra completo al final (repo, título y cuerpo). Dice también quién lo pidió: el motivo del agente, o que vino del panel de Issues. Lo que se puede comprobar sin efectos falla antes de preguntar:
    - el tamaño del pedido;
    - caracteres invisibles o de dirección de texto en el título o el cuerpo;
    - la identidad de una preparación guardada (también una anterior al registro, que se reconoce por su sesión), y que su worktree y su sesión sigan ahí;
@@ -25,17 +25,17 @@ Primer corte para **repos existentes con issues de GitHub**, sobre sesiones y to
    - que la ruta del worktree no sea ajena;
    - el modo offline (`--offline` o `PI_OFFLINE`); en ese caso el panel tampoco ofrece Enter;
    - la falta de modelo o de confianza.
-4. Si aceptás:
+4. Al arrancar (sin preguntar, o con tu sí):
    - se crea el issue, si hace falta;
    - se reutiliza la clasificación previa del pedido nuevo; para un issue existente sin preparación se clasifica su tipo, y al retomar no se reclasifica;
    - se prepara un worktree desde `main` local, con su propia sesión;
    - se cambia a esa sesión y el trabajo sigue en Explorar.
 
-   Si decís que no, no se crea issue, worktree, sesión ni trabajo.
-5. Explorar no habilita escrituras. Respondé las preguntas y aprobá la receta completa en la UI. La aprobación incluye los comandos exactos de los casos y los commits locales, no un push. La revisión TUI abre en un resumen humano y permite inspeccionar íntegramente los detalles y los comandos, que después corren sin volver a preguntar. Si volvés/cancelás, el agente puede rehacer la receta conservando la exploración y las respuestas.
-6. El agente implementa, verifica y pide otro consentimiento para publicar la rama y abrir un PR draft (con `push_pr: auto` en Foundations, no pregunta).
+   Con `arranque: ask`, si decís que no, no se crea issue, worktree, sesión ni trabajo.
+5. Explorar no habilita escrituras. Respondé las preguntas. Por defecto la receta se aprueba sola. Con `receta: ask`, la aprobás completa en la UI. La aprobación autoriza implementación y commits locales, no push ni grants de comandos. La revisión permite inspeccionar los comandos exactos de los casos D, que al ejecutarse siguen Foundations y las confirmaciones independientes. Si volvés/cancelás, el agente puede rehacer la receta conservando exploración y respuestas.
+6. El agente implementa, verifica, publica la rama y abre un PR draft. Con `push_pr: ask` en Foundations, antes pide otro sí, sobre el cuerpo exacto del PR. El cuerpo lleva `Closes #N`: GitHub cierra el issue cuando una persona mergea el PR.
 
-**Enter iniciar trabajo** (o **retomar trabajo**) en el panel de Issues y «Trabajar en el issue seleccionado» en la paleta entran por el mismo camino y piden el mismo sí. Si el issue ya tenía worktree y sesión, se retoman sin reclasificar ni volver a leer sus etiquetas. Un trabajo guardado sigue desde su etapa, sin duplicarse, y el diálogo dice en cuál está. Si estaba pausado, el diálogo lo avisa y el sí lo reanuda, como `/omi-work resume`, sin conceder aprobaciones. Si algo falla después de crear el issue, el aviso trae su número: hay que pedir ese issue, no crear otro.
+**Enter iniciar trabajo** (o **retomar trabajo**) en el panel de Issues y «Trabajar en el issue seleccionado» en la paleta entran por el mismo camino (con `arranque: ask`, piden el mismo sí). Si el issue ya tenía worktree y sesión, se retoman sin reclasificar ni volver a leer sus etiquetas. Un trabajo guardado sigue desde su etapa, sin duplicarse, y el diálogo dice en cuál está. Si estaba pausado, el arranque lo reanuda (el diálogo o el aviso lo dice), como `/omi-work resume`, sin conceder aprobaciones. Si algo falla después de crear el issue, el aviso trae su número: hay que pedir ese issue, no crear otro.
 
 No hay un comando para empezar: `/omi-triage` y `/omi-work start` ya no existen. Una tool no puede cambiar de sesión, así que el pedido viaja como un comando interno con un token de un solo uso, que vive sólo en la memoria del proceso. Escribir ese comando a mano, sin un token vigente, no hace nada. Con el harness activo, `omi_work_begin` no se ofrece. Un arranque y `/omi-main` no corren a la vez: los dos cambian de sesión.
 
@@ -44,9 +44,11 @@ No hay un comando para empezar: `/omi-triage` y `/omi-work start` ya no existen.
 | `/omi-work resume` | Adoptar explícitamente el estado guardado; no repite comandos ya hechos. Si estaba pausado, reanuda sin conceder aprobaciones. |
 | `/omi-work approve` | Aprobar receta/spec vigente y escribirla en la sección del harness del issue. Revalida fuente y código explorado. |
 | `/omi-work pause` | Pausar conservando fase, decisiones, archivos y evidencia. |
-| `/omi-work refresh` | Opcional. Volver a leer el pedido y explorar; invalida receta, decisiones y pruebas activas. También reabre un trabajo que el agente cerró sin cambio. Si lo propone el agente, pide confirmación. Un cambio de alcance dicho en el chat no lo necesita. |
-| `/omi-work pr` | Revalidar y pedir permiso remoto para push normal y PR draft; después actualiza la sección del issue con la evidencia. |
-| `/omi-work status` | Consultar el estado sin llamar al modelo, con la revisión de Foundations vigente, sus políticas y su catálogo. |
+| `/omi-work refresh` | Opcional. Volver a leer el pedido y explorar; invalida receta, decisiones y pruebas activas. También reabre un trabajo que el agente cerró sin cambio. Si lo propone el agente, pide confirmación sólo con `receta: ask`. Un cambio de alcance dicho en el chat no lo necesita. |
+| `/omi-work pr` | Revalidar, hacer push normal y abrir el PR draft, uno por grupo si hay [stack](#stack-de-prs) (con `push_pr: ask`, antes pide el permiso); después actualiza la sección del issue con la evidencia. |
+| `/omi-work stack` | Actualizar un [stack de PRs](#stack-de-prs) publicado: mergea el de abajo en el de arriba y re-apunta a `main` el que quedó sobre uno mergeado. Sigue la misma política que el push: con `push_pr: ask` pide el sí. |
+| `/omi-work status` | Consultar el estado sin llamar al modelo, con la revisión de Foundations vigente, sus políticas y sus patrones de confirmación en lista vertical. |
+| `/omi-work foundations` | Abrir el panel dedicado de configuración, como **f** en la vista OMI o `/omi-foundations`. No inicia ni retoma trabajo, no acepta ni guarda al abrir; sólo Guardar explícitamente persiste v2. |
 | `/omi-work stop` | Salir explícitamente del flujo y restaurar las tools normales del chat, sin borrar ni revertir archivos. También sale de un harness bloqueado (estado inválido o atrasado) sin tocar el estado guardado. |
 | Ctrl 6 / `/omi-workflow` | Pantalla 6 · Progreso: recorrido completo de sólo lectura, también con la lateral oculta. |
 | `/omi-progress` | Detalle del progreso en el workspace TUI, también con la lateral oculta. |
@@ -76,7 +78,7 @@ Los criterios viven en las **perillas del producto de la KB de Harness**, igual 
 - `allowedImpacts`: lista única de cero a tres valores `cosmetic`, `documentation`, `local-behavior`. Sólo esos impactos pueden seguir en chat. La lista vacía no habilita ninguno.
 - Reversibilidad y verificación clara son requisitos fijos. Seguridad, auth, permisos, secretos, pagos, datos personales, migraciones, infraestructura, contratos públicos y el propio harness siempre requieren seguimiento aunque cambie una línea. Incertidumbre, dimensiones desconocidas o preguntas pendientes primero vuelven para aclararse, sin recursos.
 - JSON estricto, todos los campos obligatorios y sin extras. Bloque duplicado, JSON inválido, repo no identificable o cerca sin cerrar detiene el pedido sin recursos. Un bloque identificable de otro repo no aplica.
-- La lectura reutiliza la conexión y las perillas ya leídas por el host, sin tools del modelo ni escrituras KB. Se fija en la sesión y sobrevive `/reload`. No acepta Foundations, escribe confianza ni cambia sus cuatro políticas, hashes o revisiones. Cambiar estas perillas se hace en la KB; este flujo sólo las lee, sin wizard ni guardado automático.
+- La lectura reutiliza la conexión y las perillas ya leídas por el host, sin tools del modelo ni escrituras KB. Se fija en la sesión y sobrevive `/reload`. No acepta Foundations, escribe confianza ni cambia sus tres políticas, hashes o revisiones. Cambiar estas perillas se hace en la KB; este flujo sólo las lee, sin wizard ni guardado automático.
 - Sin bloque aplicable, sin producto, sin KB/login, MCP desactivado o KB caída, usa el **default conservador del ejemplo**, con aviso explícito. No usa un resultado de clasificación fallido como default: una evaluación inválida siempre detiene. No guarda un caché persistente nuevo de criterios; al abrir otra sesión vuelve a leerlos.
 - La clasificación no es una frontera de seguridad y no inspecciona código: puede estimar mal. Nunca sustituye las reglas y permisos del proyecto. Si al continuar el chat aparece mayor alcance o riesgo, el agente debe proponer el harness. La ruta **Directa** es distinta: sigue dentro del harness, con receta, evidencia y seguimiento.
 
@@ -90,7 +92,7 @@ La TUI presenta una revisión dedicada, no un volcado JSON en un confirm genéri
 - **Pruebas** muestra cada caso con descripción y comando completo. `│` inicia una línea lógica, `↳` marca continuación visual y `↵` un salto real. No se pierden espacios al envolver comandos. Los backslashes se duplican (`\\` representa `\`); tabulaciones, retornos, controles y caracteres invisibles se muestran como escapes (`\t`, `\r`, `\uXXXX`), nunca como secuencias ejecutables del terminal. La leyenda de la sección los escribe igual que en los comandos. Navegar no ejecuta comandos ni exige visitar todas las secciones para habilitar el sí.
 - El marco adapta ancho/alto al terminal y al tema vigente, incluidos 80×24 y resize. Si el pane ya no permite inspección (menos de 32 columnas de revisión o 14 filas de terminal), se suspende aprobar hasta ampliarlo; Esc sigue cancelando.
 
-El sí autoriza **implementar, commits locales, comandos D exactos sin volver a preguntar y mantener la sección del harness al final del cuerpo del issue**, sin tocar el pedido de arriba. No autoriza push, merge, workflows ni deploy. Un comando D corre sin volver a preguntar con cualquier etiqueta, también como setup. Otros comandos piden permiso, salvo los del catálogo de Foundations: «Sí» vale para el trabajo y «Permitir siempre en este proyecto» lo suma al catálogo (ver «Evidencia y permisos»). Con `receta: auto` no hay revisión: la receta se aprueba sola y sus D no quedan autorizados (ver Foundations). La receta no tiene un tope propio de tamaño: la revisión navega por secciones. Antes del sí sólo se comprueba que el artefacto entre en GitHub; si no entra, falla pidiendo dividir el trabajo, no se resume en silencio para aprobarla.
+El sí autoriza **implementar, commits locales y mantener la sección del harness al final del cuerpo del issue**, sin tocar el pedido de arriba. No autoriza push, merge, workflows ni deploy, ni concede grants a los D. Una receta humana o `receta: auto` (el default) nunca dispensa el sí explícito que exige Foundations v2 por patrones o sintaxis. Sin Foundations v2 aceptada nada pregunta; con v2, sólo las líneas simples no coincidentes corren solas, y un grant humano exacto del trabajo/pedido evita repetir ese sí. La etiqueta, incluido setup, no cambia estas reglas (ver «Evidencia y permisos»). La receta no tiene un tope propio de tamaño: la revisión navega por secciones. Antes del sí sólo se comprueba que el cuerpo del PR draft entre en GitHub; si no entra, falla pidiendo dividir el trabajo, no se resume en silencio para aprobarla.
 
 En RPC, donde Pi no ofrece componentes TUI, se conserva una confirmación humana con el mismo documento completo organizado en texto, con los mismos escapes y marcadores `│`/`↵` en los comandos. Los modos sin UI no pueden aprobar. Tras revisar se vuelve a contrastar la fuente, el estado guardado y el código explorado; una revisión obsoleta no se convierte en aprobación de otra receta.
 
@@ -101,7 +103,7 @@ En RPC, donde Pi no ofrece componentes TUI, se conserva una confirmación humana
 - **Receta:** tipo, tamaño, riesgo y ejecutor, objetivo, enfoque, alcance/fuera de alcance, casos D y comandos exactos, lentes. Inline por defecto; delegación por las primitivas existentes, hasta cuatro escritores y respetando el tope de la receta. El filesystem sigue siendo compartido: no hay reservas ni sandbox por archivo.
 - **Directa:** trabajo chico con causa/enfoque entendido; genera un paso C1 sin spec pesada.
 - **Diagnóstico:** bug sin causa conocida. Pide reproducción observada y causa; después el arreglo sigue como Directa o Con spec según su tamaño. No habilita arreglos durante el diagnóstico.
-- **Con spec:** trabajo grande. Exige por qué, pasos C con cobertura explícita de todos los D y playbook humano antes de aprobar.
+- **Con spec:** trabajo grande. Exige por qué, pasos C con cobertura explícita de todos los D y playbook humano antes de aprobar. Puede agrupar los pasos en un [stack de PRs](#stack-de-prs).
 - **Implementar:** un C activo por vez, test rojo real, mismo comando verde, commit convencional nuevo por paso. No se completa un paso mediante texto del modelo.
 - **Verificar:** cada D con su comando aprobado, salida/exit code y contenido actuales; gates ejecutados y lentes solicitados. Seguridad y Cumplimiento son obligatorios con riesgo alto. Los lentes son llamadas de sólo lectura, sin tools ni conversación del implementador; no sustituyen la Review externa del PR.
   - **Qué ven.** Los casos D, el alcance, el diff completo y la evidencia que registró el harness, no el modelo: por caso D su última verificación; por paso C su historial rojo→verde con comando, etiqueta, exit code, HEAD, fingerprint y la salida que ya se guarda. Un paso de una vuelta anterior trae su rojo y su verde acreditados, archivados.
@@ -109,26 +111,22 @@ En RPC, donde Pi no ofrece componentes TUI, se conserva una confirmación humana
   - **Sin tope de tamaño.** Si el diff no entra en una llamada, se reparte por archivo en partes. Un archivo más grande se corta por líneas, con una etiqueta por fragmento. El lente corre por parte, con los casos y la evidencia en cada una, y se combina: el peor veredicto gana (`fail`, `unknown`, `pass`) y se juntan los hallazgos con su parte. Nada se trunca en silencio.
   - **Presupuesto por llamada.** Cada llamada entra en 120.000 caracteres, medidos en el JSON que se manda: casos, alcance, evidencia y su parte del diff. Si la evidencia completa no deja lugar para al menos 30.000 de diff, se resume de forma determinista y lo dice en `evidence.summarized`: por paso C el rojo y el verde acreditados (o los últimos), por caso D y por gate la última corrida, y cada salida con su cola y la marca «[recortado: N caracteres]». `omittedRuns` cuenta las corridas que no vinieron. Ejemplo: 5 pasos, un D y 2 gates × 3 vueltas con salidas de 12.000 (≈207 KB) y un diff de ≈600 KB van en 20 llamadas de hasta 120.000, con salidas de 4.000. Si ni resumida entra (por ejemplo, casos D enormes), el lente falla con un error explícito en vez de mandar una llamada que no entra.
   - **Corridas.** Un lente que falló no se repite sobre el mismo contenido, salvo que un `refuter` posterior apruebe: así un aviso no se borra repitiendo el lente y el fail de Seguridad no se esquiva. Por contenido, cada lente admite tres veredictos y diez corridas: cancelar o un error del proveedor no gasta veredictos.
-- **PR:** sólo con cambio limpio y verificado, confirmación humana remota y un SHA autorizado. Termina en un draft; no mergea ni cierra el issue.
+- **PR:** sólo con cambio limpio y verificado y un SHA autorizado; con `push_pr: ask`, además, confirmación humana remota. Termina en un draft, o en uno por grupo con un stack; no mergea ni cierra el issue.
 
-Dependencia bloqueante, información insuficiente, inferencia nueva o imposibilidad de verificar deben quedar como espera/pausa. Una base que se arma con un comando no es una espera: el agente la prepara con `setup`, en cualquier etapa activa. Ejemplo: un worktree nuevo sin `node_modules` corre `npm ci` en Explorar (sin preguntar si está en el catálogo), vuelve a reproducir y registra `explored` de nuevo, sin `refresh`. Sólo queda como base faltante lo que un comando no resuelve, por ejemplo una credencial o un servicio externo.
+Dependencia bloqueante, información insuficiente, inferencia nueva o imposibilidad de verificar deben quedar como espera/pausa. Una base que se arma con un comando no es una espera: el agente la prepara con `setup`, en cualquier etapa activa. Ejemplo: un worktree nuevo sin `node_modules` corre `npm ci` en Explorar (sin preguntar sólo si lo permite v2 aceptada o su grant exacto vigente), vuelve a reproducir y registra `explored` de nuevo, sin `refresh`. Sólo queda como base faltante lo que un comando no resuelve, por ejemplo una credencial o un servicio externo.
 
 ## Evidencia y permisos
 
 `omi_workflow` sólo recibe propuestas de artefactos y acciones. No acepta exit codes, aprobaciones humanas ni resultados de pruebas aportados por el modelo.
 
-- Los comandos se ejecutan con `omi_workflow_check`. Ejecutar código de un repo no es una lectura inocua: antes de aprobar la receta, una reproducción pide permiso, salvo que esté en el catálogo de Foundations.
-- Autorizar un comando se separa de su etiqueta (`setup`, `reproduction`, `red`, `green`, `verification`, `gate`). La etiqueta decide en qué etapa corre y qué acredita, no si hace falta otro sí. Un comando corre sin preguntar si:
-  - está en el catálogo de Foundations;
-  - es el comando exacto de un caso D de una receta que aprobó una persona;
-  - ya tiene un permiso guardado en este trabajo;
-  - o Foundations dice `fuera_de_catalogo: auto`.
-- Si no, OMI ofrece **Sí**, **No** y **Permitir siempre en este proyecto**, tanto en TUI como en RPC. Muestra el comando exacto, el checkout, el repo y el destino en la KB. En TUI el detalle se desplaza con PgUp/PgDn sin ocultar las tres decisiones; no hay consentimiento preseleccionado y se confirma con Enter. RPC usa el selector nativo con el detalle completo. Sin UI no concede permisos.
-  - **Sí** queda guardado en el estado del trabajo (`grants`), por comando exacto y por pedido: sobrevive a `/reload`, `resume`, aprobar la receta y un `replan` por acuerdo del chat. Cambiar el pedido o `refresh` lo descarta. No cambia Foundations ni habilita otros trabajos.
-  - **Permitir siempre en este proyecto** guarda inmediatamente ese comando exacto en el catálogo existente de Foundations de las perillas del producto, y su aceptación en el registro local. Recién tras confirmar ambos actualiza la política de esta sesión y ejecuta. Vale tras reiniciar y en otros trabajos/clones/worktrees del mismo repo, no en otros repos; `refresh` no elimina el catálogo. No agrega prefijos ni comodines ni sustituye las confirmaciones sensibles de OMI.
-  - **No**, cerrar, una respuesta desconocida o cancelar antes del guardado no ejecutan ni agregan permisos. Un error de persistencia bloquea: no concede un grant temporal como fallback ni anuncia éxito. Si el envío ya salió a la KB y luego falla la confirmación/aceptación o se cancela, el documento remoto puede existir: el error distingue ese resultado parcial, sin ejecutar. Si ya se completaron el guardado y la aceptación local pero se cancela la ejecución, informa que el permiso sí quedó persistido para futuras sesiones.
-  - Una decisión desde un trabajo pausado o cambiado por otra ventana se rechaza al revalidar el estado durable, antes de guardar y antes de ejecutar.
-  Ejemplo: `npm run typecheck` aprobado por una persona como D5 corre igual como setup, sin otro diálogo.
+- Los comandos se ejecutan con `omi_workflow_check`. Ejecutar código del proyecto usa los permisos de tu usuario; no es una lectura inocua.
+- La etiqueta (`setup`, `reproduction`, `red`, `green`, `verification`, `gate`) decide fase y evidencia, no autoriza. Primero prevalecen restricciones independientes y confirmaciones sensibles. Después puede reutilizarse un **grant humano del comando EXACTO** para este trabajo/pedido. **Sin Foundations v2 aceptada, nada pregunta** (el default). Con v2, sin grant, sintaxis no soportada o match de patrón siempre pide sí, y sólo una línea SIMPLE no coincidente corre sola; receta humana/auto no neutraliza esta precedencia.
+- Si hace falta, OMI ofrece **Sí**, **No** y **Editar reglas**, sin consentimiento preseleccionado. Muestra comando, checkout, repo, KB/producto y alcance. PgUp/PgDn desplaza el detalle TUI sin ocultar decisiones; RPC usa selector nativo. Sin UI no concede permisos.
+  - **Sí** guarda el grant en el trabajo, ligado a id de trabajo + hash del pedido + comando. Sobrevive a `/reload`, `resume`, aprobar receta y `replan`; cambiar pedido o `refresh` lo invalida. No toca KB, no usa prefijos/globs ni autoriza otros trabajos.
+  - **Editar reglas** abre el panel con borrador vigente, sin excepciones automáticas, escrituras ni grants. Sólo Guardar explícitamente modifica la configuración. Cerrar la edición, incluso guardando, **NO ejecuta el comando pendiente**: hay que reintentarlo para evaluar de nuevo. En RPC esta edición exige abrir la TUI; no hay fallback a JSON ni permiso temporal.
+  - **No**, Esc, cerrar, respuesta desconocida o error no ejecutan ni conceden grants. Un guardado parcial informa si la KB pudo guardar o si también quedó aceptado localmente, sin ejecutar ni inventar éxito. No se reintenta un envío después de cancelar.
+  - Se revalida el trabajo durable antes de guardar/aceptar o ejecutar: una decisión vieja tras pausa o cambio de otra ventana no vale.
+  Ejemplo: con `git push *`, ser D5 no autoriza `npm run typecheck && git push origin main`; `npm run typecheck` solo corre sin preguntar, o reutiliza su grant humano exacto.
 - Setup corre en cualquier etapa activa, también antes de aprobar la receta, con la misma autorización. Nunca acredita una prueba y sus errores se muestran.
 - Fuera de Implementar, un setup prepara lo que Git ignora (por ejemplo, `node_modules`). Si cambia archivos versionados, no ignorados o HEAD, devuelve un error. No se revierte solo; el cambio queda a la vista en `git status`. Es una detección con el fingerprint, no un sandbox: un comando autorizado que le esconde cambios a Git (por ejemplo, con `git update-index --assume-unchanged`) no se detecta.
 - La reproducción corre en Explorar, Resolver inferencias (donde se puede volver a registrar `explored`) y Diagnóstico.
@@ -155,14 +153,16 @@ La verificación prueba que la persona escribió esas palabras, no que el resume
 
 ## Foundations: comandos y permisos por repo
 
-Foundations es la configuración del harness para un repo: qué comandos corren sin preguntar y qué puntos piden un sí. Lo decide la persona, en la KB de Harness. No es la etapa Fundación.
+Foundations es la configuración del harness para un repo: **patrones que requieren confirmación humana**, no una lista de comandos permitidos. Lo decide la persona en la KB de Harness. Sólo aplica al harness; no cambia el bash del chat general ni `/settings` de Pi. No es la etapa Fundación ni un sandbox.
+
+Sin Foundations v2 aceptada, nada pregunta: los tres puntos van en `auto` y ningún comando pide sí. Foundations sirve para poner en `ask` los que quieras y para listar los comandos que piden confirmación. Ejemplo: `"confirmar": ["git push *"], "politica": { "arranque": "auto", "receta": "ask", "push_pr": "ask" }` arranca solo y corre `npm test` sin preguntar, pero te muestra la receta, pide el sí antes de `git push origin main` y antes del push del PR.
 
 ### Dónde vive
 
 - En las **perillas** del producto, en la KB (`harness-kb`), dentro de un bloque `omi-foundations`. El resto del documento de perillas es de otros usos y no se toca.
 - El producto es el nombre del repo de `origin` en github.com. Ejemplo: `github.com/chichex/omi-code` → producto `omi-code`.
-- Tiene que estar en tus productos de la KB (`mis_productos`). Si no, no hay Foundations y no se ofrece armarlo.
-- El bloque declara su `repo`. Sólo aplica si coincide con `origin`: dos repos con el mismo nombre (`chichex/medicine`, `pramaestudio/medicine`) tienen un bloque cada uno. Un trabajo cuyo issue es de otro repo usa la política estricta.
+- Tiene que estar en tus productos de la KB (`mis_productos`). Si no, no hay Foundations: vale el default (todo `auto`).
+- El bloque declara su `repo`. Sólo aplica si coincide con `origin`: dos repos con el mismo nombre (`chichex/medicine`, `pramaestudio/medicine`) tienen un bloque cada uno. Un trabajo cuyo issue es de otro repo usa el default: todo `auto`.
 
 ### Formato
 
@@ -173,94 +173,114 @@ JSON estricto, en una cerca con info string exacta `omi-foundations`:
 
 ```omi-foundations
 {
-  "version": 1,
+  "version": 2,
   "repo": "chichex/omi-code",
-  "comandos": ["npm ci", "npm run typecheck", "npm test", "npm run test:packaging"],
-  "politica": { "arranque": "ask", "receta": "ask", "fuera_de_catalogo": "ask", "push_pr": "ask" }
+  "confirmar": ["git push *", "npm publish", "rm *"],
+  "politica": { "arranque": "ask", "receta": "ask", "push_pr": "ask" }
 }
 ```
 ````
 
-- `version`: `1`. `repo`: `owner/name` en minúsculas.
-- `comandos`: hasta 100, únicos y exactos, como los D. Sin espacios al borde, saltos de línea ni caracteres de control o invisibles. `npm test` no autoriza `npm test -- --watch`.
-- `politica`: las cuatro claves, cada una `ask` o `auto`. No hay defaults ni otros campos.
-- Reordenar o reformatear no es una revisión nueva. Cambiar un comando o una política sí.
-- Inválido (JSON roto, otro esquema, cerca sin cerrar, dos bloques del mismo repo o un bloque cuyo `repo` no se lee): no autoriza nada.
+- `version`: únicamente `2`. `repo`: `owner/name` en minúsculas. Sin campos extra ni defaults implícitos.
+- `confirmar`: hasta **100 reglas**, únicas exactas, de **1–2000 unidades UTF-16** (`string.length`). Sin espacios en extremos. Una cadena vacía en JSON es inválida; la lista vacía sí es válida y guardar/aceptar advierte que **todo comando SIMPLE quedará sin confirmación por ESTA política**.
+- Se rechazan exactamente Unicode **Cc, Cf, Zl, Zp y U+E0100..U+E01EF**: incluye tabs, LF/CR, bidi y ancho cero. Errores por regla/línea con escape visible, nunca controles activos en la terminal.
+- `politica`: sólo `arranque`, `receta`, `push_pr`, con `ask|auto`. Se retiraron la allowlist `comandos` y `fuera_de_catalogo`.
+- Hash canónico de versión, repo, reglas ordenadas y políticas: reordenar/reformatear no cambia identidad; cambiar contenido, repo o políticas sí.
+- Ausente, inválido u obsoleto (v1): no vale. Rige la última v2 aceptada o, sin ninguna, el default: nada pregunta. JSON roto, cerca sin cerrar, bloques duplicados o repo ilegible nunca se leen como una lista vacía aceptada ni se sobrescriben a ciegas.
+
+### Matcher y puerta sintáctica conservadora
+
+El glob compara la **línea completa**, sensible a mayúsculas y sin trim, normalizar espacios, tokenizar para coincidir, expandir archivos ni evaluar regex. `*` significa cero o más puntos de código Unicode, incluidos espacios; `?` uno. En patrones, `\*`, `\?` y `\\` son literales de *, ? y backslash; cualquier otro escape o backslash final es inválido. El resto de signos, incluidos metacaracteres de regex, son literales. La implementación tiene costo acotado, sin backtracking exponencial.
+
+Sólo puede autoejecutarse una línea SIMPLE: uno o más tokens separados únicamente por espacios ASCII; cada token usa `[A-Za-z0-9_./:@%+=,-]`. Sin espacios iniciales/finales, vacíos ni `=` en el primer token. Ese primer token literal tampoco puede ser `if`, `then`, `elif`, `else`, `fi`, `for`, `while`, `until`, `do`, `done`, `case`, `esac`, `in`, `select`, `function`, `time`, `coproc`, `eval`, `exec`, `command`, `builtin`, `source` o `.`.
+
+Cualquier otra sintaxis pide sí explícito: comillas, backslash en el comando, controles/invisibles, `&&`/`||`, pipes, redirecciones/heredocs, background, agrupaciones, expansiones, globbing y multilínea. **No se rechaza para ejecución ni se altera el comando**: puede autorizarse exacto por la persona. No se analizan componentes para autoautorizar.
+
+Con `git push *`, `git push origin main` pide sí; `git push` sin el espacio/argumentos no coincide (agregar esa regla si también se quiere confirmar). `npm test` simple no coincidente puede auto con v2 aceptada. `npm test && git push origin main`, `echo "texto"`, `VAR=x npm test`, `echo $(id)` y multilínea siempre piden sí salvo su grant exacto.
+
+No se infiere qué hace un ejecutable, wrapper, script, alias o función. Un patrón textual no cubre todas las formas semánticas de hacer push. **No es sandbox**; prohibiciones del proyecto y confirmaciones sensibles de OMI prevalecen.
 
 ### Qué decide cada política
 
-| Punto | `ask` (hoy) | `auto` |
+| Punto | `ask` | `auto` (default) |
 |---|---|---|
 | `arranque` | El sí de `omi_work_begin` o de Enter en Issues | Crea el issue, el worktree y la sesión sin preguntar, con el texto del agente. Las guardas sin efectos fallan igual antes |
-| `receta` | La revisión de la receta | El agente aprueba su propia receta, también la que rehace tras un `replan`. Se revalida igual, queda `aprobada por Foundations` en la sección del issue y sus D fuera del catálogo siguen pidiendo permiso |
-| `fuera_de_catalogo` | Un sí por comando y por trabajo | Cualquier comando corre sin preguntar: equivale a shell sin permiso |
-| `push_pr` | El sí para push y PR draft | Push de la rama y PR draft sin preguntar. Nunca mergea ni fuerza |
+| `receta` | La revisión de la receta | El agente aprueba su propia receta, también tras un `replan`. Se revalida y registra `aprobada por Foundations`; nunca concede grants ni dispensa sí por patrones o sintaxis |
+| `push_pr` | El sí para push y PR draft, sobre el cuerpo exacto del PR | Push de la rama y PR draft sin preguntar. Nunca mergea ni fuerza |
 
-Los comandos del catálogo corren sin preguntar con cualquier etiqueta. Las reglas de etapa y de evidencia no cambian. Nada de esto habilita merge, tags, workflows, deploys ni secretos.
+La autorización de comandos es independiente de estas tres políticas y de su etiqueta. Las reglas de fase/evidencia no cambian. Nada habilita merge, tags, workflows, deploys, secretos ni violar prohibiciones del proyecto.
 
 ### Aceptar una revisión
 
-1. Al arrancar la sesión, OMI lee las perillas en segundo plano, sin preguntar.
-2. En el primer punto del harness que necesita la política (el arranque, `/omi-work resume`, `approve`, `pr` o el primer comando), si la revisión es nueva, muestra la diferencia contra la última aceptada y pide un sí. Cada `auto` trae su aviso. Ejemplo:
+1. Al arrancar la sesión, OMI lee las perillas en segundo plano, sin preguntar ni escribir la KB.
+2. En el primer punto del harness que necesita la política (el arranque, `/omi-work resume`, `approve`, `pr` o el primer comando), si la revisión v2 es nueva, la aplica sin preguntar y avisa la diferencia vertical contra la última aceptada (o contra el default, si no había ninguna). Cada `auto` y la lista vacía traen su aviso. También sin UI. Abrir el panel no la acepta. Ejemplo:
 
    ```
    Foundations · chichex/omi-code · KB omi-code (kb-prod-chiche.ohmyinfra.com)
-   Comandos que corren sin preguntar:
-     + npm run test:packaging
-       npm test
+   Antes: última revisión aceptada e0cabd0f
+   Patrones que requieren confirmación:
+     + git push *
+       npm publish
+   Sólo comandos simples no coincidentes corren sin preguntar por esta política.
    Políticas:
-     fuera del catálogo: ask → auto   ⚠ corre cualquier comando sin preguntar: equivale a shell sin permiso
+     push + PR draft: ask → auto   ⚠ hace push de la rama y abre el PR draft sin preguntar; nunca mergea ni fuerza
    ```
 
-3. Toda revisión nueva pide el sí, también si sólo quita permisos. La misma revisión en otro documento de perillas (alguien editó otra parte) no vuelve a preguntar.
-4. La aceptada se guarda en `<OMI_HOME>/agent/foundations/` (por defecto `~/.omi/agent/foundations/`), 0600, por KB, producto y repo.
-5. La revisión queda **fija toda la sesión**: un cambio externo en la KB a mitad de sesión no se aplica. Sobrevive a `/reload` y viaja a la sesión del worktree con `omi_work_begin`, sin otro diálogo. La sesión siguiente muestra la diferencia. La excepción es una decisión propia de guardar Foundations o **Permitir siempre en este proyecto**: tras guardarse y aceptarse, reemplaza el pin inmediatamente.
+3. Toda revisión nueva se aplica y se avisa, también si sólo quita permisos. La misma revisión en otro documento de perillas (alguien editó otra parte) no vuelve a avisar; sólo actualiza la metadata local de esa aceptación.
+4. El registro **v2** vive en `<OMI_HOME>/agent/foundations/` (por defecto `~/.omi/agent/foundations/`), 0600, por KB, producto y repo. Un registro v1 cuenta como nada aceptado.
+5. La revisión queda **fija toda la sesión**: un cambio externo en la KB a mitad de sesión no se aplica. Sobrevive a `/reload` y viaja a la sesión del worktree con `omi_work_begin`, sin otro aviso. La sesión siguiente aplica la revisión nueva y avisa la diferencia. La excepción es Guardar en el panel: tras persistir y aceptar, reemplaza el pin; una decisión anterior pendiente no lo pisa.
 
-Rechazar o cancelar deja la última revisión aceptada. Sin ninguna, la política estricta: `ask` en los cuatro puntos y catálogo vacío.
+Sin ninguna v2 aceptada vale el default: `auto` en los tres puntos y ningún comando pregunta.
 
 ### Sin KB
 
 | Situación | Vale en la sesión |
 |---|---|
-| `--offline`, `PI_OFFLINE`, `--no-mcp`, `-builtin:mcp`, `--no-extensions`, sin login, KB lenta (tope de 10 s) o `harness-kb` redefinido en `mcp.json` | La última aceptada; si no hay, estricta |
-| Perillas sin bloque para el repo | La última aceptada, con aviso; si no hay, estricta y se ofrece armarlo |
-| Bloque inválido | La última aceptada, con aviso y el motivo; si no hay, estricta |
-| Revisión nueva sin UI | La última aceptada; si no hay, estricta |
-| Producto inexistente o sin acceso | Estricta |
+| `--offline`, `PI_OFFLINE`, `--no-mcp`, `-builtin:mcp`, `--no-extensions`, sin login, KB lenta (tope de 10 s) o `harness-kb` redefinido en `mcp.json` | La última v2 aceptada; si no hay, el default (todo `auto`) |
+| Perillas sin bloque para el repo | La última v2 aceptada, con aviso; si no hay, el default, sin ofrecer armarlo |
+| Bloque inválido o v1 | La última v2 aceptada, con aviso y el motivo; si no hay, el default. No se interpreta como lista vacía aceptada |
+| Revisión nueva sin UI | La revisión nueva: aceptarla no necesita UI |
+| Producto inexistente o sin acceso | El default; no crea productos ni finge guardado |
+
+Esto describe la lectura inicial: un pin v2 ya aceptado/fijado no se relee en cada comando. No se promete sincronización instantánea con cambios externos. Sin KB no se acepta un borrador que no pudo guardarse.
 
 OMI lee la KB por la conexión MCP de Pi, sin el modelo. Si `~/.omi/agent/mcp.json` o `.pi/mcp.json` definen `harness-kb`, no la usa: podría ser otro servidor.
 
 ### Qué escribe en la KB y cuándo
 
-Sólo tras una decisión explícita de la persona: armar Foundations cuando falta, o agregar un comando desde su diálogo de autorización. El agente no recibe permiso para editar libremente la KB.
+Sólo **Guardar explícitamente** desde el panel escribe una revisión de las perillas y su aceptación local. Aceptar una revisión de la KB sólo escribe el registro local. El agente no obtiene una tool libre para editar la KB. Leer/abrir/cancelar nunca guarda; los tests usan mocks, no políticas reales.
 
-**Agregar un comando con «Permitir siempre en este proyecto»**
+**Panel vertical dedicado**
 
-- Se guarda en el momento de elegir la opción, no al terminar el trabajo. Reutiliza el catálogo y la aceptación existentes; no hay una segunda lista ni una cola de sincronización.
-- Requiere KB disponible, producto accesible e identidad de KB/producto/repo igual a la de la sesión y del issue. Sin KB, con bloque inválido o catálogo lleno, informa el error y no ejecuta. Si falta el bloque y no hay uno aceptado, puede crear sólo ese comando con las cuatro políticas `ask`.
-- Relee el documento vigente y conserva byte a byte todo lo ajeno al bloque del repo, sus demás comandos y políticas. La expectativa de revisión se verifica también sobre el documento usado para componer; si el bloque cambió respecto del pin, desapareció o contiene una revisión no aceptada, aborta y pide revisarla en una sesión nueva. No acepta silenciosamente políticas ajenas por autorizar un comando.
-- Comprueba otra vez las perillas antes del envío, confirma el documento guardado y exige que siga siendo el vigente antes de aceptar localmente. Los conflictos detectados bloquean la ejecución; una respuesta perdida puede recuperarse con la misma clave idempotente, sin reintentar tras cancelar.
-- **Límite de concurrencia:** estos controles son optimistas, no una exclusión mutua ni CAS remoto. Otro escritor todavía puede guardar entre la última lectura y el envío. La exclusión global de la KB queda fuera de este cambio, a cargo de la persona según el acuerdo de #58. No se promete atomicidad.
+- Se abre con **f** en la vista OMI (Ctrl 5), «Foundations» en la paleta (Ctrl K), `/omi-foundations`, `/omi-work foundations` o **Editar reglas** del permiso. No inicia ni retoma trabajo. El harness no lo ofrece al arrancar: sin Foundations v2 nada pregunta. No se abre automáticamente al iniciar ni al hacer reload.
+- Encabezado Foundations + repo, políticas en filas apiladas y editor amplio de una regla por línea, con foco evidente, wrap/scroll y colores del tema. Guardar/Cancelar quedan visibles. No es un wizard por pestañas, JSON ni una respuesta libre de `omi_ask`.
+- Entrar/reabrir precarga la v2 vigente sin aceptarla. Ausencia/v1 empieza con reglas vacías y las políticas del default (`auto`), nunca comandos anteriores ni sugerencias. La aceptación anterior y la precarga son datos separados en el diff.
+- Tab/Shift+Tab cambia foco; Espacio/Enter alterna una política. En el editor, Enter o Ctrl+J agrega línea; líneas exactamente vacías se omiten, espacios al borde/duplicados no se recortan ni deduplican. Pegados largos quedan editables, no marcadores; controles/invisibles se rechazan sin normalizarlos a reglas válidas y se conserva el borrador previo.
+- Ctrl+S valida y abre revisión vertical; otro Ctrl+S guarda deliberadamente. Esc en revisión vuelve con el borrador; Esc en editor/Ctrl+C cancela. Los errores conservan texto, políticas y número original de línea. Las reglas largas en revisión usan marcadores de continuación y escapes para no perder espacios.
+- Usable en 80×24 y resize a 132×40, tema claro/oscuro. Un pane que no permite inspeccionar suspende Guardar, no la cancelación. Las pruebas de renderer no equivalen a una evaluación visual humana.
+- Desde un comando pendiente, abrir/cancelar/guardar **nunca lo ejecuta ni crea grant**. Siempre hay que reintentarlo, aun si las reglas cambiaron.
 
-**Armar Foundations cuando falta**
+**Corte limpio y persistencia**
 
-- Cuándo: al empezar el harness en la sesión del worktree, una vez por sesión, si la KB respondió, el producto existe, sus perillas no tienen bloque para el repo y no hay una revisión aceptada. Sólo en la TUI interactiva: en RPC no se ofrece.
-- Se ofrece con una pregunta: «Armar Foundations» (la recomendada, nunca elegida sola), «Ahora no» o «No ofrecer más para este repo» (queda en el registro local), cada una con lo que pasa. Esc es «Ahora no»: no se guarda nada.
-- Se arma respondiendo [preguntas en tanda](#preguntas-en-tanda), no editando JSON:
-  1. «¿Qué comandos corren sin preguntar?», de elección múltiple. Las opciones son los comandos que OMI detecta leyendo archivos, sin ejecutar nada: scripts de `package.json` como `test`, `typecheck`, `lint`, `check`, `build`, `test:*`, con el gestor de su lockfile (`npm ci`, `pnpm install --frozen-lockfile`…), o `go test ./...` y `go vet ./...`. Cada una dice de dónde sale (por ejemplo, «Script «test» de package.json») y ninguna viene marcada. «Escribir otra respuesta» suma otros, uno por línea (Ctrl+J). Cada línea se valida con las reglas de `comandos`; una inválida vuelve al texto con el motivo.
-  2. Una pregunta por política (arranque, receta, fuera del catálogo, push + PR), en una tanda con pestañas. `ask` es la recomendada; cada `auto` trae su aviso en la descripción.
-  3. Un resumen legible, sin JSON: la diferencia contra la política estricta y el destino. Nada viene elegido: «Guardar en la KB», «Cambiar respuestas» (vuelve a las preguntas con lo elegido) o «Cancelar».
-- Esc en cualquier paso, o «Cancelar», no guarda nada. Sólo «Guardar en la KB» guarda: una revisión nueva de las perillas, con el mismo parser y validador que un bloque escrito a mano. El resto del documento queda byte a byte, o se crea `Perillas de <producto>` si no había.
-- Si las perillas cambiaron durante el diálogo, no se guarda. Una respuesta perdida se reintenta con la misma clave, sin duplicar el documento. La clave es determinista (repo, perillas previas y cuerpo), así que no se guarda en el registro local: un guardado que falla no deja nada ahí.
-- Lo guardado queda aceptado y vale en esa sesión.
+- Únicamente formato v2. Bloques, pins y aceptaciones v1 son obsoletos: no se migran, invierten ni eliminan automáticamente. Hay que configurar/guardar de nuevo.
+- El guardado explícito puede reemplazar sólo el bloque antiguo inequívoco de ese repo, sin interpretar/trasladar sus comandos o políticas. Conserva byte a byte lo ajeno. JSON/cercas mal formadas, repo ambiguo o duplicados fallan sin sobrescribir a ciegas.
+- Requiere KB/producto accesibles e identidad KB/producto/origin/issue consistente. Relee para componer, valida expectativa de revisión, comprueba otra vez antes de enviar y confirma contenido/producto/tipo y que siga vigente antes de aceptar localmente. Cambios detectados o un trabajo pausado/desactualizado bloquean.
+- Respuesta perdida: clave idempotente estable, relectura antes del retry y nunca reenvío sobre una revisión concurrente ni después de abortar. Fallos parciales distinguen documento posiblemente guardado, verificación KB completa y aceptación local durable. No hay fallback a grant temporal ni éxito sin persistencia.
+- Las escrituras del registro local se serializan por ruta real dentro del proceso y reemplazan el archivo atómicamente. Una aceptación pendiente compara la revisión local que leyó antes de preguntar, dentro de esa cola y después del I/O: no puede pisar la aceptación de un Guardar posterior aunque su pin todavía no se haya reemplazado. Se prueban la intercalación con barreras y un fallo antes del rename conservando los bytes anteriores. Esto no es CAS ni lock entre procesos externos.
+- Los guardados explícitos coordinan su turno por identidad KB/producto/repo dentro del proceso, aunque usen sesiones o clientes distintos. Capturan la expectativa local antes del I/O y revalidan la revisión remota dentro de la cola de escritura, antes del reemplazo local; antes de publicar el pin comprueban otra vez turno, KB y aceptación durable. Un Guardar A retenido no vuelve a aceptar ni publicar A después de un Guardar B más nuevo. Si hay conflicto, informa el estado parcial sin ejecutar comandos.
+- Las perillas resultantes deben entrar en el límite legible del cliente de KB (**400.000 caracteres**, incluido JSON escapado y contenido ajeno); excederlo falla antes de enviar, sin rebajar límites de validación de reglas.
+- **Concurrencia optimista, no CAS ni exclusión mutua remota**: todavía existe la ventana entre última lectura y envío. No se promete atomicidad distribuida ni se implementa limpieza de datos reales.
 
-Para cambiar políticas, quitar comandos o editar libremente el catálogo, editá las perillas en la KB (o pedíselo al agente fuera del harness). El diálogo de autorización sólo puede sumar el comando exacto solicitado; no hay un comando de edición general. `/omi-work status` y el detalle del progreso muestran la revisión vigente, su origen (KB, local o estricta), las cuatro políticas, el catálogo y los avisos.
+`/omi-work status`, la vista OMI y el progreso muestran origen/revisión, tres políticas, patrones verticales y avisos; nunca concatenan reglas con pipes.
 
 ### Límites
 
 - No es una frontera de seguridad: el registro local lo puede editar cualquier proceso con tu usuario.
-- `fuera_de_catalogo: auto` y `arranque: auto` dan mucho poder al agente; el diálogo de aceptación los marca.
-- Sin KB, una revisión aceptada vieja puede ser más permisiva que la vigente.
+- Por defecto el agente tiene mucho poder: sin Foundations v2 arranca, se aprueba la receta, corre cualquier comando y publica el PR draft sin preguntar. El aviso de cada revisión marca sus `auto`. Nunca mergea, fuerza un push, crea tags, lanza workflows ni despliega.
+- `arranque: auto`, `receta: auto` y `push_pr: auto` tienen avisos explícitos; no dispensan restricciones independientes.
+- Los globs son textuales, no un análisis de seguridad de scripts, ejecutables, wrappers, aliases o funciones. Un bloque inválido o v1 no vale: sin una v2 aceptada vale el default (todo `auto`), no un `ask`.
+- Sin KB, una revisión aceptada vieja puede ser más o menos permisiva que la vigente.
+- Revertir código/configuración no deshace efectos de comandos ya ejecutados; no se promete rollback externo.
 - Un repo cuyo nombre no es un producto de la KB no tiene Foundations.
 - Cada sesión en un repo de GitHub lee la KB: tres llamadas MCP.
 
@@ -286,10 +306,97 @@ OMI pregunta como AskUserQuestion de Claude Code: de 1 a 4 preguntas en una tand
 - Elección múltiple: casillas; Espacio o un número marcan, Enter confirma lo marcado (también nada).
 - Con más de una pregunta, el paso **Enviar** repasa todas las respuestas antes de mandarlas. Si falta alguna, Enter vuelve a la primera sin responder.
 - Esc cancela la tanda: no quedan respuestas parciales ni consentimiento. En el texto libre, Esc sólo vuelve a las opciones.
-- Una pregunta sin recomendada, como el sí de guardar Foundations, arranca sin cursor: Enter solo no elige nada, y un número sólo lleva el cursor. Elegir pide Enter.
-- Va en el lugar del editor, dentro del layout del workspace. Si no entra, primero esconde las descripciones de las otras opciones y después desplaza la lista, sin tapar la ayuda. Un texto largo, como el resumen de Foundations, se desplaza con PgUp/PgDn.
+- Una pregunta sin recomendada, como el sí de un permiso de comando, arranca sin cursor: Enter solo no elige nada, y un número sólo lleva el cursor. Elegir pide Enter.
+- Va en el lugar del editor, dentro del layout del workspace. Si no entra, primero esconde las descripciones de las otras opciones y después desplaza la lista, sin tapar la ayuda. Un texto largo, como el detalle de un permiso, se desplaza con PgUp/PgDn.
 
 El agente pregunta así con `omi_ask`: `questions` de 1 a 4, cada una con `question`, `header` (hasta 12 caracteres), `options` de 2 a 4 (`label` y `description`, la primera es la recomendada) y `multiSelect`. OMI agrega la respuesta libre. Devuelve, por pregunta, su id (`q1`…), el texto, las opciones elegidas (`options`) y lo escrito (`text`); al cancelar, `cancelled`, y el turno termina. En modo print, RPC o sin UI no se le ofrece al modelo; si llega igual, falla con un error: nunca supone una respuesta. Es `model-only`: ni `codemode` ni un subagente la pueden llamar.
+
+## Stack de PRs
+
+Un trabajo grande puede terminar en varios PRs encadenados (un **stack**) en vez de un PR enorme. Cada PR se revisa y se mergea por separado.
+
+### Cuándo partir
+
+Lo decide el agente al escribir la spec (ruta Con spec) y lo aprueba la persona con la receta. Conviene cuando el cambio no se revisa bien en un solo PR. Ejemplos: más de unas 400 líneas de diff, o partes que se revisan y mergean por separado (modelo, lógica, UI). Cada PR tiene que pasar sus tests solo. Sin stack, el trabajo va en un solo PR, como siempre. Directa tiene un solo paso: siempre un PR.
+
+### Cómo se declara
+
+En `specified`, junto a los pasos, `stack` agrupa los pasos C en PRs:
+
+```json
+{
+  "why": "Se revisa mejor por partes",
+  "steps": [
+    { "id": "C1", "title": "Modelo", "cases": ["D1"] },
+    { "id": "C2", "title": "Estado", "cases": ["D1"] },
+    { "id": "C3", "title": "Vista", "cases": ["D2"] }
+  ],
+  "playbook": ["Probar el flujo completo"],
+  "stack": [
+    { "title": "Modelo y estado", "steps": ["C1", "C2"] },
+    { "title": "Vista", "steps": ["C3"] }
+  ]
+}
+```
+
+- De 2 a 10 grupos. Cada uno lleva `title` (qué entrega) y sus pasos.
+- Los grupos son contiguos, van en orden y cubren cada paso una vez: cortan la secuencia C1…Cn. `[C1, C3], [C2]` se rechaza, porque cada rama apunta al commit del último paso de su grupo.
+- El stack es parte de la spec: la aprobación lo cubre y la revisión de la receta lo muestra en Pasos. Cambiarlo es otra receta.
+- Un paso de corrección de una vuelta (`retry`) va en el último PR.
+- Un estado guardado sin `stack` sigue igual: un solo PR.
+
+### Cómo se publica
+
+`publish` abre un PR draft por grupo, en orden, con la política del push: con `push_pr: auto` (el default) no pregunta; con `push_pr: ask` pide un solo sí para todo el stack. Ejemplo con la receta de arriba y la rama `feat/issue-46`:
+
+| PR | Rama | Base | Commit | Cierra |
+|---|---|---|---|---|
+| 1 | `feat/issue-46-1` | `main` | el de C2 | no: `Refs #46` |
+| 2 | `feat/issue-46-2` | `feat/issue-46-1` | el de C3, el HEAD verificado | sí: `Closes #46` |
+
+- Cada PR pasa las mismas validaciones que el PR único: aprobación vigente, HEAD verificado y limpio, repo y `origin`, pedido sin cambios, hash del recibo y recuperación sin duplicar. Antes de escribir se arman todos los cuerpos (si uno no entra en GitHub, no se abre ninguno) y se comprueba que cada commit esté debajo del de arriba.
+- Push normal del SHA de cada grupo a su rama, sin force ni tags. La rama del worktree no se sube.
+- Título: `<título del issue> · PR k/n: <título del grupo>`.
+- El cuerpo es el mismo Markdown del PR único (ver «Cuerpo del PR draft»), con su encabezado propio: `Refs #N` o `Closes #N` y la línea del stack. Ejemplo: ``Stack: PR 2 de 2 · pasos C3 · sobre #123 (rama `feat/issue-46-1`)``. El texto de cada PR dice si cierra el issue o no.
+- Sólo el último PR cierra el issue (`Closes #N`); los de abajo lo referencian (`Refs #N`). GitHub lo cierra cuando ese PR entra en `main`.
+- Si la publicación se corta a mitad, volver a publicar recupera los PRs ya abiertos (por rama, base, head y cuerpo exactos) y sigue con el que falta. Un PR ajeno en una rama del stack frena; los de abajo ya abiertos quedan.
+
+### Cómo se ve
+
+La sección del issue suma **Stack de PRs**: cada PR con su número (link), base, pasos y estado (`sin abrir`, `draft`, `abierto` o `mergeado`). Antes de publicar muestra el plan. El progreso (pantalla 6 y `/omi-progress`) y la revisión de la receta muestran las mismas líneas en texto plano.
+
+```
+### Stack de PRs
+- **PR 1 de 2** · https://github.com/chichex/omi-code/pull/123 · base `main` · pasos C1, C2 · draft · Modelo y estado
+- **PR 2 de 2** · https://github.com/chichex/omi-code/pull/124 · base `feat/issue-46-1` (#123) · pasos C3 · draft · Vista
+```
+
+### Cómo se actualiza
+
+`/omi-work stack` (o el agente, con `omi_workflow` `action: "stack"`) deja el stack al día. Sigue la política del push: con `push_pr: auto` no pregunta y avisa qué hace; con `push_pr: ask` pide el sí antes de leer GitHub. Lee cada PR en GitHub y va de abajo hacia arriba:
+
+- **Cambió el de abajo.** Ejemplo: una persona sube un commit de review a `…-1`. Lo mergea en `…-2` con un commit de merge y hace push normal de `…-2`. Sigue hacia arriba: `…-2` en `…-3`, y así.
+- **El de abajo se mergeó a `main`**, también con squash. Al de arriba le mergea `main` y lo re-apunta con `gh pr edit --base main`. El merge usa como base la punta final del PR mergeado: así sus propios cambios, que `main` trae aplastados en un commit, no chocan. Ejemplo: C3 cambia una línea que agregó C1; un `git merge main` común chocaría, este no.
+- **Nada cambió:** no escribe nada y lo dice. Correrlo otra vez no repite nada.
+
+Nunca rebase ni force push, nunca mergea un PR, nunca corre workflows. Los merges se calculan con `git merge-tree` y `git commit-tree`: no tocan el worktree ni su índice. Todo se calcula antes de la primera escritura en GitHub.
+
+Frena y pide una persona si:
+
+- un merge tiene conflicto: se resuelve a mano con `git merge`, se sube y se vuelve a correr;
+- un PR del stack está cerrado sin mergear, o se mergeó en una rama que no es `main`;
+- una rama del stack se reescribió (ya no contiene el commit publicado);
+- GitHub rechaza el push (la rama cambió mientras tanto o está protegida). Si ya había subido un PR de abajo, esa rama queda bien: volver a correr sigue desde ahí.
+
+### Límites
+
+- Sólo la ruta Con spec arma un stack. La base es siempre `main`, como en el PR único.
+- El harness no implementa los cambios de review de un PR de abajo: los hace una persona (u otro trabajo) y el harness los propaga hacia arriba.
+- Un paso de corrección de una vuelta va al último PR, aunque arregle algo de uno de abajo.
+- Si `main` avanza, no se mergea en el PR 1 ni en los que ya están sobre `main`: eso sigue el flujo normal de GitHub.
+- El merge con base fija necesita Git 2.40 o superior.
+- No hay lock con GitHub: otro puede escribir entre la lectura y el push. El push normal lo rechaza y se vuelve a correr.
+- La línea «sobre #N» del cuerpo queda como al abrir el PR. La base vigente la muestran GitHub y la sección del issue.
 
 ## Persistencia, sesiones y recuperación
 
@@ -306,7 +413,7 @@ Los cambios externos del filesystem no se revierten. Una operación ejecutada si
 
 ## GitHub sin sobrescribir el pedido
 
-Crear el issue de un pedido nuevo es la única escritura en GitHub antes de Explorar. Pasa después de clasificar y decidir harness, sólo con el sí (o `arranque: auto` de Foundations), una vez, con el título y el cuerpo que mostró el diálogo. Si GitHub no confirma la creación, no se reintenta: hay que revisar el repo antes de volver a pedirlo, para no duplicarlo.
+Crear el issue de un pedido nuevo es la única escritura en GitHub antes de Explorar. Pasa después de clasificar y decidir harness, una vez, con el título y el cuerpo del pedido: sin preguntar por defecto, o sólo con el sí si Foundations dice `arranque: ask`. Si GitHub no confirma la creación, no se reintenta: hay que revisar el repo antes de volver a pedirlo, para no duplicarlo.
 
 El harness no crea comentarios en el issue. Su estado va en una **sección administrada al final del cuerpo**, entre `<!-- omi:harness:start -->` y `<!-- omi:harness:end -->`. El pedido humano queda arriba, intacto byte a byte. La sección es markdown: ruta y etapa, receta con sus casos D, pasos, decisiones, acuerdos del chat, una tabla de evidencia (caso, resultado, HEAD) y los avisos de los lentes con sus hallazgos. Ejemplo:
 
@@ -324,7 +431,7 @@ El harness no crea comentarios en el issue. Su estado va en una **sección admin
 | D1 | ✅ exit 0 | cae0b33 |
 ```
 
-- **Cuándo se escribe:** al aprobar una receta, al registrar un acuerdo y al abrir el PR draft. Nunca antes del primer sí a una receta: sin receta aprobada sólo se actualiza una sección que ya existe. Por ejemplo, tras un acuerdo que rehace la receta, la sección se actualiza enseguida y muestra la receta «en revisión» hasta el nuevo sí. Si no se puede escribir (sin red, límite de GitHub, marcadores rotos), OMI avisa y el trabajo sigue: el estado local es la fuente de verdad.
+- **Cuándo se escribe:** al aprobar una receta, al registrar un acuerdo, al abrir el PR draft (o el stack) y al actualizar un stack que cambió. Nunca antes del primer sí a una receta: sin receta aprobada sólo se actualiza una sección que ya existe. Por ejemplo, tras un acuerdo que rehace la receta, la sección se actualiza enseguida y muestra la receta «en revisión» hasta el nuevo sí. Si no se puede escribir (sin red, límite de GitHub, marcadores rotos), OMI avisa y el trabajo sigue: el estado local es la fuente de verdad.
 - **Cómo se escribe:** se relee el cuerpo justo antes de escribir y se reemplaza sólo lo que está entre los marcadores. Sin marcadores, la sección se agrega al final. No se escribe si el pedido cambió desde el último contraste, y la escritura se confirma releyendo; no se reintenta sola. Una sección igual no se vuelve a escribir.
 - **Riesgo residual:** GitHub no ofrece CAS para el cuerpo del issue. Una edición humana que cae entre esa relectura y la escritura se pierde del cuerpo; GitHub la conserva en el historial de ediciones del issue.
 - **Marcadores:** sólo cuentan solos en su línea, desde la primera columna y fuera de un bloque de código cercado. Una mención en el pedido (en línea, entre backticks, indentada o dentro de una cerca ```` ``` ```` o `~~~`) es texto humano. Ejemplo: un pedido que muestra el par de marcadores en un bloque de código no se pisa, sigue en el pedido que se contrasta y no frena los puntos de control. La cerca cierra con su mismo carácter y al menos su largo; una cerca sin cerrar no esconde marcadores, así la sección que OMI agrega después se sigue encontrando. Marcadores repetidos, sueltos, invertidos o desconocidos fuera de un bloque no se adivinan: OMI no escribe ni contrasta el pedido (los puntos de control fallan) y pide dejar un solo par o borrar la sección. Un par bien formado escrito por una persona fuera de un bloque se toma como la sección.
@@ -336,15 +443,58 @@ El harness no crea comentarios en el issue. Su estado va en una **sección admin
 
 El cuerpo de un issue admite 65.536 caracteres. Si el pedido más la sección no entran, la sección se resume y lo dice en un aviso al principio: primero la evidencia queda con la última prueba de cada caso y cada lente con su primer hallazgo; si tampoco entra, queda una sección mínima (ruta, etapa y veredictos de los lentes) que nombra lo que omite. Nada se corta en silencio y el pedido nunca se toca. Si ni la mínima entra, no se escribe y OMI avisa.
 
-La publicación guarda un recibo pendiente antes del push, valida repositorio/origin/branch y usa el SHA inmutable aprobado, sin force ni tags. Recupera sólo un draft abierto de esa rama/base/SHA con identidad y cuerpo exactos de este trabajo. Un PR ajeno o editado por una persona requiere intervención; no se sobrescribe ni se duplica. El PR draft conserva su propio cuerpo, con el artefacto completo del trabajo: se publica entero o falla pidiendo dividir la tarea; no se aprueba una spec silenciosamente truncada.
+### Cuerpo del PR draft
+
+El PR draft lleva su propio cuerpo, en Markdown legible. No es la sección del issue: trae también la receta completa, las inferencias y la evidencia. Ejemplo, recortado:
+
+````md
+<!-- omi-development:pr identity=… source=… head=… artifact=… -->
+Closes #60
+
+_PR draft preparado por OMI para el issue #60. Requiere revisión humana y nunca se mergea solo. Crear el draft no cierra el issue: GitHub lo cierra cuando una persona mergea este PR a la rama default._
+
+## Resumen
+- **Issue:** #60 · Corregir el formato de los PRs del harness
+- **Etapa:** Abrir PR draft · **Estado:** activo
+
+## Verificación
+| Caso | Comando | Resultado | HEAD |
+|---|---|---|---|
+| **D1** Renderer | `npm test` | ✅ exit 0 | `1919141` |
+| **D2** Sesión | `node --test test/x.test.ts` | ⬜ sin correr | — |
+
+## Advertencias
+- **Lentes:** asesoran; …
+  - **Seguridad:** ⚠️ unknown
+
+<details>
+<summary>Receta, spec y playbook</summary>
+…
+</details>
+````
+
+- **Arriba, lo que se revisa:** resumen, alcance (con los pasos y sus commits), verificación y advertencias. La verificación lista cada caso D con su última corrida y cada gate con la suya. Un caso que no corrió dice `⬜ sin correr`, no se muestra como pasado. Lleva exit code y HEAD, nunca la salida de los comandos.
+- **En `<details>`:** receta, spec y playbook; inferencias y respuestas; acuerdos del chat; la evidencia completa (reproducción, rojo, verde, verificación y gates); las revisiones de los lentes y el pedido original.
+- **Sin JSON y nada activo:** los datos pasan por el mismo escape que la sección del issue: no enlazan, no mencionan ni referencian. El pedido es Markdown de una persona: va citado en un bloque de código, con una cerca más larga que cualquier racha de backticks. Ejemplo: un pedido con `Closes #999` o `@octocat` se ve tal cual y no cierra ni avisa nada. Un `</details>` de los datos no cierra una sección y un `<!-- omi-development:` de los datos no imita el marcador.
+- **Cierre del issue:** la segunda línea es `Closes #N`, sólo para el issue del trabajo, validado como del mismo repo que el PR (origin y `gh` apuntan ahí). Va fuera de citas y bloques. En un stack la lleva sólo el último PR; los de abajo llevan `Refs #N` (ver «Stack de PRs»). Crear el draft no cierra nada: GitHub cierra el issue cuando una persona mergea el PR a la rama default. OMI no corre `gh issue close` ni mergea, y no hay soporte entre repos.
+- **Límite:** GitHub admite 65.536 caracteres. OMI mide bytes UTF-8 y cuenta el marcador más largo posible. Evidencia, avisos y revisiones se acotan por líneas enteras y lo dicen (`Presentación acotada: se muestran N de M …`). Receta, spec, inferencias, acuerdos y pedido van enteros, o falla pidiendo dividir la tarea.
+- **Hash:** el recibo pendiente guarda el hash del cuerpo del PR único, todo lo que sigue al marcador, `Closes` incluido. El marcador liga trabajo, pedido, HEAD y ese recibo, y su `artifact=` es el hash de todo lo que le sigue en ese PR. En el PR único los dos coinciden. En un stack, cada PR cambia sólo su encabezado, que sale del stack del recibo y del número del PR de abajo, y la recuperación compara su cuerpo exacto.
+
+### Publicar y recuperar
+
+- **El sí es sobre el cuerpo exacto.** Con `push_pr: ask`, la TUI abre la revisión navegable (secciones Publicación y Cuerpo del PR) y RPC trae el cuerpo entero en el diálogo. Es el mismo texto que recibe `gh`. Sin UI interactiva falla sin efectos. Con `push_pr: auto` publica sin preguntar y avisa qué hizo. Si el trabajo cambió en otra ventana durante la revisión, el sí no vale.
+- **Recibo y SHA:** la publicación guarda un recibo pendiente antes del push, valida repositorio/origin/branch y usa el SHA inmutable aprobado, sin force ni tags. Recupera sólo un draft abierto de esa rama/base/SHA con identidad y cuerpo exactos de este trabajo.
+- **Recibo de un cuerpo anterior:** un recibo pendiente cuyo hash no es el del cuerpo actual nunca se publica con ese cuerpo. Ejemplo: el de una versión de OMI con el formato viejo (`Refs #N` y JSON). Retomar no lo migra ni lo publica. Al publicar, OMI regenera el cuerpo y sigue la política `push_pr` vigente: con `ask` muestra el cuerpo nuevo entero y pide el sí (un no deja el recibo como estaba); con `auto` lo renueva y publica sin preguntar. La renovación nombra el recibo que reemplaza y exige el mismo HEAD.
+- **PR ya abierto:** un PR ajeno, editado por una persona o de una publicación anterior con otro cuerpo requiere intervención: no se edita, no se cierra ni se duplica. Ejemplo: un draft abierto con el formato viejo bloquea la publicación hasta que una persona lo resuelva en GitHub.
+- **Efectos que no se revierten solos:** revertir el código de OMI no borra cuerpos ya publicados ni reabre un issue que GitHub cerró al mergear. Eso es una intervención humana aparte.
 
 No hay garantía de atomicidad entre cambios humanos del issue y todas las acciones posteriores de Git/GitHub. Los checkpoints detectan cambios; no hay lock distribuido sobre la intención de la persona.
 
 ## Progreso en la TUI
 
-`PROGRESO · #N` muestra ruta, etapa, actividad, pasos, checks observados y bloqueos. El detalle muestra también Foundations: revisión, origen, políticas y catálogo. Los eventos de lectura, comandos, preguntas y lentes actualizan la actividad sin esperar el refresco de recursos. El detalle incluye preguntas, evidencia, lentes e intentos anteriores. No convierte una tool exitosa ni un workflow verde de Actions en aprobación del PR.
+`PROGRESO · #N` muestra ruta, etapa, actividad, pasos, checks observados y bloqueos. El detalle muestra también Foundations: revisión, origen, tres políticas y patrones de confirmación verticales. Los eventos de lectura, comandos, preguntas y lentes actualizan la actividad sin esperar el refresco de recursos. El detalle incluye preguntas, evidencia, lentes e intentos anteriores. No convierte una tool exitosa ni un workflow verde de Actions en aprobación del PR.
 
-El recorrido usa el catálogo de fases del harness y sus decisiones reales de ruta, no una lista paralela del renderer. Incluye pendientes, fases condicionales (Diagnóstico/Spec antes de conocer la ruta), no aplicables y los finales alternativos PR draft abierto/cierre sin cambio. `>` identifica la actual; los símbolos y textos distinguen avance sin depender del color. Un rojo esperado no hace fallar Implementar; los checks fallidos o interrumpidos conservan su significado observado. Un aviso de lente marca Verificar como △ **Con avisos**, durante la etapa y después de cumplida; sólo un `fail` de Seguridad la marca como fallida. La lateral muestra cuántos avisos hay y la pantalla 6 y `/omi-progress` los listan, uno por lente. El artefacto del issue y el PR draft traen la sección **Avisos de los lentes**, con el estado de cada lente pedido y sus hallazgos.
+El recorrido usa el catálogo de fases del harness y sus decisiones reales de ruta, no una lista paralela del renderer. Incluye pendientes, fases condicionales (Diagnóstico/Spec antes de conocer la ruta), no aplicables y los finales alternativos PR draft abierto/cierre sin cambio. `>` identifica la actual; los símbolos y textos distinguen avance sin depender del color. Un rojo esperado no hace fallar Implementar; los checks fallidos o interrumpidos conservan su significado observado. Un aviso de lente marca Verificar como △ **Con avisos**, durante la etapa y después de cumplida; sólo un `fail` de Seguridad la marca como fallida. La lateral muestra cuántos avisos hay y la pantalla 6 y `/omi-progress` los listan, uno por lente. La sección del issue trae **Avisos de los lentes** y el PR draft los lleva en **Advertencias**, con el estado de cada lente pedido y sus hallazgos.
 
 **6 · Progreso**, por Ctrl 6, pestaña/clic, paleta o `/omi-workflow`, muestra el recorrido completo y separa **Previsto** de **Real**. Usa desplazamiento de la vista de sólo lectura (flechas, PgUp/PgDn, Home/End y rueda) y Esc vuelve a Chat. La lateral muestra las etapas cuando entran todas, nunca una lista parcial que oculte la actual; en panes bajos mantiene su resumen, bloqueos, contadores y los otros bloques, con acceso indicado a la pantalla 6, sin scroll lateral. `/omi-progress` conserva el detalle.
 
@@ -354,4 +504,4 @@ El panel sólo pertenece al cwd/worktree/rama correctos, se reinicia al cambiar 
 
 ## Verificación del cambio
 
-El arranque tiene sus propios tests, con Git, worktrees y sesiones reales y con GitHub y modelo falsos: pedido nuevo con un solo sí, issue existente sin duplicar, decir que no, token de un solo uso, guardas sin efectos y recarga sin kickoff. Los tests de pty real recorren el panel de issue existente y los tres resultados del pedido nuevo: harness, chat y falta de información. El del panel: Enter en Issues, el sí, Esc en la clasificación y el harness arrancado en el worktree. El del agente: un pedido en el chat, la tool, un turno que termina sin seguir, clasificar antes de crear el issue y antes del sí, reutilizar ese resultado y arrancar el harness en el worktree sólo después de confirmar. Los otros dos resultados continúan en el chat original sin recursos, con las tools normales y sin permisos nuevos. Los lentes tienen tests con Git real: la evidencia que reciben, los avisos que no frenan el PR draft, el bloqueo por un fail de Seguridad y un diff de más de 200.000 caracteres revisado por partes sin truncar, y ninguna llamada por encima del presupuesto, con la evidencia resumida y explícita cuando no entra. Los tests del flujo cubren las tres rutas con Git y comandos reales en repos temporales, modelos/GitHub falsos, consentimientos, invalidación, evidencia, recuperación, concurrencia, cancelación y panel estrecho/claro/oscuro. La sección del issue tiene cobertura del pedido byte a byte, marcadores rotos, contraste que la ignora, escape de contenido hostil (sin links, imágenes, autolinks, HTML ni menciones activos) y escrituras no confirmadas. Los acuerdos del chat, de citas aceptadas y rechazadas (modelo, tools, mensajes de OMI, inventadas y triviales). Las preguntas en tanda tienen tests del componente (lo que dibuja y cada tecla, también respuesta libre, elección múltiple, pestañas y cancelar), del contrato de `omi_ask` (esquema, sin UI, cancelar, opción frente a texto libre y el harness) y un PTY real que abre una tanda dentro del workspace, con resize y Esc. El creador de Foundations tiene tests del flujo con una UI falsa, sin KB, y los del arranque recorren sus tandas con teclas. Foundations tiene tests con un MCP falso por HTTP y el `createMcpExtension` real de Pi, que fallan si un bump de Pi cambia cómo se registran o ejecutan las tools MCP o cómo se reemplaza `builtin:mcp`; y cuentan los diálogos de aceptación, reutilización de permisos, cambio de etiqueta, `resume`, `replan`, rechazo, KB caída y bloque inválido o ajeno. La aprobación tiene cobertura específica de documento íntegro, comandos largos/multilínea y caracteres de control, navegación/resize/temas, decisiones negativas y revalidación durante la revisión. Una prueba con Pi en PTY real recorre 80×24, resize a 132×40 y vuelta, temas claro/oscuro, navegación hasta el final del comando, cancelar y aprobar explícitamente con GitHub falso; no es una evaluación visual humana. El empaquetado comprueba el binario instalado. No equivalen a una prueba contra GitHub/OMI real ni a una evaluación de calidad de modelos: esas pruebas requieren una persona.
+El arranque tiene sus propios tests, con Git, worktrees y sesiones reales y con GitHub y modelo falsos: pedido nuevo sin preguntar por defecto y con un solo sí con `arranque: ask`, issue existente sin duplicar, decir que no, token de un solo uso, guardas sin efectos y recarga sin kickoff. Los tests de pty real recorren el panel de issue existente y los tres resultados del pedido nuevo: harness, chat y falta de información. El del panel: Enter en Issues, el sí, Esc en la clasificación y el harness arrancado en el worktree. El del agente: un pedido en el chat, la tool, un turno que termina sin seguir, clasificar antes de crear el issue y antes del sí, reutilizar ese resultado y arrancar el harness en el worktree sólo después de confirmar. Los otros dos resultados continúan en el chat original sin recursos, con las tools normales y sin permisos nuevos. Los lentes tienen tests con Git real: la evidencia que reciben, los avisos que no frenan el PR draft, el bloqueo por un fail de Seguridad y un diff de más de 200.000 caracteres revisado por partes sin truncar, y ninguna llamada por encima del presupuesto, con la evidencia resumida y explícita cuando no entra. Los tests del flujo cubren las tres rutas con Git y comandos reales en repos temporales, modelos/GitHub falsos, consentimientos, invalidación, evidencia, recuperación, concurrencia, cancelación y panel estrecho/claro/oscuro. El cuerpo del PR draft tiene cobertura de su formato, de un único `Closes` fuera de bloques con datos hostiles (cierres falsos, menciones, HTML, `</details>`, marcadores, controles), de los presupuestos con aviso, del cuerpo exacto que recibe `gh` y se muestra antes del sí, y del recibo pendiente de un cuerpo anterior con `ask` y con `auto`. La sección del issue tiene cobertura del pedido byte a byte, marcadores rotos, contraste que la ignora, escape de contenido hostil (sin links, imágenes, autolinks, HTML ni menciones activos) y escrituras no confirmadas. El stack tiene tests del reducer (agrupación, plan de ramas y bases, PRs abiertos, actualización sin cambiar la identidad), de la publicación contra un GitHub falso (orden, bases, `Refs`/`Closes`, recuperación sin duplicar y validaciones por PR), de la actualización con Git real contra un remoto bare local (merge del de abajo, squash a `main` sin conflicto, re-apuntar, segunda corrida sin cambios, conflicto, PR cerrado y rama reescrita) y un recorrido completo con dos PRs encadenados. Los acuerdos del chat, de citas aceptadas y rechazadas (modelo, tools, mensajes de OMI, inventadas y triviales). Las preguntas en tanda tienen tests del componente (lo que dibuja y cada tecla, también respuesta libre, elección múltiple, pestañas y cancelar), del contrato de `omi_ask` (esquema, sin UI, cancelar, opción frente a texto libre y el harness) y un PTY real que abre una tanda dentro del workspace, con resize y Esc. El panel de Foundations tiene tests de precarga v2 frente a aceptación, borradores/errores, pegado largo e invisible, foco, wrap/scroll, cancelar, revisión, temas y resize 80×24/132×40. Su integración usa Git temporal y KB falsa: apertura sin escrituras, reemplazo v1 acotado, edición sin ejecución/grant y reintento explícito. Los tests de persistencia cubren retry concurrente, límite de documento, aceptación pendiente frente a pin nuevo y fallos parciales sin permisos falsos. Los del arranque verifican que sin Foundations no se ofrece ni se pregunta nada. Foundations tiene tests con un MCP falso por HTTP y el `createMcpExtension` real de Pi, que fallan si un bump de Pi cambia cómo se registran o ejecutan las tools MCP o cómo se reemplaza `builtin:mcp`; y cuentan los avisos de aceptación, reutilización de permisos, cambio de etiqueta, `resume`, `replan`, rechazo, KB caída y bloque inválido o ajeno. La aprobación tiene cobertura específica de documento íntegro, comandos largos/multilínea y caracteres de control, navegación/resize/temas, decisiones negativas y revalidación durante la revisión. Una prueba con Pi en PTY real recorre 80×24, resize a 132×40 y vuelta, temas claro/oscuro, navegación hasta el final del comando, cancelar y aprobar explícitamente con GitHub falso; no es una evaluación visual humana. El empaquetado comprueba el binario instalado. No equivalen a una prueba contra GitHub/OMI real ni a una evaluación de calidad de modelos: esas pruebas requieren una persona.

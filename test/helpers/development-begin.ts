@@ -11,6 +11,9 @@ import { developmentHarnessExtension } from "../../src/tui/development.ts";
 import { tempDir, testIo } from "./io.ts";
 import { emitLikePi } from "./pi-events.ts";
 import type { KbClient } from "../../src/tui/kb-client.ts";
+import { foundationsDir } from "../../src/harness/foundations-trust.ts";
+import type { FoundationsPolicy } from "../../src/harness/foundations.ts";
+import { acceptFoundations } from "./foundations.ts";
 
 type Handler = (event: unknown, ctx: ExtensionCommandContext) => unknown;
 interface Sent { text: string; options?: { expandPromptTemplates?: boolean } }
@@ -18,7 +21,8 @@ export interface Instance { stale: boolean; manager: SessionManager; ctx: Extens
 const TRIAGE = JSON.stringify({ type: "fix", summary: "Corregir el valor", rationale: "Describe un bug", scope: [], acceptanceCriteria: [], questions: [] });
 const ASSESSMENT = { scope: "crosscutting", impact: "local-behavior", reversible: "yes", verification: "clear", risk: "low", riskAreas: [], rationale: "Requiere seguimiento de varios puntos." };
 
-export async function beginFixture(t: TestContext, options: { args?: readonly string[]; trusted?: boolean; authenticated?: boolean; persistent?: boolean; busy?: boolean; noMain?: boolean; kb?: KbClient } = {}) {
+/** `foundations`: una revisión aceptada con esas políticas. Sin ella, vale el default: nada pregunta. */
+export async function beginFixture(t: TestContext, options: { args?: readonly string[]; trusted?: boolean; authenticated?: boolean; persistent?: boolean; busy?: boolean; noMain?: boolean; kb?: KbClient; foundations?: FoundationsPolicy } = {}) {
 	const home = await realpath(await tempDir(t)); const root = join(home, "repo"); await mkdir(root); const sessions = join(home, "sessions");
 	const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 	git("init", "-b", options.noMain ? "trunk" : "main"); git("config", "user.email", "test@example.test"); git("config", "user.name", "Test"); git("config", "commit.gpgsign", "false"); git("config", "core.hooksPath", "/dev/null"); git("remote", "add", "origin", "https://github.com/test/repo.git");
@@ -53,6 +57,7 @@ export async function beginFixture(t: TestContext, options: { args?: readonly st
 		}
 		throw new Error(`Llamada remota no prevista: ${args.join(" ")}`);
 	} };
+	if (options.foundations) await acceptFoundations(foundationsDir(home), options.foundations, options.kb ? { kbUrl: options.kb.url } : {});
 	const queue: { instance: Instance; text: string }[] = [];
 	let current: Instance;
 	async function attach(manager: SessionManager): Promise<Instance> {

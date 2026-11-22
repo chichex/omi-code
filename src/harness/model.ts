@@ -8,7 +8,7 @@ import { validateLifecycleState } from "./lifecycle-invariants.ts";
 import { validateCorrectionWorkflow } from "./correction-invariants.ts";
 
 // Topes compartidos por el esquema y el reducer: el reducer los respeta antes de validar.
-export const MAX_HISTORY = 1000; export const MAX_STEPS = 50; export const MAX_ATTEMPTS = 100; export const MAX_EVIDENCE = 1000; export const MAX_REVIEWS = 100; export const MAX_AGREEMENTS = 50; export const MAX_GRANTS = 200;
+export const MAX_HISTORY = 1000; export const MAX_STEPS = 50; export const MAX_STACK = 10; export const MAX_ATTEMPTS = 100; export const MAX_EVIDENCE = 1000; export const MAX_REVIEWS = 100; export const MAX_AGREEMENTS = 50; export const MAX_GRANTS = 200;
 export const text = (maxLength = 4000) => Type.String({ minLength: 1, maxLength, pattern: "\\S" });
 const list = () => Type.Array(text(), { maxItems: 100 });
 const nullableText = () => Type.Union([text(8192), Type.Null()]);
@@ -51,7 +51,11 @@ export const RecipeSchema = Type.Object({ ...PlanSchema.properties, route: Type.
 export type Recipe = Static<typeof RecipeSchema>;
 export const StepInputSchema = Type.Object({ id: text(32), title: text(), cases: Type.Array(text(32), { minItems: 1, maxItems: 100 }) }, { additionalProperties: false });
 export type StepInput = Static<typeof StepInputSchema>;
-export const SpecSchema = Type.Object({ why: text(), steps: Type.Array(StepInputSchema, { minItems: 1, maxItems: 50 }), playbook: Type.Array(text(), { minItems: 1, maxItems: 100 }) }, { additionalProperties: false });
+// Stack de PRs: grupos contiguos de pasos C, uno por PR. Sin stack, el trabajo va en un solo PR.
+const stackSteps = () => Type.Array(text(32), { minItems: 1, maxItems: MAX_STEPS });
+export const StackGroupSchema = Type.Object({ title: text(200), steps: stackSteps() }, { additionalProperties: false });
+export const SpecSchema = Type.Object({ why: text(), steps: Type.Array(StepInputSchema, { minItems: 1, maxItems: 50 }), playbook: Type.Array(text(), { minItems: 1, maxItems: 100 }),
+	stack: Type.Optional(Type.Array(StackGroupSchema, { minItems: 2, maxItems: MAX_STACK })) }, { additionalProperties: false });
 export type Spec = Static<typeof SpecSchema>;
 export const StepSchema = Type.Object({ ...StepInputSchema.properties,
 	status: Type.Union([Type.Literal("pending"), Type.Literal("active"), Type.Literal("done")]), red: nullableText(), green: nullableText(), commit: nullableText(),
@@ -70,10 +74,17 @@ export type Review = Static<typeof ReviewSchema>;
 // Un acuerdo de alcance dicho por la persona en el chat: su cita textual (verificada por el host) y lo acordado.
 export const AgreementSchema = Type.Object({ quote: text(2000), summary: text(2000), replan: Type.Boolean(), phase: PhaseSchema, at: text(100) }, { additionalProperties: false });
 export type Agreement = Static<typeof AgreementSchema>;
+// Un PR del stack: su rama, la base sobre la que se abre y el commit del último paso de su grupo.
+export const StackPullSchema = Type.Object({ title: text(200), steps: stackSteps(), branch: text(256), base: text(256), head: text(128),
+	number: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]), url: Type.Union([text(2048), Type.Null()]),
+	status: Type.Union([Type.Literal("planned"), Type.Literal("draft"), Type.Literal("open"), Type.Literal("merged")]) }, { additionalProperties: false });
+export type StackPull = Static<typeof StackPullSchema>;
+const stackPulls = () => Type.Optional(Type.Array(StackPullSchema, { minItems: 2, maxItems: MAX_STACK }));
+// head, url y number son siempre los del PR de arriba (el único, sin stack).
 export const PublicationSchema = Type.Union([
 	Type.Object({ status: Type.Literal("none") }, { additionalProperties: false }),
-	Type.Object({ status: Type.Literal("pending"), head: text(128), bodyHash: text(128), at: text(100) }, { additionalProperties: false }),
-	Type.Object({ status: Type.Literal("opened"), head: text(128), url: text(2048), number: Type.Integer({ minimum: 1 }) }, { additionalProperties: false }),
+	Type.Object({ status: Type.Literal("pending"), head: text(128), bodyHash: text(128), at: text(100), stack: stackPulls() }, { additionalProperties: false }),
+	Type.Object({ status: Type.Literal("opened"), head: text(128), url: text(2048), number: Type.Integer({ minimum: 1 }), stack: stackPulls() }, { additionalProperties: false }),
 ]);
 // Esquema del binario anterior: cerrado y sin fases/campos de lifecycle.
 export const WorkflowV1Schema = Type.Object({
@@ -129,6 +140,13 @@ export function migrateWorkflow(value: unknown): WorkflowV2 {
  const old = structuredClone(value);
  return { ...old, version: 2, lifecycle: { status: "disabled" }, publicationFormat: 1,
   pullRequest: old.publication.status === "opened" ? { number: old.publication.number, url: old.publication.url, head: old.publication.head, branch: old.checkout.branch, base: "main", ownership: "unadopted" } : null };
+}
+// Identidad de un issue de GitHub: https://github.com/<owner>/<repo>/issues/<número>, sin credenciales,
+// query ni fragmento. Devuelve owner/repo: el PR y su Closes viven en ese mismo repositorio.
+export function issueRepository(url: string, number: number): string {
+	const parsed = new URL(url); const match = /^\/([^/]+\/[^/]+)\/issues\/(\d+)$/.exec(parsed.pathname);
+	if (parsed.protocol !== "https:" || parsed.host !== "github.com" || parsed.username || parsed.password || parsed.search || parsed.hash || !match || Number(match[2]) !== number) throw new Error("Identidad de issue no válida");
+	return match[1]!;
 }
 export const sourceHash = (title: string, body: string): string => createHash("sha256").update(JSON.stringify({ title, body })).digest("hex");
 export const artifactHash = (value: unknown): string => createHash("sha256").update(JSON.stringify(value)).digest("hex");

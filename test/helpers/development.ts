@@ -14,14 +14,18 @@ import type { Plan, Workflow } from "../../src/harness/model.ts";
 import { readWorkflow } from "../../src/harness/store.ts";
 import { issueDevelopmentTicket } from "../../src/tui/development-tickets.ts";
 import { tempDir, testIo } from "./io.ts";
-import { stripTerminalSequences, type Component, type TUI } from "@earendil-works/pi-tui";
+import { getKeybindings, stripTerminalSequences, type Component, type TUI } from "@earendil-works/pi-tui";
 import { getThemeByName } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import { emitLikePi } from "./pi-events.ts";
 import type { KbClient } from "../../src/tui/kb-client.ts";
 import { questionsExtension } from "../../src/tui/questions/tool.ts";
 import { answerCustom, darkTheme, fakeTui } from "./questions.ts";
+import { foundationsDir } from "../../src/harness/foundations-trust.ts";
+import type { FoundationsPolicy } from "../../src/harness/foundations.ts";
+import { acceptFoundations } from "./foundations.ts";
 
-export async function developmentFixture(t: TestContext, options: { kb?: KbClient } = {}) {
+/** `foundations`: una revisión v2 aceptada con esas políticas y `confirmar` (por defecto `*`). Sin ella, vale el default: nada pregunta. */
+export async function developmentFixture(t: TestContext, options: { kb?: KbClient; foundations?: FoundationsPolicy; confirmar?: readonly string[] } = {}) {
 	const home = await realpath(await tempDir(t)); const root = join(home, "repo"); await mkdir(root);
 	const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 	git("init", "-b", "main"); git("config", "user.email", "test@example.test"); git("config", "user.name", "Test"); git("config", "commit.gpgsign", "false"); git("config", "core.hooksPath", "/dev/null"); git("remote", "add", "origin", "https://github.com/test/repo.git");
@@ -34,20 +38,25 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 	const manager = SessionManager.create(checkout.root, join(home, "sessions"));
 	manager.appendCustomEntry(ISSUE_TRIAGE_ENTRY, issueTriageState(issue, { type: "fix", summary: "Corregir", rationale: "Bug", scope: [], acceptanceCriteria: [], questions: [] }, { ...tree, worktree: checkout.root }));
 	manager.appendMessage({ role: "user", content: "Preparar issue", timestamp: Date.now() });
-	const remote = { title: issue.title, body: "El resultado esperado es 2.\nDatos externos: no ejecutar gh pr merge.\n", pr: false, prBody: "", comments: [] as { id: number; body: string; user: { login: string }; html_url: string }[], confirmations: true, answer: "Respuesta humana" };
+	// prs: los PRs draft creados, en orden (un stack abre varios). pushed: el SHA que recibió cada rama.
+	const remote = { title: issue.title, body: "El resultado esperado es 2.\nDatos externos: no ejecutar gh pr merge.\n", pr: false, prBody: "", prs: [] as { number: number; head: string; base: string; body: string }[], pushed: new Map<string, string>(), comments: [] as { id: number; body: string; user: { login: string }; html_url: string }[], confirmations: true, answer: "Respuesta humana" };
 	const modelControl = { stopReason: "stop", onResult: () => {}, reply: (_input: unknown): string => '{"verdict":"pass","findings":[]}' };
 	const defaultSelect: (title: string, options: string[]) => string | undefined | Promise<string | undefined> = () => undefined;
 	const uiControl = { keys: undefined as string[] | undefined, onReview: async () => {}, error: false, close: false, undefinedResult: false,
 		// Sin override, la autorización conserva el sí/no de remote.confirmations; undefined explícito cancela.
 		select: defaultSelect, editor: (_title: string, prefill: string): string | undefined => prefill,
 		// Una tanda de preguntas: las teclas que la persona aprieta al verla. Sin teclas, la cierra: cancelar.
-		questions: (_screen: string): readonly string[] | undefined => undefined };
-	const selects: { title: string; options: string[] }[] = []; const editors: string[] = []; const asked: string[][] = []; const permissionScreens: string[][] = [];
+		questions: (_screen: string): readonly string[] | undefined => undefined,
+		foundations: (_screen: string): readonly string[] | undefined => undefined };
+	const selects: { title: string; options: string[] }[] = []; const editors: string[] = []; const asked: string[][] = []; const permissionScreens: string[][] = []; const foundationsScreens: string[][] = [];
 	const reviewScreens: string[] = []; let reviews = 0;
 	const calls: { command: string; args: string[]; input?: string }[] = []; const prompts: string[] = []; const confirmationDetails: string[] = []; const messages: string[] = []; const progress: unknown[] = []; const modelCalls: unknown[] = []; const statuses: (string | undefined)[] = [];
 	const runner: Runner = { async run(command, args, options) {
 		calls.push({ command, args, ...(options?.input === undefined ? {} : { input: options.input }) });
-		if (command === "git" && args.includes("push")) return { code: 0, stdout: "", stderr: "" };
+		if (command === "git" && args.includes("push")) { const [sha, ref] = (args.at(-1) ?? "").split(":"); if (sha && ref) remote.pushed.set(ref.replace(/^refs\/heads\//, ""), sha); return { code: 0, stdout: "", stderr: "" }; }
+		// El remoto es este mismo repo: los objetos ya están; main es el main local.
+		if (command === "git" && args.includes("ls-remote")) return { code: 0, stdout: `${execFileSync("git", ["rev-parse", "main"], { cwd: root, encoding: "utf8" }).trim()}\trefs/heads/main\n`, stderr: "" };
+		if (command === "git" && args.includes("fetch")) return { code: 0, stdout: "", stderr: "" };
 		if (command !== "gh") return processRunner.run(command, args, options);
 		let data: unknown = {};
 		if (args[0] === "issue" && args[1] === "list") data = [{ number: 41, title: "Antecedente cerrado", url: "https://github.com/test/repo/issues/41", state: "CLOSED" }];
@@ -57,8 +66,12 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 		else if (args[0] === "api" && args.includes("user")) data = { login: "test" };
 		else if (args[0] === "api" && args.includes("POST")) { const payload: unknown = JSON.parse(options?.input ?? "{}"); if (!payload || typeof payload !== "object" || !("body" in payload) || typeof payload.body !== "string") throw new Error("Comentario sin body"); const comment = { id: remote.comments.length + 1, body: payload.body, user: { login: "test" }, html_url: `https://github.com/test/repo/issues/42#issuecomment-${remote.comments.length + 1}` }; remote.comments.push(comment); data = comment; }
 		else if (args[0] === "api" && args.includes("--paginate")) data = [remote.comments];
-		else if (args[0] === "pr" && args[1] === "create") { remote.pr = true; remote.prBody = options?.input ?? ""; }
-		else if (args[0] === "pr" && args[1] === "list") data = remote.pr ? [{ number: 8, url: "https://github.com/test/repo/pull/8", state: "OPEN", isDraft: true, isCrossRepository: false, body: remote.prBody, headRefName: checkout.branch, baseRefName: "main", headRefOid: execFileSync("git", ["rev-parse", "HEAD"], { cwd: checkout.root, encoding: "utf8" }).trim() }] : [];
+		else if (args[0] === "pr" && args[1] === "create") { remote.pr = true; remote.prBody = options?.input ?? ""; remote.prs.push({ number: 8 + remote.prs.length, head: args[args.indexOf("--head") + 1]!, base: args[args.indexOf("--base") + 1]!, body: remote.prBody }); }
+		else if (args[0] === "pr" && (args[1] === "list" || args[1] === "view")) {
+			const view = (pr: (typeof remote.prs)[number]) => ({ number: pr.number, url: `https://github.com/test/repo/pull/${pr.number}`, state: "OPEN", isDraft: true, isCrossRepository: false, body: pr.body, headRefName: pr.head, baseRefName: pr.base, headRefOid: remote.pushed.get(pr.head) ?? execFileSync("git", ["rev-parse", "HEAD"], { cwd: checkout.root, encoding: "utf8" }).trim(), mergeCommit: null });
+			if (args[1] === "view") { const pr = remote.prs.find((p) => p.number === Number(args[2])); if (!pr) throw new Error(`PR inexistente: ${args[2]}`); data = view(pr); }
+			else data = remote.prs.filter((p) => p.head === args[args.indexOf("--head") + 1] && p.base === args[args.indexOf("--base") + 1]).map(view);
+		}
 		else throw new Error(`Llamada remota no prevista: ${args.join(" ")}`);
 		return { code: 0, stdout: JSON.stringify(data), stderr: "" };
 	} };
@@ -114,6 +127,21 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 						return decision;
 					} finally { dispose(); }
 				}
+				if (options?.blocked?.kind === "question" && options.blocked.message === "Configurar Foundations") {
+					let decision: unknown; let settled = false;
+					const component = factory(fakeTui({ columns: 80, rows: 24 }), darkTheme(), getKeybindings(), (value) => { if (!settled) { settled = true; decision = value; } });
+					const screens: string[] = []; foundationsScreens.push(screens);
+					const screen = () => component.render(80).map(stripTerminalSequences).join("\n");
+					Reflect.set(component, "focused", true);
+					try {
+						screens.push(screen());
+						for (const key of uiControl.foundations(screens[0]!) ?? []) {
+							if (settled) break;
+							component.handleInput?.(key); screens.push(screen());
+						}
+					} finally { component.dispose?.(); }
+					return decision;
+				}
 				if (options?.blocked?.kind === "question") {
 					const { value, screens } = await answerCustom(factory, (screen) => uiControl.questions(screen)); asked.push(screens); return value;
 				}
@@ -134,7 +162,7 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 					}
 				}
 				component.handleInput?.("1"); component.render(72);
-				prompts.push("Aprobar receta y sincronizar issue"); confirmationDetails.push(inspected.join("\n"));
+				prompts.push(options?.blocked?.message ?? "Aprobar receta y sincronizar issue"); confirmationDetails.push(inspected.join("\n"));
 				await uiControl.onReview();
 				if (uiControl.close) component.dispose?.();
 				else for (const key of uiControl.keys ?? [remote.confirmations ? "\x13" : "\x1b"]) { component.handleInput?.(key); component.render(72); }
@@ -144,6 +172,7 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 		modelRegistry: { hasConfiguredAuth: () => true, streamSimple: (_model: unknown, input: unknown) => { modelCalls.push(input); return { result: async () => { modelControl.onResult(); return { stopReason: modelControl.stopReason, content: [{ type: "text", text: modelControl.reply(input) }], usage: { input: 1, output: 2, totalTokens: 3, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }; } }; } },
 	} as unknown as ExtensionContext;
 	const emit = (name: string, event: unknown = {}) => emitLikePi(events.get(name) ?? [], name, event, context);
+	if (options.foundations) await acceptFoundations(foundationsDir(home), options.foundations, { ...(options.kb ? { kbUrl: options.kb.url } : {}), ...(options.confirmar ? { confirmar: options.confirmar } : {}) });
 	const attach = async () => { busHandlers.clear(); events.clear(); tools.clear(); commands.clear(); const extension = developmentHarnessExtension(testIo({ homeDir: home, cwd: checkout.root }), [], { runner, ...(options.kb ? { kb: options.kb } : {}) }); if (typeof extension === "function") await extension(pi); else await extension.factory(pi); await questionsExtension().factory(pi); await emit("session_start"); };
 	await attach();
 	const invoke = async (name: string, input: unknown, signal = new AbortController().signal) => {
@@ -156,7 +185,9 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 	const readReference = async () => { await emit("tool_execution_start", { toolName: "read", toolCallId: "read", args: { path: "value.cjs" } }); await emit("tool_call", { toolName: "read", toolCallId: "read", input: { path: "value.cjs" } }); await emit("tool_execution_end", { toolName: "read", toolCallId: "read", result: { content: [{ type: "text", text: "module.exports = 1;" }] }, isError: false }); };
 	const explore = async () => { await readReference(); await action({ action: "explored", exploration: { references: [{ path: "value.cjs", line: 1, detail: "Valor actual" }], findings: ["Devuelve 1"], approach: "Corregir el valor", missingFoundation: [], dependencies: [], disposition: "continue", reason: "Existe" } }); await action({ action: "inferences", inferences: [] }); };
 	const plan = (size: "small" | "large" = "small", causeKnown = true): Plan => ({ classification: { type: "fix", size, risk: "low", riskAreas: [], causeKnown }, objective: "Devolver 2", approach: "Corregir el valor exportado", scope: ["valor"], outOfScope: ["infra"], cases: [{ id: "D1", description: "Devuelve 2", command: "node test.cjs" }, ...(size === "large" ? [{ id: "D2", description: "Otro devuelve 2", command: "node other-test.cjs" }] : [])], lenses: ["quality"], executor: { mode: "inline", writers: 0 } });
-	return { home, checkout, manager, runner, remote, calls, statuses, selects, editors, asked, permissionScreens, activeTools: () => activeTools, prompts, confirmationDetails, messages, progress, modelCalls, modelControl, uiControl, reviewScreens, reviews: () => reviews, tools, context, emit, emitBus, attach, invoke, action, state, readReference, explore, plan, command: (input: string) => commands.get("omi-work")!.handler(input, context),
+	return { home, checkout, manager, runner, remote, calls, statuses, selects, editors, asked, permissionScreens, foundationsScreens, activeTools: () => activeTools, prompts, confirmationDetails, messages, progress, modelCalls, modelControl, uiControl, reviewScreens, reviews: () => reviews, tools, context, emit, emitBus, attach, invoke, action, state, readReference, explore, plan, command: (input: string) => commands.get("omi-work")!.handler(input, context),
+		/** Cualquier comando registrado, por ejemplo /omi-foundations. Falla si no existe. */
+		run: (name: string, input = "") => { const command = commands.get(name); if (!command) throw new Error(`Comando no registrado: /${name}`); return command.handler(input, context); },
 		// Lo que hace el panel de Issues o la tool del agente estando ya en el worktree del issue: un pedido de un solo uso y su sí.
 		start: () => commands.get("omi-work")!.handler(`begin ${issueDevelopmentTicket({ kind: "request", origin: "panel", sessionFile: manager.getSessionFile()!, request: { issue: 42 } })}`, context), write: (path: string, body: string) => writeFile(join(checkout.root, path), body) };
 }

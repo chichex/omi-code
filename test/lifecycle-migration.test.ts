@@ -7,7 +7,8 @@ import { Value } from "typebox/value";
 import * as model from "../src/harness/model.ts";
 import { createWorkflow, transition } from "../src/harness/state.ts";
 import { workflowPath, readWorkflow, updateWorkflow } from "../src/harness/store.ts";
-import { renderWorkflowArtifact, renderPullRequestBody } from "../src/harness/github.ts";
+import { renderPullRequestBody } from "../src/harness/github.ts";
+import { renderWorkflowArtifact } from "../src/harness/pr-body.ts";
 
 function legacy() {
  const source = { number: 42, title: "Legacy", body: "Pedido original\n", url: "https://github.com/acme/app/issues/42", hash: model.sourceHash("Legacy", "Pedido original\n") };
@@ -45,14 +46,14 @@ test("un trabajo nuevo usa v2 sin habilitar operaciones, y v2 incompleto/futuro 
  for (const value of [{ ...old, version: 2 }, { ...fresh, version: 3 }, { ...fresh, unexpected: true }, { ...fresh, lifecycle: { status: "enabled" } }]) assert.throws(() => model.parseWorkflow(JSON.stringify(value)), /inválido/);
 });
 
-test("pending conserva renderer/cuerpo/hash v1, incluso tras migrar y reiniciar", () => {
+// El formato del cuerpo es el de #64 (Markdown con Closes): migrar v1→v2 no lo cambia ni invalida el bodyHash pendiente.
+test("pending conserva renderer/cuerpo/hash, incluso tras migrar y reiniciar", () => {
  const old: model.Workflow = legacy(); old.publication = { status: "pending", head: "b".repeat(40), bodyHash: model.artifactHash(renderWorkflowArtifact(old)), at: "now" };
  const body = renderPullRequestBody(old);
- assert.equal(model.artifactHash(renderWorkflowArtifact(old)), "e701f46a8fd5d5b25466cb211aac974a1767f9dc0cd5b4821f83315b679860a8", "golden observado sobre renderer anterior a v2");
  const next = model.parseWorkflow(JSON.stringify(old));
  assert.equal(renderWorkflowArtifact(next), renderWorkflowArtifact(old)); assert.equal(renderPullRequestBody(next), body);
  assert.equal(renderPullRequestBody(model.parseWorkflow(JSON.stringify(next))), body);
- assert.match(body, /^Refs #42$/m); assert.doesNotMatch(body, /^Closes #42$/m);
+ assert.match(body, /^Closes #42$/m); assert.doesNotMatch(body, /^Refs #42$/m);
 });
 
 test("done/complete histórico sigue terminal y la identidad PR queda independiente, sin ownership inventado", () => {

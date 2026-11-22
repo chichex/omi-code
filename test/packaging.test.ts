@@ -1,45 +1,16 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { test, type TestContext } from "node:test";
-import { assetNames, currentPlatform } from "../src/upgrade/release.ts";
+import { test } from "node:test";
+import { INSTALL_SCRIPT, fakeRelease, installerEnv, runInstaller } from "./helpers/installer.ts";
 import { tempDir } from "./helpers/io.ts";
 
-const installScript = fileURLToPath(new URL("../install.sh", import.meta.url));
 const read = (path: string): Promise<string> => readFile(new URL(`../${path}`, import.meta.url), "utf8");
-
-function sha256(content: Buffer): string {
-	return createHash("sha256").update(content).digest("hex");
-}
-
-/** Publica en una carpeta lo mismo que una release, con scripts en vez de binarios. */
-async function fakeRelease(t: TestContext, options: { binary?: string; bundled?: string; tamper?: boolean } = {}): Promise<string> {
-	const dir = await tempDir(t);
-	const stage = await tempDir(t);
-	const names = assetNames(currentPlatform());
-	const bundled = options.bundled ?? "#!/bin/sh\necho 1.0.0\n";
-	await mkdir(join(stage, "theme"), { recursive: true });
-	await writeFile(join(stage, "theme/dark.json"), "x\n");
-	await writeFile(join(stage, "omi"), bundled, { mode: 0o755 });
-	await writeFile(join(dir, names.binary), options.binary ?? "#!/bin/sh\necho 1.0.0\n", { mode: 0o755 });
-	execFileSync("tar", ["-czf", join(dir, names.runtime), "-C", stage, "."]);
-	const lines: string[] = [];
-	for (const name of [names.binary, names.runtime]) lines.push(`${sha256(await readFile(join(dir, name)))}  ${name}`);
-	await writeFile(join(dir, "checksums.txt"), `${lines.join("\n")}\n`);
-	if (options.tamper === true) await writeFile(join(dir, names.binary), "#!/bin/sh\necho malo\n");
-	return dir;
-}
-
-function install(base: string, home: string) {
-	return spawnSync("sh", [installScript], { encoding: "utf8", env: { ...process.env, HOME: home, OMI_INSTALL_BASE: `file://${base}` } });
-}
 
 test("install.sh_instala binario y runtime en ~/.omi", async (t) => {
 	const home = await tempDir(t);
-	const result = install(await fakeRelease(t), home);
+	const result = runInstaller(await fakeRelease(t), home);
 	assert.equal(result.status, 0, result.stderr);
 	assert.equal(execFileSync(join(home, ".omi/bin/omi"), ["--version"], { encoding: "utf8" }), "1.0.0\n");
 	assert.equal((await stat(join(home, ".omi/runtime/theme/dark.json"))).isFile(), true);
@@ -67,16 +38,16 @@ if [ "$1" = release ] && [ "$2" = download ]; then
 fi
 exit 1
 `, { mode: 0o755 });
-	const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, PATH: `${tools}:${process.env.PATH}`, FAKE_RELEASE: release };
+	const env = installerEnv(home, release, { PATH: `${tools}:${process.env.PATH}`, FAKE_RELEASE: release });
 	delete env.OMI_INSTALL_BASE;
-	const result = spawnSync("sh", [installScript], { encoding: "utf8", env });
+	const result = spawnSync("sh", [INSTALL_SCRIPT], { encoding: "utf8", env });
 	assert.equal(result.status, 0, result.stderr);
 	assert.equal(execFileSync(join(home, ".omi/bin/omi"), ["--version"], { encoding: "utf8" }), "1.0.0\n");
 });
 
 test("install.sh_cae al bundle si el binario suelto no arranca", async (t) => {
 	const home = await tempDir(t);
-	const result = install(await fakeRelease(t, { binary: "#!/bin/sh\nexit 137\n" }), home);
+	const result = runInstaller(await fakeRelease(t, { binary: "#!/bin/sh\nexit 137\n" }), home);
 	assert.equal(result.status, 0, result.stderr);
 	assert.match(await readFile(join(home, ".omi/bin/omi"), "utf8"), /exec .*runtime\/omi/);
 	assert.equal(execFileSync(join(home, ".omi/bin/omi"), ["--version"], { encoding: "utf8" }), "1.0.0\n");
@@ -84,7 +55,7 @@ test("install.sh_cae al bundle si el binario suelto no arranca", async (t) => {
 
 test("install.sh fallback no interpreta caracteres de shell del HOME", async (t) => {
 	const home = join(await tempDir(t), "home $unknown ' \" \\ `false`");
-	const result = install(await fakeRelease(t, { binary: "#!/bin/sh\nexit 137\n" }), home);
+	const result = runInstaller(await fakeRelease(t, { binary: "#!/bin/sh\nexit 137\n" }), home);
 	assert.equal(result.status, 0, result.stderr);
 	assert.equal(execFileSync(join(home, ".omi/bin/omi"), ["--version"], { encoding: "utf8" }), "1.0.0\n");
 });
@@ -92,17 +63,26 @@ test("install.sh fallback no interpreta caracteres de shell del HOME", async (t)
 test("install.sh_falla con un mensaje claro si nada arranca", async (t) => {
 	const home = await tempDir(t);
 	const broken = "#!/bin/sh\nexit 137\n";
-	const result = install(await fakeRelease(t, { binary: broken, bundled: broken }), home);
+	const result = runInstaller(await fakeRelease(t, { binary: broken, bundled: broken }), home);
 	assert.equal(result.status, 1);
 	assert.match(result.stderr, /no arranca/);
 });
 
 test("install.sh_no instala nada si el checksum no coincide", async (t) => {
 	const home = await tempDir(t);
-	const result = install(await fakeRelease(t, { tamper: true }), home);
+	const result = runInstaller(await fakeRelease(t, { tamper: true }), home);
 	assert.equal(result.status, 1);
 	assert.match(result.stderr, /SHA-256/);
 	await assert.rejects(stat(join(home, ".omi/bin/omi")));
+});
+
+test("ci.yml_instala zsh y fish y exige que los tests del instalador abran sus shells nuevos", async () => {
+	const workflow = await read(".github/workflows/ci.yml");
+	const install = /apt-get[^\n]* install [^\n]*/.exec(workflow)?.[0] ?? "";
+	for (const shell of ["zsh", "fish"]) assert.match(install, new RegExp(`\\s${shell}(\\s|$)`), shell);
+	assert.match(workflow, /OMI_REQUIRE_SHELLS: "1"/);
+	// release.yml corre npm test sin zsh ni fish: ahí faltar un shell se deja dicho, no falla.
+	assert.doesNotMatch(await read(".github/workflows/release.yml"), /OMI_REQUIRE_SHELLS/);
 });
 
 test("bump-pi.yml_es programado y sólo abre el PR después de los tests", async () => {
