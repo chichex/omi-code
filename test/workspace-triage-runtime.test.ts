@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { tempDir } from "./helpers/io.ts";
 import { acceptFoundations, ASK_ALL } from "./helpers/foundations.ts";
 import { plainTerminal } from "./helpers/workspace-pty.ts";
+import { MAX_IDLE_CONTINUATIONS } from "../src/tui/development-continue.ts";
 
 const driver = `
 import fcntl, os, pty, select, signal, struct, sys, termios, time
@@ -149,12 +150,23 @@ export default function(pi) { pi.on('session_start', async (event,ctx) => {
  await writeFile(ctx.cwd + '/worktree-only.txt', 'WORKTREE_READ_OK');
  await writeFile(event.reason === 'reload' ? ${JSON.stringify(reloaded)} : ${JSON.stringify(ready)}, JSON.stringify({cwd:ctx.cwd,session:ctx.sessionManager.getSessionFile()}));
 }); }\n`);
-	const requests: string[] = []; let confirmedFirst = false;
+	// La continuación de OMI llega como último mensaje; se cuenta aparte de la secuencia del flujo.
+	const requests: string[] = []; const continuations: string[] = []; let confirmedFirst = false;
+	const continuation = (request: string) => JSON.stringify((JSON.parse(request) as { messages?: unknown[] }).messages?.at(-1) ?? "").includes("nadie lo pausó");
 	const server = createServer((request, response) => {
 		if (request.method !== "POST" || request.url !== "/v1/chat/completions") { request.resume(); response.writeHead(404); response.end(); return; }
 		let body = ""; request.on("data", (data: Buffer) => { body += data; });
 		request.on("end", async () => {
-			requests.push(body); response.writeHead(200, { "content-type": "text/event-stream" });
+			response.writeHead(200, { "content-type": "text/event-stream" });
+			if (continuation(body)) {
+				// El modelo vuelve a cortar en Explorar: OMI retoma dos veces y frena. Recién ahí terminó el turno.
+				continuations.push(body);
+				response.end(chunk({ role: "assistant", content: "CONTINUE_OK" }, null) + chunk({}, "stop") + "data: [DONE]\n\n");
+				if (continuations.length === MAX_IDLE_CONTINUATIONS) await writeFile(reply, "done");
+				if (continuations.length === 2 * MAX_IDLE_CONTINUATIONS) await writeFile(resumeReply, "done");
+				return;
+			}
+			requests.push(body);
 			if (requests.length === 1) {
 				try { await access(confirmed); confirmedFirst = true; } catch { /* clasificó sin el sí */ }
 				await writeFile(started, "ready");
@@ -163,8 +175,8 @@ export default function(pi) { pi.on('session_start', async (event,ctx) => {
 				if (mode === "cancel") setTimeout(send, 1500); else send();
 			} else if (requests.length === 2) {
 				response.end(chunk({ role: "assistant", tool_calls: [{ index: 0, id: "read", type: "function", function: { name: "read", arguments: JSON.stringify({ path: "worktree-only.txt" }) } }] }, null) + chunk({}, "tool_calls") + "data: [DONE]\n\n");
-			} else if (requests.length === 3) { response.end(chunk({ role: "assistant", content: "WORKTREE_PROBE_COMPLETED" }, null) + chunk({}, "stop") + "data: [DONE]\n\n"); await writeFile(reply, "done"); }
-			else { response.end(chunk({ role: "assistant", content: "RESUME_KICKOFF_DONE" }, null) + chunk({}, "stop") + "data: [DONE]\n\n"); await writeFile(resumeReply, "done"); }
+			} else if (requests.length === 3) response.end(chunk({ role: "assistant", content: "WORKTREE_PROBE_COMPLETED" }, null) + chunk({}, "stop") + "data: [DONE]\n\n");
+			else response.end(chunk({ role: "assistant", content: "RESUME_KICKOFF_DONE" }, null) + chunk({}, "stop") + "data: [DONE]\n\n");
 		});
 	});
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -192,6 +204,7 @@ export default function(pi) { pi.on('session_start', async (event,ctx) => {
 		assert.doesNotMatch(plain, /Extension error|TypeError|exceeds terminal width|Stale extension/); return;
 	}
 	assert.equal(requests.length, 3, plain);
+	assert.equal(continuations.length, MAX_IDLE_CONTINUATIONS, "el modelo cortó en Explorar: OMI retomó dos veces y frenó");
 	assert.ok(!JSON.parse(requests[0]!).tools?.length, "el clasificador no recibe tools");
 	// Con el sí, el harness arranca solo en la sesión del worktree, con sus tools y sin shell ni escrituras.
 	assert.match(requests[1]!, /Continuá el harness de desarrollo/);
@@ -213,6 +226,7 @@ export default function(pi) { pi.on('session_start', async (event,ctx) => {
 	const resumedPlain = plainTerminal(resumed.output); assert.equal(resumed.code, 0, resumedPlain); assert.match(resumedPlain, /RESUME_DRIVER_PHASE=7\b/);
 	assert.deepEqual(JSON.parse(await readFile(resumedReady, "utf8")), { cwd: worktree, session: sessionFile });
 	assert.equal(requests.length, 4, "retomar desde main no vuelve a clasificar: sólo sigue el trabajo");
+	assert.equal(continuations.length, 2 * MAX_IDLE_CONTINUATIONS, "al retomar, el tope vuelve a empezar");
 	assert.match(requests[3]!, /Continuá el harness de desarrollo/);
 	const after = await readFile(sessionFile, "utf8"); assert.ok(after.startsWith(conversation), "la conversación guardada se conserva");
 	const added = after.slice(conversation.length);

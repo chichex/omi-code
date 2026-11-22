@@ -24,6 +24,7 @@ import { adoptLifecycle, landLifecycle, LIFECYCLE_COMMANDS, LifecycleDeclined, r
 import { fixLifecycle } from "./development-lifecycle-fix.ts";
 import { shipLifecycle } from "./development-lifecycle-ship.ts";
 import { LifecycleOnboarding } from "./development-lifecycle-onboarding.ts";
+import { continueDevelopment } from "./development-continue.ts";
 
 const KICKOFF = "Continuá el harness de desarrollo activo desde su etapa persistida. Respetá sus bloqueos y pedí los permisos pendientes; no saltees etapas.";
 const USAGE = "Uso: /omi-work resume | approve | pause | refresh | pr | stack | status | foundations | stop · después del PR draft: adopt | review | fix | land | ship";
@@ -237,5 +238,6 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 			return { result: { output: "Harness activo: usá omi_workflow_check para comandos observados y autorizados, o /omi-work stop para salir explícitamente del flujo.", exitCode: 1, cancelled: false, truncated: false } };
 		});
 		observeDevelopment(pi, session);
+		continueDevelopment(pi, session);
 	} };
 }
