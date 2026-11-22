@@ -98,7 +98,7 @@ function pushing() {
  const lifecycle = life.reserveLifecycleOperation(r.lifecycle, { id: "push1", key: "push1", kind: "push", subjectId: "subject2", targetId: null, correlationId: "push-correlation", retryOf: null }, { id: "push-decision", kind: "push", subjectId: "subject2", targetId: null, configHash: pin().accepted.blockHash, source: "person", at }, "process", at); return { ...r, lifecycle };
 }
 function pushPorts(r: ReturnType<typeof pushing>, lost = false) {
- let remoteHead = head, claims = 0, origin = `https://github.com/${repo}.git`; 
+ let remoteHead = head, claims = 0, origin = `https://github.com/${repo}.git`;
  const currentPr = async () => ({ number: 42, state: "open", draft: true, merged: false, merge_commit_sha: null, head: { sha: remoteHead, ref: "feat/work", repo: { full_name: repo } }, base: { sha: base, ref: "main", repo: { full_name: repo } } });
  const runner = fakeRunner((_command, args) => { if (args.includes("get-url")) return { stdout: `${origin}\n` }; if (!args.includes("push")) return { code: 0 }; remoteHead = nextHead; if (lost) throw new Error("Response lost"); return { code: 0 }; });
  return { runner, repository: async () => ({ full_name: repo, default_branch: "main" }), signal: AbortSignal.timeout(5000), beforePush: async () => {}, currentPr, snapshot: async () => ({ head: nextHead, fingerprint: nextFingerprint, clean: true, branch: "feat/work", ancestor: true }),

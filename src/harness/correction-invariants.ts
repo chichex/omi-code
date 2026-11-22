@@ -31,7 +31,7 @@ export function assertCorrectionContinuity(before: EnabledLifecycle, after: Enab
   const next = rounds[index]; requireFact(next, "ronda perdida");
   const input = (r: typeof old) => [r.operationId, r.subjectId, r.findings, r.startHead, r.startFingerprint, r.scopeHash, r.scopeSource, r.authorityHash, r.evidenceOffset, r.reviewOffset, r.at];
   requireFact(sameData(input(old), input(next)), "input/ámbito de ronda reescrito");
-  const order = { planned: 0, coding: 1, verified: 2, failed: 2, pushed: 3 }; 
+  const order = { planned: 0, coding: 1, verified: 2, failed: 2, pushed: 3 };
   requireFact(order[next.status] >= order[old.status] && (old.status === "planned" || "stepId" in next && old.stepId === next.stepId), "ronda retrocedió o cambió C");
   if (old.status === "verified" || old.status === "pushed") requireFact((next.status === "verified" || next.status === "pushed") && old.newSubjectId === next.newSubjectId && old.head === next.head && old.fingerprint === next.fingerprint, "snapshot verificado reescrito");
   if (old.status === "pushed" || old.status === "failed") requireFact(sameData(old, next), "push confirmado reescrito");

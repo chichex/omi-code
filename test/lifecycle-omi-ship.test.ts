@@ -239,8 +239,7 @@ test("publicación no fabrica provenance si registry digest/OCI revision son err
   if (command === "regctl" && args[1] === "digest") stdout = `sha256:${"d".repeat(64)}`;
   if (command === "regctl" && args[1] === "config") { registryRead = true; stdout = JSON.stringify({ config: { Labels: { "org.opencontainers.image.revision": head, "org.opencontainers.image.version": "1.1.0" } } }); }
   return { code: 0, stdout, stderr: "" };
- } }; 
+ } };
  const p = ports(linked); p.runtime = linked.runtime({ runner, guard: humanless(true), readSecret: async () => "fixture-only" });
  const result = await publishOmiVersion(shipping("publish"), "omi1", { ...p, fixedCheckout: async () => ({ root: fixed, commitSha: mergedSha, release: async () => {} }) }); assert.equal(result.state, "unknown"); assert.equal(result.receipt, null); assert.equal(registryRead, true, "rechazar por OCI revision incorrecta, no por preflight previo");
 });
-
