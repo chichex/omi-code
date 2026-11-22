@@ -6,7 +6,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import type { FoundationsBlock } from "../src/harness/foundations.ts";
-import type { TrustRecord } from "../src/harness/foundations-trust.ts";
+import { readTrust, writeTrust, type TrustRecord } from "../src/harness/foundations-trust.ts";
 import type { FoundationsPin } from "../src/tui/development-foundations.ts";
 import { commitFoundationsSave, prepareFoundationsSave } from "../src/tui/development-foundations-save.ts";
 import type { KbDoc } from "../src/tui/kb-client.ts";
@@ -253,6 +253,57 @@ test("foundations_save: onAccepted observa aceptación durable; abortar ahí con
 	}), { message: `${ACCEPTED} cancelado después de aceptar` });
 	assert.equal(pins.length, 1); const pin = pins[0]; assert.ok(pin);
 	assert.equal(saves(f.kb).length, 1); assert.deepEqual(await acceptance(f.trustDir), expectedAcceptance(f, pin));
+});
+
+function barrier() {
+	let release: () => void = () => { throw new Error("barrera no inicializada"); };
+	const waiting = new Promise<void>((resolve) => { release = resolve; });
+	return { waiting, release };
+}
+for (const hold of ["beforeAccept", "beforeWrite", "afterWrite"] as const) {
+	test(`foundations_save: Guardar A retenido en ${hold} no pisa la aceptación ni el pin de Guardar B`, async (t) => {
+		const f = await fixture(t); const reached = barrier(); const resume = barrier();
+		const prepared = await prepareFoundationsSave(f.kb, f.key, f.block, f.deps.signal);
+		const pins: FoundationsPin[] = [];
+		const pause = async () => { reached.release(); await resume.waiting; };
+		const pending = commitFoundationsSave(f.kb, f.key, f.block, prepared, { ...f.deps,
+			...(hold === "beforeAccept" ? { beforeAccept: pause } : {}),
+			writeAcceptance: async (dir, record, options) => {
+				if (hold === "beforeWrite") await pause();
+				await writeTrust(dir, record, options);
+				if (hold === "afterWrite") await pause();
+			}, onAccepted: (pin) => pins.push(pin),
+		});
+		// Observar el rechazo desde el principio evita rechazos sin manejar; las barreras no usan sleeps.
+		const outcome = pending.then(() => null, (error: unknown) => error);
+		await reached.waiting;
+		const next = block(["git push *", "npm run deploy"]);
+		const preparedB = await prepareFoundationsSave(f.kb, f.key, next, f.deps.signal, hash(f.block));
+		const pinB = await commitFoundationsSave({ ...f.kb }, f.key, next, preparedB, { ...f.deps, onAccepted: (pin) => pins.push(pin) });
+		resume.release(); const error = await outcome;
+		assert.ok(error instanceof Error, "A obsoleto debe terminar sin anunciar éxito");
+		assert.match(error.message, /obsolet|cambi|nueva|vigente/i);
+		assert.deepEqual(pins, [pinB], "A tampoco vuelve a publicar un pin viejo después de B");
+		assert.deepEqual(await acceptance(f.trustDir), expectedAcceptance(f, pinB, next));
+		assert.equal(saves(f.kb).length, 2);
+		assert.equal(f.kb.documents.at(-1)?.cuerpo, preparedB.body);
+	});
+}
+test("foundations_save: revisión remota aparecida dentro de beforeAccept impide aceptar y publicar A", async (t) => {
+	const f = await fixture(t); const prepared = await prepareFoundationsSave(f.kb, f.key, f.block, f.deps.signal);
+	const pins: FoundationsPin[] = [];
+	await assert.rejects(commitFoundationsSave(f.kb, f.key, f.block, prepared, { ...f.deps,
+		beforeAccept: async () => { f.kb.perillas("repo", "Revisión externa posterior"); }, onAccepted: (pin) => pins.push(pin),
+	}), /cambi|nueva|vigente/i);
+	assert.equal(await readTrust(f.trustDir, f.key), undefined); assert.deepEqual(pins, []);
+});
+test("foundations_save: aceptación local cambiada dentro de beforeAccept no se sobrescribe", async (t) => {
+	const f = await fixture(t); const prepared = await prepareFoundationsSave(f.kb, f.key, f.block, f.deps.signal);
+	const newer: TrustRecord = { version: 2, ...f.key, offerDeclined: true, accepted: null };
+	await assert.rejects(commitFoundationsSave(f.kb, f.key, f.block, prepared, { ...f.deps,
+		beforeAccept: () => writeTrust(f.trustDir, newer), onAccepted: () => assert.fail("no publicar el pin A"),
+	}), /cambi|nueva|vigente/i);
+	assert.deepEqual(await readTrust(f.trustDir, f.key), newer);
 });
 
 test("foundations_save: un error del callback posterior no oculta una aceptación ya durable", async (t) => {

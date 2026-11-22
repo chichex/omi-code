@@ -78,10 +78,11 @@ test("foundations_policy v2: el pin de otro repo o con hash inválido nunca apli
 });
 for (const nested of [false, true]) test(`foundations_policy v2: el agente no guarda ni borra perillas, tampoco con llamada anidada ${nested}`, async (t) => {
 	const f = await fixture(t);
-	assert.equal(await f.emit("tool_call", { toolName: "mcp__harness_kb__guardar", input: {} }), undefined);
+	assert.equal(await f.emit("tool_call", { toolName: "mcp__harness_kb__guardar", toolCallId: "g0", input: {} }), undefined);
 	await f.start(); await approve(f); await f.action({ action: "step", id: "C1" });
+	assert.equal((await f.state()).phase, "implement", "se bloquea también implementando con receta aprobada");
 	for (const toolName of ["mcp__harness_kb__guardar", "mcp__harness_kb__borrar"]) {
-		const result = await f.emit("tool_call", { toolName, input: { producto: "repo" }, ...(nested ? { parentToolCallId: "worker-1" } : {}) }) as { block?: boolean; reason?: string };
+		const result = await f.emit("tool_call", { toolName, toolCallId: "g1", input: { producto: "repo", tipo: "perillas", titulo: "x", cuerpo: "x" }, ...(nested ? { parentToolCallId: "worker-1" } : {}) }) as { block?: boolean; reason?: string };
 		assert.equal(result?.block, true);
 		assert.equal(result?.reason, `Harness: ${toolName} no está habilitada en esta etapa. Usá omi_workflow y omi_workflow_check; no eludas la receta, evidencia ni permisos.`);
 	}
@@ -90,7 +91,7 @@ test("foundations_policy v2: el agente recibe patrones de confirmación como dat
 	const f = await fixture(t, block(["git push *"])); await f.start();
 	const event = { systemPromptOptions: { sections: {} as Record<string, string> } }; await f.emit("before_agent_start", event);
 	const text = event.systemPromptOptions.sections.omi_development!;
-	assert.match(text, /REQUIEREN confirmación/); assert.ok(text.includes(JSON.stringify(["git push *"]))); assert.doesNotMatch(text, /Catálogo de Foundations/);
+	assert.match(text, /REQUIEREN confirmación/); assert.ok(text.includes(JSON.stringify(["git push *"]))); assert.doesNotMatch(text, /Catálogo de Foundations/); assert.doesNotMatch(text, /kind setup con permiso humano/);
 });
 const others = (prompts: string[]) => prompts.filter((title) => title !== ACCEPT);
 test("foundations_policy v2: clasificación simple no acepta Foundations ni crea recursos aunque arranque sea auto", async (t) => {
