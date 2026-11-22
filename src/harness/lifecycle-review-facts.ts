@@ -26,12 +26,14 @@ export function recordLifecycleReview(original: unknown, facts: ReviewFacts): En
  for (const check of facts.checks) {
   // Un status sin app no identifica al emisor: queda en la lectura, no como check acreditado.
   if (check.appId === null) continue;
-  const id = bounded(`${op.id}:check:${check.externalId}`);
-  if (!s.checks.some(c => c.id === id)) s.checks.push({ id, subjectId: op.subjectId, context: bounded(check.context, 1000), appId: check.appId, state: check.state, externalId: bounded(check.externalId), at: facts.at });
+  // Un cambio de estado (pending → success) es otro hecho, append-only; la proyección usa el último por check.
+  const externalId = bounded(check.externalId), previous = s.checks.filter(c => c.subjectId === op.subjectId && c.externalId === externalId);
+  if (previous.at(-1)?.state === check.state) continue;
+  s.checks.push({ id: bounded(`${op.id}:check:${externalId}:${previous.length + 1}`), subjectId: op.subjectId, context: bounded(check.context, 1000), appId: check.appId, state: check.state, externalId, at: facts.at });
  }
  if (facts.approval) {
-  const id = bounded(`${op.id}:approval`);
-  if (!s.approvals.some(a => a.id === id)) s.approvals.push({ id, subjectId: op.subjectId, provider: facts.provider, reviewer: bounded(facts.approval.reviewer), state: facts.approval.state, externalId: bounded(facts.approval.externalId), at: facts.at });
+  const previous = s.approvals.filter(a => a.subjectId === op.subjectId && a.provider === facts.provider);
+  if (previous.at(-1)?.state !== facts.approval.state) s.approvals.push({ id: bounded(`${op.id}:approval:${previous.length + 1}`), subjectId: op.subjectId, provider: facts.provider, reviewer: bounded(facts.approval.reviewer), state: facts.approval.state, externalId: bounded(facts.approval.externalId), at: facts.at });
  }
  const checked = validateLifecycleState(s); lifecycleAssert(checked.status === "enabled", "lifecycle inválido después de la Review"); return checked;
 }

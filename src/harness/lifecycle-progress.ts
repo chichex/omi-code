@@ -24,7 +24,7 @@ export function lifecycleLines(state: Workflow): string[] {
  }
  const s = state.lifecycle, pin = s.pins.find(p => p.accepted.blockHash === s.pinHash)?.accepted.block, subject = s.subjects.find(x => x.id === s.currentSubject);
  if (!pin) return ["Lifecycle sin configuración vigente: no se inician efectos."];
- const reviewed = reviewedSubject(s), checks = s.checks.filter(c => c.subjectId === reviewed), passed = checks.filter(c => c.state === "success").length;
+ const reviewed = reviewedSubject(s), checks = [...new Map(s.checks.filter(c => c.subjectId === reviewed).map(c => [c.externalId, c])).values()], passed = checks.filter(c => c.state === "success").length;
  const blocks = findingBlocks(s), corrected = s.ledger.length - blocks.length;
  const rounds = s.corrections ?? [], active = rounds.findLast(r => r.status !== "pushed" && r.status !== "failed");
  const reviews = s.operations.filter(o => o.kind === "review"), lastReview = reviews.at(-1);

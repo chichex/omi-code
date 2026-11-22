@@ -85,12 +85,17 @@ test("acme/app PR #42: Review → corrección TDD → push al mismo PR → Land 
  assert.equal(s.operations.filter(o => o.kind === "review" && o.status === "confirmed").length, 1); assert.equal(s.ledger.length, 1); assert.equal(s.budget.attemptsUsed, 1);
  assert.equal(s.checks.filter(c => c.state === "success").length, 1);
  await f.command("status"); assert.match(last(f.messages), /Hallazgos: 1 pendiente/); assert.match(last(f.messages), /intentos 1\/12/); assert.match(last(f.messages), /Bloqueo: /);
+ // Un comentario nuevo en el mismo HEAD: releer GitHub no es otro efecto ni gasta otro intento.
+ gh.inline.push({ id: 502, body: "Agregar el caso en el test", commit_id: head, path: "test.cjs", line: 1 });
+ const reviewPrompts = f.prompts.filter(p => /Review del PR #42/.test(p)).length;
+ await f.command("review"); s = enabled(await f.state());
+ assert.equal(s.ledger.length, 2); assert.equal(s.budget.attemptsUsed, 1); assert.equal(f.prompts.filter(p => /Review del PR #42/.test(p)).length, reviewPrompts);
  await f.command("land"); assert.match(last(f.messages), /hallazgo/i); assert.deepEqual(effects(gh), [], "Land con hallazgos pendientes no muta");
 
  await f.command("fix");
  let state = await f.state(); s = enabled(state);
  assert.equal(state.phase, "implement"); assert.equal(s.stage, "corrections"); assert.equal(s.budget.roundsUsed, 1); assert.equal(s.budget.attemptsUsed, 2);
- assert.ok(f.prompts.some(p => /Corregir 1 hallazgo/.test(p)));
+ assert.ok(f.prompts.some(p => /Corregir 2 hallazgo/.test(p)));
  const step = state.steps.at(-1)!; assert.equal(step.id, "C2");
  await f.action({ action: "step", id: "C2" });
  await f.write("test.cjs", 'require("node:assert/strict").equal(require("./value.cjs"), 3);\n');
@@ -113,7 +118,7 @@ test("acme/app PR #42: Review → corrección TDD → push al mismo PR → Land 
  await f.command("review"); s = enabled(await f.state());
  assert.ok(s.approvals.some(a => a.subjectId === s.currentSubject && a.state === "approved"));
  await f.command("fix"); s = enabled(await f.state());
- assert.ok(f.prompts.some(p => /Ya corregidos/.test(p))); assert.equal(s.budget.roundsUsed, 1, "confirmar lo ya corregido no gasta otra ronda");
+ assert.ok(f.prompts.some(p => /Ya corregidos: 2 hallazgo/.test(p))); assert.equal(s.budget.roundsUsed, 1, "confirmar lo ya corregido no gasta otra ronda");
 
  await f.command("land"); state = await f.state(); s = enabled(state);
  assert.ok(f.prompts.some(p => /Marcar el PR #42 listo para review/.test(p))); assert.ok(f.prompts.some(p => /Mergear el PR #42/.test(p)));

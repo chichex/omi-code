@@ -497,7 +497,7 @@ El PR draft es el final por defecto. Para seguir el mismo trabajo, la persona lo
 | Comando | Qué hace | Permiso |
 |---|---|---|
 | `/omi-work adopt` | Habilita el lifecycle sobre el PR draft abierto: relee el PR en GitHub y el checkout, fija la configuración aceptada | Siempre un sí |
-| `/omi-work review` | Corre la Review configurada: `github` lee reviews, comentarios y checks; `local` usa un revisor aislado; `gha` dispara el workflow y espera su recibo | `review.mode` |
+| `/omi-work review` | Corre la Review configurada: `github` lee reviews, comentarios y checks; `local` usa un revisor aislado; `gha` dispara el workflow y espera su recibo. Con `github`, volver a correrlo en el mismo HEAD sólo relee: no pregunta ni gasta otro intento | `review.mode` |
 | `/omi-work fix` | Agrupa los hallazgos del HEAD actual y abre una ronda: el agente corrige con rojo, verde, commit y todos los D. Al terminar, verifica y hace push al **mismo PR** | Siempre un sí para la ronda y otro para el push |
 | `/omi-work land` | Marca el PR listo (sale de draft), relee checks, reviews y reglas, y mergea por PR y SHA. Reconoce un merge externo | `land.mode` |
 | `/omi-work ship` | Verifica cada destino aceptado con recibos y provenance; termina en Entregado sólo si todos se verifican | `mode` de cada destino |

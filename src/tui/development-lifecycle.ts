@@ -128,7 +128,7 @@ export async function adoptLifecycle(session: DevelopmentSession, ctx: Extension
 	ctx.ui.notify(`${session.status()}\nSeguí con /omi-work review.`, "info");
 }
 
-async function reviewFacts(session: DevelopmentSession, ctx: ExtensionContext, reserved: WorkflowV2, intent: LifecycleIntent): Promise<{ externalId: string; facts: Omit<ReviewFacts, "operationId" | "at"> }> {
+async function reviewFacts(session: DevelopmentSession, ctx: ExtensionContext, reserved: WorkflowV2, intent: Pick<LifecycleIntent, "id">): Promise<{ externalId: string; facts: Omit<ReviewFacts, "operationId" | "at"> }> {
 	const s = reserved.lifecycle; if (s.status !== "enabled") throw new Error("lifecycle deshabilitado");
 	const config = currentLifecyclePin(s).accepted.block, provider = config.review.provider, subject = currentSubject(s), signal = session.lifecycle.signal, client = githubClient(session, reserved);
 	const store = { checkout: reserved.checkout, issue: reserved.source.number, operationId: intent.id };
@@ -161,6 +161,14 @@ export async function reviewLifecycle(session: DevelopmentSession, ctx: Extensio
 	await freshPin(session, ctx);
 	const { s } = enabledWork(session, ctx); const config = currentLifecyclePin(s).accepted.block, subject = currentSubject(s), provider = config.review.provider;
 	if (s.stage !== "review") throw new Error(`Review corre en la etapa Review; ahora: ${s.stage}.`);
+	// GitHub sólo se lee: con una Review ya confirmada de este HEAD, releer comentarios y checks no es otro efecto.
+	const done = s.operations.findLast(o => o.kind === "review" && o.subjectId === subject.id && o.status === "confirmed" && o.receipt.outcome === "succeeded");
+	if (provider.kind === "github" && done && done.status === "confirmed") {
+		const { state } = enabledWork(session, ctx);
+		const { facts } = await reviewFacts(session, ctx, state, done);
+		await session.update(ctx, saved => ({ ...saved, lifecycle: recordLifecycleReview(saved.lifecycle, { ...facts, operationId: done.id, at: session.now() }) }));
+		ctx.ui.notify(`Relectura de GitHub del mismo HEAD: sin otro intento.\n${session.status()}`, "info"); return;
+	}
 	const intent = newIntent(s, "review"); let observed: Omit<ReviewFacts, "operationId" | "at"> | undefined;
 	const dispatch = provider.kind === "gha";
 	await operate(session, ctx, intent,
