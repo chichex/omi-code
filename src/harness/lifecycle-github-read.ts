@@ -44,6 +44,7 @@ export class GitHubReadClient {
    || /^\/(?:branches|rules\/branches)\/[^/?#]+(?:\/protection)?$/.test(tail)
    || /^\/actions\/workflows\/(?:[1-9]\d*|[A-Za-z0-9_.-]+\.ya?ml)(?:\/runs)?$/.test(tail)
    || /^\/actions\/runs\/[1-9]\d*(?:\/artifacts)?$/.test(tail)
+   || /^\/releases(?:\/[1-9]\d*(?:\/assets)?|\/tags\/[^/?#]+)?$/.test(tail)
    || /^\/collaborators\/[A-Za-z0-9][A-Za-z0-9-]*(?:%5Bbot%5D)?\/permission$/i.test(tail)
    || /^\/compare\/[a-f0-9]{40}(?:[a-f0-9]{24})?\.\.\.[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(tail)
    || /^\/git\/ref\/(?:heads|tags)\/[^/?#]+$/.test(tail) || /^\/git\/tags\/[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(tail));

@@ -7,7 +7,7 @@ export function currentLifecyclePin(s: EnabledLifecycle) {
 const TARGET_KINDS = new Set<OperationKind>(["ship", "publish", "deploy", "promote", "rollback", "fix-forward"]);
 const STAGES: Record<EnabledLifecycle["stage"], readonly OperationKind[]> = {
  review: ["review", "ready"], corrections: ["correction", "push"], ready: ["ready", "land"], land: ["land"],
- ship: ["ship", "publish", "deploy", "promote", "rollback", "fix-forward"], paused: [], delivered: [],
+ ship: ["ship", "publish", "deploy", "promote", "rollback", "fix-forward"], paused: [], delivered: [], complete: [],
 };
 export function lifecycleBudgetBlock(s: EnabledLifecycle, intent: LifecycleIntent, owner: string): string {
  const block = currentLifecyclePin(s).accepted.block;

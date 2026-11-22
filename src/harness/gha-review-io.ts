@@ -13,13 +13,8 @@ import { GhaRunSchema, checkedGhaRequest, type GhaReviewRequest, type GhaRun } f
 import { readReceiptZip } from "./gha-artifact.ts";
 import type { GhaReviewPorts } from "./lifecycle-gha-review.ts";
 import { lifecycleAssert } from "./lifecycle-invariants.ts";
-const WorkflowSchema = Type.Object({ id, path: text(), state: Type.Literal("active") });
-const RefSchema = Type.Object({ object: Type.Object({ type: Type.Enum(["commit", "tag"]), sha }) });
+import { trustedWorkflow } from "./github-workflow-reference.ts";
 const ArtifactSchema = Type.Object({ id, name: text(1000), size_in_bytes: Type.Integer({ minimum: 1 }), expired: Type.Boolean(), digest: Type.Optional(Type.Union([Type.String({ pattern: "^sha256:[a-f0-9]{64}$" }), Type.Null()])), workflow_run: Type.Object({ id, head_sha: sha }) });
-async function optionalRef(client: GitHubReadClient, kind: "heads" | "tags", name: string, signal: AbortSignal) {
- try { return githubChecked(RefSchema, await client.json(`repos/${client.repo}/git/ref/${kind}/${encodeURIComponent(name)}`, signal)).object; }
- catch (e) { if (e instanceof GitHubReadError && e.status === 404) return null; throw e; }
-}
 /** Resuelve el ref aceptado; un nombre ambiguo branch/tag no elige uno por inferencia. */
 export async function persistGhaReviewRequest(checkout: Workflow["checkout"], issue: number, operationId: string, input: unknown): Promise<void> {
  await claimReviewRequest({ checkout, issue, operationId }, checkedGhaRequest(input));
@@ -30,19 +25,10 @@ export async function resolveGhaReviewRequest(original: unknown, operationId: st
  const pin = s.pins.find(p => p.accepted.blockHash === op?.configHash); const provider = pin?.accepted.block.review.provider;
  lifecycleAssert(op?.kind === "review" && subject && provider?.kind === "gha" && client.repo === s.root.repo, "operación/proveedor/repo de review ajenos");
  if (op.providerRequest) return checkedGhaRequest(op.providerRequest);
- const filename = provider.workflow.replace(/^\.github\/workflows\//, "");
- const workflow = githubChecked(WorkflowSchema, await client.json(`repos/${client.repo}/actions/workflows/${filename}`, signal));
- lifecycleAssert(workflow.path === `.github/workflows/${filename}`, "workflow de otra ruta");
- const namespace = /^refs\/(heads|tags)\/(.+)$/.exec(provider.ref);
- const refs = namespace ? [await optionalRef(client, namespace[1] === "heads" ? "heads" : "tags", namespace[2]!, signal)]
-  : [await optionalRef(client, "heads", provider.ref, signal), await optionalRef(client, "tags", provider.ref, signal)];
- const found = refs.filter(ref => ref !== null); lifecycleAssert(found.length === 1, "ref ausente o ambiguo entre branch/tag");
- let object = found[0]; lifecycleAssert(object, "ref sin objeto");
- for (let depth = 0; object.type === "tag" && depth < 5; depth++) object = githubChecked(RefSchema, await client.json(`repos/${client.repo}/git/tags/${object.sha}`, signal)).object;
- lifecycleAssert(object.type === "commit", "tag sin commit único acotado");
+ const workflow = await trustedWorkflow(client, provider.workflow, provider.ref, signal);
  const created = Date.parse(op.history[0]?.at ?? ""); lifecycleAssert(Number.isFinite(created), "reserva sin fecha reconciliable");
  return checkedGhaRequest({ repo: client.repo, pr: subject.number, headSha: subject.headSha, baseSha: subject.baseSha, correlationId: op.correlationId,
-  createdAfter: new Date(created - 300000).toISOString(), workflow: { id: workflow.id, path: workflow.path, ref: provider.ref, sha: object.sha } });
+  createdAfter: new Date(created - 300000).toISOString(), workflow });
 }
 export function reviewArtifactName(request: GhaReviewRequest, run: GhaRun): string { return `omi-review-v1-${request.correlationId}-${run.id}-${run.run_attempt}`; }
 export type ArtifactDownload = (repo: string, artifactId: number, signal: AbortSignal) => Promise<Buffer>;

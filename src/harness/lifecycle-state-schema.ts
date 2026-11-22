@@ -5,6 +5,7 @@ import { GhaReviewRequestSchema } from "./gha-review-contract.ts";
 import { LocalReviewRequestSchema } from "./local-review-schema.ts";
 import { CorrectionRoundSchema, CorrectionPushRequestSchema } from "./correction-schema.ts";
 import { ReadyLandSchema, LandRequestSchema, MergeFactSchema, DraftReadyRequestSchema } from "./land-schema.ts";
+import { GhaShipRequestSchema, ShipDeliverySchema, ShipCompletionSchema } from "./ship-schema.ts";
 export const ReviewInvocationSchema = Type.Union([GhaReviewRequestSchema, LocalReviewRequestSchema]);
 const closed = { additionalProperties: false } as const;
 export const boundedText = (maxLength = 256) => Type.String({ minLength: 1, maxLength, pattern: "\\S" });
@@ -29,7 +30,7 @@ export const DecisionSchema = Type.Object({ id: boundedText(), kind: OperationKi
 export type LifecycleDecision = Static<typeof DecisionSchema>;
 export const ReceiptSchema = Type.Object({ operationId: boundedText(), correlationId: boundedText(), subjectId: boundedText(), targetId: nullableText(), externalId: boundedText(), outcome: Type.Enum(["succeeded", "failed", "not-applicable"]), verifiedSubjectId: nullableText(), at: boundedText(100) }, closed);
 export type LifecycleReceipt = Static<typeof ReceiptSchema>;
-const OperationFields = { ...IntentSchema.properties, configHash: Hash, decisionId: boundedText(), providerRequest: Type.Optional(ReviewInvocationSchema), pushRequest: Type.Optional(CorrectionPushRequestSchema), landRequest: Type.Optional(LandRequestSchema), readyRequest: Type.Optional(DraftReadyRequestSchema), history: Type.Array(Type.Object({ status: Type.Enum(["pending", "unknown", "confirmed"]), at: boundedText(100) }, closed), { minItems: 1, maxItems: 1000 }) };
+const OperationFields = { ...IntentSchema.properties, configHash: Hash, decisionId: boundedText(), providerRequest: Type.Optional(ReviewInvocationSchema), pushRequest: Type.Optional(CorrectionPushRequestSchema), landRequest: Type.Optional(LandRequestSchema), readyRequest: Type.Optional(DraftReadyRequestSchema), shipRequest: Type.Optional(GhaShipRequestSchema), history: Type.Array(Type.Object({ status: Type.Enum(["pending", "unknown", "confirmed"]), at: boundedText(100) }, closed), { minItems: 1, maxItems: 1000 }) };
 const OperationSchema = Type.Union([
  Type.Object({ ...OperationFields, status: Type.Literal("pending") }, closed),
  Type.Object({ ...OperationFields, status: Type.Literal("unknown"), reason: boundedText(4000) }, closed),
@@ -55,13 +56,14 @@ const CheckSchema = Type.Object({ id: boundedText(), subjectId: boundedText(), c
 const ApprovalSchema = Type.Object({ id: boundedText(), subjectId: boundedText(), provider: Type.Enum(["github", "gha", "local"]), reviewer: boundedText(), state: Type.Enum(["approved", "changes-requested", "dismissed", "unknown"]), externalId: boundedText(), at: boundedText(100) }, closed);
 export const EnabledLifecycleSchema = Type.Object({
  status: Type.Literal("enabled"), root: LifecycleRootSchema, pins: Type.Array(LifecyclePinSchema, { minItems: 1, maxItems: 1000 }), pinHash: Hash,
- stage: Type.Enum(["review", "corrections", "ready", "land", "ship", "paused", "delivered"]),
+ stage: Type.Enum(["review", "corrections", "ready", "land", "ship", "paused", "delivered", "complete"]),
  corrections: Type.Optional(Type.Array(CorrectionRoundSchema, { maxItems: 10 })),
  ready: Type.Optional(ReadyLandSchema), readyHistory: Type.Optional(Type.Array(ReadyLandSchema, { maxItems: 100 })), merges: Type.Optional(Type.Array(MergeFactSchema, { maxItems: 10 })),
  currentSubject: nullableText(), subjects: Type.Array(AdoptedSubjectSchema, { maxItems: 1000 }),
  decisions: Type.Array(DecisionSchema, { maxItems: 100 }), operations: Type.Array(OperationSchema, { maxItems: 100 }),
  budget: Type.Object({ attemptsUsed: Count, fixForwardPRsUsed: Count, roundsUsed: Count, activeMilliseconds: Count }, closed),
  segments: Type.Array(SegmentSchema, { maxItems: 1000 }), ledger: Type.Array(FindingSchema, { maxItems: 1000 }), evidence: Type.Array(EvidenceFactSchema, { maxItems: 1000 }),
+ deliveries: Type.Optional(Type.Array(ShipDeliverySchema, { maxItems: 100 })), completion: Type.Optional(ShipCompletionSchema),
  checks: Type.Array(CheckSchema, { maxItems: 1000 }), approvals: Type.Array(ApprovalSchema, { maxItems: 1000 }),
 }, closed);
 export const LifecycleStateSchema = Type.Union([Type.Object({ status: Type.Literal("disabled") }, closed), EnabledLifecycleSchema]);

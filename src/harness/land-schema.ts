@@ -19,4 +19,4 @@ export const LandRequestSchema = Type.Object({ repo: text(200), pr: id, subjectI
 export type LandRequest = Static<typeof LandRequestSchema>;
 export const DraftReadyRequestSchema = Type.Object({ repo: text(200), pr: id, subjectId: text(), headSha: sha, baseSha: sha, branch: text(128), base: text(128), configHash: hash, correlationId: text() }, closed);
 export type DraftReadyRequest = Static<typeof DraftReadyRequestSchema>;
-export const MergeFactSchema = Type.Object({ subjectId: text(), mergedSubjectId: text(), repo: text(200), pr: id, headSha: sha, mergeSha: sha, base: text(128), source: Type.Enum(["external", "operation"]), operationId: Type.Optional(text()), at: text(100) }, closed);
+export const MergeFactSchema = Type.Object({ subjectId: text(), mergedSubjectId: text(), repo: text(200), pr: id, headSha: sha, mergeSha: sha, base: text(128), source: Type.Enum(["external", "operation"]), operationId: Type.Optional(text()), mergedAt: Type.Optional(text(100)), at: text(100) }, closed);

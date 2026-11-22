@@ -11,7 +11,7 @@ export const ExpectedReviewSchema = Type.Object({ repo: Type.String({ pattern: "
  headSha: sha, baseSha: sha, branch: text(128), base: text(128), contentHash: Type.String({ pattern: "^[a-f0-9]{64}$" }) }, { additionalProperties: false });
 export type ExpectedReview = Static<typeof ExpectedReviewSchema>;
 export const PullSchema = Type.Object({ number: id, state: text(), draft: Type.Boolean(), head: Type.Object({ sha, ref: text(128), repo: Type.Union([Type.Null(), Type.Object({ full_name: text(200) })]) }),
- base: Type.Object({ sha, ref: text(128), repo: Type.Object({ full_name: text(200) }) }), merged: Type.Boolean(), merge_commit_sha: Type.Union([sha, Type.Null()]) });
+ base: Type.Object({ sha, ref: text(128), repo: Type.Object({ full_name: text(200) }) }), merged: Type.Boolean(), merged_at: Type.Optional(Type.Union([Type.String({ maxLength: 100 }), Type.Null()])), merge_commit_sha: Type.Union([sha, Type.Null()]) });
 export const RepoSchema = Type.Object({ full_name: text(200), default_branch: text(128), allow_squash_merge: Type.Boolean(), allow_merge_commit: Type.Boolean(), allow_rebase_merge: Type.Boolean(), permissions: Type.Optional(Type.Object({ push: Type.Boolean(), admin: Type.Boolean() })) });
 export const BranchSchema = Type.Object({ name: text(128), protected: Type.Boolean() });
 export const ReviewSchema = Type.Object({ id, user: login, state: text(100), commit_id: sha, submitted_at: Type.Union([text(100), Type.Null()]), body });

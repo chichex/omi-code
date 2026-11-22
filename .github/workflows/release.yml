@@ -37,12 +37,20 @@ jobs:
       - id: next
         env:
           DRY_RUN: ${{ inputs.dry_run }}
+          OMI_RELEASE_PLAN_PATH: ${{ runner.temp }}/omi-release-plan.json
         run: |
           if [ "$DRY_RUN" = true ]; then
             node scripts/next-release.ts --force >> "$GITHUB_OUTPUT"
           else
             node scripts/next-release.ts >> "$GITHUB_OUTPUT"
           fi
+      # El snapshot se toma en el mismo planner, antes de que el job release cree otro tag.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: omi-release-plan-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/omi-release-plan.json
+          if-no-files-found: error
+          retention-days: 7
 
   # CI sólo arranca el binario de Linux; macOS tiene fallas propias (exit 137 sin refirmar).
   macos:

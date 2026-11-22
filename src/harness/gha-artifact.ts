@@ -25,7 +25,7 @@ async function inflate(data: Buffer, signal?: AbortSignal): Promise<Buffer> {
   stream.end(data);
  });
 }
-export async function readReceiptZip(bytes: Buffer, expectedName: "review.json" | "ship.json", digest?: string | null, signal?: AbortSignal): Promise<string> {
+export async function readReceiptZip(bytes: Buffer, expectedName: "review.json" | "ship.json" | "omi-release-plan.json", digest?: string | null, signal?: AbortSignal): Promise<string> {
  signal?.throwIfAborted(); requireZip(Buffer.isBuffer(bytes) && bytes.length >= 22 && bytes.length <= MAX_ZIP_BYTES);
  if (digest !== undefined && digest !== null) requireZip(/^sha256:[a-f0-9]{64}$/.test(digest) && `sha256:${createHash("sha256").update(bytes).digest("hex")}` === digest);
  let end = -1;

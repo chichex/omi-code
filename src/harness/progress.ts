@@ -24,7 +24,8 @@ function completed(s: Workflow, id: Phase): boolean {
   case "pr": return s.publication.status === "opened";
   case "review": return s.version === 2 && s.lifecycle.status === "enabled" && ["ready", "land", "ship", "delivered"].includes(s.lifecycle.stage);
   case "land": return s.version === 2 && s.lifecycle.status === "enabled" && !!s.lifecycle.merges?.length;
-  case "ship": return s.version === 2 && s.lifecycle.status === "enabled" && s.lifecycle.stage === "delivered";
+  case "ship": return s.version === 2 && s.lifecycle.status === "enabled" && s.lifecycle.completion !== undefined;
+  case "delivered": return s.version === 2 && s.lifecycle.status === "enabled" && s.lifecycle.completion?.outcome === "verified";
   case "done": return s.phase === "done";
   case "closed": return s.phase === "closed";
  }
