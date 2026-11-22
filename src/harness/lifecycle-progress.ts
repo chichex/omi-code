@@ -6,13 +6,17 @@ import { lifecycleFindingBlocks } from "./lifecycle-state.ts";
 const STAGES = { review: "Review", corrections: "Correcciones", ready: "Listo para merge (no es permiso)", land: "Land", ship: "Ship", paused: "Pausado", delivered: "Entregado", complete: "Terminado" } as const;
 const OUTCOMES = { verified: "entrega verificada", "externally-attested": "entrega atestiguada por una persona, sin origen demostrado", "not-applicable": "Ship no aplica (elegido explícitamente)", "manual-attested": "entrega declarada a mano, sin verificar" } as const;
 const minutes = (ms: number) => Math.floor(ms / 60000);
+type Enabled = Extract<Extract<Workflow, { version: 2 }>["lifecycle"], { status: "enabled" }>;
+/** Después del merge, Review/checks/hallazgos se leen del HEAD revisado, no del sujeto integrado. */
+const reviewedSubject = (s: Enabled): string | null => s.merges?.at(-1)?.subjectId ?? s.currentSubject;
+const findingBlocks = (s: Enabled) => lifecycleFindingBlocks({ ...s, currentSubject: reviewedSubject(s) });
 /** Bloqueos honestos del lifecycle: hallazgos sin disposición vigente y operaciones inciertas. */
 export function lifecycleBlocks(state: Workflow): string[] {
  if (state.version !== 2 || state.lifecycle.status !== "enabled") return [];
  const s = state.lifecycle;
  const uncertain = s.operations.filter(o => o.status === "unknown").map(o => `${o.kind} ${o.id} incierto: observar/reconciliar, no repetir`);
  const open = s.segments.filter(x => x.mode !== "closed").map(x => `Actividad ${x.id} sin cerrar: reconciliar antes de otro efecto`);
- return [...lifecycleFindingBlocks(s), ...uncertain, ...open];
+ return [...findingBlocks(s), ...uncertain, ...open];
 }
 export function lifecycleLines(state: Workflow): string[] {
  if (state.version !== 2 || state.lifecycle.status !== "enabled") {
@@ -20,11 +24,11 @@ export function lifecycleLines(state: Workflow): string[] {
  }
  const s = state.lifecycle, pin = s.pins.find(p => p.accepted.blockHash === s.pinHash)?.accepted.block, subject = s.subjects.find(x => x.id === s.currentSubject);
  if (!pin) return ["Lifecycle sin configuración vigente: no se inician efectos."];
- const checks = s.checks.filter(c => c.subjectId === s.currentSubject), passed = checks.filter(c => c.state === "success").length;
- const blocks = lifecycleFindingBlocks(s), corrected = s.ledger.length - blocks.length;
+ const reviewed = reviewedSubject(s), checks = s.checks.filter(c => c.subjectId === reviewed), passed = checks.filter(c => c.state === "success").length;
+ const blocks = findingBlocks(s), corrected = s.ledger.length - blocks.length;
  const rounds = s.corrections ?? [], active = rounds.findLast(r => r.status !== "pushed" && r.status !== "failed");
  const reviews = s.operations.filter(o => o.kind === "review"), lastReview = reviews.at(-1);
- const approval = s.approvals.findLast(a => a.subjectId === s.currentSubject);
+ const approval = s.approvals.findLast(a => a.subjectId === reviewed);
  const merge = s.merges?.at(-1);
  const lines = [
   `Lifecycle · ${STAGES[s.stage]} · PR #${subject?.number ?? state.pullRequest?.number ?? "?"}${subject ? ` · ${subject.headSha.slice(0, 12)}` : ""}`,
@@ -44,5 +48,5 @@ export function lifecycleLines(state: Workflow): string[] {
 export function lifecycleSummary(state: Workflow): string | undefined {
  if (state.version !== 2 || state.lifecycle.status !== "enabled") return state.publication.status === "opened" ? "Sin Review/Land/Ship" : undefined;
  const s = state.lifecycle, pin = s.pins.find(p => p.accepted.blockHash === s.pinHash)?.accepted.block; if (!pin) return undefined;
- return `Hallazgos ${lifecycleFindingBlocks(s).length} · rondas ${s.budget.roundsUsed}/${pin.corrections.maxRounds} · intentos ${s.budget.attemptsUsed}/${pin.budget.maxAttempts}`;
+ return `Hallazgos ${findingBlocks(s).length} · rondas ${s.budget.roundsUsed}/${pin.corrections.maxRounds} · intentos ${s.budget.attemptsUsed}/${pin.budget.maxAttempts}`;
 }

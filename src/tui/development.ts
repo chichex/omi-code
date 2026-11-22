@@ -20,9 +20,12 @@ import { effectivePolicy, foundationsLines } from "./development-foundations.ts"
 import { editFoundations } from "./development-foundations-setup.ts";
 import { HeldLoadout } from "./development-loadout.ts";
 import { syncWorkStack } from "./development-stack.ts";
+import { adoptLifecycle, landLifecycle, LIFECYCLE_COMMANDS, LifecycleDeclined, reviewLifecycle } from "./development-lifecycle.ts";
+import { fixLifecycle } from "./development-lifecycle-fix.ts";
+import { shipLifecycle } from "./development-lifecycle-ship.ts";
 
 const KICKOFF = "Continuá el harness de desarrollo activo desde su etapa persistida. Respetá sus bloqueos y pedí los permisos pendientes; no saltees etapas.";
-const USAGE = "Uso: /omi-work resume | approve | pause | refresh | pr | stack | status | foundations | stop";
+const USAGE = "Uso: /omi-work resume | approve | pause | refresh | pr | stack | status | foundations | stop · después del PR draft: adopt | review | fix | land | ship";
 // Otra ventana preparando el mismo issue es una espera, no un error; también envuelto en un aviso.
 const busy = (error: unknown): boolean => error instanceof IssuePreparationBusyError || (error instanceof Error && error.cause instanceof IssuePreparationBusyError);
 
@@ -114,7 +117,7 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 			pi.sendUserMessage(beginCommand(token), { expandPromptTemplates: true });
 		});
 		pi.registerCommand("omi-work", {
-			description: "Harness de desarrollo: resume, approve, pause, refresh, pr, stack, status, foundations, stop",
+			description: "Harness de desarrollo: resume, approve, pause, refresh, pr, stack, status, foundations, stop; y después del PR draft adopt, review, fix, land, ship",
 			handler: async (input, ctx) => {
 				try {
 					const command = input.trim() || "status";
@@ -123,6 +126,18 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 					if (command === "foundations") { await editFoundations(ctx, session, deps.kb); loadout(); return; }
 					const [verb, ...rest] = command.split(/\s+/);
 					if (verb === BEGIN_SUBCOMMAND) { await begin(rest.join(" "), ctx); return; }
+					// Review, correcciones, Land y Ship: comandos de la persona; cada efecto pide su permiso.
+					if ((LIFECYCLE_COMMANDS as readonly string[]).includes(command)) {
+						let continueWork = false;
+						try {
+							if (command === "adopt") await adoptLifecycle(session, ctx);
+							else if (command === "review") await reviewLifecycle(session, ctx);
+							else if (command === "fix") continueWork = await fixLifecycle(session, ctx);
+							else if (command === "land") await landLifecycle(session, ctx);
+							else await shipLifecycle(session, ctx);
+						} catch (error) { if (!(error instanceof LifecycleDeclined)) throw error; ctx.ui.notify(error.message, "info"); }
+						loadout(); if (continueWork) proceed(ctx); return;
+					}
 					if (["resume", "approve", "pr", "stack"].includes(command)) await session.foundations.pin(ctx);
 					if (command === "resume") {
 						await session.restore(ctx, true); session.current(ctx);

@@ -60,7 +60,7 @@ export function fakeGitHub(repo: string, root: string, pull: Omit<FakePull, "hea
 		if (path.endsWith("/check-runs")) return json({ total_count: gh.checks.length, check_runs: gh.checks.map(c => ({ id: c.id, name: c.name, head_sha: gh.pull.head(), status: "completed", conclusion: c.conclusion, app: { id: c.app } })) });
 		if (path === `${prefix}/branches/main/protection`) return json({ url: `https://api.github.com/${prefix}/branches/main/protection`, required_status_checks: { strict: false, checks: [{ context: "cierre", app_id: 15368 }], contexts: ["cierre"] }, required_pull_request_reviews: { required_approving_review_count: 1 } });
 		if (path === `${prefix}/branches/main`) return json({ name: "main", protected: true, commit: { sha: gh.pull.base } });
-		if (path.startsWith(`${prefix}/collaborators/`)) return json({ user: { login: path.split("/")[3] }, permission: "write" });
+		if (path.startsWith(`${prefix}/collaborators/`)) return json({ user: { login: path.split("/")[4] }, permission: "write" });
 		if (path.startsWith(`${prefix}/compare/`)) return json({ status: "ahead", ahead_by: 1, behind_by: 0 });
 		return json({ message: "Not Found" }, 404);
 	};
