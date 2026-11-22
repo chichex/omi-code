@@ -1,16 +1,11 @@
 // Invariantes del agregado: se aplican al leer disco, no sólo desde los reducers.
-import { createHash } from "node:crypto";
 import { Value } from "typebox/value";
 import { checkLifecycleConfig, lifecycleHash } from "./lifecycle-config.ts";
 import { lifecycleKeyValid } from "./lifecycle-trust.ts";
 import { LifecycleStateSchema, type LifecycleState, type EnabledLifecycle } from "./lifecycle-state-schema.ts";
+import { dataHash, sameData } from "./lifecycle-value.ts";
+export { dataHash, sameData } from "./lifecycle-value.ts";
 export function lifecycleAssert(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(`Lifecycle: ${message}`); }
-function canonical(value: unknown): unknown {
- if (Array.isArray(value)) return value.map(canonical);
- return value && typeof value === "object" ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, canonical(item)])) : value;
-}
-export const dataHash = (value: unknown): string => createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex");
-export const sameData = (a: unknown, b: unknown): boolean => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
 export const subjectIdentity = (s: EnabledLifecycle["subjects"][number]): string => JSON.stringify([s.repo, s.number, s.headSha, s.baseSha, s.contentHash, s.mergedSha]);
 export function sourceKey(provider: string, externalId: string, operationId: string, subject: EnabledLifecycle["subjects"][number]): string {
  return JSON.stringify([provider, subject.repo, subject.number, externalId, provider === "github" ? null : operationId]);
@@ -42,6 +37,11 @@ export function validateLifecycleState(value: unknown, root?: { workflowId: stri
   const d = s.decisions.find(d => d.id === op.decisionId);
   lifecycleAssert(d && d.kind === op.kind && d.subjectId === op.subjectId && d.targetId === op.targetId && d.configHash === op.configHash, "decisión ajena a la operación");
   if (op.targetId !== null) lifecycleAssert(pin.accepted.block.ship.targets.some(t => t.id === op.targetId), "destino de operación inexistente");
+  if (op.providerRequest) {
+   const req = op.providerRequest, sub = subject(op.subjectId), provider = pin.accepted.block.review.provider;
+   lifecycleAssert(op.kind === "review" && provider.kind === "gha" && req.repo === s.root.repo && req.pr === sub.number && req.headSha === sub.headSha && req.baseSha === sub.baseSha && req.correlationId === op.correlationId
+    && req.workflow.ref === provider.ref && req.workflow.path === `.github/workflows/${provider.workflow.replace(/^\.github\/workflows\//, "")}` && Number.isFinite(Date.parse(req.createdAfter)), "request GHA de otra operación/config/sujeto");
+  }
   const previous = s.operations.slice(0, index).findLast(old => effectKey(old) === effectKey(op));
   if (previous) lifecycleAssert(previous.status === "confirmed" && previous.receipt.outcome === "failed" && op.retryOf === previous.id, "efecto duplicado/pendiente/incierto o retry no enlazado");
   else lifecycleAssert(op.retryOf === null, "retry referencia otro efecto");
@@ -96,6 +96,7 @@ export function assertLifecycleContinuity(before: LifecycleState, after: Lifecyc
   const next = after.operations[index]; lifecycleAssert(next, "operación perdida");
   const immutable = (op: typeof old) => [op.id, op.key, op.kind, op.subjectId, op.targetId, op.correlationId, op.retryOf, op.configHash, op.decisionId];
   lifecycleAssert(sameData(immutable(old), immutable(next)), "identidad de operación reescrita"); prefix(old.history, next.history, "journal history");
+  if (old.providerRequest) lifecycleAssert(sameData(old.providerRequest, next.providerRequest), "request fijado antes del efecto no se borra ni reescribe");
   if (old.status === "confirmed") lifecycleAssert(sameData(old, next), "recibo confirmado reescrito");
   if (old.status === "unknown") lifecycleAssert(next.status !== "pending", "unknown no vuelve a pending");
  }

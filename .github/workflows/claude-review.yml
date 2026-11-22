@@ -18,6 +18,7 @@
 #     anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
 
 name: Claude Review
+run-name: ${{ inputs.correlation_id != '' && format('omi-review-v1 PR #{0} {1}', inputs.pr, inputs.correlation_id) || format('Claude Review PR #{0}', inputs.pr) }}
 
 on:
   workflow_dispatch:
@@ -25,6 +26,14 @@ on:
       pr:
         description: "Número del PR a revisar (ej: 271)"
         required: true
+        type: string
+      expected_head_sha:
+        description: "HEAD exacto del PR; junto con correlation_id activa omi-review-v1"
+        required: false
+        type: string
+      correlation_id:
+        description: "Correlación única del harness; requerida junto con expected_head_sha"
+        required: false
         type: string
       model:
         description: "Modelo con el que revisa"
@@ -51,12 +60,40 @@ on:
 # Dos disparos sobre el mismo PR: gana el último. No deshace los comentarios que
 # el review cancelado ya alcanzó a publicar.
 concurrency:
-  group: claude-review-${{ inputs.pr }}
-  cancel-in-progress: true
+  group: claude-review-${{ inputs.pr }}-${{ inputs.correlation_id || 'legacy' }}
+  cancel-in-progress: ${{ inputs.correlation_id == '' }}
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      strong: ${{ steps.inputs.outputs.strong }}
+    steps:
+      - name: Validar contrato de inputs antes de consumir cuota del reviewer
+        id: inputs
+        env:
+          PR: ${{ inputs.pr }}
+          EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
+          CORRELATION_ID: ${{ inputs.correlation_id }}
+          REVIEW_MODEL: ${{ inputs.model }}
+          REVIEW_EFFORT: ${{ inputs.effort }}
+        run: |
+          [[ "$PR" =~ ^[1-9][0-9]*$ ]] || { echo '::error::PR inválido'; exit 1; }
+          case "$REVIEW_MODEL" in claude-opus-5-5|claude-sonnet-5-5|claude-fable-5-1|claude-haiku-4-5) ;; *) exit 1;; esac
+          case "$REVIEW_EFFORT" in low|medium|high|xhigh|max) ;; *) exit 1;; esac
+          if [ -z "$EXPECTED_HEAD_SHA" ] && [ -z "$CORRELATION_ID" ]; then
+            echo 'strong=false' >> "$GITHUB_OUTPUT"
+          else
+            [[ "$EXPECTED_HEAD_SHA" =~ ^[a-f0-9]{40}([a-f0-9]{24})?$ ]] || { echo '::error::SHA inválido/incompleto'; exit 1; }
+            [[ "$CORRELATION_ID" =~ ^[A-Za-z0-9][A-Za-z0-9_.:-]{15,127}$ ]] || { echo '::error::Correlación inválida/incompleta'; exit 1; }
+            echo 'strong=true' >> "$GITHUB_OUTPUT"
+          fi
+
   review:
     name: Review
+    needs: validate
+    if: needs.validate.outputs.strong == 'false'
     # Ya no hace falta filtrar por autor ni por draft, como cuando el trigger era
     # `pull_request`: workflow_dispatch exige permiso de escritura sobre el repo,
     # así que solo lo dispara alguien que podría gastar la cuota igual.
@@ -223,3 +260,68 @@ jobs:
             echo "::error::El review no publicó ningún comentario"
             exit 1
           fi
+
+  review_contract:
+    name: Review correlacionada · omi-review-v1
+    needs: validate
+    if: needs.validate.outputs.strong == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      PR: ${{ inputs.pr }}
+      EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
+      CORRELATION_ID: ${{ inputs.correlation_id }}
+      REVIEW_MODEL: ${{ inputs.model }}
+      REVIEW_EFFORT: ${{ inputs.effort }}
+      REVIEW_DIRECTORY: ${{ runner.temp }}/omi-review-v1
+    steps:
+      # Producer/imports/lockfile proceden del workflow autorizado, NO del PR.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          submodules: false
+          lfs: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+      - run: npm ci
+      - name: Fijar identidad del PR desde el producer confiable
+        id: inspect
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/review-workflow.ts inspect
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_head_sha }}
+          path: .omi-review-pr
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+          lfs: false
+      - name: Preparar diff íntegro con head/base/merge-base fijos
+        id: prepare
+        run: node scripts/review-workflow.ts prepare
+      # La ruta fuerte usa el SDK 0.3.321 fijado en package-lock: arrays vacíos reales,
+      # no flags vacíos interpretados por el parser del Action legacy. No tools ni MCP/config del PR.
+      - name: Reviewer aislado · sólo material preparado
+        if: steps.prepare.outputs.complete == 'true'
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: node scripts/review-workflow.ts review
+      - name: Finalizar recibo host y revalidar HEAD/base
+        if: always() && steps.prepare.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/review-workflow.ts finish
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.prepare.outcome == 'success'
+        with:
+          name: omi-review-v1-${{ inputs.correlation_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/omi-review-v1/review.json
+          if-no-files-found: error
+          retention-days: 7

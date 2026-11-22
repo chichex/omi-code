@@ -1,6 +1,7 @@
 // Agregado durable post-PR. Todo dato externo se valida; no contiene comandos ni capacidades ejecutables.
 import { Type, type Static } from "typebox";
 import { LifecycleConfigSchema } from "./lifecycle-schema.ts";
+import { GhaReviewRequestSchema } from "./gha-review-contract.ts";
 const closed = { additionalProperties: false } as const;
 export const boundedText = (maxLength = 256) => Type.String({ minLength: 1, maxLength, pattern: "\\S" });
 const nullableText = () => Type.Union([boundedText(), Type.Null()]);
@@ -24,7 +25,7 @@ export const DecisionSchema = Type.Object({ id: boundedText(), kind: OperationKi
 export type LifecycleDecision = Static<typeof DecisionSchema>;
 export const ReceiptSchema = Type.Object({ operationId: boundedText(), correlationId: boundedText(), subjectId: boundedText(), targetId: nullableText(), externalId: boundedText(), outcome: Type.Enum(["succeeded", "failed", "not-applicable"]), verifiedSubjectId: nullableText(), at: boundedText(100) }, closed);
 export type LifecycleReceipt = Static<typeof ReceiptSchema>;
-const OperationFields = { ...IntentSchema.properties, configHash: Hash, decisionId: boundedText(), history: Type.Array(Type.Object({ status: Type.Enum(["pending", "unknown", "confirmed"]), at: boundedText(100) }, closed), { minItems: 1, maxItems: 1000 }) };
+const OperationFields = { ...IntentSchema.properties, configHash: Hash, decisionId: boundedText(), providerRequest: Type.Optional(GhaReviewRequestSchema), history: Type.Array(Type.Object({ status: Type.Enum(["pending", "unknown", "confirmed"]), at: boundedText(100) }, closed), { minItems: 1, maxItems: 1000 }) };
 const OperationSchema = Type.Union([
  Type.Object({ ...OperationFields, status: Type.Literal("pending") }, closed),
  Type.Object({ ...OperationFields, status: Type.Literal("unknown"), reason: boundedText(4000) }, closed),

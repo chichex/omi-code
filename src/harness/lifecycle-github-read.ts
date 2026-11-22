@@ -14,7 +14,7 @@ export class GitHubReadError extends Error {
  constructor(message = "GitHub incompleto/no disponible; no acredita avance", status: number | null = null, transient = false) { super(message); this.name = "GitHubReadError"; this.status = status; this.transient = transient; }
 }
 interface ReadResult extends CommandResult { truncated?: boolean; transient?: boolean }
-const boundedRunner: Runner = { run(command, args, options = {}) {
+export const boundedGitHubRunner: Runner = { run(command, args, options = {}) {
  return new Promise<ReadResult>(done => {
   execFile(command, args, { cwd: options.cwd, signal: options.signal, timeout: 15000, killSignal: "SIGKILL", maxBuffer: MAX_GITHUB_READ_BYTES, windowsHide: true,
    env: childEnvironment({ ...process.env, ...options.env }) }, (error, stdout, stderr) => {
@@ -41,18 +41,26 @@ export class GitHubReadClient {
   const allowed = path === prefix || path.startsWith(prefix + "/") && (/^\/pulls\/[1-9]\d*(?:\/(?:reviews|comments))?$/.test(tail)
    || /^\/issues\/[1-9]\d*\/comments$/.test(tail)
    || /^\/commits\/[a-f0-9]{40}(?:[a-f0-9]{24})?\/(?:statuses|check-runs)$/.test(tail)
-   || /^\/(?:branches|rules\/branches)\/[^/?#]+(?:\/protection)?$/.test(tail));
+   || /^\/(?:branches|rules\/branches)\/[^/?#]+(?:\/protection)?$/.test(tail)
+   || /^\/actions\/workflows\/(?:[1-9]\d*|[A-Za-z0-9_.-]+\.ya?ml)(?:\/runs)?$/.test(tail)
+   || /^\/actions\/runs\/[1-9]\d*(?:\/artifacts)?$/.test(tail)
+   || /^\/git\/ref\/(?:heads|tags)\/[^/?#]+$/.test(tail) || /^\/git\/tags\/[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(tail));
   const url = new URL(endpoint, "https://api.github.com/");
-  if (!allowed || endpoint.length > 4096 || url.hostname !== "api.github.com" || url.hash || [...url.searchParams].some(([key, value]) => !["page", "per_page"].includes(key) || !/^[1-9]\d*$/.test(value))) throw new GitHubReadError("Endpoint fuera del contrato de lectura GitHub");
+  const queryAllowed = (key: string, value: string): boolean => ["page", "per_page"].includes(key) ? /^[1-9]\d*$/.test(value)
+   : tail.startsWith("/actions/") && (key === "event" && ["workflow_dispatch", "push", "release", "workflow_run"].includes(value)
+    || key === "branch" && lifecycleRef(value) || key === "created" && value.startsWith(">=") && Number.isFinite(Date.parse(value.slice(2))));
+  if (!allowed || endpoint.length > 4096 || url.hostname !== "api.github.com" || url.hash || [...url.searchParams].some(([key, value]) => !queryAllowed(key, value))) throw new GitHubReadError("Endpoint fuera del contrato de lectura GitHub");
   const branch = /^\/(?:branches|rules\/branches)\/([^/?#]+)(?:\/protection)?$/.exec(tail)?.[1];
   if (branch && !lifecycleRef(decodeURIComponent(branch))) throw new GitHubReadError("Branch GitHub inválida");
+  const ref = /^\/git\/ref\/(?:heads|tags)\/([^/?#]+)$/.exec(tail)?.[1];
+  if (ref && !lifecycleRef(decodeURIComponent(ref))) throw new GitHubReadError("Ref GitHub inválida");
  }
  private async packet(endpoint: string, signal: AbortSignal): Promise<Packet> {
   this.allowed(endpoint);
   for (let attempt = 0; ; attempt++) {
    signal.throwIfAborted();
    try {
-    const result: ReadResult = await (this.options.runner ?? boundedRunner).run("gh", ["api", "--hostname", "github.com", "--method", "GET", "--include", endpoint], {
+    const result: ReadResult = await (this.options.runner ?? boundedGitHubRunner).run("gh", ["api", "--hostname", "github.com", "--method", "GET", "--include", endpoint], {
      cwd: this.options.cwd, signal: AbortSignal.any([signal, AbortSignal.timeout(15000)]),
      env: { GH_HOST: "github.com", GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", GH_PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
     });
@@ -90,7 +98,8 @@ export class GitHubReadClient {
  async collection<S extends TSchema>(endpoint: string, schema: S, signal: AbortSignal, field?: string): Promise<Static<S>[]> {
   const items: Static<S>[] = []; const ids = new Set<string>(); let bytes = 0; let expectedTotal: number | undefined;
   for (let page = 1; page <= 10; page++) {
-   const packet = await this.packet(`${endpoint}?per_page=100&page=${page}`, signal); let raw: unknown = packet.body;
+   const requested = new URL(endpoint, "https://api.github.com/"); requested.searchParams.set("per_page", "100"); requested.searchParams.set("page", String(page));
+   const packet = await this.packet(requested.pathname.slice(1) + requested.search, signal); let raw: unknown = packet.body;
    if (field) {
     if (!record(raw) || !Number.isSafeInteger(raw.total_count) || Number(raw.total_count) < 0) throw new GitHubReadError("Colección GitHub sin total verificable");
     if (expectedTotal !== undefined && expectedTotal !== raw.total_count) throw new GitHubReadError("La colección cambió durante la paginación");
@@ -108,7 +117,7 @@ export class GitHubReadClient {
     if (expectedTotal !== undefined && items.length !== expectedTotal) throw new GitHubReadError("Colección GitHub truncada"); return items;
    }
    const next = new URL(packet.next); const nextPage = next.searchParams.get("page");
-   if (!raw.length || page === 10 || next.protocol !== "https:" || next.hostname !== "api.github.com" || next.username || next.password || next.hash || next.pathname !== `/${endpoint}` || nextPage !== String(page + 1) || next.searchParams.get("per_page") !== "100") throw new GitHubReadError("Paginación GitHub incompleta o fuera de identidad");
+   if (!raw.length || page === 10 || next.protocol !== "https:" || next.hostname !== "api.github.com" || next.username || next.password || next.hash || next.pathname !== requested.pathname || [...new URL(endpoint, "https://api.github.com/").searchParams].some(([key, value]) => next.searchParams.get(key) !== value) || nextPage !== String(page + 1) || next.searchParams.get("per_page") !== "100") throw new GitHubReadError("Paginación GitHub incompleta o fuera de identidad");
   }
   throw new GitHubReadError("Colección GitHub incompleta");
  }
