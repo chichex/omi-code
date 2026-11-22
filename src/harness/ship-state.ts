@@ -26,17 +26,17 @@ export function completeShip(original: unknown, at: string, explicit?: unknown):
  const state = parseWorkflow(JSON.stringify(original)); lifecycleAssert(state.lifecycle.status === "enabled", "lifecycle no habilitado");
  const s = state.lifecycle, sub = s.subjects.find(x => x.id === s.currentSubject), config = currentLifecyclePin(s).accepted.block;
  lifecycleAssert(sub?.mergedSha && config.ship.status !== "unconfigured", "Ship no configurado o merge no observado; no es éxito");
- let outcome: "verified" | "not-applicable" | "manual-attested"; const evidenceIds: string[] = [];
+ let outcome: "verified" | "externally-attested" | "not-applicable" | "manual-attested"; const evidenceIds: string[] = [];
  if (config.ship.status === "manual") {
   lifecycleAssert(Value.Check(ManualShipSchema, explicit) && explicit.subjectId === sub.id && explicit.integratedSha === sub.mergedSha && explicit.configHash === s.pinHash, "manual pendiente: falta declaración humana explícita del destino/merge"); outcome = "manual-attested";
  } else if (config.ship.status === "not-applicable") outcome = "not-applicable";
  else {
-  lifecycleAssert(config.ship.targets.length > 0, "vacío no es entrega"); let verified = false;
+  lifecycleAssert(config.ship.targets.length > 0, "vacío no es entrega"); let verified = false, attested = false;
   for (const target of config.ship.targets) {
    const d = s.deliveries?.findLast(d => d.targetId === target.id && d.subjectId === sub.id && d.configHash === s.pinHash);
-   lifecycleAssert(d && ["verified", "not-applicable"].includes(d.result.state), "falta verificar un destino actual; fallido/unknown/rollback no entrega"); evidenceIds.push(d.id); verified ||= d.result.state === "verified";
+   lifecycleAssert(d && ["verified", "not-applicable"].includes(d.result.state), "falta verificar un destino actual; fallido/unknown/rollback no entrega"); evidenceIds.push(d.id); verified ||= d.result.state === "verified"; attested ||= d.result.proof?.kind === "omi" && d.result.proof.origin.kind === "attested";
   }
-  outcome = verified ? "verified" : "not-applicable";
+  outcome = attested ? "externally-attested" : verified ? "verified" : "not-applicable";
  }
  const completion = { subjectId: sub.id, integratedSha: sub.mergedSha, configHash: s.pinHash, evidenceIds, at };
  if (outcome === "manual-attested") { lifecycleAssert(Value.Check(ManualShipSchema, explicit), "falta declaración manual"); s.completion = { ...completion, outcome, attestation: structuredClone(explicit) }; }

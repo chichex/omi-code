@@ -22,7 +22,7 @@ export function createGhaShipPorts(original: unknown, operationId: string, optio
  const provider = c.target.provider, assets = new Map<number, { name: string; size: number }>(); let downloaded = 0;
  let workflow: Awaited<ReturnType<typeof trustedWorkflow>> | undefined;
  const getWorkflow = async (signal: AbortSignal, refresh = false) => {
-  if (c.op.shipRequest && !refresh) return c.op.shipRequest.workflow;
+  if (c.op.shipRequest && !refresh) { lifecycleAssert(c.op.shipRequest.kind !== "omi", "request de otro proveedor"); return c.op.shipRequest.workflow; }
   if (refresh) workflow = undefined;
   return workflow ??= await trustedWorkflow(client, provider.workflow, provider.ref, signal);
  };

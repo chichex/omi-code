@@ -1,10 +1,13 @@
 // Integridad de evidencia y finalización: succeeded genérico nunca basta para afirmar entrega.
 import type { EnabledLifecycle } from "./lifecycle-state-schema.ts";
 import { sameData } from "./lifecycle-value.ts";
+import { validateOmiFacts, assertOmiContinuity } from "./omi-ship-invariants.ts";
 function requireFact(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(`Ship: ${message}`); }
 export function validateShipFacts(s: EnabledLifecycle): void {
+ validateOmiFacts(s);
  for (const op of s.operations) if (op.shipRequest) {
-  const r = op.shipRequest, sub = s.subjects.find(x => x.id === op.subjectId), cfg = s.pins.find(p => p.accepted.blockHash === op.configHash)?.accepted.block, target = cfg?.ship.targets.find(t => t.id === op.targetId);
+  const r = op.shipRequest; if (r.kind === "omi") continue;
+  const sub = s.subjects.find(x => x.id === op.subjectId), cfg = s.pins.find(p => p.accepted.blockHash === op.configHash)?.accepted.block, target = cfg?.ship.targets.find(t => t.id === op.targetId);
   requireFact(op.kind === "ship" && sub?.mergedSha && target?.provider.kind === "gha" && r.repo === sub.repo && r.pr === sub.number && r.subjectId === sub.id && r.integratedSha === sub.mergedSha && r.targetId === target.id && r.configHash === op.configHash && r.correlationId === op.correlationId && r.mode === target.provider.mode && r.workflow.ref === target.provider.ref && r.workflow.path === `.github/workflows/${target.provider.workflow.replace(/^\.github\/workflows\//, "")}` && r.kind === (target.evidence.kind === "github-release" ? "gha-release" : "gha-receipt"), "request de otro target/merge/config");
  }
  const deliveries = s.deliveries ?? []; requireFact(new Set(deliveries.map(d => d.id)).size === deliveries.length, "IDs de evidencia duplicados");
@@ -14,9 +17,9 @@ export function validateShipFacts(s: EnabledLifecycle): void {
   if (proof) {
    requireFact(proof.subjectId === sub.id && proof.operationId === op.id && proof.targetId === target.id && proof.configHash === op.configHash && proof.integratedSha === sub.mergedSha, "prueba de otro merge/destino");
    if (proof.kind === "github-release" || proof.kind === "gha-receipt") requireFact(proof.repo === s.root.repo, "prueba de otro repositorio");
-   if (proof.kind === "gha-receipt") requireFact(proof.correlationId === op.correlationId && (!op.shipRequest || proof.workflowSha === op.shipRequest.workflow.sha && (op.shipRequest.mode !== "dispatch" || proof.providerCorrelationId === op.correlationId && proof.sourceSha === sub.mergedSha)), "recibo de otra correlación/workflow");
+   if (proof.kind === "gha-receipt") requireFact(proof.correlationId === op.correlationId && (!op.shipRequest || op.shipRequest.kind !== "omi" && proof.workflowSha === op.shipRequest.workflow.sha && (op.shipRequest.mode !== "dispatch" || proof.providerCorrelationId === op.correlationId && proof.sourceSha === sub.mergedSha)), "recibo de otra correlación/workflow");
    if (proof.kind === "github-release") requireFact(target.evidence.kind === "github-release" && proof.assets.length === target.evidence.assets.length && new Set(proof.assets.map(a => a.id)).size === proof.assets.length && new Set(proof.assets.map(a => a.name)).size === proof.assets.length && target.evidence.assets.every(name => proof.assets.some(a => a.name === name)), "assets requeridos omitidos/duplicados");
-   requireFact(proof.kind === "not-applicable" || proof.kind === "github-release" && target.evidence.kind === "github-release" || proof.kind === "gha-receipt" && target.evidence.kind === "receipt", "tipo de evidencia no corresponde a configuración");
+   requireFact(proof.kind === "not-applicable" || proof.kind === "github-release" && target.evidence.kind === "github-release" || proof.kind === "gha-receipt" && target.evidence.kind === "receipt" || proof.kind === "omi" && target.evidence.kind === "omi", "tipo de evidencia no corresponde a configuración");
   }
   if (d.result.state === "verified") requireFact(op.status === "confirmed" && op.receipt.outcome === "succeeded" && proof && proof.kind !== "not-applicable" && (!target.evidence.health || proof.probes.health === "pass") && (!target.evidence.version || proof.probes.version === "pass") && !Object.values(proof.probes).some(p => p === "fail" || p === "unknown"), "entrega sin recibo/probes verificados");
   if (d.result.state === "not-applicable") requireFact(op.status === "confirmed" && op.receipt.outcome === "not-applicable" && proof?.kind === "not-applicable", "no-aplica sin evidencia explícita");
@@ -35,6 +38,7 @@ export function validateShipFacts(s: EnabledLifecycle): void {
  }
 }
 export function assertShipContinuity(before: EnabledLifecycle, after: EnabledLifecycle): void {
+ assertOmiContinuity(before, after);
  const deliveries = after.deliveries ?? [], previous = before.deliveries ?? [];
  requireFact(deliveries.length >= previous.length && previous.every((d, i) => sameData(d, deliveries[i])), "no borrar/reescribir evidencia anterior");
  for (const op of before.operations) if (op.shipRequest) requireFact(sameData(op.shipRequest, after.operations.find(o => o.id === op.id)?.shipRequest), "claim no se borra ni reescribe");

@@ -1,5 +1,6 @@
 // Cliente HTTP de omi-api. Toda respuesta se valida contra un esquema: la red es una frontera.
 
+import { boundedResponseText } from "./response-body.ts";
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Static, TSchema } from "typebox";
@@ -47,6 +48,7 @@ const QueuedMutation = Type.Object({
 });
 
 export interface ClientOptions {
+	maxResponseBytes?: number;
 	apiUrl: string;
 	token?: string;
 	fetch?: typeof fetch;
@@ -62,6 +64,14 @@ export interface RequestOptions {
 	headers?: Record<string, string>;
 	/** Recibe los headers de una respuesta exitosa, como el Set-Cookie del login. */
 	onHeaders?: (headers: Headers) => void;
+}
+
+export interface MutationOptions extends RequestOptions {
+ projectPath: string; onQueued?: (state: string) => void;
+ /** Clave durable observada por el host; no es un parámetro de tools ni una autorización. */
+ idempotencyKey?: string;
+ /** El host conserva el ID de cola antes de seguir esperando; rechazo no reenvía la mutación. */
+ onReceipt?: (receipt: { mutationId: string; state: string }) => Promise<void>;
 }
 
 export function decode<S extends TSchema>(schema: S, value: unknown, context: string): Static<S> {
@@ -110,12 +120,15 @@ export class OmiClient {
 	readonly apiUrl: string;
 	readonly #token: string | undefined;
 	readonly #fetch: typeof fetch;
+	readonly #maxResponseBytes: number;
 	readonly pollIntervalMs: number;
 
 	constructor(options: ClientOptions) {
 		this.apiUrl = options.apiUrl.replace(/\/+$/, "");
 		this.#token = options.token;
 		this.#fetch = options.fetch ?? fetch;
+		this.#maxResponseBytes = options.maxResponseBytes ?? 8 * 1024 * 1024;
+		if (!Number.isSafeInteger(this.#maxResponseBytes) || this.#maxResponseBytes < 1) throw new OmiError("invalid_response_limit", "límite de respuesta inválido");
 		this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 	}
 
@@ -138,14 +151,22 @@ export class OmiClient {
 		method: string,
 		path: string,
 		schema: S,
-		options: RequestOptions & { projectPath: string; onQueued?: (state: string) => void },
+		options: MutationOptions,
 	): Promise<Static<S>> {
-		const idempotencyKey = randomUUID();
+		const idempotencyKey = options.idempotencyKey ?? randomUUID();
+		if (!/^[A-Za-z0-9_.:-]{1,128}$/.test(idempotencyKey)) throw new OmiError("invalid_idempotency_key", "clave de mutación durable inválida");
 		const payload = await this.#json(method, path, { ...options, idempotencyKey });
 		if (!Value.Check(QueuedReceipt, payload)) return decode(schema, payload, `${method} ${path}`);
 		options.onQueued?.(payload.state);
+		await options.onReceipt?.({ mutationId: payload.mutation_id, state: payload.state });
 		const result = await this.#awaitReceipt(payload.mutation_id, options.projectPath, options.signal);
 		return decode(schema, result, `${method} ${path}`);
+	}
+
+	/** Recupera sólo un recibo ya conocido; nunca vuelve a emitir POST/PUT. */
+	async observeMutation(mutationId: string, projectPath: string, signal?: AbortSignal): Promise<unknown> {
+		if (!mutationId || mutationId.length > 256 || !projectPath.startsWith("/organizations/") || !projectPath.includes("/projects/")) throw new OmiError("invalid_receipt", "recibo de mutación inválido");
+		return this.#awaitReceipt(mutationId, projectPath, signal);
 	}
 
 	/** Abre una respuesta en streaming, como el SSE de logs. Los errores previos al stream son JSON. */
@@ -176,7 +197,7 @@ export class OmiClient {
 
 	async #json(method: string, path: string, options: RequestOptions & { idempotencyKey?: string }): Promise<unknown> {
 		const response = await this.#send(method, path, options);
-		const text = await response.text();
+		const text = await boundedResponseText(response, this.#maxResponseBytes);
 		try {
 			return JSON.parse(text);
 		} catch {
@@ -200,7 +221,7 @@ export class OmiClient {
 		let response: Response;
 		try {
 			response = await this.#fetch(url, {
-				method,
+				method, redirect: "manual",
 				headers,
 				...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
 				...(signals.length === 0 ? {} : { signal: AbortSignal.any(signals) }),
@@ -216,7 +237,7 @@ export class OmiClient {
 			options.onHeaders?.(response.headers);
 			return response;
 		}
-		const text = await response.text();
+		const text = await boundedResponseText(response, this.#maxResponseBytes);
 		let payload: unknown;
 		try {
 			payload = JSON.parse(text);

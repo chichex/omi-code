@@ -2,6 +2,7 @@
 // se observa por polling, y promover es un deploy común en prod.
 
 import { Type } from "typebox";
+import type { MutationOptions } from "../client/http.ts";
 import { DeploymentSchema, DeploymentsSchema, type Deployment } from "../client/views.ts";
 import { OmiError } from "../core/errors.ts";
 import { enforce, type EnvironmentName } from "../guardrails/policy.ts";
@@ -16,7 +17,7 @@ const DEPLOY_POLL_BACKOFF = 1.5;
 
 const STAGES = Type.Union([Type.Literal("stage"), Type.Literal("prod")]);
 
-async function followDeployment(scope: Scope, path: string, started: Deployment, runtime: ToolRuntime): Promise<Deployment> {
+export async function followDeployment(scope: Scope, path: string, started: Deployment, runtime: ToolRuntime): Promise<Deployment> {
 	let reported = 0;
 	const report = (deployment: Deployment): void => {
 		for (const step of deployment.steps.slice(reported)) {
@@ -30,7 +31,7 @@ async function followDeployment(scope: Scope, path: string, started: Deployment,
 	while (current.status === "en_curso") {
 		if (Date.now() > deadline) throw new OmiError("deployment_timeout", `el deploy ${started.id} no terminó a tiempo`, { hint: "`omi status` muestra su estado" });
 		await scope.client.wait(runtime.signal, scope.client.pollIntervalMs * DEPLOY_POLL_BACKOFF);
-		const { deployments } = await scope.client.request("GET", path, DeploymentsSchema);
+		const { deployments } = await scope.client.request("GET", path, DeploymentsSchema, runtime.signal ? { signal: runtime.signal } : {});
 		const latest = deployments.find((deployment) => deployment.id === started.id);
 		if (latest === undefined) throw new OmiError("deployment_missing", `el deploy ${started.id} desapareció del historial`);
 		current = latest;
@@ -47,13 +48,17 @@ function failure(deployment: Deployment, service: string): OmiError {
 	});
 }
 
-async function runDeployment(scope: Scope, service: string, environment: EnvironmentName, version: string, runtime: ToolRuntime): Promise<ToolResult> {
+export async function runDeployment(scope: Scope, service: string, environment: EnvironmentName, version: string, runtime: ToolRuntime, durable: { idempotencyKey?: string; onReceipt?: MutationOptions["onReceipt"]; onStarted?: (deployment: Deployment) => Promise<void> } = {}): Promise<ToolResult> {
 	const path = `${environmentPath(scope, service, environment)}/deployments`;
 	const started = await scope.client.mutate("POST", path, DeploymentSchema, {
 		body: { version },
 		projectPath: scope.projectPath,
+		...(runtime.signal ? { signal: runtime.signal } : {}),
+		...(durable.idempotencyKey ? { idempotencyKey: durable.idempotencyKey } : {}),
+		...(durable.onReceipt ? { onReceipt: durable.onReceipt } : {}),
 		onQueued: (state) => runtime.progress?.(`deploy en cola: ${state}`),
 	});
+	await durable.onStarted?.(started);
 	const finished = await followDeployment(scope, path, started, runtime);
 	if (finished.status !== "exitoso") throw failure(finished, service);
 	return { text: `${service} ${version} desplegada en ${environment}`, data: finished };
