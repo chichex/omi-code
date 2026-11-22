@@ -1,6 +1,6 @@
 # Harness de desarrollo · hasta PR draft
 
-Primer corte para **repos existentes con issues de GitHub**, sobre sesiones y tools nativas de Pi. Implementa Directa, Diagnóstico y Con spec. Por defecto no pregunta nada: arranca, aprueba su receta, corre los comandos y abre el PR draft solo. [Foundations](#foundations-comandos-y-permisos-por-repo) pone por repo cada uno de esos puntos en `ask`. No incluye la etapa Fundación (completar una base faltante), prototipos descartables, perfiles/fallbacks de modelos, Review externa, Land ni Ship.
+Primer corte para **repos existentes con issues de GitHub**, sobre sesiones y tools nativas de Pi. Implementa Directa, Diagnóstico y Con spec. Por defecto no pregunta nada: arranca, aprueba su receta, corre los comandos y abre el PR draft solo. [Foundations](#foundations-comandos-y-permisos-por-repo) pone por repo cada uno de esos puntos en `ask`. No incluye la etapa Fundación (completar una base faltante), prototipos descartables ni perfiles/fallbacks de modelos. Después del PR draft, la persona puede seguir el mismo trabajo por [Review, correcciones, Land y Ship](#review-land-y-ship), con la configuración que guarda [`omi init --development`](#omi-init---development).
 
 ## Empezar y continuar
 
@@ -490,9 +490,60 @@ _PR draft preparado por OMI para el issue #60. Requiere revisión humana y nunca
 
 No hay garantía de atomicidad entre cambios humanos del issue y todas las acciones posteriores de Git/GitHub. Los checkpoints detectan cambios; no hay lock distribuido sobre la intención de la persona.
 
+## Review, Land y Ship
+
+El PR draft es el final por defecto. Para seguir el mismo trabajo, la persona lo habilita y lo avanza con comandos propios. El agente no tiene tools para estos efectos: ni `bash` ni `omi_workflow` reservan, mergean, despachan ni despliegan.
+
+| Comando | Qué hace | Permiso |
+|---|---|---|
+| `/omi-work adopt` | Habilita el lifecycle sobre el PR draft abierto: relee el PR en GitHub y el checkout, fija la configuración aceptada | Siempre un sí |
+| `/omi-work review` | Corre la Review configurada: `github` lee reviews, comentarios y checks; `local` usa un revisor aislado; `gha` dispara el workflow y espera su recibo | `review.mode` |
+| `/omi-work fix` | Agrupa los hallazgos del HEAD actual y abre una ronda: el agente corrige con rojo, verde, commit y todos los D. Al terminar, verifica y hace push al **mismo PR** | Siempre un sí para la ronda y otro para el push |
+| `/omi-work land` | Marca el PR listo (sale de draft), relee checks, reviews y reglas, y mergea por PR y SHA. Reconoce un merge externo | `land.mode` |
+| `/omi-work ship` | Verifica cada destino aceptado con recibos y provenance; termina en Entregado sólo si todos se verifican | `mode` de cada destino |
+
+Por defecto cada etapa es `ask`. En `chichex/omi-code`, el merge y cualquier dispatch son siempre humanos, aunque la configuración diga `auto`. Cada efecto pasa por el coordinador raíz: actividad, decisión, reserva, una sola invocación y recibo. Un resultado incierto queda como incierto y no se repite solo. Restaurar, recargar o moverse por el árbol de la sesión no ejecuta nada.
+
+Ejemplo, con Review por GitHub y Ship por una release:
+
+```text
+/omi-work adopt    → sí · Review del PR
+/omi-work review   → sí · 1 hallazgo: «Falta cubrir el valor 3»
+/omi-work fix      → sí · el agente corrige (paso C2) y marca verified
+/omi-work fix      → sí al push · mismo PR, HEAD nuevo
+/omi-work review   → sí · aprobado, sin hallazgos nuevos
+/omi-work land     → sí a «listo para review» · sí al merge
+/omi-work ship     → sí · release v0.2.0 verificada · Entrega verificada
+```
+
+Un comentario ya corregido que la Review vuelve a ver en el HEAD nuevo se confirma con `/omi-work fix` («Ya corregidos»), sin gastar otra ronda. Land no avanza con hallazgos pendientes ni operaciones inciertas. Un merge no es una entrega: Ship la verifica después. Ship `not-applicable` termina sin entrega y `manual` queda como entrega declarada, nunca como Entrega verificada.
+
+Límites de este corte: no se adopta un stack de PRs; un comentario de GitHub sin texto no cuenta como hallazgo; Ship OMI sólo observa (`observe`): publicar o desplegar desde acá no está conectado; los probes health/version de un destino GHA no tienen verificador conectado y quedan como desconocidos; la recuperación (stop, rollback, fix-forward) la decide una persona fuera de estos comandos. Una actividad que quedó abierta en otro proceso bloquea efectos nuevos hasta reconciliarla.
+
+## Onboarding del lifecycle
+
+Al abrir la sesión, un detector lee en segundo plano los workflows, scripts, manifiestos y el vínculo `.omi/project.json` del checkout. Sólo lee: no ejecuta scripts ni copia comandos, URLs o secretos.
+
+Al entrar al harness, si el repo no tiene lifecycle configurado en la KB, OMI ofrece el mismo wizard que `omi init --development`. No aparece en consultas simples ni en needs-info, que siguen en el chat. Se ofrece una vez por revisión de la configuración y sesión.
+
+- **Configurar ahora**: propone destino, verificación y recuperación con lo detectado; muestra el resumen y guarda sólo con un sí.
+- **Más adelante**: posterga esa revisión; no se vuelve a ofrecer hasta que cambie.
+- **Esc**: cancela sin escribir, aceptar ni desactivar nada.
+
+## `omi init --development`
+
+Configura Review, Land y Ship del repo en las perillas del producto en la KB, con el mismo wizard de la TUI. Necesita una persona en una terminal interactiva; ningún flag acepta por ella.
+
+```sh
+omi init --development                 # wizard: destino, verificación, recuperación, resumen y un sí
+omi init --development --check --json  # diagnóstico de sólo lectura
+```
+
+`--check` informa el estado (`unconfigured`, `pending`, `configured`, `manual`, `not-applicable`, `invalid` o `unavailable`), si se pueden iniciar efectos y lo detectado. Una KB caída es `unavailable`, nunca «sin configurar». Guardar no ejecuta workflows, merge ni deploy.
+
 ## Progreso en la TUI
 
-`PROGRESO · #N` muestra ruta, etapa, actividad, pasos, checks observados y bloqueos. El detalle muestra también Foundations: revisión, origen, tres políticas y patrones de confirmación verticales. Los eventos de lectura, comandos, preguntas y lentes actualizan la actividad sin esperar el refresco de recursos. El detalle incluye preguntas, evidencia, lentes e intentos anteriores. No convierte una tool exitosa ni un workflow verde de Actions en aprobación del PR.
+`PROGRESO · #N` muestra ruta, etapa, actividad, pasos, checks observados y bloqueos. Con el lifecycle habilitado, el recorrido suma Review del PR, Land, Ship y Entrega verificada, y una sección **Review · Land · Ship** con presupuesto (intentos, rondas, tiempo activo), Review, checks del SHA actual, hallazgos, merge, cada destino Ship y bloqueos; la lateral resume hallazgos, rondas e intentos en una línea. `/omi-work status` muestra lo mismo. Un trabajo que terminó en PR draft sin lifecycle sigue como **PR draft abierto** y avisa que no hubo Review, Land ni Ship. El detalle muestra también Foundations: revisión, origen, tres políticas y patrones de confirmación verticales. Los eventos de lectura, comandos, preguntas y lentes actualizan la actividad sin esperar el refresco de recursos. El detalle incluye preguntas, evidencia, lentes e intentos anteriores. No convierte una tool exitosa ni un workflow verde de Actions en aprobación del PR.
 
 El recorrido usa el catálogo de fases del harness y sus decisiones reales de ruta, no una lista paralela del renderer. Incluye pendientes, fases condicionales (Diagnóstico/Spec antes de conocer la ruta), no aplicables y los finales alternativos PR draft abierto/cierre sin cambio. `>` identifica la actual; los símbolos y textos distinguen avance sin depender del color. Un rojo esperado no hace fallar Implementar; los checks fallidos o interrumpidos conservan su significado observado. Un aviso de lente marca Verificar como △ **Con avisos**, durante la etapa y después de cumplida; sólo un `fail` de Seguridad la marca como fallida. La lateral muestra cuántos avisos hay y la pantalla 6 y `/omi-progress` los listan, uno por lente. La sección del issue trae **Avisos de los lentes** y el PR draft los lleva en **Advertencias**, con el estado de cada lente pedido y sus hallazgos.
 
