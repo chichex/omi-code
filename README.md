@@ -127,22 +127,16 @@ Una extensión del usuario que ya registre `subagent` reemplaza la incluida, sin
 
 No trae skills ni reemplaza el modelo predeterminado del usuario. Para usar un proveedor nativo de Pi, entrá con `/login` o importá credenciales; para Claude Bridge, usá el flujo de Claude Code indicado arriba. Detectar su ejecutable no equivale a validar la autenticación.
 
-Para los siguientes modelos del proveedor **OpenAI**, omi configura por defecto una ventana de
-**1.050.000 tokens**, según el límite publicado en la ficha API de cada modelo:
+omi usa la ventana de contexto del catálogo de Pi. Por ejemplo, `openai/gpt-6.1-sol` trae 272.000 tokens,
+y Pi compacta la sesión un poco antes de llegar ahí. Arriba de 272.000 tokens de entrada, OpenAI cobra
+el tramo caro: con GPT-6.1 Sol la entrada pasa de 2 a 4 USD por millón.
 
-| Familia | Modelos verificados (fuentes oficiales) |
-|---|---|
-| GPT-5.4 / 5.5 | [GPT-5.4](https://developers.openai.com/api/docs/models/gpt-5.4), [GPT-5.5](https://developers.openai.com/api/docs/models/gpt-5.5) |
-| GPT-5.6 | [Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna), [Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol), [Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra) |
-| GPT-6 | [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra), [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna), [Sol](https://developers.openai.com/api/docs/models/gpt-6-sol) |
-| GPT-6.1 | [Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol), [Terra](https://developers.openai.com/api/docs/models/gpt-6.1-terra) |
-
-Al arrancar agrega únicamente los `contextWindow` faltantes en `~/.omi/agent/models.json`;
-respeta por modelo un límite explícito en `modelOverrides` o en una definición `models` del usuario.
-También completa instalaciones que ya tenían el default de GPT-6.1 Sol. No modifica otros modelos,
-proveedores ni el catálogo cacheado: los Claude y Gemini recientes ya declaran aproximadamente 1M en Pi.
-El contexto largo puede aumentar el costo API; se mantienen las tarifas por tramos del catálogo.
-Esto no verifica permisos ni disponibilidad en tu cuenta, ni aplica el límite API al proveedor Codex.
+Hasta la 0.25, omi escribía 1.050.000 tokens en `~/.omi/agent/models.json` para diez GPT de OpenAI
+(GPT-5.4, 5.5, 5.6 Luna/Sol/Terra, 6 Astra/Luna/Sol y 6.1 Sol/Terra). Así una sesión larga crecía cerca
+del millón y cada vuelta reenviaba todo al precio alto. Al arrancar, omi retira esos valores una sola vez:
+sólo los `contextWindow: 1050000` de esos IDs en `modelOverrides` del proveedor `openai`. No toca otros
+modelos, proveedores ni definiciones `models`, y deja anotada la limpieza en `~/.omi/agent/omi-migrations.json`.
+Si querés la ventana completa, volvé a ponerla en `models.json`; desde entonces omi la respeta.
 
 Para la configuración del agente, omi sólo lee `~/.omi/agent` y el proyecto, del directorio actual hasta la raíz del repo.
 Por ejemplo, no carga `~/.pi/agent`, `~/.agents/skills` ni `~/AGENTS.md`. Para instrucciones globales usá `~/.omi/agent/AGENTS.md`.
