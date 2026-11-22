@@ -35,13 +35,16 @@ test("authorization v2: patrones son completos sin trim, regex ni canonización 
 	assert.equal(authorize("npm test && git push origin main", rules), "ask");
 	assert.equal(authorize("git push", block(["git push", "git push *"])), "ask");
 });
-test("authorization v2: sin configuración v2 válida aceptada todo pide sí", () => {
-	assert.equal(commandAuthorization(state(), "npm test"), "ask");
-	assert.equal(authorize("npm test", block(), state(), false), "ask");
-	for (const invalid of [null, { version: 1, repo: "test/repo", comandos: ["npm test"], politica: { ...STRICT_POLICY, fuera_de_catalogo: "auto" } }, { ...block(), confirmar: ["bad\\x"] }, { ...block(), confirmar: [""] }]) {
-		assert.equal(Reflect.apply(commandAuthorization, undefined, [state(), "npm test", { block: invalid, accepted: true }]), "ask");
+// Decisión del dueño al integrar #66 con #68: sin una v2 aceptada rige el default de #66, nada pregunta.
+test("authorization v2: sin configuración v2 válida aceptada rige el default: nada pregunta, ni lo compuesto", () => {
+	for (const command of ["npm test", "npm test && git push origin main", 'echo "texto"']) {
+		assert.equal(commandAuthorization(state(), command), "auto", command);
+		assert.equal(authorize(command, block(["*"]), state(), false), "auto", `${command}: una v2 no aceptada no vale`);
+		for (const invalid of [null, { version: 1, repo: "test/repo", comandos: ["npm test"], politica: { ...STRICT_POLICY, fuera_de_catalogo: "ask" } }, { ...block(["*"]), confirmar: ["bad\\x"] }, { ...block(), confirmar: [""] }]) {
+			assert.equal(Reflect.apply(commandAuthorization, undefined, [state(), command, { block: invalid, accepted: true }]), "auto", `${command}: un bloque inválido o v1 no vale`);
+		}
+		assert.equal(Reflect.apply(commandAuthorization, undefined, [state(), command, { catalog: [], outside: "ask" }]), "auto", `${command}: la forma v1 no vale`);
 	}
-	assert.equal(Reflect.apply(commandAuthorization, undefined, [state(), "npm test", { catalog: ["npm test"], outside: "auto" }]), "ask");
 });
 test("authorization v2: ni una receta humana ni Foundations dispensa confirmación por patrón/sintaxis", () => {
 	for (const by of ["person", "foundations"] as const) {
@@ -50,7 +53,7 @@ test("authorization v2: ni una receta humana ni Foundations dispensa confirmaci�
 		current.approval = { by, sourceHash: current.source.hash, recipeHash: recipeApprovalHash(current), at: "now" };
 		assert.equal(authorize("npm test", block(["npm *"]), current), "ask");
 		assert.equal(authorize('echo "texto"', block(), current), "ask");
-		assert.equal(commandAuthorization(current, "npm test"), "ask");
+		assert.equal(authorize("npm test", block(["*"]), current), "ask");
 	}
 });
 test("authorization v2: grant humano exacto por trabajo/pedido sobrevive receta y retoma, no autoriza variantes", () => {
@@ -60,12 +63,13 @@ test("authorization v2: grant humano exacto por trabajo/pedido sobrevive receta 
 		assert.equal(authorize(command, block(["*"]), granted), "grant");
 		assert.equal(commandAuthorization(granted, command), "grant", "también sin config válida");
 		assert.equal(commandAuthorization(structuredClone(granted), command), "grant", "reload persistido");
-		assert.equal(commandAuthorization(granted, `${command} --other`), "ask");
-		assert.equal(commandAuthorization({ ...granted, id: "other" }, command), "ask");
-		assert.equal(commandAuthorization({ ...granted, source: { ...granted.source, hash: "otro pedido" } }, command), "ask");
+		const all = block(["*"]);
+		assert.equal(authorize(`${command} --other`, all, granted), "ask");
+		assert.equal(authorize(command, all, { ...granted, id: "other" }), "ask");
+		assert.equal(authorize(command, all, { ...granted, source: { ...granted.source, hash: "otro pedido" } }), "ask");
 		const refreshed = transition(granted, { type: "source_changed", source: granted.source }, "now");
-		assert.equal(commandAuthorization(refreshed, command), "ask");
+		assert.equal(authorize(command, all, refreshed), "ask");
 		const forged = { ...granted, grants: [{ ...granted.grants![0]!, command: "otro comando" }] };
-		assert.equal(commandAuthorization(forged, command), "ask", "también verifica el texto exacto guardado");
+		assert.equal(authorize(command, all, forged), "ask", "también verifica el texto exacto guardado");
 	}
 });

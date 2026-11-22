@@ -9,19 +9,21 @@ import type { Io } from "../cli/io.ts";
 import { processRunner, type Runner } from "../core/exec.ts";
 import { parseWorkflow, type Workflow, type Phase } from "../harness/model.ts";
 export interface ObservationOrigin { id: string; source: string; epoch: number; phase: Phase; round: number }
-import { artifactHash } from "../harness/model.ts";
 import type { ReadReceipt } from "../harness/references.ts";
 import { createWorkflow, recipeApprovalHash, transition, type WorkflowEvent } from "../harness/state.ts";
 import { readWorkflow, updateWorkflow } from "../harness/store.ts";
 import { inspectCheckout } from "../harness/git.ts";
-import { publishDraft, readIssueSource, renderWorkflowArtifact } from "../harness/github.ts";
+import { readIssueSource } from "../harness/github.ts";
+import { pullRequestBody, renderWorkflowArtifact } from "../harness/pr-body.ts";
+import { publishTargets, publishWork } from "./development-stack.ts";
 import { updateIssueSection } from "./development-issue.ts";
 import { restoreIssueTriage } from "./workspace/issue-triage.ts";
 import { readGit } from "./workspace/data.ts";
 import { developmentProgress, PHASE_LABELS } from "./development-view.ts";
 import type { BeginLoader } from "./development-begin.ts";
 import { developmentOffline } from "./development-tickets.ts";
-import { approvalDocument, approvalText } from "./development-approval.ts";
+import { approvalDocument, approvalText, type ApprovalDocument } from "./development-approval.ts";
+import { PUBLICATION_TITLE, publicationDocument, publicationSummary } from "./development-publication.ts";
 import { showApprovalReview } from "./development-approval-view.ts";
 import type { KbClient } from "./kb-client.ts";
 import { FoundationsGate, foundationsLines } from "./development-foundations.ts";
@@ -82,7 +84,7 @@ export class DevelopmentSession {
 		this.runner = deps.runner ?? processRunner; this.now = deps.now ?? (() => new Date().toISOString());
 		this.offline = developmentOffline(args, io.env);
 		this.kb = deps.kb;
-		this.foundations = new FoundationsGate({ kb: deps.kb, runner: this.runner, trustDir: foundationsDir(io.homeDir), now: this.now, confirm: (ctx, title, description) => this.confirm(ctx, title, description) });
+		this.foundations = new FoundationsGate({ kb: deps.kb, runner: this.runner, trustDir: foundationsDir(io.homeDir), now: this.now });
 	}
 	private anchor(): void {
 		const s = this.state;
@@ -142,7 +144,7 @@ export class DevelopmentSession {
 		}
 		this.emit();
 	}
-	// La persona ya dio el sí al empezar (development-begin): acá no se vuelve a preguntar.
+	// El arranque ya pasó por development-begin (el sí, o arranque: auto): acá no se vuelve a preguntar.
 	async start(ctx: ExtensionContext): Promise<void> {
 		this.context = ctx; this.checkContext(ctx);
 		if (this.offline) throw new Error("Iniciar requiere leer el issue vigente en GitHub; quitá --offline o PI_OFFLINE. Retomar lo guardado no requiere red.");
@@ -219,15 +221,14 @@ export class DevelopmentSession {
 		};
 		await assertExplored();
 		const document = approvalDocument(state);
-		// receta: auto aprueba sin la revisión humana; se revalida igual y sus comandos no quedan autorizados.
+		// receta: auto aprueba sin la revisión humana y sin UI; se revalida igual y sus D quedan autorizados.
 		const foundations = await this.foundations.policy(ctx, state); const auto = foundations.politica.receta === "auto";
 		if (!auto && (!ctx.hasUI || !["tui", "rpc"].includes(ctx.mode))) throw new Error("Aprobar receta: requiere confirmación humana interactiva");
 		const cancellation = AbortSignal.any([this.lifecycle.signal, ...((signal ?? ctx.signal) ? [signal ?? ctx.signal!] : [])]);
 		this.emit(auto ? "Foundations · receta auto" : "Esperando revisión de receta", !auto);
 		let approved: boolean;
 		try {
-			approved = auto || (ctx.mode === "tui" ? await showApprovalReview(ctx, document, cancellation)
-				: await ctx.ui.confirm(document.title, approvalText(document), { signal: cancellation }) === true);
+			approved = auto || await this.reviewed(ctx, document, cancellation);
 		} finally { this.emit(); }
 		if (!approved || cancellation.aborted) return false;
 		// Una revisión larga no puede autorizar una receta distinta ni un estado adoptado por otra ventana.
@@ -239,7 +240,7 @@ export class DevelopmentSession {
 		await this.apply({ type: "approved", ...(auto ? { by: "foundations" as const, ...(foundations.hash ? { foundations: foundations.hash } : {}) } : {}) }, ctx);
 		// También con receta: auto la sección del issue muestra la receta aprobada.
 		await updateIssueSection(this, ctx);
-		if (auto) ctx.ui.notify("Foundations · receta auto: la receta se aprobó sin revisión humana. Sus comandos siguen Foundations v2: sintaxis no soportada o patrones coincidentes piden sí, salvo grant humano exacto vigente.", "info");
+		if (auto) ctx.ui.notify("Foundations · receta auto: la receta se aprobó sin revisión humana. Sus comandos siguen Foundations: sin v2 aceptada corren sin preguntar; con v2, patrones coincidentes o sintaxis no soportada piden sí, salvo grant humano exacto vigente.", "info");
 		return true;
 	}
 	// Volver a explorar descarta receta, aprobación y pruebas; también las lecturas y comandos autorizados.
@@ -255,14 +256,33 @@ export class DevelopmentSession {
 		if (!snapshot.clean) throw new Error("El worktree cambió después de verificar. Volvé a Implementar/Verificar.");
 		// Revalidar evidencia con el fingerprint actual, también al recuperar una publicación pendiente.
 		transition({ ...state, phase: "verify", publication: { status: "none" } }, { type: "verified", fingerprint: snapshot.fingerprint }, this.now());
-		renderWorkflowArtifact(state); // Falla antes del sí si el artefacto no entra en GitHub.
-		const remote = `${state.checkout.branch} → main\nCommit ${snapshot.head}\nIssue #${state.source.number}\n\nHace push normal sólo de esta rama, crea o recupera su PR draft y actualiza la sección del harness en el cuerpo del issue con la evidencia. No mergea, no fuerza pushes ni ejecuta workflows.`;
-		if ((await this.foundations.policy(ctx, state)).politica.push_pr === "auto") ctx.ui.notify(`Foundations · push + PR draft auto: sin preguntar.\n${remote}`, "info");
-		else if (!(await this.confirm(ctx, "Subir rama y abrir PR draft", remote))) return;
-		if (state.publication.status === "none") state = await this.apply({ type: "publishing", head: snapshot.head, bodyHash: artifactHash(renderWorkflowArtifact(state)) }, ctx);
-		const receipt = await publishDraft(state, this.runner, this.lifecycle.signal);
+		// El cuerpo exacto que se publica (en un stack, el del PR que cierra); falla antes del sí si no entra en GitHub. Un recibo pendiente de otro
+		// cuerpo (por ejemplo, del formato anterior) nunca se publica: se renueva con este, según push_pr.
+		const head = state.publication.status === "pending" ? state.publication.head : snapshot.head;
+		const proposal = pullRequestBody(state, head);
+		const replaces = state.publication.status === "pending" && state.publication.bodyHash !== proposal.bodyHash ? state.publication.bodyHash : undefined;
+		const summary = publicationSummary(state, publishTargets(state, head), replaces !== undefined);
+		if ((await this.foundations.policy(ctx, state)).politica.push_pr === "auto") ctx.ui.notify(`Foundations · push + PR draft auto: sin preguntar.\n${summary}`, "info");
+		else if (!(await this.reviewPublication(ctx, publicationDocument(summary, proposal.body)))) return;
+		// Una revisión larga no autoriza un trabajo que avanzó en otra ventana.
+		const saved = await readWorkflow(state.checkout, state.source.number);
+		if (!saved || saved.id !== state.id || saved.revision !== state.revision) throw new Error("El trabajo cambió durante la revisión del PR; retomá el estado vigente y volvé a publicar.");
+		if (state.publication.status === "none" || replaces) state = await this.apply({ type: "publishing", head, bodyHash: proposal.bodyHash, ...(replaces ? { replaces } : {}) }, ctx);
+		const receipt = await publishWork(state, this.runner, this.lifecycle.signal);
 		await this.apply({ type: "published", ...receipt }, ctx);
 		await updateIssueSection(this, ctx);
+	}
+	// Revisión íntegra de un documento: navegable en la TUI, el texto entero en RPC. Volver, cerrar o cancelar no aprueban.
+	private async reviewed(ctx: ExtensionContext, document: ApprovalDocument, cancellation: AbortSignal): Promise<boolean> {
+		const approved = ctx.mode === "tui" ? await showApprovalReview(ctx, document, cancellation) : await ctx.ui.confirm(document.title, approvalText(document), { signal: cancellation }) === true;
+		return approved && !cancellation.aborted;
+	}
+	private async reviewPublication(ctx: ExtensionContext, document: ApprovalDocument): Promise<boolean> {
+		this.checkContext(ctx);
+		if (!ctx.hasUI || !["tui", "rpc"].includes(ctx.mode)) throw new Error(`${PUBLICATION_TITLE}: requiere confirmación humana interactiva`);
+		const cancellation = AbortSignal.any([this.lifecycle.signal, ...(ctx.signal ? [ctx.signal] : [])]);
+		this.emit(`Esperando revisión · ${PUBLICATION_TITLE}`, true);
+		try { return await this.reviewed(ctx, document, cancellation); } finally { this.emit(); }
 	}
 	async answer(id: string, ctx: ExtensionContext): Promise<boolean> {
 		const state = this.current(ctx); const inference = state.inferences.find((i) => i.id === id && i.resolution === "pending");

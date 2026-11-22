@@ -1,7 +1,7 @@
 // Integración v2 con Git temporal y KB/GitHub falsos. Las reglas no dispensan guardas sensibles.
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
-import { foundationsHash, renderFoundationsBlock, STRICT_POLICY, type FoundationsBlock, type FoundationsPolicy } from "../src/harness/foundations.ts";
+import { DEFAULT_POLICY, foundationsHash, renderFoundationsBlock, STRICT_POLICY, type FoundationsBlock, type FoundationsPolicy } from "../src/harness/foundations.ts";
 import { developmentFixture } from "./helpers/development.ts";
 import { beginFixture } from "./helpers/development-begin.ts";
 import { memoryKb } from "./helpers/mock-kb.ts";
@@ -56,7 +56,7 @@ test("foundations_policy v2: match pregunta una vez por comando exacto y sobrevi
 });
 test("foundations_policy v2: lista vacía no neutraliza sintaxis compuesta ni receta auto crea grants", async (t) => {
 	const f = await fixture(t, block([], { receta: "auto" })); await f.start();
-	assert.match(f.confirmationDetails[0]!, /todo comando SIMPLE.*sin confirmación por esta política/);
+	assert.ok(f.messages.some((message) => /todo comando SIMPLE.*sin confirmación por esta política/s.test(message)), "el aviso de la revisión nueva advierte la lista vacía");
 	await f.invoke("omi_workflow_check", { kind: "reproduction", command: COMPLEX }); await approve(f);
 	await f.invoke("omi_workflow_check", { kind: "setup", command: COMPLEX });
 	assert.equal(f.asked(), 1); assert.deepEqual((await f.state()).grants?.map((grant) => grant.command), [COMPLEX]);
@@ -73,7 +73,7 @@ test("foundations_policy v2: el pin de otro repo o con hash inválido nunca apli
 	const pin: FoundationsPin = { version: 2, origin: "kb", block: value, hash, docId: "doc", author: "", date: "", notice: "", reading: { kind: "valid", key: { kbUrl: f.kb.url, product: "repo", repo: "test/repo" }, block: value, hash, perillas: f.kb.documents[0]! } };
 	assert.deepEqual(effectivePolicy(pin, state).command, { block: value, accepted: true });
 	const foreign = { ...state, source: { ...state.source, url: "https://github.com/acme/repo/issues/42" } };
-	assert.deepEqual(effectivePolicy(pin, foreign), { politica: ASK, command: { block: null, accepted: false }, hash: null });
+	assert.deepEqual(effectivePolicy(pin, foreign), { politica: DEFAULT_POLICY, command: { block: null, accepted: false }, hash: null }, "vale el default: ni las reglas ni los ask de otro repo");
 	assert.equal(effectivePolicy({ ...pin, hash: "h" }, state).command.accepted, false);
 });
 for (const nested of [false, true]) test(`foundations_policy v2: el agente no guarda ni borra perillas, tampoco con llamada anidada ${nested}`, async (t) => {
@@ -107,7 +107,7 @@ test("foundations_policy v2: arranque auto conserva guardas sin efectos y avisa 
 	const blocked = await beginFixture(t, { kb, noMain: true }); await blocked.ask({ title: "Arreglar", body: "Debe dar 2", reason: "Bug" });
 	assert.deepEqual(blocked.prompts, []); assert.deepEqual(blocked.remote.created, []);
 	const f = await beginFixture(t, { kb }); const origin = f.current(); await f.ask({ title: "Arreglar", body: "Debe dar 2", reason: "Bug" });
-	assert.deepEqual(f.prompts.map((prompt) => prompt.title), [ACCEPT]); assert.equal(f.remote.created.length, 1);
+	assert.deepEqual(f.prompts.map((prompt) => prompt.title), [], "ni la aceptación de la revisión nueva ni el sí"); assert.equal(f.remote.created.length, 1);
 	assert.ok(origin.notices.some((notice) => /Foundations · arranque auto: Crear issue y empezar el trabajo/.test(notice)));
 	assert.ok(origin.notices.some((notice) => /arranque auto.*sin preguntar/s.test(notice)));
 	assert.notEqual(f.current().manager.getSessionFile(), f.main.getSessionFile());

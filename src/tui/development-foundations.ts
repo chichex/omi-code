@@ -1,10 +1,12 @@
-// Foundations de la sesión: sólo v2 válida y aceptada autoriza. Lecturas/editor nunca aceptan implícitamente.
-// Sin imports runtime de Pi: development-begin también usa este módulo.
+// Foundations de la sesión: se lee de la KB al arrancar, una revisión v2 válida se acepta sola (con aviso) y
+// queda fija toda la sesión, también a través de /reload y del cambio a la sesión del worktree. Sin KB, vale
+// la última v2 aceptada; sin ninguna, el default: nada pregunta. Un bloque inválido, ausente o v1 no vale.
+// Lecturas y editor nunca aceptan implícitamente. Sin imports runtime de Pi: development-begin también usa este módulo.
 import { resolve } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Runner } from "../core/exec.ts";
 import type { Workflow } from "../harness/model.ts";
-import { checkBlock, foundationsDiff, foundationsHash, parseFoundations, POLICY_LABELS, STRICT_POLICY, visibleText, type FoundationsBlock, type FoundationsPolicy, type PolicyPoint } from "../harness/foundations.ts";
+import { checkBlock, DEFAULT_POLICY, foundationsDiff, foundationsHash, parseFoundations, POLICY_LABELS, visibleText, type FoundationsBlock, type FoundationsPolicy, type PolicyPoint } from "../harness/foundations.ts";
 import { readTrust, writeTrust, type TrustKey, type TrustRecord } from "../harness/foundations-trust.ts";
 import type { CommandPolicy } from "../harness/authorization.ts";
 import type { KbClient, KbDoc } from "./kb-client.ts";
@@ -20,11 +22,13 @@ export type FoundationsReading =
 	| { kind: "invalid"; key: TrustKey; reason: string; perillas: KbDoc }
 	| { kind: "valid"; key: TrustKey; block: FoundationsBlock; hash: string; perillas: KbDoc };
 export interface FoundationsPin {
-	version: 2; origin: "kb" | "local" | "strict";
+	version: 2; origin: "kb" | "local" | "default";
 	block: FoundationsBlock | null; hash: string | null; docId: string | null; author: string | null; date: string | null;
 	notice: string; reading: FoundationsReading;
 }
-export interface DecideDeps { trustDir: string; now: () => string; confirm: (ctx: ExtensionContext, title: string, description: string) => Promise<boolean>; isCurrent?: () => boolean }
+export interface DecideDeps { trustDir: string; now: () => string; isCurrent?: () => boolean }
+
+/** `owner/name` en minúsculas, sólo para github.com. */
 export function parseRepoIdentity(url: string): string | undefined {
 	const match = /^(?:https:\/\/github\.com\/|ssh:\/\/git@github\.com\/|git@github\.com:)([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(url.trim());
 	return match ? `${match[1]}/${match[2]}`.toLowerCase() : undefined;
@@ -55,28 +59,33 @@ export async function readFoundations(kb: KbClient | undefined, cwd: string, run
 		return { kind: "unavailable", key, reason: error instanceof Error ? error.message : "falló la lectura" };
 	}
 }
-const strictPin = (reading: FoundationsReading, notice: string): FoundationsPin => ({ version: 2, origin: "strict", block: null, hash: null, docId: null, author: null, date: null, notice, reading });
-/** También valida pins viejos conservados en memoria al recargar el runtime. Ningún error equivale a lista vacía. */
+const DEFAULT_NOTICE = "vale el default: nada pregunta (todo auto)";
+const defaultPin = (reading: FoundationsReading, notice: string): FoundationsPin => ({ version: 2, origin: "default", block: null, hash: null, docId: null, author: null, date: null, notice, reading });
+/** También valida pins viejos conservados en memoria al recargar el runtime. Lo que no valida vale como el default. */
 function acceptedBlock(pin: FoundationsPin | undefined): FoundationsBlock | null {
-	if (!pin || pin.version !== 2 || pin.origin === "strict" || pin.reading.kind !== "valid") return null;
-	const checked = checkBlock(pin.block); const reading = checkBlock(pin.reading.block);
-	if ("reason" in checked || "reason" in reading) return null;
-	const hash = foundationsHash(checked.block);
-	return hash === pin.hash && pin.reading.hash === hash && foundationsHash(reading.block) === hash && pin.reading.key.repo === checked.block.repo ? checked.block : null;
+	if (!pin || pin.version !== 2 || pin.origin === "default" || !pin.block || pin.reading?.kind === "none" || !pin.reading) return null;
+	const checked = checkBlock(pin.block);
+	if ("reason" in checked || foundationsHash(checked.block) !== pin.hash || pin.reading.key.repo !== checked.block.repo) return null;
+	// Desde la KB, la lectura tiene que ser exactamente esa revisión.
+	if (pin.origin === "kb" && (pin.reading.kind !== "valid" || pin.reading.hash !== pin.hash)) return null;
+	return checked.block;
 }
 function safePin(pin: FoundationsPin): FoundationsPin {
-	return pin.version !== 2 || pin.block && !acceptedBlock(pin) ? strictPin(pin.reading, "Foundations inválido u obsoleto: hay que volver a configurar y aceptar v2. Todo comando pide sí, salvo su grant humano exacto.") : pin;
+	return pin.version !== 2 || pin.block && !acceptedBlock(pin) ? defaultPin(pin.reading, `Foundations inválido u obsoleto: ${DEFAULT_NOTICE}. Para pedir confirmaciones, guardá v2 con /omi-foundations.`) : pin;
 }
-/** Decisión explícita por revisión. Ausente/inválida/vieja/no aceptada no activa una política anterior. */
+/** Qué vale en la sesión. Nunca pregunta: una revisión v2 nueva y válida se acepta sola, se registra y se avisa. */
 export async function decideFoundations(reading: FoundationsReading, ctx: ExtensionContext, deps: DecideDeps): Promise<FoundationsPin> {
-	if (reading.kind === "none") return strictPin(reading, reading.reason);
-	if (reading.kind === "unavailable") return strictPin(reading, `KB no disponible (${reading.reason}): todo comando pide confirmación salvo grants humanos exactos.`);
-	if (reading.kind === "missing") return strictPin(reading, "Falta Foundations v2: configurá y guardá el modelo nuevo. Todo comando pide confirmación.");
-	if (reading.kind === "invalid") return strictPin(reading, `Foundations inválido u obsoleto (${reading.reason}): volvé a configurar v2.`);
-	const checked = checkBlock(reading.block);
-	if ("reason" in checked || foundationsHash(checked.block) !== reading.hash) return strictPin(reading, "Foundations inválido u obsoleto: configurá v2 de nuevo.");
-	if (deps.isCurrent?.() === false) return strictPin(reading, "La decisión de Foundations quedó obsoleta durante la lectura.");
+	if (reading.kind === "none") return defaultPin(reading, `${reading.reason}: ${DEFAULT_NOTICE}.`);
 	const record = await readTrust(deps.trustDir, reading.key); const accepted = record?.accepted ?? null;
+	const fallback = (why: string): FoundationsPin => accepted
+		? { version: 2, origin: "local", block: accepted.block, hash: accepted.blockHash, docId: accepted.docId, author: accepted.author, date: accepted.date, notice: `${why}: vale la última revisión aceptada.`, reading }
+		: defaultPin(reading, `${why}: ${DEFAULT_NOTICE}.`);
+	if (reading.kind === "unavailable") return fallback(`KB no disponible (${reading.reason})`);
+	if (reading.kind === "missing") return fallback(`Las perillas de ${reading.key.product} no tienen Foundations v2 para ${reading.key.repo}`);
+	if (reading.kind === "invalid") return fallback(`Foundations inválido u obsoleto en la KB (${reading.reason})`);
+	const checked = checkBlock(reading.block);
+	if ("reason" in checked || foundationsHash(checked.block) !== reading.hash) return fallback("Foundations inválido en la KB");
+	if (deps.isCurrent?.() === false) return fallback("La decisión de Foundations quedó obsoleta durante la lectura");
 	const saveTrust = (next: TrustRecord) => writeTrust(deps.trustDir, next, { expected: record ?? null, ...(deps.isCurrent ? { isCurrent: deps.isCurrent } : {}) });
 	const doc = reading.perillas;
 	const pin: FoundationsPin = { version: 2, origin: "kb", block: checked.block, hash: reading.hash, docId: doc.id, author: doc.autor ?? "", date: doc.fecha ?? "", notice: "", reading };
@@ -85,30 +94,36 @@ export async function decideFoundations(reading: FoundationsReading, ctx: Extens
 		if (accepted.docId !== doc.id && deps.isCurrent?.() !== false) await saveTrust({ ...record, accepted: { ...accepted, docId: doc.id, author: doc.autor ?? "", date: doc.fecha ?? "" } }).catch(() => {});
 		return pin;
 	}
-	if (!ctx.hasUI) return strictPin(reading, "Hay una revisión de Foundations v2 no aceptada; aceptarla requiere UI.");
-	const description = `${foundationsDiff(accepted?.block, checked.block, { product: reading.key.product, kbUrl: reading.key.kbUrl, docId: doc.id, ...(doc.autor ? { author: doc.autor } : {}), ...(doc.fecha ? { date: doc.fecha } : {}) })}\n\nCon el sí se acepta esta revisión; con no o cancelar, todo comando requiere confirmación salvo su grant humano exacto. Nunca habilita merge, tags, workflows, deploys ni secretos; no es un sandbox.`;
-	if (!(await deps.confirm(ctx, "Aceptar Foundations", description))) return strictPin(reading, "Rechazaste la revisión de Foundations v2: no está aceptada.");
-	if (deps.isCurrent?.() === false) return strictPin(reading, "La decisión de Foundations quedó obsoleta; no se aceptó esa revisión anterior.");
+	// La persona la escribió en la KB: se aplica sin preguntar, también sin UI, y el aviso dice qué cambió.
+	const diff = foundationsDiff(accepted?.block, checked.block, { product: reading.key.product, kbUrl: reading.key.kbUrl, docId: doc.id, ...(doc.autor ? { author: doc.autor } : {}), ...(doc.fecha ? { date: doc.fecha } : {}) });
+	const applied = `Foundations: se aplica la revisión nueva de la KB, sin preguntar.\n\n${diff}\n\nVale en esta sesión y en las siguientes hasta que cambie en la KB. Nunca habilita merge, tags, workflows, deploys ni secretos; no es un sandbox.`;
 	const base: TrustRecord = record ?? { version: 2, ...reading.key, accepted: null, offerDeclined: false };
 	try { await saveTrust({ ...base, accepted: { docId: doc.id, blockHash: reading.hash, block: checked.block, author: doc.autor ?? "", date: doc.fecha ?? "", acceptedAt: deps.now() } }); }
-	catch { return strictPin(reading, "No se pudo guardar la aceptación local; esta revisión no quedó activada."); }
+	catch {
+		const notice = "No se pudo registrar la aceptación: vale en esta sesión y se vuelve a avisar en la próxima.";
+		ctx.ui.notify(`${applied}\n\n${notice}`, "warning"); return { ...pin, notice };
+	}
+	ctx.ui.notify(applied, "info");
 	return pin;
 }
+
+/** Política vigente para un trabajo: la v2 aceptada, si el issue es del mismo repo; si no, el default (todo auto). */
 export function effectivePolicy(pin: FoundationsPin | undefined, state?: Workflow): { politica: FoundationsPolicy; command: CommandPolicy; hash: string | null } {
 	const accepted = acceptedBlock(pin);
 	const block = accepted && (!state || issueRepo(state.source.url) === accepted.repo) ? accepted : null;
-	return { politica: block?.politica ?? STRICT_POLICY, command: { block, accepted: block !== null }, hash: block ? pin?.hash ?? null : null };
+	return { politica: block?.politica ?? DEFAULT_POLICY, command: { block, accepted: block !== null }, hash: block ? pin?.hash ?? null : null };
 }
-const ORIGINS = { kb: "KB", local: "local (última aceptada)", strict: "estricta" };
+const ORIGINS = { kb: "KB", local: "local (última aceptada)", default: "por defecto (sin Foundations v2: nada pregunta)" };
+/** Para /omi-work status y el detalle del progreso. Sin I/O. */
 export function foundationsLines(pin: FoundationsPin | undefined): string[] {
-	if (!pin) return ["Foundations: se lee de la KB; configurá con /omi-work foundations."];
+	if (!pin) return ["Foundations: se lee de la KB; se decide en el primer punto del harness."];
 	pin = safePin(pin);
-	const block = acceptedBlock(pin); const policy = block?.politica ?? STRICT_POLICY;
+	const block = acceptedBlock(pin); const policy = block?.politica ?? DEFAULT_POLICY;
 	return [
 		visibleText(`Foundations: ${ORIGINS[pin.origin]}${pin.hash ? ` · revisión ${pin.hash.slice(0, 8)}` : ""}${pin.docId ? ` · perillas ${pin.docId.slice(0, 8)}${pin.author ? ` · ${pin.author}` : ""}` : ""}`),
 		"Políticas:", ...(Object.keys(POLICY_LABELS) as PolicyPoint[]).map((point) => `  ${POLICY_LABELS[point]}: ${policy[point]}`),
-		"Patrones que requieren confirmación:", ...(block?.confirmar.length ? block.confirmar.map((rule) => visibleText(`  ${rule}`)) : [block ? "  (lista vacía: todo comando SIMPLE sin confirmación por esta política)" : "  (sin v2 aceptada: todo comando pide confirmación salvo grant exacto)"]),
-		...(pin.notice ? [visibleText(`Aviso: ${pin.notice}`)] : []), "Editar: /omi-work foundations",
+		"Patrones que requieren confirmación:", ...(block?.confirmar.length ? block.confirmar.map((rule) => visibleText(`  ${rule}`)) : [block ? "  (lista vacía: todo comando SIMPLE sin confirmación por esta política)" : "  (sin v2 aceptada: nada pregunta)"]),
+		...(pin.notice ? [visibleText(`Aviso: ${pin.notice}`)] : []), "Editar: /omi-foundations",
 	];
 }
 interface Entry { reading: Promise<FoundationsReading>; generation?: number; pin?: FoundationsPin | undefined; deciding?: Promise<FoundationsPin> | undefined; triage?: Promise<TriagePolicyPin> }
@@ -121,6 +136,12 @@ export function carryFoundationsPin(from: string, to: string): void {
 	const entry = sessions.get(resolve(from));
 	if (entry && !sessions.has(resolve(to))) remember(resolve(to), entry);
 }
+/** Para la pantalla OMI, que vive en otra extensión: el pin de esa sesión si ya se decidió. Sin I/O ni efectos. */
+export function sessionFoundationsPin(sessionFile: string): FoundationsPin | undefined {
+	const pin = sessions.get(resolve(sessionFile))?.pin;
+	return pin ? safePin(pin) : undefined;
+}
+
 export interface FoundationsGateDeps extends DecideDeps { kb: KbClient | undefined; runner: Runner }
 export class FoundationsGate {
 	private readonly deps: FoundationsGateDeps;
@@ -137,15 +158,16 @@ export class FoundationsGate {
 	async read(ctx: ExtensionContext, signal: AbortSignal): Promise<FoundationsReading> {
 		return readFoundations(this.deps.kb, ctx.cwd, this.deps.runner, signal);
 	}
+	/** El primer punto que necesita la política espera la lectura y la decide, sin preguntar. Después queda fija. */
 	async pin(ctx: ExtensionContext): Promise<FoundationsPin> {
 		const file = this.file(ctx);
-		if (!file) return strictPin({ kind: "none", reason: "sin sesión persistente" }, "Sin sesión persistente: política estricta.");
+		if (!file) return defaultPin({ kind: "none", reason: "sin sesión persistente" }, `Sin sesión persistente: ${DEFAULT_NOTICE}.`);
 		this.load(ctx); const entry = sessions.get(file)!;
 		if (entry.pin) { entry.pin = safePin(entry.pin); return entry.pin; }
 		const generation = entry.generation ?? 0;
 		entry.deciding ??= entry.reading.then((reading) => decideFoundations(reading, ctx, { ...this.deps, isCurrent: () => (entry.generation ?? 0) === generation })).finally(() => { entry.deciding = undefined; });
 		const decided = safePin(await entry.deciding);
-		// Un guardado propio explícito tiene precedencia sobre un diálogo que quedó pendiente.
+		// Un guardado propio explícito tiene precedencia sobre una decisión que quedó pendiente.
 		entry.pin ??= decided;
 		return entry.pin;
 	}
@@ -165,6 +187,11 @@ export class FoundationsGate {
 	current(ctx: ExtensionContext): FoundationsPin | undefined {
 		const file = this.file(ctx); const pin = file ? sessions.get(file)?.pin : undefined;
 		return pin ? safePin(pin) : undefined;
+	}
+	/** Empieza un guardado explícito: una decisión automática pendiente queda obsoleta y no escribe la confianza. */
+	supersede(ctx: ExtensionContext): void {
+		const file = this.file(ctx); const entry = file && sessions.get(file);
+		if (entry) entry.generation = (entry.generation ?? 0) + 1;
 	}
 	replace(ctx: ExtensionContext, pin: FoundationsPin): void {
 		const file = this.file(ctx); const entry = file && sessions.get(file);

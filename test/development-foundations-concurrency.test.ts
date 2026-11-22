@@ -4,7 +4,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { checkBlock, foundationsHash, renderFoundationsBlock, STRICT_POLICY, type FoundationsBlock } from "../src/harness/foundations.ts";
 import { readTrust, writeTrust } from "../src/harness/foundations-trust.ts";
 import { commitFoundationsSave, prepareFoundationsSave } from "../src/tui/development-foundations-save.ts";
-import { FoundationsGate, readFoundations, type FoundationsPin } from "../src/tui/development-foundations.ts";
+import { FoundationsGate } from "../src/tui/development-foundations.ts";
 import { memoryKb } from "./helpers/mock-kb.ts";
 import { tempDir } from "./helpers/io.ts";
 const block = (confirmar: string[] = []): FoundationsBlock => ({ version: 2, repo: "test/repo", confirmar, politica: { ...STRICT_POLICY } });
@@ -38,45 +38,35 @@ test("foundations_concurrency: ningún modo interno puede aceptar un guardado qu
 	await assert.rejects(() => Reflect.apply(commitFoundationsSave, undefined, [kb, key, block(), prepared, { trustDir: dir, now: () => "now", signal: signal(), requireLatest: false }]), /cambi|nueva|vigente/i);
 	assert.equal(await readTrust(dir, key), undefined);
 });
-test("foundations_concurrency: confirmación A no sobrescribe la aceptación durable de Guardar B antes de replace", async (t) => {
+/** La lectura inicial de la sesión (A) queda retenida hasta `release`; las demás pasan. */
+function slowFirstRead(kb: ReturnType<typeof memoryKb>) {
+	const current = kb.currentPerillas.bind(kb); let release: () => void = () => { throw new Error("falta la lectura A"); };
+	const held = new Promise<void>((resolve) => { release = resolve; }); let started: () => void = () => {};
+	const reading = new Promise<void>((resolve) => { started = resolve; }); let first = true;
+	kb.currentPerillas = async (product, abort) => {
+		if (first) { first = false; const value = await current(product, abort); started(); await held; return value; }
+		return current(product, abort);
+	};
+	return { release: () => release(), reading };
+}
+for (const order of ["antes de reemplazar el pin", "después de reemplazar el pin"] as const) test(`foundations_concurrency: una decisión automática pendiente no pisa la confianza ni el pin de un Guardar (${order})`, async (t) => {
 	const dir = await tempDir(t); const kb = memoryKb({ products: ["repo"] }); kb.perillas("repo", renderFoundationsBlock(block()));
 	const runner = { run: async () => ({ code: 0, stdout: "https://github.com/test/repo.git\n", stderr: "" }) };
-	let answer: (value: boolean) => void = () => { throw new Error("falta diálogo A"); };
-	const waiting = new Promise<boolean>((resolve) => { answer = resolve; });
-	let opened: () => void = () => { throw new Error("falta barrera A"); };
-	const shown = new Promise<void>((resolve) => { opened = resolve; });
-	const gate = new FoundationsGate({ kb, runner, trustDir: dir, now: () => "now", confirm: async () => { opened(); return waiting; } });
-	const ctx = { cwd: dir, hasUI: true, sessionManager: { getSessionFile: () => `${dir}/race-session` } } as ExtensionContext;
-	const pending = gate.pin(ctx); await shown;
+	const gate = new FoundationsGate({ kb, runner, trustDir: dir, now: () => "now" });
+	const ctx = { cwd: dir, hasUI: true, ui: { notify() {} }, sessionManager: { getSessionFile: () => `${dir}/race-session` } } as unknown as ExtensionContext;
+	const slow = slowFirstRead(kb); const pending = gate.pin(ctx); await slow.reading;
 	const key = { kbUrl: kb.url, product: "repo", repo: "test/repo" }; const next = block(["git push *"]);
 	const prepared = await prepareFoundationsSave(kb, key, next, signal());
+	// Como editFoundations: el guardado explícito deja obsoleta la decisión automática pendiente.
+	gate.supersede(ctx);
 	await commitFoundationsSave(kb, key, next, prepared, { trustDir: dir, now: () => "now", signal: signal(),
-		writeAcceptance: async (target, record) => {
-			await writeTrust(target, record);
-			// B ya escribió, pero onAccepted/replace no puede correr hasta que termine este callback.
-			// A pasa la generación antigua y termina DESPUÉS de la escritura de B, sin sleeps ni polling.
-			answer(true); await pending;
+		writeAcceptance: async (target, record, options) => {
+			await writeTrust(target, record, options);
+			// A termina DESPUÉS de la escritura de B y antes de su replace, sin sleeps ni polling.
+			if (order === "antes de reemplazar el pin") { slow.release(); await pending; }
 		}, onAccepted: (pin) => gate.replace(ctx, pin),
 	});
+	if (order === "después de reemplazar el pin") { slow.release(); await pending; }
 	assert.equal(gate.current(ctx)?.hash, foundationsHash(next));
-	assert.equal((await readTrust(dir, key))?.accepted?.blockHash, foundationsHash(next), "A no debe sobrescribir la aceptación durable de B");
-});
-for (const response of [false, true]) test(`foundations_concurrency: una aceptación pendiente (${response}) no pisa un pin guardado ni su confianza durable`, async (t) => {
-	const dir = await tempDir(t); const kb = memoryKb({ products: ["repo"] }); kb.perillas("repo", renderFoundationsBlock(block()));
-	const runner = { run: async () => ({ code: 0, stdout: "https://github.com/test/repo.git\n", stderr: "" }) };
-	let answer: (value: boolean) => void = () => { throw new Error("falta diálogo"); };
-	const waiting = new Promise<boolean>((resolve) => { answer = resolve; });
-	let opened: () => void = () => { throw new Error("falta señal"); };
-	const shown = new Promise<void>((resolve) => { opened = resolve; });
-	const gate = new FoundationsGate({ kb, runner, trustDir: dir, now: () => "now", confirm: async () => { opened(); return waiting; } });
-	const ctx = { cwd: dir, hasUI: true, sessionManager: { getSessionFile: () => `${dir}/session` } } as ExtensionContext;
-	const pending = gate.pin(ctx); await shown;
-	const next = block(["git push *"]); kb.perillas("repo", renderFoundationsBlock(next));
-	const reading = await readFoundations(kb, dir, runner, signal()); assert.equal(reading.kind, "valid"); assert.ok(reading.kind === "valid");
-	const key = reading.key; const hash = foundationsHash(next);
-	const saved: FoundationsPin = { version: 2, origin: "kb", block: next, hash, docId: reading.perillas.id, author: "", date: "", notice: "", reading };
-	await writeTrust(dir, { version: 2, ...key, accepted: { docId: reading.perillas.id, blockHash: hash, block: next, author: "", date: "", acceptedAt: "now" }, offerDeclined: false });
-	gate.replace(ctx, saved); answer(response);
-	assert.equal((await pending).hash, hash); assert.equal(gate.current(ctx)?.hash, hash);
-	assert.equal((await readTrust(dir, key))?.accepted?.blockHash, hash);
+	assert.equal((await readTrust(dir, key))?.accepted?.blockHash, foundationsHash(next), "A no sobrescribe la aceptación durable de B");
 });

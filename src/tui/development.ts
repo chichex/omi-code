@@ -1,5 +1,5 @@
-// Harness sobre el runtime de Pi. Un pedido de desarrollo lo arranca con un único sí humano
-// (development-begin); sus tools empiezan inactivas y sólo omi_work_begin se ofrece en el chat normal.
+// Harness sobre el runtime de Pi. Un pedido de desarrollo lo arranca (development-begin) sin preguntar, salvo
+// que Foundations diga arranque: ask; sus tools empiezan inactivas y sólo omi_work_begin se ofrece en el chat normal.
 import { lstat, realpath } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, InlineExtension } from "@earendil-works/pi-coding-agent";
@@ -17,11 +17,12 @@ import { beginCommand, BEGIN_SUBCOMMAND, holdSessionSwitch, revokeDevelopmentTic
 import { restoreIssueTriage } from "./workspace/issue-triage.ts";
 import { IssuePreparationBusyError } from "./workspace/issue-registry.ts";
 import { effectivePolicy, foundationsLines } from "./development-foundations.ts";
-import { editFoundations, offerFoundations } from "./development-foundations-setup.ts";
+import { editFoundations } from "./development-foundations-setup.ts";
 import { HeldLoadout } from "./development-loadout.ts";
+import { syncWorkStack } from "./development-stack.ts";
 
 const KICKOFF = "Continuá el harness de desarrollo activo desde su etapa persistida. Respetá sus bloqueos y pedí los permisos pendientes; no saltees etapas.";
-const USAGE = "Uso: /omi-work resume | approve | pause | refresh | pr | status | foundations | stop";
+const USAGE = "Uso: /omi-work resume | approve | pause | refresh | pr | stack | status | foundations | stop";
 // Otra ventana preparando el mismo issue es una espera, no un error; también envuelto en un aviso.
 const busy = (error: unknown): boolean => error instanceof IssuePreparationBusyError || (error instanceof Error && error.cause instanceof IssuePreparationBusyError);
 
@@ -58,18 +59,17 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 		trackExtensionMessages(pi, session, [KICKOFF]);
 		let pendingBegin: string | undefined;
 		registerBeginTool(pi, { offline: session.offline, busy: () => !!session.state || !!session.lockedReason, onRequest: (token) => { pendingBegin = token; } });
-		// Sin el sí humano no se llama al modelo: un trabajo pausado o terminado sólo informa su estado.
+		// Sin arrancar no se llama al modelo: un trabajo pausado o terminado sólo informa su estado.
 		const proceed = (ctx: ExtensionContext) => {
 			if (!session.state || session.state.status === "paused" || session.state.status === "complete") { ctx.ui.notify(session.status(), "info"); return; }
 			if (!ctx.model || !ctx.modelRegistry.hasConfiguredAuth(ctx.model)) { ctx.ui.notify("Trabajo guardado. Elegí un modelo autenticado para continuar.", "warning"); return; }
 			pi.sendUserMessage(KICKOFF);
 		};
-		// Sólo después del sí de begin: ese sí también reanuda un trabajo pausado, como dijo el diálogo.
+		// Sólo después del arranque de begin (el sí o arranque: auto), que también reanuda un trabajo pausado.
+		// Sin Foundations no se ofrece armarlo: sin Foundations nada pregunta.
 		const startHere = async (ctx: ExtensionContext) => {
 			await session.start(ctx);
 			if (session.state?.status === "paused") await session.apply({ type: "resume" }, ctx);
-			// Sin Foundations para el repo, se ofrece armarlo una vez por sesión; sólo se guarda con el sí.
-			await offerFoundations(ctx, session, deps.kb).catch((error: unknown) => ctx.ui.notify(`Foundations: ${error instanceof Error ? error.message : "no se pudo ofrecer"}`, "warning"));
 			loadout(); proceed(ctx);
 		};
 		async function begin(token: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -114,7 +114,7 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 			pi.sendUserMessage(beginCommand(token), { expandPromptTemplates: true });
 		});
 		pi.registerCommand("omi-work", {
-			description: "Harness de desarrollo: resume, approve, pause, refresh, pr, status, foundations, stop",
+			description: "Harness de desarrollo: resume, approve, pause, refresh, pr, stack, status, foundations, stop",
 			handler: async (input, ctx) => {
 				try {
 					const command = input.trim() || "status";
@@ -123,7 +123,7 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 					if (command === "foundations") { await editFoundations(ctx, session, deps.kb); loadout(); return; }
 					const [verb, ...rest] = command.split(/\s+/);
 					if (verb === BEGIN_SUBCOMMAND) { await begin(rest.join(" "), ctx); return; }
-					if (["resume", "approve", "pr"].includes(command)) await session.foundations.pin(ctx);
+					if (["resume", "approve", "pr", "stack"].includes(command)) await session.foundations.pin(ctx);
 					if (command === "resume") {
 						await session.restore(ctx, true); session.current(ctx);
 						if (!session.offline && !(await session.fresh(ctx))) { loadout(); return; }
@@ -132,12 +132,23 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 					else if (command === "pause") await session.apply({ type: "pause", reason: "Pausado por la persona" }, ctx);
 					else if (command === "refresh") await session.refresh(ctx);
 					else if (command === "pr") await session.publish(ctx);
+					else if (command === "stack") await syncWorkStack(session, ctx);
 					else if (command === "stop") await session.stop(ctx);
 					else throw new Error(USAGE);
 					loadout();
 					if (["resume", "approve", "refresh"].includes(command)) proceed(ctx);
 					else ctx.ui.notify(session.status(), "info");
 				} catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "No se pudo ejecutar el harness", busy(error) ? "warning" : "error"); }
+			},
+		});
+		// La pantalla OMI (otra extensión) lo despacha con «f»: el editor vive acá, con el pin, la KB y la sesión.
+		pi.registerCommand("omi-foundations", {
+			description: "Ver y editar Foundations: patrones que requieren confirmación y políticas ask/auto",
+			handler: async (_input, ctx) => {
+				try {
+					if (!ctx.isIdle() || ctx.hasPendingMessages()) throw new Error("Esperá a que termine el turno antes de editar Foundations.");
+					await editFoundations(ctx, session, deps.kb);
+				} catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "No se pudo editar Foundations", "warning"); }
 			},
 		});
 		// Pi ya restauró las tools de la rama: con el harness activo, las restringidas.

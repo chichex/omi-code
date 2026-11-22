@@ -2,7 +2,7 @@
 import type { ExtensionContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type Focusable, type TUI } from "@earendil-works/pi-tui";
 import {
-	AUTO_WARNINGS, checkBlock, EMPTY_RULES_WARNING, foundationsDiff, MAX_RULES, POLICY_LABELS, ruleProblem, STRICT_POLICY, visibleText,
+	AUTO_WARNINGS, checkBlock, EMPTY_RULES_WARNING, foundationsDiff, MAX_RULES, POLICY_LABELS, ruleProblem, DEFAULT_POLICY, visibleText,
 	type FoundationsBlock, type FoundationsPolicy, type PolicyPoint,
 } from "../harness/foundations.ts";
 import { FoundationsRulesEditor } from "./development-foundations-editor.ts";
@@ -59,7 +59,7 @@ export class FoundationsPanel implements Component, Focusable {
 		const accepted = checkBlock(options.previousAccepted);
 		this.previous = "block" in accepted && accepted.block.repo === options.repo.toLowerCase() ? copy(accepted.block) : undefined;
 		this.hasInitial = initial !== undefined;
-		this.policy = { ...(initial?.politica ?? STRICT_POLICY) };
+		this.policy = { ...(initial?.politica ?? DEFAULT_POLICY) };
 		this.editor = new FoundationsRulesEditor({
 			tui: options.tui, theme: options.theme, initial: initial?.confirmar.join("\n") ?? "",
 			...(options.keybindings ? { keybindings: options.keybindings } : {}),

@@ -1,4 +1,5 @@
 // Foundations v2: patrones que requieren confirmación, no una allowlist. Sin I/O ni migraciones.
+// Un bloque inválido, ausente, v1 o de otro repo no vale: sin una v2 aceptada rige el default (nada pregunta).
 import { createHash } from "node:crypto";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
@@ -23,6 +24,9 @@ export type ParsedFoundations =
 	| { status: "missing" }
 	| { status: "invalid"; reason: string };
 export const FOUNDATIONS_INFO = "omi-foundations";
+/** Sin Foundations v2 aceptada: nada pregunta. Cada punto se pone en ask desde Foundations. */
+export const DEFAULT_POLICY: FoundationsPolicy = Object.freeze({ arranque: "auto", receta: "auto", push_pr: "auto" });
+/** Todo pregunta. */
 export const STRICT_POLICY: FoundationsPolicy = Object.freeze({ arranque: "ask", receta: "ask", push_pr: "ask" });
 export const POLICY_LABELS: Record<PolicyPoint, string> = { arranque: "arranque", receta: "receta", push_pr: "push + PR draft" };
 export const AUTO_WARNINGS: Record<PolicyPoint, string> = {
@@ -125,17 +129,19 @@ export function composePerillas(current: string | undefined, product: string, re
 }
 export interface FoundationsMeta { product: string; kbUrl: string; docId?: string; author?: string; date?: string }
 function host(url: string): string { try { return new URL(url).host; } catch { return url; } }
+
+/** Diferencia en texto plano contra la última revisión aceptada, o contra el default (todo auto). */
 export function foundationsDiff(previous: FoundationsBlock | undefined, next: FoundationsBlock, meta: FoundationsMeta): string {
 	const before = new Set(previous?.confirmar ?? []); const after = new Set(next.confirmar);
 	const rules = [...next.confirmar.map((rule) => `  ${before.has(rule) ? "  " : "+ "}${rule}`), ...[...before].filter((rule) => !after.has(rule)).map((rule) => `  - ${rule}`)];
 	const policies = POINTS.map((point) => {
-		const was = previous?.politica[point] ?? STRICT_POLICY[point]; const now = next.politica[point];
+		const was = previous?.politica[point] ?? DEFAULT_POLICY[point]; const now = next.politica[point];
 		return `  ${POLICY_LABELS[point]}: ${was === now ? now : `${was} → ${now}`}${now === "auto" ? `   ⚠ ${AUTO_WARNINGS[point]}` : ""}`;
 	});
 	return [
 		visibleText(`Foundations · ${next.repo} · KB ${meta.product} (${host(meta.kbUrl)})`),
 		...(meta.docId || meta.author || meta.date ? [visibleText(`Perillas ${meta.docId?.slice(0, 8) ?? "sin id"} · ${meta.author ?? "autor desconocido"} · ${meta.date ?? "sin fecha"}`)] : []),
-		previous ? `Antes: última revisión aceptada ${foundationsHash(previous).slice(0, 8)}` : "Antes: política estricta (nada aceptado: todo pregunta)",
+		previous ? `Antes: última revisión aceptada ${foundationsHash(previous).slice(0, 8)}` : "Antes: sin Foundations (por defecto: todo auto)",
 		"Patrones que requieren confirmación:", ...(rules.length ? rules.map(visibleText) : ["  (ninguna regla)"]),
 		next.confirmar.length ? "Sólo comandos simples no coincidentes corren sin preguntar por esta política." : EMPTY_RULES_WARNING,
 		"Políticas:", ...policies,

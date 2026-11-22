@@ -5,6 +5,7 @@ import { renderFoundationsBlock } from "../src/harness/foundations.ts";
 import { developmentInstructions } from "../src/tui/development-view.ts";
 import { developmentFixture } from "./helpers/development.ts";
 import { memoryKb } from "./helpers/mock-kb.ts";
+import { ASK_ALL } from "./helpers/foundations.ts";
 const AUTHORIZE = "Autorizar comando del proyecto";
 const INSTALL = "node test.cjs";
 const WRITES_CODE = "node -e \"require('node:fs').writeFileSync('value.cjs', 'module.exports = 3;\\n')\"";
@@ -16,9 +17,16 @@ async function withFoundations(t: TestContext) {
 	kb.perillas("repo", renderFoundationsBlock({ version: 2, repo: "test/repo", confirmar: [], politica: { arranque: "ask", receta: "ask", push_pr: "ask" } }));
 	return developmentFixture(t, { kb });
 }
-test("development_setup: sin v2 aceptada setup pide sí aun siendo simple y antes de aprobar receta", async (t) => {
+test("development_setup: sin Foundations v2 setup corre en Explorar sin preguntar, antes de aprobar la receta", async (t) => {
 	const f = await developmentFixture(t); await f.start(); const result = await f.invoke("omi_workflow_check", { kind: "setup", command: INSTALL });
-	assert.equal(result.isError, false); assert.equal(asked(f), 1); assert.equal((await f.state()).evidence.length, 0);
+	assert.equal(result.isError, false); assert.equal(asked(f), 0, "sin Foundations v2 nada pregunta"); assert.equal((await f.state()).evidence.length, 0, "setup no acredita nada");
+});
+test("development_setup: con v2 y un patrón coincidente setup pide sí una vez antes de aprobar la receta", async (t) => {
+	const f = await developmentFixture(t, { foundations: ASK_ALL }); await f.start();
+	const result = await f.invoke("omi_workflow_check", { kind: "setup", command: INSTALL });
+	assert.equal(result.isError, false);
+	assert.equal(asked(f), 1, "un comando que coincide con * pregunta una vez");
+	assert.equal((await f.state()).evidence.length, 0, "setup no acredita nada");
 });
 test("development_setup: simple no coincidente con v2 aceptada corre en Explorar sin preguntar", async (t) => {
 	const f = await withFoundations(t); await f.start(); const result = await f.invoke("omi_workflow_check", { kind: "setup", command: INSTALL });

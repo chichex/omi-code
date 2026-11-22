@@ -4,7 +4,7 @@ import { test } from "node:test";
 import * as foundations from "../src/harness/foundations.ts";
 import type { FoundationsBlock } from "../src/harness/foundations.ts";
 
-const { checkBlock, composePerillas, foundationsDiff, foundationsHash, parseFoundations, readFoundationsText, renderFoundationsBlock, STRICT_POLICY, visibleText } = foundations;
+const { checkBlock, composePerillas, DEFAULT_POLICY, foundationsDiff, foundationsHash, parseFoundations, readFoundationsText, renderFoundationsBlock, STRICT_POLICY, visibleText } = foundations;
 const REPO = "chichex/omi-code";
 type Policy = { arranque: "ask" | "auto"; receta: "ask" | "auto"; push_pr: "ask" | "auto" };
 type Block = { version: 2; repo: string; confirmar: string[]; politica: Policy };
@@ -219,14 +219,18 @@ test("foundations v2: diferencia vertical de reglas que piden confirmación, no 
 	assert.match(text, /push \+ PR draft: ask → auto .*sin preguntar/);
 });
 
-test("foundations v2: sin aceptación la diferencia parte de todo-pregunta y advierte la inversión", () => {
+test("foundations v2: sin aceptación la diferencia parte del default (todo auto) y advierte la inversión", () => {
 	const text = foundationsDiff(undefined, validated(), meta);
-	assert.match(text, /Antes: pol[ií]tica estricta/);
+	assert.match(text, /Antes: sin Foundations \(por defecto: todo auto\)/);
+	assert.doesNotMatch(text, /estricta|todo pregunta/);
 	for (const pattern of block().confirmar) assert.ok(text.split("\n").includes(`  + ${pattern}`));
-	assert.match(text, /^ {2}arranque: ask$/m);
+	assert.match(text, /^ {2}arranque: auto → ask$/m);
+	assert.match(foundationsDiff(undefined, validated(block({ politica: { ...block().politica, receta: "auto" } })), meta), /^ {2}receta: auto {3}⚠ /m, "un auto igual al default no muestra flecha");
 	assert.match(text, /simple/i);
 	assert.match(text, /no coincid|no coincidan|no coinciden/i);
 	assert.match(text, /sin (?:pedir )?confirmaci[oó]n|sin preguntar/i);
+	assert.deepEqual(DEFAULT_POLICY, { arranque: "auto", receta: "auto", push_pr: "auto" });
+	assert.deepEqual(STRICT_POLICY, { arranque: "ask", receta: "ask", push_pr: "ask" });
 });
 
 test("foundations v2: lista vacía advierte explícitamente que todos los comandos SIMPLES no requieren confirmar por esta política", () => {

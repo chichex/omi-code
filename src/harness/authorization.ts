@@ -18,9 +18,10 @@ export function isSimpleCommand(command: string): boolean {
 export function commandAuthorization(state: Workflow, command: string, policy: CommandPolicy = NO_FOUNDATIONS): CommandAuthorization {
 	const key = grantKey(state, command);
 	if (state.grants?.some((grant) => grant.key === key && grant.command === command)) return "grant";
-	// Validación en runtime también para pins de /reload anteriores al corte, sin crashes ni defaults permisivos.
-	if (policy?.accepted !== true) return "ask";
+	// Sin Foundations v2 aceptada rige el default: nada pregunta. También para pins de /reload anteriores al corte.
+	if (policy?.accepted !== true) return "auto";
 	const checked = checkBlock(policy.block);
-	if ("reason" in checked || !isSimpleCommand(command)) return "ask";
+	if ("reason" in checked) return "auto";
+	if (!isSimpleCommand(command)) return "ask";
 	return checked.block.confirmar.some((pattern) => matchCommandPattern(pattern, command)) ? "ask" : "auto";
 }

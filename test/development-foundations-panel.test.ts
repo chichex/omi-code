@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { test } from "node:test";
 import { CURSOR_MARKER, stripTerminalSequences, visibleWidth, type Component, type Focusable } from "@earendil-works/pi-tui";
 import { getThemeByName } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
-import { AUTO_WARNINGS, STRICT_POLICY, type FoundationsBlock } from "../src/harness/foundations.ts";
+import { AUTO_WARNINGS, DEFAULT_POLICY, STRICT_POLICY, type FoundationsBlock } from "../src/harness/foundations.ts";
 import { fakeTui, KEYS, typed } from "./helpers/questions.ts";
 
 type Panel = Component & Focusable & { handleInput(data: string): void; dispose(): void };
@@ -11,6 +11,8 @@ function isPanel(value: unknown): value is Panel {
 	return !!value && typeof value === "object" && "render" in value && typeof value.render === "function" && "handleInput" in value && typeof value.handleInput === "function" && "dispose" in value && typeof value.dispose === "function" && "focused" in value && typeof value.focused === "boolean" && "invalidate" in value && typeof value.invalidate === "function";
 }
 const block = (confirmar: string[] = []): FoundationsBlock => ({ version: 2, repo: "test/repo", confirmar, politica: { ...STRICT_POLICY } });
+/** Sin v2 vigente el panel parte del default que vale: todo auto. */
+const fresh = (confirmar: string[] = []): FoundationsBlock => ({ ...block(confirmar), politica: { ...DEFAULT_POLICY } });
 const paste = (text: string) => `\x1b[200~${text}\x1b[201~`;
 async function mount(initial: unknown = undefined, appearance: "light" | "dark" = "dark", previousAccepted?: unknown) {
 	// El rojo por capacidad ausente es un assert explícito, no un fallo del comando o del loader de tests.
@@ -42,18 +44,18 @@ test("foundations_panel: vertical con v2 precargado, editor integrado/foco y acc
 	f.press(KEYS.tab); assert.ok(!f.lines().some((line) => line.includes(CURSOR_MARKER)), "el botón no conserva cursor del editor");
 	assert.deepEqual(f.results, [], "abrir y navegar no guardan"); f.panel.dispose(); assert.deepEqual(f.results, [undefined]);
 });
-test("foundations_panel: legacy/ausente no precargan comandos ni auto, parten vacíos y ask", async () => {
+test("foundations_panel: legacy/ausente no precargan comandos, parten vacíos y con el default vigente (auto)", async () => {
 	for (const initial of [undefined, { version: 1, repo: "test/repo", comandos: ["NO-HEREDAR"], politica: { arranque: "auto", receta: "auto", push_pr: "auto", fuera_de_catalogo: "auto" } }]) {
 		const f = await mount(initial); const screen = f.screen();
-		assert.doesNotMatch(screen, /NO-HEREDAR/); assert.equal((screen.match(/ask/g) ?? []).length >= 3, true);
+		assert.doesNotMatch(screen, /NO-HEREDAR/); assert.equal((screen.match(/auto/g) ?? []).length >= 3, true);
 		f.press("\x13"); assert.deepEqual(f.results, [], "revisar no guarda");
-		assert.match(f.screen(), /SIMPLE/); f.press("\x13"); assert.deepEqual(f.results, [block()]);
+		assert.match(f.screen(), /SIMPLE/); f.press("\x13"); assert.deepEqual(f.results, [fresh()]);
 	}
 });
 test("foundations_panel: precargar v2 no la presenta como aceptada; el diff usa sólo la aceptación explícita anterior", async () => {
 	const initial = block(["git push *"]);
 	const fresh = await mount(initial); fresh.screen(); fresh.press("\x13");
-	assert.match(fresh.screen(), /Antes: política estricta/); assert.doesNotMatch(fresh.screen(), /Antes: última revisión aceptada/);
+	assert.match(fresh.screen(), /Antes: sin Foundations \(por defecto: todo auto\)/); assert.doesNotMatch(fresh.screen(), /Antes: última revisión aceptada/);
 	const accepted = await mount(initial, "dark", initial); accepted.screen(); accepted.press("\x13");
 	assert.match(accepted.screen(), /Antes: última revisión aceptada/);
 });
@@ -65,13 +67,13 @@ test("foundations_panel: Enter separa reglas, vacías se omiten; revisar/volver 
 	const review = f.screen(); assert.match(review, /Revis|Guardar/); assert.match(review, /git push \*/);
 	f.press(KEYS.esc); assert.match(f.screen(), /npm publish/);
 	f.press("\x13", "\x13");
-	assert.deepEqual(f.results, [{ ...block(["git push *", "npm publish"]), politica: { ...STRICT_POLICY, arranque: "auto" } }]);
+	assert.deepEqual(f.results, [{ ...block(["git push *", "npm publish"]), politica: { ...DEFAULT_POLICY, arranque: "ask" } }]);
 });
 test("foundations_panel: errores por línea no recortan ni pierden borrador; se corrige sin reiniciar", async () => {
 	const f = await mount(); f.press(paste("git push *\n\n npm test"), "\x13");
 	assert.match(f.screen(), /Línea 3|Regla 3/); assert.match(f.screen(), /espacios|borde/); assert.deepEqual(f.results, []);
 	f.press("\x01", "\x1b[3~"); // Home lógico y Delete: quitar sólo el espacio inválido
-	f.press("\x13", "\x13"); assert.deepEqual(f.results, [block(["git push *", "npm test"])]);
+	f.press("\x13", "\x13"); assert.deepEqual(f.results, [fresh(["git push *", "npm test"])]);
 });
 test("foundations_panel: un pegado con invisibles/tabs no se normaliza para convertirse en regla válida", async () => {
 	for (const invisible of ["\t", "\u202e", "\u{E0100}"]) {
@@ -85,7 +87,7 @@ test("foundations_panel: un pegado largo sigue visible/editable, no marcador pas
 	const f = await mount(); f.press(paste(rule)); assert.doesNotMatch(f.screen(), /\[paste #/);
 	f.press("\x01"); assert.match(f.screen(), /BEGIN-/);
 	f.press("\x05"); assert.match(f.screen(), /-FIN/);
-	f.press("\x13", "\x13"); assert.deepEqual(f.results, [block([rule])]);
+	f.press("\x13", "\x13"); assert.deepEqual(f.results, [fresh([rule])]);
 });
 for (const appearance of ["dark", "light"] as const) test(`foundations_panel: límites de 80x24, resize 132x40 y tema dinámico ${appearance}`, async () => {
 	const f = await mount(block(Array.from({ length: 100 }, (_, index) => `command${index} ${"x".repeat(120)}`)), appearance);
@@ -105,10 +107,10 @@ for (const [text, expected] of [["git push *\n\ngit push *", /Línea 3|Regla 3/]
 });
 test("foundations_panel: pegado multilínea partido en chunks conserva texto y espacios exactos", async () => {
 	const f = await mount(); f.press("\x1b[200~git  push", " *\n\nnpm publish", "\x1b[201~", "\x13", "\x13");
-	assert.deepEqual(f.results, [block(["git  push *", "npm publish"])]);
+	assert.deepEqual(f.results, [fresh(["git  push *", "npm publish"])]);
 });
 test("foundations_panel: revisión muestra íntegros los avisos de todas las políticas auto sin elegir ni guardar por navegar", async () => {
-	const f = await mount(); f.press(KEYS.shiftTab, KEYS.shiftTab, KEYS.shiftTab, KEYS.space, KEYS.tab, KEYS.space, KEYS.tab, KEYS.space, "\x13");
+	const f = await mount(block()); f.press(KEYS.shiftTab, KEYS.shiftTab, KEYS.shiftTab, KEYS.space, KEYS.tab, KEYS.space, KEYS.tab, KEYS.space, "\x13");
 	const screens: string[] = [];
 	for (let page = 0; page < 30; page++) { const next = f.screen(); if (screens.at(-1) === next) break; screens.push(next); f.press(KEYS.pageDown); }
 	const inspected = screens.flatMap((screen) => screen.split("\n").map((line) => line.replace(/^│ /, "").replace(/ │$/, "").trimEnd())).join(" ").replace(/\s+/g, " ");

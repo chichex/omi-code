@@ -13,6 +13,7 @@ import pkg from "../package.json" with { type: "json" };
 import bundledTools from "../scripts/bundled-tools.json" with { type: "json" };
 import { assetNames, currentPlatform } from "../src/upgrade/release.ts";
 import { FOREIGN, OWN, PI_MARKS, requestSeenByModel, seedConfig, seedPi } from "./helpers/foreign-config.ts";
+import { installerEnv, newShell } from "./helpers/installer.ts";
 import { tempDir } from "./helpers/io.ts";
 import { SENTINEL_CONNECT, pathWithout, startupNetwork } from "./helpers/startup-network.ts";
 import { exerciseWorkspace, plainTerminal } from "./helpers/workspace-pty.ts";
@@ -35,7 +36,8 @@ async function buildAndInstall(t: TestContext, custom = false): Promise<Install>
 	const home = await tempDir(t, "omi-home-");
 	execFileSync(process.execPath, ["scripts/build-release.ts", "--targets", currentPlatform(), "--out", release], { cwd: root, stdio: "pipe" });
 	const installRoot = custom ? join(home, "custom omi") : join(home, ".omi");
-	const installed = spawnSync("sh", ["install.sh"], { cwd: root, encoding: "utf8", env: { ...process.env, HOME: home, OMI_HOME: installRoot, OMI_INSTALL_BASE: `file://${release}` } });
+	// bash existe en todos los hosts: el instalador configura su archivo de inicio dentro del HOME temporal.
+	const installed = spawnSync("sh", ["install.sh"], { cwd: root, encoding: "utf8", env: installerEnv(home, release, { OMI_HOME: installRoot, SHELL: "/bin/bash" }) });
 	assert.equal(installed.status, 0, installed.stderr);
 	return { home, release, installRoot, binary: join(installRoot, "bin/omi") };
 }
@@ -68,6 +70,10 @@ test("release real_compila, instala y arranca sin Node ni repo", { skip: !enable
 	const version = spawnSync(binary, ["--version"], { encoding: "utf8", cwd: home, env: { HOME: home, PATH: "/usr/bin:/bin" } });
 	assert.equal(version.status, 0, version.stderr);
 	assert.equal(version.stdout.trim(), pkg.version);
+	// Una terminal nueva encuentra el binario real sin editar nada a mano (issue #23).
+	const opened = newShell("/bin/bash", process.platform === "darwin" ? ["-l", "-c"] : ["-i", "-c"], home);
+	assert.equal(opened.status, 0, opened.stderr);
+	assert.equal(opened.stdout, `${binary}\n${pkg.version}\n`);
 	await assert.rejects(stat(join(installRoot, "runtime/skills")));
 	assert.equal((await stat(join(installRoot, "runtime/theme/dark.json"))).isFile(), true);
 	assert.equal((await stat(join(installRoot, "runtime/claude-bridge/src/index.js"))).isFile(), true, "el bundle se distribuye aunque no haya ejecutable externo");

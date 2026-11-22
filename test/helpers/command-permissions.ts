@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import type { TestContext } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { STRICT_POLICY, renderFoundationsBlock, type FoundationsBlock } from "../../src/harness/foundations.ts";
+import { STRICT_POLICY, renderFoundationsBlock, type FoundationsBlock, type FoundationsPolicy } from "../../src/harness/foundations.ts";
 import { foundationsDir, readTrust } from "../../src/harness/foundations-trust.ts";
 import { executeCheck } from "../../src/tui/development-execution.ts";
 import { DevelopmentSession } from "../../src/tui/development-session.ts";
@@ -17,10 +17,11 @@ export const KNOWN = "node test.cjs";
 export const HUMAN = '# Perillas de repo\n\nTono: formal.\n\n```json\n{ "otra": "perilla" }\n```\n';
 export const block = (confirmar: string[] = ["git push *"], overrides: Partial<FoundationsBlock> = {}): FoundationsBlock => ({ version: 2, repo: REPO, confirmar, politica: { ...STRICT_POLICY }, ...overrides });
 
-export async function commandFixture(t: TestContext, options: { body?: string | null; value?: FoundationsBlock; products?: string[]; withoutKb?: boolean } = {}) {
+/** `foundations`: además, una revisión v2 aceptada localmente con `*` (la que vale si la KB no da una válida). */
+export async function commandFixture(t: TestContext, options: { body?: string | null; value?: FoundationsBlock; products?: string[]; withoutKb?: boolean; foundations?: FoundationsPolicy } = {}) {
 	const kb = memoryKb({ products: options.products ?? ["repo"] });
 	if (options.body !== null) kb.perillas("repo", options.body ?? `${HUMAN}\n${renderFoundationsBlock(options.value ?? block())}\n`);
-	const f = await developmentFixture(t, options.withoutKb ? {} : { kb });
+	const f = await developmentFixture(t, { ...(options.withoutKb ? {} : { kb }), ...(options.foundations ? { foundations: options.foundations } : {}) });
 	await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" });
 	assert.equal((await f.state()).phase, "implement", "la fixture llega a la etapa que permite setup");
 	// Frontera Pi mínima: el propio DevelopmentSession sigue validando contexto, permisos y estado durable.

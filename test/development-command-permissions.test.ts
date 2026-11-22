@@ -36,8 +36,9 @@ for (const mode of ["tui", "rpc"] as const) {
 		const state = await f.state();
 		assert.deepEqual(state.grants?.map((grant) => grant.command), [COMMAND]);
 		assert.equal(saves(f).length, 0); assert.deepEqual(await accepted(f), previous);
-		assert.equal(commandAuthorization({ ...state, id: "otro-trabajo" }, COMMAND), "ask");
-		assert.equal(commandAuthorization({ ...state, source: { ...state.source, hash: "otro-pedido" } }, COMMAND), "ask");
+		const policy = { block: block(), accepted: true };
+		assert.equal(commandAuthorization({ ...state, id: "otro-trabajo" }, COMMAND, policy), "ask");
+		assert.equal(commandAuthorization({ ...state, source: { ...state.source, hash: "otro-pedido" } }, COMMAND, policy), "ask");
 	});
 
 	test(`command_permissions: ${mode} No y cerrar no ejecutan ni guardan y permiten preguntar de nuevo`, async (t) => {

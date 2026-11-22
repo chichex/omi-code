@@ -5,9 +5,10 @@ import { createReadToolDefinition, type ExtensionToolContext } from "@earendil-w
 import { updateWorkflow } from "../src/harness/store.ts";
 import { isApproved, transition } from "../src/harness/state.ts";
 import { parseIssueBody } from "../src/harness/issue-section.ts";
+import { ASK_ALL } from "./helpers/foundations.ts";
 
 for (const route of ["direct", "diagnostic", "spec"] as const) test(`development_flow ${route}: permisos, evidencia, commits y PR draft recuperable`, async (t) => {
-	const f = await developmentFixture(t);
+	const f = await developmentFixture(t, { foundations: ASK_ALL });
 	await f.start();
 	assert.equal((await f.state()).phase, "explore");
 	assert.deepEqual(await f.emit("tool_call", { toolName: "write", input: { path: "value.cjs", content: "bad" } }), { block: true, reason: "Harness: write no está habilitada en esta etapa. Usá omi_workflow y omi_workflow_check; no eludas la receta, evidencia ni permisos." });
@@ -75,7 +76,7 @@ for (const route of ["direct", "diagnostic", "spec"] as const) test(`development
 });
 
 test("development_flow no puede fingir referencias, aprobación o ejecución; un cambio del pedido invalida el plan", async (t) => {
-	const f = await developmentFixture(t); await f.start();
+	const f = await developmentFixture(t, { foundations: ASK_ALL }); await f.start();
 	await assert.rejects(f.action({ action: "explored", exploration: { references: [{ path: "value.cjs", line: 1, detail: "no leído" }], findings: [], approach: "cambiar", missingFoundation: [], dependencies: [], disposition: "continue", reason: "seguir" } }), /no se leyó/);
 	await f.explore(); await f.action({ action: "planned", plan: f.plan() });
 	f.remote.confirmations = false; await f.action({ action: "approve" });
@@ -134,7 +135,7 @@ test("development_flow un aviso de read sin contenido no acredita una línea de 
 });
 
 test("development_flow la aprobación muestra la receta completa, no un artefacto truncado", async (t) => {
-	const f = await developmentFixture(t); await f.start(); await f.explore(); const plan = f.plan();
+	const f = await developmentFixture(t, { foundations: ASK_ALL }); await f.start(); await f.explore(); const plan = f.plan();
 	plan.scope = ["a".repeat(3900), "b".repeat(3900), "c".repeat(3900), "d".repeat(3900), "FINAL_SCOPE_SENTINEL"];
 	await f.action({ action: "planned", plan }); await f.action({ action: "approve" });
 	const preview = f.confirmationDetails.find((p) => p.includes("FINAL_SCOPE_SENTINEL"));
@@ -206,7 +207,7 @@ test("development_flow una vuelta de corrección con Git real agrega un paso con
 });
 
 test("development_flow el modelo no puede volver a explorar sin un sí humano; la persona sí con /omi-work refresh", async (t) => {
-	const f = await developmentFixture(t); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" });
+	const f = await developmentFixture(t, { foundations: ASK_ALL }); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" });
 	f.remote.confirmations = false; const prompts = f.prompts.length;
 	const declined = await f.action({ action: "refresh" });
 	assert.equal(f.prompts.length, prompts + 1, "refresh del modelo pide confirmación"); assert.equal(declined.terminate, true);
@@ -219,7 +220,7 @@ test("development_flow el modelo no puede volver a explorar sin un sí humano; l
 });
 
 test("development_flow declinar /omi-work approve no vuelve a disparar al modelo", async (t) => {
-	const f = await developmentFixture(t); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() });
+	const f = await developmentFixture(t, { foundations: ASK_ALL }); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() });
 	f.remote.confirmations = false; const messages = f.messages.length;
 	await f.command("approve");
 	assert.equal((await f.state()).approval, null);
@@ -259,7 +260,7 @@ test("development_flow /omi-work stop sale de un harness bloqueado por estado in
 });
 
 test("development_flow aprobar ofrece resumen y comandos completos sin conceder grants implícitos", async (t) => {
-	const f = await developmentFixture(t); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan("large") });
+	const f = await developmentFixture(t, { foundations: ASK_ALL }); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan("large") });
 	await f.action({ action: "specified", spec: { why: "Dos valores", steps: [{ id: "C1", title: "Ambos", cases: ["D1", "D2"] }], playbook: ["Probar"] } });
 	await f.action({ action: "approve" });
 	const description = f.confirmationDetails[f.prompts.lastIndexOf("Aprobar receta y sincronizar issue")] ?? "";
@@ -282,7 +283,7 @@ test("development_flow un directorio con un archivo protegido no deja el índice
 });
 
 test("development_flow tras declinar la aprobación el modelo re-planifica y se vuelve a pedir el sí", async (t) => {
-	const f = await developmentFixture(t); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() });
+	const f = await developmentFixture(t, { foundations: ASK_ALL }); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() });
 	f.remote.confirmations = false; await f.action({ action: "approve" }); assert.equal((await f.state()).phase, "approve");
 	await f.action({ action: "planned", plan: { ...f.plan(), objective: "Devolver 2 con el ajuste pedido" } });
 	assert.equal((await f.state()).recipe?.objective, "Devolver 2 con el ajuste pedido");

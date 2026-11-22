@@ -194,6 +194,13 @@ test("runUpgrade_no deja temporales en ~/.omi", async (t) => {
 	assert.deepEqual((await readdir(join(home, ".omi"))).sort(), ["bin", "runtime"]);
 });
 
+// El PATH lo configura sólo install.sh (issue #23): actualizar no toca la config del shell.
+test("runUpgrade_no toca los archivos del shell", async (t) => {
+	const home = await installed(t);
+	await runUpgrade(options(home, await releaseServer(t)));
+	assert.deepEqual(await readdir(home), [".omi"]);
+});
+
 test("runUpgrade_ya al día no descarga", async (t) => {
 	const home = await installed(t);
 	const release = await releaseServer(t, { tag: "v0.1.0" });

@@ -1,18 +1,15 @@
-// Configurar Foundations es una acción humana: abrir no acepta, guarda ni concede un grant.
+// Configurar Foundations es una acción humana: abrir no acepta, guarda ni concede un grant. El harness ya no
+// lo ofrece solo al arrancar: sin Foundations v2 nada pregunta. Se abre con /omi-foundations o f en la vista OMI.
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { checkBlock, visibleText, type FoundationsBlock } from "../harness/foundations.ts";
-import { foundationsDir, readTrust, writeTrust, type TrustKey, type TrustRecord } from "../harness/foundations-trust.ts";
+import { checkBlock, type FoundationsBlock } from "../harness/foundations.ts";
+import { foundationsDir, readTrust, type TrustKey } from "../harness/foundations-trust.ts";
 import type { DevelopmentSession } from "./development-session.ts";
-import type { FoundationsPin, FoundationsReading } from "./development-foundations.ts";
+import type { FoundationsReading } from "./development-foundations.ts";
 import type { KbClient } from "./kb-client.ts";
-import { chooseFoundationsOffer } from "./development-foundations-offer.ts";
 import { showFoundationsPanel } from "./development-foundations-panel.ts";
 import { commitFoundationsSave, prepareFoundationsSave } from "./development-foundations-save.ts";
-import { askQuestions } from "./questions/ask.ts";
-export { FOUNDATIONS_OFFER } from "./development-foundations-offer.ts";
 
 const SAVE_TIMEOUT_MS = 30_000;
-const offered = new Set<string>();
 const sameKey = (left: TrustKey, right: TrustKey) => left.kbUrl === right.kbUrl && left.product === right.product && left.repo === right.repo;
 const issueRepo = (url: string) => /^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\/\d+$/.exec(url)?.[1]?.toLowerCase();
 function editable(reading: FoundationsReading): asserts reading is Exclude<FoundationsReading, { kind: "none" | "unavailable" }> {
@@ -54,34 +51,9 @@ export async function editFoundations(ctx: ExtensionContext, session: Developmen
 	// Un v1 no es ausencia ni una política operativa: sólo se reemplaza el documento inequívoco que se abrió.
 	if (reading.kind === "invalid" && (prepared.previous?.id !== reading.perillas.id || prepared.previous.cuerpo !== reading.perillas.cuerpo)) throw new Error("Las perillas cambiaron durante la edición; revisá su contenido antes de guardar.");
 	await assertCurrent();
+	session.foundations.supersede(ctx);
 	await commitFoundationsSave(kb, key, block, prepared, { trustDir, now: session.now, signal: ioSignal(),
 		beforeAccept: assertCurrent, onAccepted: (pin) => { session.foundations.replace(ctx, pin); session.emit(); } });
 	ctx.ui.notify("Foundations v2 guardado en la KB y aceptado localmente. No se ejecutó ningún comando ni se concedió un grant; reintentá cualquier comando pendiente.", "info");
 	return true;
-}
-export function shouldOfferFoundations(pin: FoundationsPin | undefined, record: TrustRecord | undefined, hasUI: boolean): boolean {
-	return hasUI && pin?.reading.kind === "missing" && pin.origin === "strict" && !record?.accepted && !record?.offerDeclined;
-}
-/** Oferta inicial una vez por sesión. No reabre el editor al iniciar/reload ni hereda sugerencias de v1. */
-export async function offerFoundations(ctx: ExtensionContext, session: DevelopmentSession, kb: KbClient | undefined): Promise<void> {
-	const file = ctx.sessionManager.getSessionFile();
-	if (!kb || !file || offered.has(file) || !session.state) return;
-	const pin = session.foundations.current(ctx);
-	if (pin?.reading.kind !== "missing") return;
-	const key = pin.reading.key; const trustDir = foundationsDir(session.io.homeDir);
-	if (!shouldOfferFoundations(pin, await readTrust(trustDir, key), ctx.hasUI && ctx.mode === "tui")) return;
-	offered.add(file);
-	const choice = await chooseFoundationsOffer(async (batch) => {
-		session.checkContext(ctx); session.emit("Esperando respuesta · Foundations", true);
-		try { return await askQuestions(ctx, batch, { signal: session.lifecycle.signal }); } finally { session.emit(); }
-	}, key);
-	if (choice === "never") {
-		const existing = await readTrust(trustDir, key);
-		const record = existing ?? { version: 2 as const, ...key, accepted: null, offerDeclined: false };
-		// El descarte de una oferta tampoco puede borrar una aceptación guardada concurrentemente.
-		await writeTrust(trustDir, { ...record, offerDeclined: true }, { expected: existing ?? null });
-	} else if (choice === "build") {
-		try { await editFoundations(ctx, session, kb); }
-		catch (error) { ctx.ui.notify(visibleText(`No se pudo completar Foundations: ${error instanceof Error ? error.message : "error"}`), "warning"); }
-	}
 }

@@ -5,6 +5,13 @@ import { readTrust, writeTrust, type TrustKey, type TrustRecord } from "../harne
 import type { FoundationsPin } from "./development-foundations.ts";
 import { MAX_KB_DOCUMENT_LENGTH, type KbClient, type KbDoc } from "./kb-client.ts";
 
+/** En qué quedó la KB: cambió antes de guardar (nada guardado), pudo haberse guardado, quedó guardada sin aceptar, o aceptada. */
+export type SaveStage = "conflict" | "unconfirmed" | "saved" | "accepted";
+export class FoundationsSaveError extends Error {
+	readonly stage: SaveStage;
+	constructor(stage: SaveStage, message: string, options?: ErrorOptions) { super(message, options); this.name = "FoundationsSaveError"; this.stage = stage; }
+}
+
 export interface PreparedSave { previous: KbDoc | null; body: string; clave: string }
 const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
 /** La expectativa se valida sobre el mismo documento que se compone, incluida la ausencia explícita (null). */
@@ -14,7 +21,7 @@ export async function prepareFoundationsSave(kb: KbClient, key: TrustKey, block:
 	signal.throwIfAborted();
 	if (expectedHash !== undefined) {
 		const parsed = parseFoundations(previous?.cuerpo ?? "", key.repo);
-		if (parsed.status === "invalid" || (parsed.status === "valid" ? parsed.hash : null) !== expectedHash) throw new Error("La revisión de Foundations cambió antes de componer las perillas; no se guardó nada. Revisá la KB en una sesión nueva.");
+		if (parsed.status === "invalid" || (parsed.status === "valid" ? parsed.hash : null) !== expectedHash) throw new FoundationsSaveError("conflict", "La revisión de Foundations cambió antes de componer las perillas; no se guardó nada. Revisá la KB en una sesión nueva.");
 	}
 	const body = composePerillas(previous?.cuerpo, key.product, key.repo, block);
 	if (body.length > MAX_KB_DOCUMENT_LENGTH) throw new Error(`Las perillas resultantes exceden el límite legible de KB (${MAX_KB_DOCUMENT_LENGTH} caracteres); no se guardó nada.`);
@@ -22,11 +29,10 @@ export async function prepareFoundationsSave(kb: KbClient, key: TrustKey, block:
 }
 
 interface SaveDeps {
-	trustDir: string; now: () => string; signal: AbortSignal;
+	trustDir: string; now: () => string; signal: AbortSignal; writeAcceptance?: typeof writeTrust;
 	beforeAccept?: () => Promise<void>;
 	/** Publica sólo una aceptación durable que siga vigente; editar/guardar nunca ejecuta comandos. */
 	onAccepted?: (pin: FoundationsPin) => void;
-	writeAcceptance?: typeof writeTrust;
 }
 // Turnos por identidad compartida, no por objeto KbClient ni sesión. Sólo coordinan este proceso.
 const saveTurns = new Map<string, object>();
@@ -61,7 +67,7 @@ async function persistSave(kb: KbClient, key: TrustKey, block: FoundationsBlock,
 	assertCurrent();
 	const current = await kb.currentPerillas(key.product, signal);
 	assertCurrent();
-	if ((current?.id ?? null) !== (prepared.previous?.id ?? null) || current?.cuerpo !== prepared.previous?.cuerpo) throw new Error("Las perillas cambiaron en la KB antes de guardar Foundations; no se guardó nada. Revisá la revisión vigente.");
+	if ((current?.id ?? null) !== (prepared.previous?.id ?? null) || current?.cuerpo !== prepared.previous?.cuerpo) throw new FoundationsSaveError("conflict", "Las perillas cambiaron en la KB antes de guardar Foundations; no se guardó nada. Revisá la revisión vigente.");
 	const input = { product: key.product, titulo: prepared.previous?.titulo || `Perillas de ${key.product}`, cuerpo: prepared.body, clave: prepared.clave };
 	let confirmed = false; let accepted = false;
 	try {
@@ -115,6 +121,6 @@ async function persistSave(kb: KbClient, key: TrustKey, block: FoundationsBlock,
 			: accepted ? "Foundations quedó guardado en la KB y aceptado localmente para futuras sesiones, pero no se ejecutó el comando"
 			: confirmed ? "Foundations se guardó en la KB, pero no se completó su verificación o aceptación local"
 				: "No se pudo confirmar el guardado de Foundations en la KB; pudo haberse guardado";
-		throw new Error(`${status}. ${why}`, { cause: error });
+		throw new FoundationsSaveError(accepted ? "accepted" : confirmed ? "saved" : "unconfirmed", `${status}. ${why}`, { cause: error });
 	}
 }

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { FoundationsGate } from "../src/tui/development-foundations.ts";
+import { DEFAULT_POLICY } from "../src/harness/foundations.ts";
 import { memoryKb } from "./helpers/mock-kb.ts";
 import { tempDir } from "./helpers/io.ts";
 
@@ -14,9 +15,10 @@ function reader(gate: FoundationsGate) {
 }
 async function fixture(t: import("node:test").TestContext, text?: string) {
 	const home = await tempDir(t); const kb = memoryKb({ products: ["repo"] }); if (text !== undefined) kb.perillas("repo", text);
+	// Aceptar Foundations ya no pregunta: avisa. Leer criterios de triage no lo acepta, así que no avisa.
 	let prompts = 0; const identity = { origin: "https://github.com/test/repo.git\n" };
-	const gate = new FoundationsGate({ kb, trustDir: home, now: () => "now", confirm: async () => { prompts++; return true; }, runner: { run: async () => ({ code: 0, stdout: identity.origin, stderr: "" }) } });
-	const ctx = { hasUI: true, cwd: home, sessionManager: { getSessionFile: () => `${home}/session.jsonl` } } as unknown as ExtensionContext;
+	const gate = new FoundationsGate({ kb, trustDir: home, now: () => "now", runner: { run: async () => ({ code: 0, stdout: identity.origin, stderr: "" }) } });
+	const ctx = { hasUI: true, cwd: home, sessionManager: { getSessionFile: () => `${home}/session.jsonl` }, ui: { notify: () => { prompts++; } } } as unknown as ExtensionContext;
 	return { gate, ctx, kb, identity, prompts: () => prompts };
 }
 
@@ -60,6 +62,6 @@ test("triage_policy: el pin no se comparte con otras sesiones ni repositorios", 
 test("triage_policy: cambiar criterio no altera las cuatro políticas de autorización", async (t) => {
 	const f = await fixture(t, block({ ...policy, enabled: false, maxScope: "module" }));
 	const pin = await reader(f.gate)(f.ctx); assert.equal(pin.policy.enabled, false); assert.equal(pin.policy.maxScope, "module");
-	const permissions = await f.gate.policy(f.ctx); assert.deepEqual(permissions.politica, { arranque: "ask", receta: "ask", push_pr: "ask" });
+	const permissions = await f.gate.policy(f.ctx); assert.deepEqual(permissions.politica, DEFAULT_POLICY, "sin bloque omi-foundations vale el default, no el criterio de triage");
 	assert.equal(f.prompts(), 0);
 });

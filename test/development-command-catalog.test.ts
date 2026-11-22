@@ -8,6 +8,7 @@ import { commandAuthorization } from "../src/harness/authorization.ts";
 import { STRICT_POLICY, parseFoundations, renderFoundationsBlock } from "../src/harness/foundations.ts";
 import { foundationsDir, trustPath } from "../src/harness/foundations-trust.ts";
 import { FoundationsGate, effectivePolicy } from "../src/tui/development-foundations.ts";
+import { ASK_ALL } from "./helpers/foundations.ts";
 import { COMMAND, HUMAN, KNOWN, REPO, accepted, authorizations, block, choose, commandFixture, key, noPermissionAdded, saves, type CommandFixture } from "./helpers/command-permissions.ts";
 
 const draftKeys = (text: string): readonly string[] => ["\x15", `\x1b[200~${text}\x1b[201~`, "\x13", "\x13"];
@@ -70,15 +71,14 @@ test("command_catalog: error de la UI de edición no ejecuta ni concede fallback
 
 test("command_catalog: otra sesión acepta reglas guardadas, no hereda un grant de ningún trabajo", async (t) => {
 	const f = await commandFixture(t); edit(f); await savedDraft(f, ["npm publish *"]);
-	const confirmations: string[] = [];
 	const ctx = { ...f.context, sessionManager: SessionManager.create(f.checkout.root, join(f.home, "new-sessions")) };
-	const gate = new FoundationsGate({ kb: f.kb, runner: f.runner, trustDir: foundationsDir(f.home), now: () => "2026-11-19T00:00:00Z", confirm: async (_ctx, title) => { confirmations.push(title); return false; } });
+	const gate = new FoundationsGate({ kb: f.kb, runner: f.runner, trustDir: foundationsDir(f.home), now: () => "2026-11-19T00:00:00Z" });
 	const first = await f.state(); const otherWork = { ...first, id: "otro-trabajo", grants: [] };
 	const policy = await gate.policy(ctx, otherWork);
 	assert.equal(commandAuthorization(otherWork, "npm test", policy.command), "auto");
 	assert.equal(commandAuthorization(otherWork, "npm publish package", policy.command), "ask");
 	assert.equal(commandAuthorization(otherWork, COMMAND, policy.command), "ask");
-	assert.deepEqual(confirmations, []); assert.equal(gate.current(ctx)?.docId, f.kb.documents.at(-1)!.id);
+	assert.equal(gate.current(ctx)?.docId, f.kb.documents.at(-1)!.id);
 	assert.equal(authorizations(f).length, 1); assert.deepEqual((await f.state()).grants ?? [], []);
 });
 
@@ -86,12 +86,12 @@ test("command_catalog: otro owner con el mismo producto no hereda reglas ni acep
 	const f = await commandFixture(t); edit(f); await savedDraft(f, ["npm publish *"]);
 	const ctx = { ...f.context, sessionManager: SessionManager.create(f.checkout.root, join(f.home, "foreign-sessions")) };
 	const runner = { run: async (...args: Parameters<typeof f.runner.run>) => args[0] === "git" && args[1].join(" ") === "remote get-url origin" ? { code: 0, stdout: "https://github.com/acme/repo.git\n", stderr: "" } : f.runner.run(...args) };
-	const gate = new FoundationsGate({ kb: f.kb, runner, trustDir: foundationsDir(f.home), now: () => "now", confirm: async () => { assert.fail("no hay revisión de acme/repo para aceptar"); } });
+	const gate = new FoundationsGate({ kb: f.kb, runner, trustDir: foundationsDir(f.home), now: () => "now" });
 	const state = await f.state(); const foreign = { ...state, source: { ...state.source, url: "https://github.com/acme/repo/issues/42" }, grants: [] };
 	const policy = await gate.policy(ctx, foreign);
 	assert.deepEqual(policy.command, { block: null, accepted: false });
-	assert.equal(commandAuthorization(foreign, "npm test", policy.command), "ask");
-	assert.equal(gate.current(ctx)?.origin, "strict");
+	assert.equal(commandAuthorization(foreign, COMMAND, policy.command), "auto", "sin v2 de acme/repo vale el default: nada pregunta");
+	assert.equal(gate.current(ctx)?.origin, "default");
 	assert.deepEqual(effectivePolicy(f.session.foundations.current(f.context), foreign).command, { block: null, accepted: false });
 });
 
@@ -141,7 +141,8 @@ test("command_catalog: revisión posterior durante verificación no se acepta", 
 });
 
 for (const failure of ["offline", "missing-product", "without-kb"] as const) test(`command_catalog: ${failure} no inventa persistencia ni crea productos`, async (t) => {
-	const f = await commandFixture(t, failure === "without-kb" ? { withoutKb: true } : {}); edit(f); const previous = await accepted(f);
+	// Sin KB y sin aceptada no hay diálogo: el v2 aceptado localmente es el que lo abre.
+	const f = await commandFixture(t, failure === "without-kb" ? { withoutKb: true, foundations: ASK_ALL } : {}); edit(f); const previous = await accepted(f);
 	if (failure === "offline") f.kb.available = "sin conexión a la KB";
 	if (failure === "missing-product") f.kb.access = ["otro"];
 	await assert.rejects(f.check(), /KB|producto|acceso|disponible|conexión/i);
@@ -158,7 +159,8 @@ test("command_catalog: origin distinto del issue no escribe en el pin previo", a
 });
 
 for (const body of ["```omi-foundations\n{ roto\n```\n", `${renderFoundationsBlock(block())}\n${renderFoundationsBlock(block())}\n`]) test("command_catalog: bloque inválido/ambiguo no se sobrescribe", async (t) => {
-	const f = await commandFixture(t, { body }); edit(f);
+	// Un bloque inválido no vale: sin una v2 aceptada no habría diálogo. Con la v2 aceptada localmente, sí.
+	const f = await commandFixture(t, { body, foundations: ASK_ALL }); edit(f);
 	await assert.rejects(f.check(), /inválid|Foundations|bloque/i);
 	assert.equal(saves(f).length, 0); assert.equal(f.kb.documents.at(-1)!.cuerpo, body); await noPermissionAdded(f);
 });

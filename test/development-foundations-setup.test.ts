@@ -1,14 +1,14 @@
 // El panel configura v2 sólo con Guardar. Git temporal, KB en memoria o MCP HTTP falso, nunca KB real.
+// Arrancar el harness sin Foundations no lo ofrece: sin Foundations v2 nada pregunta.
 import assert from "node:assert/strict";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { foundationsHash, parseFoundations, renderFoundationsBlock, STRICT_POLICY, type FoundationsBlock } from "../src/harness/foundations.ts";
+import { DEFAULT_POLICY, foundationsHash, parseFoundations, renderFoundationsBlock, STRICT_POLICY, type FoundationsBlock } from "../src/harness/foundations.ts";
 import { foundationsDir, readTrust, trustPath } from "../src/harness/foundations-trust.ts";
-import { shouldOfferFoundations, FOUNDATIONS_OFFER } from "../src/tui/development-foundations-setup.ts";
-import { commitFoundationsSave, prepareFoundationsSave } from "../src/tui/development-foundations-save.ts";
+import { commitFoundationsSave, FoundationsSaveError, prepareFoundationsSave } from "../src/tui/development-foundations-save.ts";
 import { createKbClient } from "../src/tui/kb-client.ts";
 import { developmentFixture } from "./helpers/development.ts";
 import { memoryKb, mockKb, type MemoryKb } from "./helpers/mock-kb.ts";
@@ -19,6 +19,8 @@ process.env.PI_CODING_AGENT_DIR = await mkdtemp(join(tmpdir(), "omi-kb-agent-"))
 const HUMAN = '# Perillas de repo\n\nTono: formal.\n\n```json\n{ "otra": "perilla" }\n```\n';
 const REPO = "test/repo";
 const block = (confirmar: string[] = []): FoundationsBlock => ({ version: 2, repo: REPO, confirmar, politica: { ...STRICT_POLICY } });
+/** Sin v2 vigente el panel parte de lo que vale: el default, todo auto. */
+const fresh = (confirmar: string[] = []): FoundationsBlock => ({ version: 2, repo: REPO, confirmar, politica: { ...DEFAULT_POLICY } });
 const saves = (kb: { calls: { tool: string }[] }) => kb.calls.filter((call) => call.tool === "guardar").length;
 const key = (kb: { url: string }) => ({ kbUrl: kb.url, product: "repo", repo: REPO });
 const paste = (text: string) => `\x1b[200~${text}\x1b[201~`;
@@ -28,43 +30,38 @@ async function fixture(t: TestContext, body: string | null = HUMAN, products = [
 }
 const SAVE = ["\x13", "\x13"];
 
-test("foundations_setup v2: oferta cerrada una vez por sesión; Ahora no/Esc no guardan ni aceptan", async (t) => {
-	for (const choice of [["2"], [KEYS.esc]]) {
-		const f = await fixture(t); f.uiControl.questions = () => choice; await f.start();
-		assert.equal(f.asked.length, 1); assert.match(f.asked[0]![0]!, /Armar Foundations/);
-		assert.match(f.asked[0]!.join("\n"), /confirmación/); assert.equal(saves(f.kb), 0); assert.equal(await readTrust(foundationsDir(f.home), key(f.kb)), undefined);
-		await f.attach(); await f.command("resume"); await f.start(); assert.equal(f.asked.length, 1);
+test("foundations_setup v2: arrancar el harness sin Foundations no ofrece armarlo ni pregunta nada", async (t) => {
+	for (const body of [HUMAN, null]) {
+		const f = await fixture(t, body); f.uiControl.questions = () => ["1"]; await f.start();
+		assert.equal(f.asked.length, 0, "sin la oferta"); assert.equal(f.selects.length, 0); assert.deepEqual(f.prompts, []);
+		assert.equal(f.foundationsScreens.length, 0); assert.equal(saves(f.kb), 0);
+		assert.equal(await readTrust(foundationsDir(f.home), key(f.kb)), undefined, "nada en el registro local");
 	}
 });
-test("foundations_setup v2: No ofrecer más sólo guarda el descarte local v2", async (t) => {
-	const f = await fixture(t); f.uiControl.questions = () => ["3"]; await f.start();
-	const record = await readTrust(foundationsDir(f.home), key(f.kb)); assert.equal(record?.version, 2); assert.equal(record?.offerDeclined, true); assert.equal(record?.accepted, null); assert.equal(saves(f.kb), 0);
-	const pin = { version: 2 as const, origin: "strict" as const, block: null, hash: null, docId: null, author: null, date: null, notice: "", reading: { kind: "missing" as const, key: key(f.kb), perillas: null } };
-	assert.equal(shouldOfferFoundations(pin, record, true), false); assert.equal(shouldOfferFoundations(pin, undefined, true), true); assert.equal(shouldOfferFoundations(pin, undefined, false), false);
-});
-test("foundations_setup v2: oferta abre panel integrado y sólo Guardar persiste/acepta, preservando perillas", async (t) => {
-	const f = await fixture(t); f.uiControl.questions = () => ["1"]; f.uiControl.foundations = () => [...typed("git push *"), ...SAVE];
-	await f.start(); assert.equal(f.asked.length, 1, "no hay wizard de comandos/políticas por pestañas"); assert.equal(f.editors.length, 0);
+test("foundations_setup v2: /omi-foundations abre el panel integrado y sólo Guardar persiste/acepta, preservando perillas", async (t) => {
+	const f = await fixture(t); f.uiControl.foundations = () => [...typed("git push *"), ...SAVE];
+	await f.start(); await f.run("omi-foundations"); assert.equal(f.asked.length, 0, "no hay wizard de comandos/políticas por pestañas"); assert.equal(f.editors.length, 0);
 	assert.equal(f.foundationsScreens.length, 1); assert.equal(saves(f.kb), 1);
 	const saved = f.kb.documents.at(-1)!; assert.ok(saved.cuerpo.startsWith(HUMAN));
-	const parsed = parseFoundations(saved.cuerpo, REPO); assert.ok(parsed.status === "valid"); assert.deepEqual(parsed.block, block(["git push *"]));
+	const parsed = parseFoundations(saved.cuerpo, REPO); assert.ok(parsed.status === "valid"); assert.deepEqual(parsed.block, fresh(["git push *"]));
 	assert.equal((await readTrust(foundationsDir(f.home), key(f.kb)))?.accepted?.docId, saved.id);
 	await f.invoke("omi_workflow_check", { kind: "reproduction", command: "node test.cjs" }); assert.ok(!f.prompts.includes("Autorizar comando del proyecto"));
 });
 test("foundations_setup v2: sin perillas crea documento sólo al guardar y advierte lista vacía", async (t) => {
-	const f = await fixture(t, null); f.uiControl.questions = () => ["1"]; f.uiControl.foundations = () => SAVE; await f.start();
+	const f = await fixture(t, null); f.uiControl.foundations = () => SAVE; await f.start(); await f.command("foundations");
 	assert.equal(saves(f.kb), 1); assert.ok(f.kb.documents.at(-1)!.cuerpo.startsWith("# Perillas de repo\n\n## Foundations de omi"));
 	assert.match(f.foundationsScreens[0]!.join("\n"), /SIMPLE/);
 });
 test("foundations_setup v2: errores vuelven al editor con borrador y línea original, no lo recortan", async (t) => {
-	const f = await fixture(t); f.uiControl.questions = () => ["1"];
-	f.uiControl.foundations = () => [paste("git push *\n\n npm test"), "\x13", "\x01", "\x1b[3~", ...SAVE]; await f.start();
+	const f = await fixture(t);
+	f.uiControl.foundations = () => [paste("git push *\n\n npm test"), "\x13", "\x01", "\x1b[3~", ...SAVE]; await f.start(); await f.command("foundations");
 	assert.ok(f.foundationsScreens[0]!.some((screen) => /Línea 3/.test(screen))); assert.equal(saves(f.kb), 1);
 	const parsed = parseFoundations(f.kb.documents.at(-1)!.cuerpo, REPO); assert.ok(parsed.status === "valid"); assert.deepEqual(parsed.block.confirmar, ["git push *", "npm test"]);
 });
 test("foundations_setup v2: cancelar editor o volver desde revisión y cancelar no persiste", async (t) => {
 	for (const keys of [[KEYS.esc], [...typed("git push *"), "\x13", KEYS.esc, KEYS.esc]]) {
-		const f = await fixture(t); f.uiControl.questions = () => ["1"]; f.uiControl.foundations = () => keys; await f.start();
+		const f = await fixture(t); f.uiControl.foundations = () => keys; await f.start(); await f.command("foundations");
+		assert.equal(f.foundationsScreens.length, 1);
 		assert.equal(saves(f.kb), 0); assert.equal(await readTrust(foundationsDir(f.home), key(f.kb)), undefined);
 	}
 });
@@ -87,7 +84,7 @@ test("foundations_setup v2: v1 falla cerrado y sólo guardado explícito reempla
 	f.uiControl.foundations = () => SAVE; await f.command("foundations"); assert.equal(saves(f.kb), 1);
 	assert.doesNotMatch(f.foundationsScreens[0]![0]!, /NO-HEREDAR/); const saved = f.kb.documents.at(-1)!;
 	assert.ok(saved.cuerpo.startsWith(HUMAN)); assert.ok(saved.cuerpo.endsWith("\nFin.\n"));
-	const parsed = parseFoundations(saved.cuerpo, REPO); assert.ok(parsed.status === "valid"); assert.deepEqual(parsed.block, block()); assert.deepEqual((await f.state()).grants ?? [], []);
+	const parsed = parseFoundations(saved.cuerpo, REPO); assert.ok(parsed.status === "valid"); assert.deepEqual(parsed.block, fresh(), "v1 no se hereda: parte del default vigente"); assert.deepEqual((await f.state()).grants ?? [], []);
 });
 test("foundations_setup v2: cambio de política durante el panel bloquea guardar sobre revisión ajena", async (t) => {
 	const f = await fixture(t, renderFoundationsBlock(block(["git push *"]))); await f.start();
@@ -129,5 +126,21 @@ test("foundations_setup v2: MCP HTTP real conserva bytes y recupera una respuest
 	const kb = await createHttpKb(t); let first = true;
 	kb.mock.hook = (tool) => { if (tool === "guardar" && first) { first = false; return "drop"; } };
 	const pin = await save(kb, foundationsDir(await tempDir(t))); const saved = kb.mock.documents.filter((doc) => doc.cuerpo.includes("omi-foundations"));
-	assert.equal(saved.length, 1); assert.ok(saved[0]!.cuerpo.startsWith(HUMAN)); assert.equal(pin.docId, saved[0]!.id); assert.equal(FOUNDATIONS_OFFER.length, 3);
+	assert.equal(saved.length, 1); assert.ok(saved[0]!.cuerpo.startsWith(HUMAN)); assert.equal(pin.docId, saved[0]!.id);
+});
+// De #63: cada fallo del guardado dice en qué quedó la KB.
+test("foundations_setup v2: los fallos del guardado dicen en qué quedó la KB", async (t) => {
+	const kb = memoryKb({ products: ["repo"] }); kb.perillas("repo", `${HUMAN}\n${renderFoundationsBlock(block())}\n`);
+	const target = key(kb); const trustDir = foundationsDir(await tempDir(t)); const now = () => "2026-11-19T00:00:00Z";
+	const next = block(["git push *"]); const signal = AbortSignal.timeout(5000);
+	const stage = (expected: string) => (error: unknown) => error instanceof FoundationsSaveError && error.stage === expected;
+	await assert.rejects(prepareFoundationsSave(kb, target, next, signal, "0".repeat(64)), stage("conflict"));
+	const prepared = await prepareFoundationsSave(kb, target, next, signal, foundationsHash(block()));
+	kb.perillas("repo", `${HUMAN}\n${renderFoundationsBlock(block(["otro"]))}\n`);
+	await assert.rejects(commitFoundationsSave(kb, target, next, prepared, { trustDir, now, signal }), stage("conflict"));
+	const fresh = await prepareFoundationsSave(kb, target, next, signal);
+	kb.hook = (tool) => tool === "guardar" ? "error" : undefined;
+	await assert.rejects(commitFoundationsSave(kb, target, next, fresh, { trustDir, now, signal }), stage("unconfirmed"));
+	kb.hook = () => {};
+	await assert.rejects(commitFoundationsSave(kb, target, next, fresh, { trustDir, now, signal, writeAcceptance: async () => { throw new Error("disco lleno"); } }), stage("saved"));
 });
