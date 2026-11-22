@@ -1,4 +1,5 @@
-// `omi init`: vincula el repo. Flags en la CLI, preguntas sólo si hay un humano.
+// `omi init`: vincula el repo. Flags en la CLI, preguntas sólo si hay un humano. Bare con terminal elige
+// módulo; `--development` carga su host recién ahí: la ruta legacy no importa Pi, la TUI ni la KB.
 
 import { basename } from "node:path";
 import { EXIT_OK, UsageError } from "../../core/errors.ts";
@@ -33,8 +34,24 @@ async function orAsk(value: string | undefined, question: string, fallback: stri
 	return (await io.prompt(`${question} [${fallback}]: `)).trim() || fallback;
 }
 
-export async function initCommand(args: string[], io: Io): Promise<number> {
-	const { values } = parseFlags(args, {
+type DevelopmentInit = (args: string[], io: Io) => Promise<number>;
+export interface InitDeps { development?: () => Promise<DevelopmentInit> }
+const loadDevelopment = async (): Promise<DevelopmentInit> => (await import("../init-development.ts")).developmentInit;
+const LEGACY_FLAGS = ["org", "project", "name", "service", "port", "env", "create"] as const;
+
+/** Sólo bare con terminal y sin --json: los flags legacy y el diagnóstico no interactivo no cambian. */
+async function chooseModule(io: Io): Promise<"link" | "development"> {
+	io.out("¿Qué configurar?\n  1) Vínculo con OMI: proyecto y services (.omi/project.json)\n  2) Desarrollo: Review, Land y Ship del harness (KB)");
+	const answer = (await io.prompt("Módulo [1]: ")).trim();
+	if (answer === "" || answer === "1") return "link";
+	if (answer === "2") return "development";
+	throw new UsageError(`módulo inválido: ${answer}`, "elegí 1 o 2, o usá `omi init --development`");
+}
+
+export async function initCommand(args: string[], io: Io, deps: InitDeps = {}): Promise<number> {
+	const development = deps.development ?? loadDevelopment;
+	if (args.includes("--development")) return (await development())(args, io);
+	const { values, positionals } = parseFlags(args, {
 		org: { type: "string" },
 		project: { type: "string" },
 		name: { type: "string" },
@@ -43,6 +60,8 @@ export async function initCommand(args: string[], io: Io): Promise<number> {
 		env: { type: "string" },
 		create: { type: "boolean" },
 	});
+	const bare = positionals.length === 0 && LEGACY_FLAGS.every((flag) => values[flag] === undefined);
+	if (bare && io.interactive && values.json !== true && await chooseModule(io) === "development") return (await development())(["--development"], io);
 	const fallback = basename(io.cwd);
 	const projectSlug = await orAsk(values.project, "slug del proyecto", fallback, io);
 	const services = (values.service ?? [await orAsk(undefined, "nombre del service", fallback, io)]).map(parseService);
