@@ -4,6 +4,7 @@ import { hostname } from "node:os";
 import { dirname, isAbsolute, join, parse, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { migrateWorkflow, parseWorkflow, type Workflow, type WorkflowV2 } from "./model.ts";
+import { assertLifecycleContinuity, lifecycleReceiptReserveBytes } from "./lifecycle-invariants.ts";
 
 const MAX_BYTES = 8 * 1024 * 1024;
 export class WorkflowConflictError extends Error {
@@ -121,14 +122,19 @@ export async function updateWorkflow(checkout: Workflow["checkout"], issueNumber
   await lock.sync();
   const stored = await readStoredWorkflow(checkout, issueNumber); const current = stored?.state;
   if (expectedRevision === undefined ? current !== undefined : current === undefined || current.revision !== expectedRevision) throw new WorkflowConflictError();
-  const candidate = change(current);
+  // El callback recibe una copia: incluso si muta in-place, la preimagen conserva identidad y consumo.
+  const candidate = change(current === undefined ? undefined : structuredClone(current));
   requireCondition(!stored || stored.legacy || candidate.version === 2, "no se admite downgrade de v2");
   const next = parseWorkflow(JSON.stringify(candidate));
   validateIdentity(next, checkout, issueNumber);
   requireCondition(next.revision === (expectedRevision === undefined ? 0 : expectedRevision + 1), "la revisión debe avanzar exactamente una vez");
-  if (current) requireCondition(next.id === current.id, "no se puede reemplazar la identidad del workflow");
+  if (current) {
+   requireCondition(next.id === current.id, "no se puede reemplazar la identidad del workflow");
+   assertLifecycleContinuity(current.lifecycle, next.lifecycle);
+  }
   const serialized = JSON.stringify(next, null, 2) + "\n";
   requireCondition(Buffer.byteLength(serialized) <= MAX_BYTES, "estado demasiado grande");
+  requireCondition(Buffer.byteLength(serialized) <= MAX_BYTES - lifecycleReceiptReserveBytes(next.lifecycle), "falta espacio comprometido para recibos pendientes/actividad");
   if (stored?.legacy) await backupLegacy(path, stored.raw);
   temp = join(directory, `.${issueNumber}.${randomUUID()}.tmp`);
   const file = await open(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);

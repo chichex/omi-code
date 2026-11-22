@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 import { PHASES, PHASES_V1 } from "./phases.ts";
+import { LifecycleStateSchema } from "./lifecycle-state-schema.ts";
+import { validateLifecycleState } from "./lifecycle-invariants.ts";
 
 // Topes compartidos por el esquema y el reducer: el reducer los respeta antes de validar.
 export const MAX_HISTORY = 1000; export const MAX_STEPS = 50; export const MAX_ATTEMPTS = 100; export const MAX_EVIDENCE = 1000; export const MAX_REVIEWS = 100; export const MAX_AGREEMENTS = 50; export const MAX_GRANTS = 200;
@@ -99,7 +101,7 @@ const PullRequestSchema = Type.Union([Type.Null(), Type.Object({ number: Type.In
 export const WorkflowV2Schema = Type.Object({
  ...WorkflowV1Schema.properties, version: Type.Literal(2), phase: PhaseSchema,
  // Disabled no significa omitido/no-aplica ni permiso: habilitar/adoptar es una operación host explícita.
- lifecycle: Type.Object({ status: Type.Literal("disabled") }, { additionalProperties: false }),
+ lifecycle: LifecycleStateSchema,
  pullRequest: PullRequestSchema,
  // El renderer v1 permanece ligado al pending legacy y no se cambia al migrar/reanudar.
  publicationFormat: Type.Literal(1),
@@ -113,7 +115,14 @@ export type WorkflowV2 = Omit<Static<typeof WorkflowV2Schema>, "inferences"> & {
 export type Workflow = WorkflowV1 | WorkflowV2;
 /** Migración pura: validar antes de convertir, sin I/O, nuevos efectos ni avance de revisión. */
 export function migrateWorkflow(value: unknown): WorkflowV2 {
- if (Value.Check(WorkflowV2Schema, value)) return structuredClone(value);
+ if (Value.Check(WorkflowV2Schema, value)) {
+  if (value.lifecycle.status === "enabled") {
+   const repo = /^https:\/\/github\.com\/([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)\/issues\/(\d+)$/.exec(value.source.url);
+   if (!repo || Number(repo[2]) !== value.source.number) throw new Error("Estado del harness inválido: lifecycle sin identidad GitHub comprobable");
+   validateLifecycleState(value.lifecycle, { workflowId: value.id, issue: value.source.number, repo: repo[1]!.toLowerCase() });
+  }
+  return structuredClone(value);
+ }
  if (!Value.Check(WorkflowV1Schema, value)) throw new Error("Estado del harness inválido; no se reemplaza ni se reinicia automáticamente");
  const old = structuredClone(value);
  return { ...old, version: 2, lifecycle: { status: "disabled" }, publicationFormat: 1,
