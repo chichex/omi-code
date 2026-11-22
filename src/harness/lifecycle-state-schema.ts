@@ -7,6 +7,8 @@ import { CorrectionRoundSchema, CorrectionPushRequestSchema } from "./correction
 import { ReadyLandSchema, LandRequestSchema, MergeFactSchema, DraftReadyRequestSchema } from "./land-schema.ts";
 import { ShipRequestSchema, ShipDeliverySchema, ShipCompletionSchema } from "./ship-schema.ts";
 import { OmiQueuedSchema, OmiStartedSchema, PublicationFactSchema } from "./omi-ship-schema.ts";
+import { RecoveryBaselineSchema, RecoveryObservationSchema, GhaRollbackRequestSchema } from "./recovery-schema.ts";
+import { RecoveryWorkspaceSchema, FixForwardRequestSchema, FixForwardPushSchema } from "./recovery-workspace-schema.ts";
 export const ReviewInvocationSchema = Type.Union([GhaReviewRequestSchema, LocalReviewRequestSchema]);
 const closed = { additionalProperties: false } as const;
 export const boundedText = (maxLength = 256) => Type.String({ minLength: 1, maxLength, pattern: "\\S" });
@@ -14,7 +16,7 @@ const nullableText = () => Type.Union([boundedText(), Type.Null()]);
 const Sha = Type.String({ pattern: "^[a-f0-9]{40}(?:[a-f0-9]{24})?$" });
 const Hash = Type.String({ pattern: "^[a-f0-9]{64}$" });
 const Count = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
-export const OperationKindSchema = Type.Enum(["review", "correction", "push", "ready", "land", "ship", "publish", "deploy", "promote", "rollback", "fix-forward"]);
+export const OperationKindSchema = Type.Enum(["review", "correction", "push", "ready", "land", "ship", "publish", "deploy", "promote", "rollback", "fix-forward", "fix-forward-push"]);
 export type OperationKind = Static<typeof OperationKindSchema>;
 export const LifecycleRootSchema = Type.Object({ workflowId: boundedText(100), issue: Type.Integer({ minimum: 1 }), repo: boundedText(200) }, closed);
 export const LifecyclePinSchema = Type.Object({
@@ -31,7 +33,7 @@ export const DecisionSchema = Type.Object({ id: boundedText(), kind: OperationKi
 export type LifecycleDecision = Static<typeof DecisionSchema>;
 export const ReceiptSchema = Type.Object({ operationId: boundedText(), correlationId: boundedText(), subjectId: boundedText(), targetId: nullableText(), externalId: boundedText(), outcome: Type.Enum(["succeeded", "failed", "not-applicable"]), verifiedSubjectId: nullableText(), at: boundedText(100) }, closed);
 export type LifecycleReceipt = Static<typeof ReceiptSchema>;
-const OperationFields = { ...IntentSchema.properties, configHash: Hash, decisionId: boundedText(), providerRequest: Type.Optional(ReviewInvocationSchema), pushRequest: Type.Optional(CorrectionPushRequestSchema), landRequest: Type.Optional(LandRequestSchema), readyRequest: Type.Optional(DraftReadyRequestSchema), shipRequest: Type.Optional(ShipRequestSchema), queued: Type.Optional(Type.Array(OmiQueuedSchema, { maxItems: 10 })), deployments: Type.Optional(Type.Array(OmiStartedSchema, { maxItems: 10 })), history: Type.Array(Type.Object({ status: Type.Enum(["pending", "unknown", "confirmed"]), at: boundedText(100) }, closed), { minItems: 1, maxItems: 1000 }) };
+const OperationFields = { ...IntentSchema.properties, configHash: Hash, decisionId: boundedText(), providerRequest: Type.Optional(ReviewInvocationSchema), pushRequest: Type.Optional(CorrectionPushRequestSchema), landRequest: Type.Optional(LandRequestSchema), readyRequest: Type.Optional(DraftReadyRequestSchema), shipRequest: Type.Optional(ShipRequestSchema), recoveryRequest: Type.Optional(GhaRollbackRequestSchema), fixForwardRequest: Type.Optional(FixForwardRequestSchema), fixForwardPush: Type.Optional(FixForwardPushSchema), queued: Type.Optional(Type.Array(OmiQueuedSchema, { maxItems: 10 })), deployments: Type.Optional(Type.Array(OmiStartedSchema, { maxItems: 10 })), history: Type.Array(Type.Object({ status: Type.Enum(["pending", "unknown", "confirmed"]), at: boundedText(100) }, closed), { minItems: 1, maxItems: 1000 }) };
 const OperationSchema = Type.Union([
  Type.Object({ ...OperationFields, status: Type.Literal("pending") }, closed),
  Type.Object({ ...OperationFields, status: Type.Literal("unknown"), reason: boundedText(4000) }, closed),
@@ -64,6 +66,8 @@ export const EnabledLifecycleSchema = Type.Object({
  decisions: Type.Array(DecisionSchema, { maxItems: 100 }), operations: Type.Array(OperationSchema, { maxItems: 100 }),
  budget: Type.Object({ attemptsUsed: Count, fixForwardPRsUsed: Count, roundsUsed: Count, activeMilliseconds: Count }, closed),
  segments: Type.Array(SegmentSchema, { maxItems: 1000 }), ledger: Type.Array(FindingSchema, { maxItems: 1000 }), evidence: Type.Array(EvidenceFactSchema, { maxItems: 1000 }),
+ recoveryWorkspaces: Type.Optional(Type.Array(RecoveryWorkspaceSchema, { maxItems: 5 })), activeRecoveryId: Type.Optional(Type.Union([boundedText(), Type.Null()])),
+ recoveryBaselines: Type.Optional(Type.Array(RecoveryBaselineSchema, { maxItems: 100 })), recoveryObservations: Type.Optional(Type.Array(RecoveryObservationSchema, { maxItems: 100 })),
  publications: Type.Optional(Type.Array(PublicationFactSchema, { maxItems: 100 })),
  deliveries: Type.Optional(Type.Array(ShipDeliverySchema, { maxItems: 100 })), completion: Type.Optional(ShipCompletionSchema),
  checks: Type.Array(CheckSchema, { maxItems: 1000 }), approvals: Type.Array(ApprovalSchema, { maxItems: 1000 }),

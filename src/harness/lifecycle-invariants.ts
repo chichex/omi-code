@@ -8,6 +8,7 @@ export { dataHash, sameData } from "./lifecycle-value.ts";
 import { validateCorrectionFacts, assertCorrectionContinuity } from "./correction-invariants.ts";
 import { validateLandFacts, assertLandContinuity } from "./land-invariants.ts";
 import { validateShipFacts, assertShipContinuity } from "./ship-invariants.ts";
+import { validateRecoveryFacts, assertRecoveryContinuity } from "./recovery-invariants.ts";
 export function lifecycleAssert(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(`Lifecycle: ${message}`); }
 export const subjectIdentity = (s: EnabledLifecycle["subjects"][number]): string => JSON.stringify([s.repo, s.number, s.headSha, s.baseSha, s.contentHash, s.mergedSha]);
 export function sourceKey(provider: string, externalId: string, operationId: string, subject: EnabledLifecycle["subjects"][number]): string {
@@ -78,7 +79,7 @@ export function validateLifecycleState(value: unknown, root?: { workflowId: stri
    }
   }
  }
- validateCorrectionFacts(s); validateLandFacts(s); validateShipFacts(s);
+ validateCorrectionFacts(s); validateLandFacts(s); validateShipFacts(s); validateRecoveryFacts(s);
  for (const collection of [s.checks, s.approvals]) { unique(collection.map(x => x.id), "checks/aprobaciones"); for (const item of collection) subject(item.subjectId); }
  return value;
 }
@@ -95,7 +96,7 @@ function prefix(previous: readonly unknown[], next: readonly unknown[], name: st
 export function assertLifecycleContinuity(before: LifecycleState, after: LifecycleState): void {
  if (before.status === "disabled") return;
  lifecycleAssert(after.status === "enabled" && sameData(before.root, after.root), "no se deshabilita ni reinicia el lifecycle inicializado");
- assertCorrectionContinuity(before, after); assertLandContinuity(before, after); assertShipContinuity(before, after);
+ assertCorrectionContinuity(before, after); assertLandContinuity(before, after); assertShipContinuity(before, after); assertRecoveryContinuity(before, after);
  prefix(before.pins, after.pins, "pins"); prefix(before.subjects, after.subjects, "subjects"); prefix(before.decisions, after.decisions, "decisions"); prefix(before.evidence, after.evidence, "evidence"); prefix(before.checks, after.checks, "checks"); prefix(before.approvals, after.approvals, "approvals");
  lifecycleAssert(after.operations.length >= before.operations.length, "no se borra el journal");
  for (const [index, old] of before.operations.entries()) {

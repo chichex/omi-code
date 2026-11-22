@@ -13,7 +13,8 @@ function field(value: unknown, path: string): unknown {
  for (const name of path.split(".")) { if (!current || typeof current !== "object" || !Object.hasOwn(current, name) || ["__proto__", "prototype", "constructor"].includes(name)) return undefined; current = Reflect.get(current, name); }
  return current;
 }
-export async function probeOmi(c: OmiShipContext, deps: OmiShipDeps) {
+export async function probeOmi(c: OmiShipContext, deps: OmiShipDeps, expected: { commit?: string | null } = {}) {
+ const expectedCommit = expected.commit === undefined ? c.integratedSha : expected.commit;
  const evidence = c.target.evidence; lifecycleAssert(evidence.kind === "omi", "evidencia OMI no configurada");
  const origin = new URL(`https://${c.environment.hostname}`); lifecycleAssert(origin.hostname && !origin.username && !origin.password && origin.pathname === "/" && !origin.search && !origin.hash, "hostname OMI no identificado");
  const probe = async (path: string) => {
@@ -28,7 +29,7 @@ export async function probeOmi(c: OmiShipContext, deps: OmiShipDeps) {
    const response = await probe(evidence.version.path); if (response.status !== 200) probes.version = response.status === 404 ? "unknown" : "fail";
    else { const body = await withinSignal(json(response), c.signal), actual = field(body, evidence.version.versionField), rev = evidence.version.commitField ? field(body, evidence.version.commitField) : undefined;
     version = typeof actual === "string" ? actual : null; commit = typeof rev === "string" && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(rev) ? rev : null;
-    probes.version = version === null ? "unknown" : version !== deps.version ? "fail" : evidence.version.commitField && !commit ? "unknown" : commit && commit !== c.integratedSha ? "fail" : "pass";
+    probes.version = version === null ? "unknown" : version !== deps.version ? "fail" : evidence.version.commitField && !commit ? "unknown" : commit && expectedCommit !== null && commit !== expectedCommit ? "fail" : "pass";
    }
   } catch { probes.version = "unknown"; }
  }

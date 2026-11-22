@@ -23,6 +23,11 @@ export function lifecycleBudgetBlock(s: EnabledLifecycle, intent: LifecycleInten
   if (!subject?.mergedSha) return "Ship/recuperación exige merge observado";
   const target = block.ship.targets.find(t => t.id === intent.targetId);
   if (block.ship.status !== "configured" || !target) return "Destino Ship no configurado";
+  if (intent.retryOf) {
+   let previous = s.operations.find(o => o.id === intent.retryOf), retries = 0;
+   while (previous && retries <= 100) { retries++; previous = previous.retryOf ? s.operations.find(o => o.id === previous?.retryOf) : undefined; }
+   if (retries > target.maxRetries) return "Se agotaron los redisparos/retries permitidos del destino";
+  }
   if ((intent.kind === "rollback" || intent.kind === "fix-forward") && target.onFailure.action !== intent.kind) return "La recuperación no está configurada para este destino";
  } else if (intent.targetId !== null) return "Esta operación no admite destino Ship";
  return "";

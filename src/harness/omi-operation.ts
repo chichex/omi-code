@@ -11,6 +11,7 @@ import { omiShipContext, omiRequest, type OmiShipDeps, type OmiShipContext } fro
 import { PublicationInputSchema, OmiAttestationSchema, type OmiRequest } from "./omi-ship-schema.ts";
 import { probeOmi } from "./omi-probes.ts";
 import { revalidateOmiPublication } from "./omi-registry.ts";
+import { recoveryCause, rollbackBaseline } from "./recovery-state.ts";
 export async function assertOmiVersionOrigin(c: OmiShipContext, deps: OmiShipDeps): Promise<void> {
  if (Value.Check(PublicationInputSchema, deps.publication) && deps.publication.version === deps.version && deps.publication.commitSha === c.integratedSha) {
   const pub = deps.publication;
@@ -35,6 +36,10 @@ export async function claimOmi(original: unknown, operationId: string, request: 
   const op = state.lifecycle.operations.find(o => o.id === operationId);
   lifecycleAssert(state.source.hash === expected.source.hash && sameData(state.recipe, expected.recipe) && sameData(state.approval, expected.approval) && sameData(state.lifecycle.subjects.find(s => s.id === request.subjectId), expectedSubject) && sameData(op, expectedOperation), "fuente/receta/aprobación/sujeto/operación cambió durante permiso");
   lifecycleAssert(op?.status === "pending" && !op.shipRequest && op.configHash === state.lifecycle.pinHash && op.correlationId === request.correlationId && op.subjectId === state.lifecycle.currentSubject && op.subjectId === request.subjectId && op.targetId === request.targetId, "claim OMI existente/obsoleto: observar, no replay");
+  if (request.action === "rollback") {
+   lifecycleAssert(request.failureDeliveryId && request.baselineId, "falta causa/previa rollback"); const cause = recoveryCause(state, request.failureDeliveryId, operationId), baseline = rollbackBaseline(cause);
+   lifecycleAssert(baseline.kind === "omi" && baseline.id === request.baselineId && baseline.previousVersion === request.version && sameData(baseline.destination, request.destination), "previa/destino cambió durante permiso");
+  }
   op.shipRequest = request; return { ...state, revision: state.revision + 1 };
  });
 }
@@ -47,7 +52,7 @@ export async function recordOmiQueued(operationId: string, receipt: { mutationId
   return { ...state, revision: state.revision + 1 };
  });
 }
-async function recordDeployment(c: OmiShipContext, id: string, deps: OmiShipDeps): Promise<void> {
+export async function recordOmiDeployment(c: OmiShipContext, id: string, deps: OmiShipDeps): Promise<void> {
  const receipt = { id, service: c.service.name, environment: c.provider.environment, version: deps.version };
  if (deps.recordDeployment) { await deps.recordDeployment(receipt); return; }
  const store = deps.workflowStore; lifecycleAssert(store?.operationId === c.op.id, "falta store deployment"); const current = await readWorkflow(store.checkout, store.issue); lifecycleAssert(current, "trabajo perdido");
@@ -71,7 +76,7 @@ export async function deployOmiVersion(original: unknown, operationId: string, d
  await claimOmi(original, operationId, request, deps); c.signal.throwIfAborted();
  try {
   const result = await runDeployment(c.scope, c.service.name, c.provider.environment, deps.version, { ...deps.runtime, signal: c.signal }, { idempotencyKey: request.idempotencyKey, onReceipt: receipt => recordOmiQueued(operationId, receipt, deps), onStarted: async started => {
-   lifecycleAssert(started.service === c.service.name && started.environment === c.provider.environment && started.to_version === deps.version, "respuesta deployment de otro servicio/ambiente/versión"); await recordDeployment(c, started.id, deps);
+   lifecycleAssert(started.service === c.service.name && started.environment === c.provider.environment && started.to_version === deps.version, "respuesta deployment de otro servicio/ambiente/versión"); await recordOmiDeployment(c, started.id, deps);
   } });
   return { state: "confirmed", deployment: result.data, reason: "Deploy observado por core OMI; entrega requiere probes/provenance aparte" };
  } catch { return { state: "unknown", deployment: null, reason: "Mutación OMI incierta/fallida; conservar clave/recibo y observar sin reenviar" }; }

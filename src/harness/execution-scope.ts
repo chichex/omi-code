@@ -1,11 +1,17 @@
 // Ámbito de evidencia actual: conserva historia sin usarla para acreditar una ronda post-PR nueva.
 import type { Workflow } from "./model.ts";
+import { currentRecoveryWorkspace } from "./workflow-context.ts";
 export function currentCorrection(state: Workflow) {
  return state.version === 2 && state.lifecycle.status === "enabled" ? state.lifecycle.corrections?.findLast(r => r.status !== "pushed" && r.status !== "failed") : undefined;
 }
-export function executionEvidence(state: Workflow) { const round = currentCorrection(state); return round ? state.evidence.slice(round.evidenceOffset) : state.evidence; }
-export function executionReviews(state: Workflow) { const round = currentCorrection(state); return round ? state.reviews.slice(round.reviewOffset) : state.reviews; }
+export function executionEvidence(state: Workflow) { const round = currentCorrection(state), workspace = currentRecoveryWorkspace(state); return round ? state.evidence.slice(round.evidenceOffset) : workspace?.status === "coding" ? state.evidence.slice(workspace.evidenceOffset) : state.evidence; }
+export function executionReviews(state: Workflow) { const round = currentCorrection(state), workspace = currentRecoveryWorkspace(state); return round ? state.reviews.slice(round.reviewOffset) : workspace?.status === "coding" ? state.reviews.slice(workspace.reviewOffset) : state.reviews; }
 export function correctionExecutionBlock(state: Workflow): string {
+ const workspace = currentRecoveryWorkspace(state);
+ if (workspace?.status === "coding" && state.version === 2 && state.lifecycle.status === "enabled") {
+  const op = state.lifecycle.operations.find(o => o.id === workspace.operationId);
+  return op?.status === "pending" && op.kind === "fix-forward" && op.configHash === state.lifecycle.pinHash && workspace.sourceSubjectId === state.lifecycle.currentSubject && state.steps.some(s => s.id === workspace.stepId) ? "" : "Reserva fix-forward incierta/obsoleta: no ejecutar código";
+ }
  if (state.version !== 2 || state.pullRequest?.ownership !== "adopted" || !["implement", "verify", "pr"].includes(state.phase)) return "";
  const round = currentCorrection(state); if (!round || round.status === "planned" || state.lifecycle.status !== "enabled") return "Falta corrección activa autorizada";
  const s = state.lifecycle, op = s.operations.find(o => o.id === round.operationId);

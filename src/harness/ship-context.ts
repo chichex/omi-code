@@ -39,7 +39,7 @@ export async function shipProbes(c: GhaShipContext, deps: GhaShipDeps, deployedS
  lifecycleAssert(Value.Check(ShipProbesSchema, probes), "health/version incompletos");
  return { health: expected.health ? probes.health === "not-configured" ? "unknown" : probes.health : "not-configured", version: expected.version ? probes.version === "not-configured" ? "unknown" : probes.version : "not-configured" };
 }
-export function shipScope(deps: GhaShipDeps, targetTimeout: number) {
+export function shipScope(deps: Pick<GhaShipDeps, "timeoutSeconds" | "signal" | "now">, targetTimeout: number) {
  lifecycleAssert(Number.isInteger(deps.timeoutSeconds) && deps.timeoutSeconds >= 60 && deps.timeoutSeconds <= 7200, "timeout Ship inválido");
  const controller = new AbortController(), duration = Math.min(deps.timeoutSeconds, targetTimeout) * 1000, start = deps.now(); lifecycleAssert(Number.isFinite(start), "reloj Ship inválido"); const deadline = start + duration;
  const signal = AbortSignal.any([deps.signal, controller.signal, AbortSignal.timeout(duration)]);
