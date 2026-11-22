@@ -39,8 +39,9 @@ export function validateLifecycleState(value: unknown, root?: { workflowId: stri
   if (op.targetId !== null) lifecycleAssert(pin.accepted.block.ship.targets.some(t => t.id === op.targetId), "destino de operación inexistente");
   if (op.providerRequest) {
    const req = op.providerRequest, sub = subject(op.subjectId), provider = pin.accepted.block.review.provider;
-   lifecycleAssert(op.kind === "review" && provider.kind === "gha" && req.repo === s.root.repo && req.pr === sub.number && req.headSha === sub.headSha && req.baseSha === sub.baseSha && req.correlationId === op.correlationId
-    && req.workflow.ref === provider.ref && req.workflow.path === `.github/workflows/${provider.workflow.replace(/^\.github\/workflows\//, "")}` && Number.isFinite(Date.parse(req.createdAfter)), "request GHA de otra operación/config/sujeto");
+   lifecycleAssert(op.kind === "review" && req.repo === s.root.repo && req.pr === sub.number && req.headSha === sub.headSha && req.baseSha === sub.baseSha && req.correlationId === op.correlationId, "request de otra operación/sujeto");
+   if ("provider" in req) lifecycleAssert(req.provider === "local" && provider.kind === "local" && req.contentHash === sub.contentHash, "request local de otra config/contenido");
+   else lifecycleAssert(provider.kind === "gha" && req.workflow.ref === provider.ref && req.workflow.path === `.github/workflows/${provider.workflow.replace(/^\.github\/workflows\//, "")}` && Number.isFinite(Date.parse(req.createdAfter)), "request GHA de otra configuración");
   }
   const previous = s.operations.slice(0, index).findLast(old => effectKey(old) === effectKey(op));
   if (previous) lifecycleAssert(previous.status === "confirmed" && previous.receipt.outcome === "failed" && op.retryOf === previous.id, "efecto duplicado/pendiente/incierto o retry no enlazado");

@@ -6,7 +6,7 @@ import { Value } from "typebox/value";
 import type { Runner } from "../core/exec.ts";
 import { childEnvironment } from "../core/process-environment.ts";
 import { parseWorkflow, type Workflow } from "./model.ts";
-import { readWorkflow, updateWorkflow } from "./store.ts";
+import { claimReviewRequest } from "./review-claim.ts";
 import { GitHubReadClient, GitHubReadError } from "./lifecycle-github-read.ts";
 import { PullSchema, githubChecked, sha, id, text } from "./lifecycle-github-schema.ts";
 import { GhaRunSchema, checkedGhaRequest, type GhaReviewRequest, type GhaRun } from "./gha-review-contract.ts";
@@ -22,17 +22,7 @@ async function optionalRef(client: GitHubReadClient, kind: "heads" | "tags", nam
 }
 /** Resuelve el ref aceptado; un nombre ambiguo branch/tag no elige uno por inferencia. */
 export async function persistGhaReviewRequest(checkout: Workflow["checkout"], issue: number, operationId: string, input: unknown): Promise<void> {
- const request = checkedGhaRequest(input); const current = await readWorkflow(checkout, issue);
- lifecycleAssert(current?.lifecycle.status === "enabled" && current.status === "active", "trabajo no activo para registrar request");
- const previous = current.lifecycle.operations.find(o => o.id === operationId);
- lifecycleAssert(!previous?.providerRequest, "request ya reservado/fijado antes del efecto; sólo observar, nunca redispatch");
- await updateWorkflow(checkout, issue, current.revision, saved => {
-  lifecycleAssert(saved?.version === 2 && saved.status === "active" && saved.lifecycle.status === "enabled", "trabajo cambió antes de registrar request");
-  const index = saved.lifecycle.operations.findIndex(o => o.id === operationId); const op = saved.lifecycle.operations[index];
-  lifecycleAssert(op?.kind === "review" && op.status === "pending" && !op.providerRequest && op.configHash === saved.lifecycle.pinHash && saved.lifecycle.stage === "review" && op.subjectId === saved.lifecycle.currentSubject, "falta operación review pending vigente");
-  saved.lifecycle.operations[index] = { ...op, providerRequest: request };
-  return { ...saved, revision: saved.revision + 1 };
- });
+ await claimReviewRequest({ checkout, issue, operationId }, checkedGhaRequest(input));
 }
 export async function resolveGhaReviewRequest(original: unknown, operationId: string, client: GitHubReadClient, signal: AbortSignal): Promise<GhaReviewRequest> {
  const state = parseWorkflow(JSON.stringify(original)); lifecycleAssert(state.lifecycle.status === "enabled", "lifecycle no configurado");
