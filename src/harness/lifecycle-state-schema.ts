@@ -4,6 +4,7 @@ import { LifecycleConfigSchema } from "./lifecycle-schema.ts";
 import { GhaReviewRequestSchema } from "./gha-review-contract.ts";
 import { LocalReviewRequestSchema } from "./local-review-schema.ts";
 import { CorrectionRoundSchema, CorrectionPushRequestSchema } from "./correction-schema.ts";
+import { ReadyLandSchema, LandRequestSchema, MergeFactSchema, DraftReadyRequestSchema } from "./land-schema.ts";
 export const ReviewInvocationSchema = Type.Union([GhaReviewRequestSchema, LocalReviewRequestSchema]);
 const closed = { additionalProperties: false } as const;
 export const boundedText = (maxLength = 256) => Type.String({ minLength: 1, maxLength, pattern: "\\S" });
@@ -20,15 +21,15 @@ export const LifecyclePinSchema = Type.Object({
 }, closed);
 export type LifecyclePin = Static<typeof LifecyclePinSchema>;
 export const SubjectSchema = Type.Object({ id: boundedText(), repo: boundedText(200), number: Type.Integer({ minimum: 1 }), branch: boundedText(128), base: boundedText(128), headSha: Sha, baseSha: Sha, contentHash: Hash, mergedSha: Type.Union([Sha, Type.Null()]) }, closed);
-export const AdoptionSchema = Type.Object({ id: boundedText(), source: Type.Enum(["person", "publication", "correction"]), at: boundedText(100) }, closed);
+export const AdoptionSchema = Type.Object({ id: boundedText(), source: Type.Enum(["person", "publication", "correction", "merge"]), at: boundedText(100) }, closed);
 const AdoptedSubjectSchema = Type.Object({ ...SubjectSchema.properties, adoption: AdoptionSchema }, closed);
 export const IntentSchema = Type.Object({ id: boundedText(), key: boundedText(), kind: OperationKindSchema, subjectId: boundedText(), targetId: nullableText(), correlationId: boundedText(), retryOf: nullableText() }, closed);
 export type LifecycleIntent = Static<typeof IntentSchema>;
-export const DecisionSchema = Type.Object({ id: boundedText(), kind: OperationKindSchema, subjectId: boundedText(), targetId: nullableText(), configHash: Hash, source: Type.Enum(["person", "policy"]), authorityHash: Type.Optional(Hash), at: boundedText(100) }, closed);
+export const DecisionSchema = Type.Object({ id: boundedText(), kind: OperationKindSchema, subjectId: boundedText(), targetId: nullableText(), configHash: Hash, source: Type.Enum(["person", "policy"]), authorityHash: Type.Optional(Hash), effectHash: Type.Optional(Hash), at: boundedText(100) }, closed);
 export type LifecycleDecision = Static<typeof DecisionSchema>;
 export const ReceiptSchema = Type.Object({ operationId: boundedText(), correlationId: boundedText(), subjectId: boundedText(), targetId: nullableText(), externalId: boundedText(), outcome: Type.Enum(["succeeded", "failed", "not-applicable"]), verifiedSubjectId: nullableText(), at: boundedText(100) }, closed);
 export type LifecycleReceipt = Static<typeof ReceiptSchema>;
-const OperationFields = { ...IntentSchema.properties, configHash: Hash, decisionId: boundedText(), providerRequest: Type.Optional(ReviewInvocationSchema), pushRequest: Type.Optional(CorrectionPushRequestSchema), history: Type.Array(Type.Object({ status: Type.Enum(["pending", "unknown", "confirmed"]), at: boundedText(100) }, closed), { minItems: 1, maxItems: 1000 }) };
+const OperationFields = { ...IntentSchema.properties, configHash: Hash, decisionId: boundedText(), providerRequest: Type.Optional(ReviewInvocationSchema), pushRequest: Type.Optional(CorrectionPushRequestSchema), landRequest: Type.Optional(LandRequestSchema), readyRequest: Type.Optional(DraftReadyRequestSchema), history: Type.Array(Type.Object({ status: Type.Enum(["pending", "unknown", "confirmed"]), at: boundedText(100) }, closed), { minItems: 1, maxItems: 1000 }) };
 const OperationSchema = Type.Union([
  Type.Object({ ...OperationFields, status: Type.Literal("pending") }, closed),
  Type.Object({ ...OperationFields, status: Type.Literal("unknown"), reason: boundedText(4000) }, closed),
@@ -56,6 +57,7 @@ export const EnabledLifecycleSchema = Type.Object({
  status: Type.Literal("enabled"), root: LifecycleRootSchema, pins: Type.Array(LifecyclePinSchema, { minItems: 1, maxItems: 1000 }), pinHash: Hash,
  stage: Type.Enum(["review", "corrections", "ready", "land", "ship", "paused", "delivered"]),
  corrections: Type.Optional(Type.Array(CorrectionRoundSchema, { maxItems: 10 })),
+ ready: Type.Optional(ReadyLandSchema), readyHistory: Type.Optional(Type.Array(ReadyLandSchema, { maxItems: 100 })), merges: Type.Optional(Type.Array(MergeFactSchema, { maxItems: 10 })),
  currentSubject: nullableText(), subjects: Type.Array(AdoptedSubjectSchema, { maxItems: 1000 }),
  decisions: Type.Array(DecisionSchema, { maxItems: 100 }), operations: Type.Array(OperationSchema, { maxItems: 100 }),
  budget: Type.Object({ attemptsUsed: Count, fixForwardPRsUsed: Count, roundsUsed: Count, activeMilliseconds: Count }, closed),

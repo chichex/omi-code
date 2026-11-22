@@ -6,6 +6,7 @@ import { LifecycleStateSchema, type LifecycleState, type EnabledLifecycle } from
 import { dataHash, sameData } from "./lifecycle-value.ts";
 export { dataHash, sameData } from "./lifecycle-value.ts";
 import { validateCorrectionFacts, assertCorrectionContinuity } from "./correction-invariants.ts";
+import { validateLandFacts, assertLandContinuity } from "./land-invariants.ts";
 export function lifecycleAssert(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(`Lifecycle: ${message}`); }
 export const subjectIdentity = (s: EnabledLifecycle["subjects"][number]): string => JSON.stringify([s.repo, s.number, s.headSha, s.baseSha, s.contentHash, s.mergedSha]);
 export function sourceKey(provider: string, externalId: string, operationId: string, subject: EnabledLifecycle["subjects"][number]): string {
@@ -31,7 +32,7 @@ export function validateLifecycleState(value: unknown, root?: { workflowId: stri
  unique(s.operations.map(x => x.id), "operations"); unique(s.operations.map(x => x.correlationId), "correlations"); unique(s.decisions.map(x => x.id), "decisions");
  unique(s.segments.map(x => x.id), "segments"); unique(s.ledger.map(x => x.id), "findings"); unique(s.ledger.map(x => x.key), "finding keys"); unique(s.evidence.map(x => x.id), "evidence");
  const operation = (id: string) => { const found = s.operations.find(x => x.id === id); lifecycleAssert(found, "referencia a operación inexistente"); return found; };
- const effectKey = (o: EnabledLifecycle["operations"][number]) => JSON.stringify([o.kind, subjectIdentity(subject(o.subjectId)), o.targetId]);
+ const effectKey = (o: EnabledLifecycle["operations"][number]) => { const sub = subject(o.subjectId); return JSON.stringify(o.kind === "land" ? [o.kind, sub.repo, sub.number] : [o.kind, subjectIdentity(sub), o.targetId]); };
  for (const [index, op] of s.operations.entries()) {
   subject(op.subjectId);
   const pin = s.pins.find(p => p.accepted.blockHash === op.configHash); lifecycleAssert(pin, "config de operación inexistente");
@@ -76,7 +77,7 @@ export function validateLifecycleState(value: unknown, root?: { workflowId: stri
    }
   }
  }
- validateCorrectionFacts(s);
+ validateCorrectionFacts(s); validateLandFacts(s);
  for (const collection of [s.checks, s.approvals]) { unique(collection.map(x => x.id), "checks/aprobaciones"); for (const item of collection) subject(item.subjectId); }
  return value;
 }
@@ -93,7 +94,7 @@ function prefix(previous: readonly unknown[], next: readonly unknown[], name: st
 export function assertLifecycleContinuity(before: LifecycleState, after: LifecycleState): void {
  if (before.status === "disabled") return;
  lifecycleAssert(after.status === "enabled" && sameData(before.root, after.root), "no se deshabilita ni reinicia el lifecycle inicializado");
- assertCorrectionContinuity(before, after);
+ assertCorrectionContinuity(before, after); assertLandContinuity(before, after);
  prefix(before.pins, after.pins, "pins"); prefix(before.subjects, after.subjects, "subjects"); prefix(before.decisions, after.decisions, "decisions"); prefix(before.evidence, after.evidence, "evidence"); prefix(before.checks, after.checks, "checks"); prefix(before.approvals, after.approvals, "approvals");
  lifecycleAssert(after.operations.length >= before.operations.length, "no se borra el journal");
  for (const [index, old] of before.operations.entries()) {

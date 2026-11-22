@@ -38,7 +38,7 @@ export function applyLifecyclePin(original: unknown, input: unknown): EnabledLif
 }
 function effectKey(s: EnabledLifecycle, op: LifecycleIntent): string {
  const sub = s.subjects.find(x => x.id === op.subjectId); lifecycleAssert(sub, "sujeto inexistente");
- return JSON.stringify([op.kind, subjectIdentity(sub), op.targetId]);
+ return JSON.stringify(op.kind === "land" ? [op.kind, sub.repo, sub.number] : [op.kind, subjectIdentity(sub), op.targetId]);
 }
 export function reserveLifecycleOperation(original: unknown, input: unknown, observedDecision: unknown, owner: string, at: string): EnabledLifecycle {
  const s = enabled(original); const intent = checked(IntentSchema, input); const decision = checked(DecisionSchema, observedDecision);
@@ -57,7 +57,7 @@ export function reserveLifecycleOperation(original: unknown, input: unknown, obs
  return finish(s);
 }
 function operationBase(op: EnabledLifecycle["operations"][number]) {
- return { id: op.id, key: op.key, kind: op.kind, subjectId: op.subjectId, targetId: op.targetId, correlationId: op.correlationId, retryOf: op.retryOf, configHash: op.configHash, decisionId: op.decisionId, history: op.history, ...(op.providerRequest ? { providerRequest: op.providerRequest } : {}), ...(op.pushRequest ? { pushRequest: op.pushRequest } : {}) };
+ return { id: op.id, key: op.key, kind: op.kind, subjectId: op.subjectId, targetId: op.targetId, correlationId: op.correlationId, retryOf: op.retryOf, configHash: op.configHash, decisionId: op.decisionId, history: op.history, ...(op.providerRequest ? { providerRequest: op.providerRequest } : {}), ...(op.pushRequest ? { pushRequest: op.pushRequest } : {}), ...(op.landRequest ? { landRequest: op.landRequest } : {}), ...(op.readyRequest ? { readyRequest: op.readyRequest } : {}) };
 }
 export function confirmLifecycleOperation(original: unknown, observed: unknown): EnabledLifecycle {
  const s = enabled(original); const receipt = checked(ReceiptSchema, observed); const index = s.operations.findIndex(o => o.id === receipt.operationId); const op = s.operations[index];

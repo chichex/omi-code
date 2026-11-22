@@ -4,6 +4,7 @@ import { GitHubReadClient, GitHubReadError, MAX_GITHUB_READ_BYTES } from "./life
 import { ExpectedReviewSchema, PullSchema, ReviewSchema, CommentSchema, InlineSchema, StatusSchema, CheckRunSchema, githubChecked } from "./lifecycle-github-schema.ts";
 import { readGitHubProtection, unknownProtection, type GitHubProtection, type RequiredGitHubCheck } from "./lifecycle-github-protection.ts";
 import { lifecycleRef } from "./lifecycle-config.ts";
+import { effectiveGitHubReviews } from "./github-review-opinions.ts";
 export { GitHubReadClient, GitHubReadError, MAX_GITHUB_READ_BYTES };
 export interface GitHubFindingObservation {
  externalId: string; source: "review" | "inline" | "comment"; reviewer: string | null; body: string;
@@ -22,18 +23,10 @@ function pullIdentity(pull: Static<typeof PullSchema>, expected: Static<typeof E
  if (pull.number !== expected.number || pull.head.sha !== expected.headSha || pull.base.sha !== expected.baseSha || pull.head.ref !== expected.branch || pull.base.ref !== expected.base || pull.base.repo.full_name.toLowerCase() !== expected.repo) throw new GitHubReadError("Cambió la identidad/HEAD/base del PR; evidencia obsoleta");
 }
 function approvalState(reviews: Static<typeof ReviewSchema>[], reviewers: string[], head: string): GitHubReviewObservation["approval"] {
- const latest = new Map<string, Static<typeof ReviewSchema>>(); const latestForHead = new Map<string, Static<typeof ReviewSchema>>();
- for (const review of reviews) {
-  const login = review.user?.login.toLowerCase(); if (!login) continue;
-  if (review.submitted_at !== null && !Number.isFinite(Date.parse(review.submitted_at))) return "unknown";
-  const previous = latest.get(login);
-  if (!previous || review.id > previous.id) latest.set(login, review);
-  const current = latestForHead.get(login);
-  if (review.commit_id === head && (!current || review.id > current.id)) latestForHead.set(login, review);
- }
- const current = [...latestForHead.values()];
+ const { valid, latest, forHead } = effectiveGitHubReviews(reviews, head); if (!valid) return "unknown";
+ const current = [...forHead.values()];
  if (current.some(review => review.state === "CHANGES_REQUESTED")) return "changes-requested";
- return reviewers.every(login => { const review = latest.get(login.toLowerCase()); return review?.state === "APPROVED" && review.commit_id === head && review.submitted_at !== null; }) ? "approved" : "unknown";
+ return reviewers.length > 0 && reviewers.every(login => { const review = latest.get(login.toLowerCase()); return review?.state === "APPROVED" && review.commit_id === head && review.submitted_at !== null; }) ? "approved" : "unknown";
 }
 function stateOfChecks(checks: ObservedGitHubCheck[], protection: GitHubProtection): GitHubReviewObservation["checkState"] {
  if (protection.requiredChecks === null) return "unknown";
@@ -63,11 +56,11 @@ function inlineObservation(comment: Static<typeof InlineSchema>, head: string): 
   binding: comment.commit_id === head ? "head" : "outdated", path: comment.path, line: comment.line, resolved: comment.resolved ?? null, outdated: comment.outdated === true || comment.commit_id !== head };
 }
 /** Lectura completa o unknown. Nunca solicita reviewers, hace push, mergea ni dispara workflows. */
-export async function readGitHubReview(client: GitHubReadClient, input: unknown, configuredReviewers: unknown, extraChecks: unknown, signal: AbortSignal): Promise<GitHubReviewObservation> {
+async function collectGitHubReview(client: GitHubReadClient, input: unknown, configuredReviewers: unknown, extraChecks: unknown, signal: AbortSignal, minimumReviewers: number): Promise<GitHubReviewObservation> {
  const result: GitHubReviewObservation = { complete: false, repo: client.repo, number: 0, headSha: "", baseSha: "", contentHash: "", approval: "unknown", checkState: "unknown", protection: unknownProtection(), reviews: [], checks: [], inlineComments: [], comments: [], findings: [], problems: [] };
  try {
   const expected = githubChecked(ExpectedReviewSchema, input);
-  const reviewers = githubChecked(Type.Array(Type.String({ minLength: 1, maxLength: 100 }), { minItems: 1, maxItems: 1000 }), configuredReviewers);
+  const reviewers = githubChecked(Type.Array(Type.String({ minLength: 1, maxLength: 100 }), { minItems: minimumReviewers, maxItems: 1000 }), configuredReviewers);
   if (expected.repo !== client.repo || !lifecycleRef(expected.base) || !lifecycleRef(expected.branch) || new Set(reviewers.map(login => login.toLowerCase())).size !== reviewers.length) throw new GitHubReadError("Identidad/reviewers no válidos");
   Object.assign(result, { number: expected.number, headSha: expected.headSha, baseSha: expected.baseSha, contentHash: expected.contentHash });
   const prefix = `repos/${client.repo}`; const pr = `${prefix}/pulls/${expected.number}`;
@@ -94,4 +87,11 @@ export async function readGitHubReview(client: GitHubReadClient, input: unknown,
   result.complete = false; result.approval = "unknown"; result.checkState = "unknown";
   result.problems.push(error instanceof GitHubReadError ? error.message : "No se completó la lectura GitHub; no acredita avance"); return result;
  }
+}
+export function readGitHubReview(client: GitHubReadClient, input: unknown, configuredReviewers: unknown, extraChecks: unknown, signal: AbortSignal): Promise<GitHubReviewObservation> {
+ return collectGitHubReview(client, input, configuredReviewers, extraChecks, signal, 1);
+}
+/** Land observa también protecciones/reviews cuando el provider de Review es local/GHA. Vacío NO aprueba GitHub. */
+export function readGitHubMergeReview(client: GitHubReadClient, input: unknown, configuredReviewers: unknown, extraChecks: unknown, signal: AbortSignal): Promise<GitHubReviewObservation> {
+ return collectGitHubReview(client, input, configuredReviewers, extraChecks, signal, 0);
 }

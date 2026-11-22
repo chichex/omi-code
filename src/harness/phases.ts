@@ -8,7 +8,7 @@ export const PHASES_V1 = [
  { id: "done", label: "PR draft abierto" }, { id: "closed", label: "Cerrado sin cambio" },
 ] as const;
 export const PHASES = [
- ...PHASES_V1.slice(0, 9), { id: "review", label: "Review del PR" },
+ ...PHASES_V1.slice(0, 9), { id: "review", label: "Review del PR" }, { id: "land", label: "Land · merge" }, { id: "ship", label: "Ship · verificar entrega" },
  ...PHASES_V1.slice(9),
 ] as const;
 export type Phase = typeof PHASES[number]["id"];
