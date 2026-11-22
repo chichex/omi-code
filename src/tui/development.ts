@@ -23,6 +23,7 @@ import { syncWorkStack } from "./development-stack.ts";
 import { adoptLifecycle, landLifecycle, LIFECYCLE_COMMANDS, LifecycleDeclined, reviewLifecycle } from "./development-lifecycle.ts";
 import { fixLifecycle } from "./development-lifecycle-fix.ts";
 import { shipLifecycle } from "./development-lifecycle-ship.ts";
+import { LifecycleOnboarding } from "./development-lifecycle-onboarding.ts";
 
 const KICKOFF = "Continuá el harness de desarrollo activo desde su etapa persistida. Respetá sus bloqueos y pedí los permisos pendientes; no saltees etapas.";
 const USAGE = "Uso: /omi-work resume | approve | pause | refresh | pr | stack | status | foundations | stop · después del PR draft: adopt | review | fix | land | ship";
@@ -45,6 +46,7 @@ async function checkWriteTarget(root: string, path: string): Promise<void> {
 export function developmentHarnessExtension(io: Io, args: readonly string[], deps: DevelopmentDeps = {}): InlineExtension {
 	return { name: "omi-development", factory: async (pi: ExtensionAPI) => {
 		const session = new DevelopmentSession(pi, io, args, deps);
+		const onboarding = new LifecycleOnboarding(session);
 		// Pi lee sus rutas al importarse: se importa al cargar la extensión, no con el módulo.
 		const cli = (await import("@earendil-works/pi-coding-agent")).parseArgs([...args]);
 		const held = new HeldLoadout(pi, cli);
@@ -73,6 +75,8 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 		const startHere = async (ctx: ExtensionContext) => {
 			await session.start(ctx);
 			if (session.state?.status === "paused") await session.apply({ type: "resume" }, ctx);
+			// La oferta del lifecycle es al entrar al harness: las consultas simples y needs-info no llegan acá.
+			await onboarding.offer(ctx);
 			loadout(); proceed(ctx);
 		};
 		async function begin(token: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -167,7 +171,7 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 			},
 		});
 		// Pi ya restauró las tools de la rama: con el harness activo, las restringidas.
-		pi.on("session_start", async (event, ctx) => { held.recall(ctx.sessionManager.getBranch(), event.reason === "reload" ? "reload" : "start"); session.foundations.load(ctx); await session.restore(ctx); loadout(); });
+		pi.on("session_start", async (event, ctx) => { held.recall(ctx.sessionManager.getBranch(), event.reason === "reload" ? "reload" : "start"); session.foundations.load(ctx); onboarding.detect(ctx.cwd); await session.restore(ctx); loadout(); });
 		pi.on("session_tree", async (_event, ctx) => { held.recall(ctx.sessionManager.getBranch(), "tree"); await session.restore(ctx); loadout(); });
 		pi.on("session_shutdown", () => { readsInFlight.clear(); session.shutdown(); });
 		pi.on("before_agent_start", (event, ctx) => {

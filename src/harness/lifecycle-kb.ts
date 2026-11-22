@@ -24,13 +24,17 @@ export async function readLifecycle(kb: KbClient | undefined, key: LifecycleKey,
   if (!ready.ready) return unavailable(ready.reason);
   if (!(await kb.products(signal)).includes(key.product)) return unavailable("Producto inexistente o sin acceso; no se considera ausencia de configuración");
   signal.throwIfAborted(); const doc = await kb.currentPerillas(key.product, signal); signal.throwIfAborted();
-  if (!doc) return { kind: "missing", key, perillas: null };
-  if (!validDoc(doc, key)) return unavailable("La KB devolvió otro documento, identidad o formato");
-  const perillas = structuredClone(doc); const parsed = parseLifecycleConfig(perillas.cuerpo, key.repo);
-  return parsed.status === "missing" ? { kind: "missing", key, perillas }
-   : parsed.status === "invalid" ? { kind: "invalid", key, perillas, reason: parsed.reason }
-   : { kind: "valid", key, perillas, block: parsed.block, hash: parsed.hash };
+  return lifecycleFromPerillas(key, doc);
  } catch { return unavailable("No se pudo consultar la KB; no se presume configuración ausente"); }
+}
+/** Lectura del documento de perillas ya obtenido de una KB accesible (por ejemplo, el que leyó Foundations). */
+export function lifecycleFromPerillas(key: LifecycleKey, doc: KbDoc | null): LifecycleReading {
+ if (!doc) return { kind: "missing", key, perillas: null };
+ if (!lifecycleKeyValid(key) || !validDoc(doc, key)) return { kind: "unavailable", key, reason: "La KB devolvió otro documento, identidad o formato" };
+ const perillas = structuredClone(doc); const parsed = parseLifecycleConfig(perillas.cuerpo, key.repo);
+ return parsed.status === "missing" ? { kind: "missing", key, perillas }
+  : parsed.status === "invalid" ? { kind: "invalid", key, perillas, reason: parsed.reason }
+  : { kind: "valid", key, perillas, block: parsed.block, hash: parsed.hash };
 }
 const sameKey = (a: LifecycleKey, b: LifecycleKey) => a.kbUrl === b.kbUrl && a.product === b.product && a.repo === b.repo;
 export interface LifecycleEvaluation {
