@@ -113,7 +113,7 @@ test("autonomía: las instrucciones del agente no dicen que un permiso humano es
 	const state = await f.state();
 	const phases: Phase[] = ["explore", "decide", "recipe", "diagnose", "spec", "approve", "implement", "verify", "pr", "done", "closed"];
 	for (const phase of phases) {
-		const text = developmentInstructions({ ...state, phase });
+		const text = developmentInstructions({ ...state, phase } as typeof state);
 		assert.doesNotMatch(text, /con permiso humano|esperá aprobación humana|pide autorización humana separada|pide permiso a la persona|pide un permiso humano/, phase);
 	}
 	assert.match(developmentInstructions({ ...state, phase: "approve" }), /Foundations/, "dice quién decide si pregunta");

@@ -136,7 +136,7 @@ test("cercas ambiguas/JSON inválido/repo desconocido fallan cerrado; otro repo 
 });
 
 test("compose preserva byte a byte Foundations/triage/otros repos y no muta sus hashes", () => {
- const foundations = { version: 1 as const, repo, comandos: ["npm test"], politica: { arranque: "ask" as const, receta: "ask" as const, fuera_de_catalogo: "ask" as const, push_pr: "ask" as const } };
+ const foundations = { version: 2 as const, repo, confirmar: ["git push *"], politica: { arranque: "ask" as const, receta: "ask" as const, push_pr: "ask" as const } };
  const before = composePerillas(undefined, "app", repo, foundations);
  const prefix = `Texto humano\r\n\n${before}\n${fence({ ...defaults(), repo: "other/app" })}\n`;
  const current = `${prefix}${fence(defaults())}\nNota final\r\n`;
