@@ -27,7 +27,7 @@ for (const spec of [false, true]) test(`aprobación: resumen humano antes de com
 	assert.match(preview, spec ? /Con spec/ : /Directa/);
 	assert.match(preview, /Riesgo.*alto/i);
 	assert.doesNotMatch(preview, /"classification"|"riskAreas"|"sourceHash"/);
-	assert.match(preview, /sin volver a preguntar/);
+	assert.match(preview, /aprobación general de receta NO concede grants/);
 	assert.match(preview, /no autoriza push, merge, workflows ni deploy/i);
 	assert.match(preview, /setup/i);
 });

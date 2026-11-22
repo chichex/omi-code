@@ -15,9 +15,9 @@ export const REPO = "test/repo";
 export const COMMAND = 'node -e "process.exit(0)"';
 export const KNOWN = "node test.cjs";
 export const HUMAN = '# Perillas de repo\n\nTono: formal.\n\n```json\n{ "otra": "perilla" }\n```\n';
-export const block = (comandos: string[] = [KNOWN], overrides: Partial<FoundationsBlock> = {}): FoundationsBlock => ({ version: 1, repo: REPO, comandos, politica: { ...STRICT_POLICY }, ...overrides });
+export const block = (confirmar: string[] = ["git push *"], overrides: Partial<FoundationsBlock> = {}): FoundationsBlock => ({ version: 2, repo: REPO, confirmar, politica: { ...STRICT_POLICY }, ...overrides });
 
-/** `foundations`: además, una revisión aceptada localmente (la que vale si la KB no da una válida). */
+/** `foundations`: además, una revisión v2 aceptada localmente con `*` (la que vale si la KB no da una válida). */
 export async function commandFixture(t: TestContext, options: { body?: string | null; value?: FoundationsBlock; products?: string[]; withoutKb?: boolean; foundations?: FoundationsPolicy } = {}) {
 	const kb = memoryKb({ products: options.products ?? ["repo"] });
 	if (options.body !== null) kb.perillas("repo", options.body ?? `${HUMAN}\n${renderFoundationsBlock(options.value ?? block())}\n`);
@@ -32,9 +32,7 @@ export async function commandFixture(t: TestContext, options: { body?: string | 
 	const check = (command = COMMAND, signal = new AbortController().signal) => executeCheck(session, { kind: "setup", command }, f.context, signal, async (_checkout, actual) => {
 		executed.push(actual); return { exitCode: 0, output: "prueba inyectada", interrupted: false };
 	});
-	// Guardar el comando sin pasar por el diálogo: sin Foundations no hay diálogo (nada pregunta).
-	const save = async (command = COMMAND) => session.foundations.saveCommand(f.context, await f.state(), command, AbortSignal.timeout(30_000), { beforeAccept: async () => {}, onAccepted: (pin) => session.foundations.replace(f.context, pin) });
-	return Object.assign(f, { kb, session, executed, check, save });
+	return Object.assign(f, { kb, session, executed, check });
 }
 export type CommandFixture = Awaited<ReturnType<typeof commandFixture>>;
 export const key = (f: CommandFixture) => ({ kbUrl: f.kb.url, product: "repo", repo: REPO });
@@ -42,17 +40,15 @@ export const saves = (f: CommandFixture) => f.kb.calls.filter((call) => call.too
 export const authorizations = (f: CommandFixture) => f.selects.filter((call) => call.title.startsWith(AUTHORIZE));
 export const accepted = (f: CommandFixture) => readTrust(foundationsDir(f.home), key(f));
 
-export function option(options: string[], decision: "yes" | "no" | "always"): string {
-	const selected = options.find((value) => decision === "yes" ? value.startsWith("Sí") : decision === "no" ? /^No(?:$|[ ,·(])/.test(value) : /siempre.*(?:proyecto|repo)/i.test(value));
+export function option(options: string[], decision: "yes" | "no" | "edit"): string {
+	const selected = options.find((value) => decision === "yes" ? value === "Sí" : decision === "no" ? value === "No" : value === "Editar reglas");
 	assert.ok(selected, `falta la decisión ${decision}: ${JSON.stringify(options)}`);
 	return selected;
 }
-export function choose(f: CommandFixture, decision: "yes" | "no" | "always" | "cancel"): void {
+export function choose(f: CommandFixture, decision: "yes" | "no" | "edit" | "cancel"): void {
 	f.uiControl.select = (_title, options) => decision === "cancel" ? undefined : option(options, decision);
 }
-export async function noPermissionAdded(f: CommandFixture, command = COMMAND): Promise<void> {
+export async function noPermissionAdded(f: CommandFixture, _command = COMMAND): Promise<void> {
 	assert.deepEqual(f.executed, [], "no llegó al ejecutor, ni siquiera como comando interrumpido");
-	assert.deepEqual((await f.state()).grants ?? [], [], "no hay fallback temporal");
-	assert.ok(!(await accepted(f))?.accepted?.block.comandos.includes(command), "no aceptó localmente el comando");
-	assert.ok(!f.session.foundations.current(f.context)?.block?.comandos.includes(command), "no cambió el pin a una revisión no confirmada");
+	assert.deepEqual((await f.state()).grants ?? [], [], "no hay fallback temporal: editar reglas no concede un grant");
 }

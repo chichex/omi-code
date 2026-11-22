@@ -14,7 +14,7 @@ import { processRunner } from "../src/core/exec.ts";
 
 const ACCEPT = "Aceptar Foundations";
 const REPO = "test/repo";
-const block = (overrides: Partial<FoundationsBlock> = {}): FoundationsBlock => ({ version: 1, repo: REPO, comandos: ["node test.cjs"], politica: { arranque: "ask", receta: "ask", fuera_de_catalogo: "ask", push_pr: "ask" }, ...overrides });
+const block = (overrides: Partial<FoundationsBlock> = {}): FoundationsBlock => ({ version: 2, repo: REPO, confirmar: ["node test.cjs"], politica: { arranque: "ask", receta: "ask", push_pr: "ask" }, ...overrides });
 const perillas = (kb: MemoryKb, value: FoundationsBlock | string) => kb.perillas("repo", `# Perillas de repo\n\nTono: formal.\n\n${typeof value === "string" ? value : renderFoundationsBlock(value)}\n`);
 const kbWith = (value?: FoundationsBlock | string) => { const kb = memoryKb({ products: ["repo"] }); if (value) perillas(kb, value); return kb; };
 const key = (kbUrl: string) => ({ kbUrl, product: "repo", repo: REPO });
@@ -69,31 +69,33 @@ test("foundations_session: una revisión nueva se acepta sola, avisa la diferenc
 test("foundations_session: una revisión nueva reemplaza la aceptada sin preguntar, también si sólo quita permisos", async (t) => {
 	const dir = foundationsDir(await tempDir(t)); const kb = kbWith(block());
 	await decideFoundations(await reading(t, kb), ctx().ctx, ctx().deps(dir));
-	const newer = block({ comandos: ["node test.cjs", "node other-test.cjs"], politica: { ...block().politica, fuera_de_catalogo: "auto" } });
+	const newer = block({ confirmar: ["node test.cjs", "node other-test.cjs"], politica: { ...block().politica, receta: "auto" } });
 	perillas(kb, newer);
 	const wider = ctx();
 	const pin = await decideFoundations(await reading(t, kb), wider.ctx, wider.deps(dir));
 	assert.match(wider.notices[0]!.message, /^ {2}\+ node other-test\.cjs$/m);
-	assert.match(wider.notices[0]!.message, /fuera del catálogo: ask → auto .*corre cualquier comando sin preguntar/, "el aviso marca cada auto");
+	assert.match(wider.notices[0]!.message, /receta: ask → auto .*aprueba su propia receta/, "el aviso marca cada auto");
 	assert.equal(pin.origin, "kb"); assert.deepEqual(pin.block, newer);
 	assert.equal((await readTrust(dir, key(kb.url)))?.accepted?.blockHash, foundationsHash(newer));
 	perillas(kb, block());
 	const narrower = ctx();
 	assert.deepEqual((await decideFoundations(await reading(t, kb), narrower.ctx, narrower.deps(dir))).block, block());
-	assert.match(narrower.notices[0]!.message, /fuera del catálogo: auto → ask/);
+	assert.match(narrower.notices[0]!.message, /receta: auto → ask/);
+	assert.match(narrower.notices[0]!.message, /^ {2}- node other-test\.cjs$/m);
 	assert.equal((await readTrust(dir, key(kb.url)))?.accepted?.blockHash, foundationsHash(block()));
 });
 
-test("foundations_session: inválido, ausente o sin KB no avisan y usan la aceptada local; sin ninguna, el default: todo auto", async (t) => {
+test("foundations_session: inválido, ausente, v1 o sin KB no avisan y usan la aceptada local; sin ninguna, el default: todo auto", async (t) => {
 	const dir = foundationsDir(await tempDir(t)); const kb = kbWith(block());
-	const cases: [string, MemoryKb][] = [["inválido", kbWith("```omi-foundations\n{ roto\n```")], ["sin bloque", kbWith()]];
+	const legacy = "```omi-foundations\n" + JSON.stringify({ version: 1, repo: REPO, comandos: ["npm test"], politica: { arranque: "ask", receta: "ask", fuera_de_catalogo: "ask", push_pr: "ask" } }) + "\n```";
+	const cases: [string, MemoryKb][] = [["inválido", kbWith("```omi-foundations\n{ roto\n```")], ["sin bloque", kbWith()], ["v1", kbWith(legacy)]];
 	const offline = kbWith(block()); offline.available = "sin login"; cases.push(["sin KB", offline]);
 	for (const [name, other] of cases) {
 		const empty = ctx();
 		const fallback = await decideFoundations(await reading(t, other), empty.ctx, empty.deps(dir));
 		assert.equal(fallback.origin, "default", name); assert.equal(fallback.block, null, name); assert.equal(empty.notices.length, 0, name);
 		assert.match(fallback.notice, /todo auto/, name);
-		assert.deepEqual(effectivePolicy(fallback), { politica: DEFAULT_POLICY, command: { catalog: [], outside: "auto" }, hash: null }, name);
+		assert.deepEqual(effectivePolicy(fallback), { politica: DEFAULT_POLICY, command: { block: null, accepted: false }, hash: null }, name);
 	}
 	await decideFoundations(await reading(t, kb), ctx().ctx, ctx().deps(dir));
 	for (const [name, other] of cases) {
@@ -142,14 +144,14 @@ test("foundations_session: una revisión nueva se acepta sin diálogo y queda fi
 	await f.start();
 	assert.equal(applied(f.messages), 1); assert.ok(!f.prompts.includes(ACCEPT), "sin diálogo de aceptación");
 	assert.deepEqual(f.prompts, ["Empezar el trabajo del issue #42"], "el arranque ya usa la revisión aceptada: arranque ask");
-	perillas(kb, block({ comandos: ["node test.cjs", "node -e 1"] }));
+	perillas(kb, block({ confirmar: ["node test.cjs", "node -e 1"] }));
 	await f.command("resume"); await f.command("status");
 	assert.equal(applied(f.messages), 1);
 	const status = f.messages.at(-1)!;
 	assert.match(status, /Foundations: KB · revisión [0-9a-f]{8}/);
 	assert.match(status, new RegExp(foundationsHash(block()).slice(0, 8)), "la sesión sigue con la revisión que leyó al arrancar");
-	assert.match(status, /arranque ask · receta ask · fuera del catálogo ask · push \+ PR draft ask/);
-	assert.match(status, /Catálogo: node test\.cjs/);
+	assert.match(status, /arranque: ask\n  receta: ask\n  push \+ PR draft: ask/);
+	assert.match(status, /Patrones que requieren confirmación:\n  node test\.cjs/);
 	const detail = (f.progress.at(-1) as { progress?: { details: string[] } }).progress?.details ?? [];
 	assert.ok(detail.some((line) => /^Foundations: KB · revisión/.test(line)), "el detalle del progreso muestra Foundations");
 });
@@ -168,7 +170,8 @@ test("foundations_session: sin KB y sin aceptada vale el default: nada pregunta"
 	assert.deepEqual(f.prompts, []); assert.equal(applied(f.messages), 0);
 	const status = f.messages.at(-1)!;
 	assert.match(status, /Foundations: por defecto/);
-	assert.match(status, /arranque auto · receta auto · fuera del catálogo auto · push \+ PR draft auto/);
+	assert.match(status, /arranque: auto\n  receta: auto\n  push \+ PR draft: auto/);
+	assert.match(status, /sin v2 aceptada: nada pregunta/);
 	assert.doesNotMatch(status, /estricta|todo pregunta/);
 });
 

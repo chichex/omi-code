@@ -80,7 +80,7 @@ test("autonomía: con Foundations en ask y la KB caída vale la revisión acepta
 	assert.equal((await f.state()).approval?.by, undefined, "la aprobó la persona");
 	await f.command("status");
 	assert.match(f.messages.at(-1)!, /Foundations: local/);
-	assert.match(f.messages.at(-1)!, /arranque ask · receta ask · fuera del catálogo ask · push \+ PR draft ask/);
+	assert.match(f.messages.at(-1)!, /arranque: ask\n  receta: ask\n  push \+ PR draft: ask/);
 });
 
 test("autonomía: un pedido nuevo sin Foundations crea el issue y arranca el harness sin preguntar", async (t) => {
@@ -101,7 +101,7 @@ test("autonomía: sin UI empezar sigue fallando antes de tocar nada, aunque arra
 });
 
 test("autonomía: con arranque ask un pedido nuevo sigue pidiendo el sí", async (t) => {
-	const f = await beginFixture(t, { foundations: { ...ASK_ALL, receta: "auto", fuera_de_catalogo: "auto", push_pr: "auto" } });
+	const f = await beginFixture(t, { foundations: { ...ASK_ALL, receta: "auto", push_pr: "auto" } });
 	f.remote.confirm = false;
 	await f.ask({ title: "Arreglar el valor", body: "Debe dar 2.", reason: "Bug" });
 	assert.deepEqual(f.prompts.map((p) => p.title), ["Crear issue y empezar el trabajo"]);
@@ -113,7 +113,7 @@ test("autonomía: las instrucciones del agente no dicen que un permiso humano es
 	const state = await f.state();
 	const phases: Phase[] = ["explore", "decide", "recipe", "diagnose", "spec", "approve", "implement", "verify", "pr", "done", "closed"];
 	for (const phase of phases) {
-		const text = developmentInstructions({ ...state, phase });
+		const text = developmentInstructions({ ...state, phase } as typeof state);
 		assert.doesNotMatch(text, /con permiso humano|esperá aprobación humana|pide autorización humana separada|pide permiso a la persona|pide un permiso humano/, phase);
 	}
 	assert.match(developmentInstructions({ ...state, phase: "approve" }), /Foundations/, "dice quién decide si pregunta");

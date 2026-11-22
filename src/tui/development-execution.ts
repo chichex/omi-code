@@ -10,12 +10,14 @@ import { expectedFailure, isApproved, recipeApprovalHash, successful } from "../
 import { inspectCheckout, assertStepCommit } from "../harness/git.ts";
 import { runWorkflowCommand, type WorkflowCommandResult } from "../harness/commands.ts";
 import { workflowWritePath } from "../harness/permissions.ts";
+import { assertCorrectionHead, assertCorrectionExecution } from "../harness/execution-scope.ts";
 import type { DevelopmentSession } from "./development-session.ts";
 import { authorizeProjectCommand } from "./development-command-authorization.ts";
 
 export interface CheckInput { kind: EvidenceKind | "setup"; command: string; stepId?: string; caseId?: string; timeoutSeconds?: number }
 /** En qué etapa corre cada etiqueta. Setup no acredita nada: prepara el checkout en cualquier etapa activa. */
 function assertCheckPhase(state: Workflow, kind: CheckInput["kind"]): void {
+	assertCorrectionExecution(state);
 	if (state.status === "paused" || state.status === "complete") throw new Error("El trabajo no está activo");
 	if (kind === "setup") return;
 	// Resolver inferencias admite volver a registrar explored: también puede volver a reproducir.
@@ -39,10 +41,11 @@ export async function executeCheck(session: DevelopmentSession, input: CheckInpu
 		if (input.kind === "green" && (!red || red.command !== input.command)) throw new Error("El verde debe ejecutar el mismo comando que el rojo observado");
 	}
 	if (input.kind === "verification" && !state.recipe?.cases.some((c) => c.id === input.caseId && c.command === input.command)) throw new Error("La verificación debe usar el caso D y comando exactos de la receta aprobada");
-	// La etiqueta no pide otro sí: un D aprobado corre igual como setup. Sólo la persona puede ampliar el catálogo.
+	// La etiqueta y la receta no dispensan confirmaciones: decidir por v2 aceptada, sintaxis y grant exacto.
 	const authorized = commandAuthorization(state, input.command, (await session.foundations.policy(ctx, state)).command) === "ask"
 		? await authorizeProjectCommand(session, ctx, { state, command: input.command, kind: input.kind, signal }) : state;
 	const before = await inspectCheckout(state.checkout, session.runner, signal);
+	assertCorrectionHead(state, before.head);
 	await session.assertUnchanged(authorized, ctx);
 	signal.throwIfAborted();
 	const startedAt = session.now(); session.emit(`${input.kind} · ${input.caseId ?? input.stepId ?? "comando"} · ${input.command}`);
@@ -69,10 +72,12 @@ export async function executeCheck(session: DevelopmentSession, input: CheckInpu
 
 export async function commitStep(session: DevelopmentSession, input: { stepId: string; message: string; paths: string[] }, ctx: ExtensionContext, signal: AbortSignal): Promise<void> {
 	const state = session.current(ctx);
+	assertCorrectionExecution(state);
 	if (state.phase !== "implement" || state.status !== "active" || !isApproved(state)) throw new Error("No hay permiso de implementar la receta vigente");
 	const step = state.steps.find((s) => s.id === input.stepId && s.status === "active");
 	const green = state.evidence.find((e) => e.id === step?.green && e.kind === "green" && e.outcome === "passed" && e.exitCode === 0);
 	if (!step || !green) throw new Error("El paso necesita rojo y verde observados antes del commit");
+	assertCorrectionHead(state, green.head);
 	if (!/^(feat|fix|refactor|test|docs|style|chore|ci|build|perf|revert)(\([a-z0-9-]+\))?!?: .+/.test(input.message) || /[\r\n]/.test(input.message)) throw new Error("Usá un mensaje de commit convencional de una línea");
 	let snapshot = await inspectCheckout(state.checkout, session.runner, signal);
 	if (snapshot.fingerprint !== green.fingerprint) throw new Error("El contenido cambió después del verde; ejecutá el test otra vez");

@@ -127,22 +127,16 @@ Una extensión del usuario que ya registre `subagent` reemplaza la incluida, sin
 
 No trae skills ni reemplaza el modelo predeterminado del usuario. Para usar un proveedor nativo de Pi, entrá con `/login` o importá credenciales; para Claude Bridge, usá el flujo de Claude Code indicado arriba. Detectar su ejecutable no equivale a validar la autenticación.
 
-Para los siguientes modelos del proveedor **OpenAI**, omi configura por defecto una ventana de
-**1.050.000 tokens**, según el límite publicado en la ficha API de cada modelo:
+omi usa la ventana de contexto del catálogo de Pi. Por ejemplo, `openai/gpt-6.1-sol` trae 272.000 tokens,
+y Pi compacta la sesión un poco antes de llegar ahí. Arriba de 272.000 tokens de entrada, OpenAI cobra
+el tramo caro: con GPT-6.1 Sol la entrada pasa de 2 a 4 USD por millón.
 
-| Familia | Modelos verificados (fuentes oficiales) |
-|---|---|
-| GPT-5.4 / 5.5 | [GPT-5.4](https://developers.openai.com/api/docs/models/gpt-5.4), [GPT-5.5](https://developers.openai.com/api/docs/models/gpt-5.5) |
-| GPT-5.6 | [Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna), [Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol), [Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra) |
-| GPT-6 | [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra), [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna), [Sol](https://developers.openai.com/api/docs/models/gpt-6-sol) |
-| GPT-6.1 | [Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol), [Terra](https://developers.openai.com/api/docs/models/gpt-6.1-terra) |
-
-Al arrancar agrega únicamente los `contextWindow` faltantes en `~/.omi/agent/models.json`;
-respeta por modelo un límite explícito en `modelOverrides` o en una definición `models` del usuario.
-También completa instalaciones que ya tenían el default de GPT-6.1 Sol. No modifica otros modelos,
-proveedores ni el catálogo cacheado: los Claude y Gemini recientes ya declaran aproximadamente 1M en Pi.
-El contexto largo puede aumentar el costo API; se mantienen las tarifas por tramos del catálogo.
-Esto no verifica permisos ni disponibilidad en tu cuenta, ni aplica el límite API al proveedor Codex.
+Hasta la 0.25, omi escribía 1.050.000 tokens en `~/.omi/agent/models.json` para diez GPT de OpenAI
+(GPT-5.4, 5.5, 5.6 Luna/Sol/Terra, 6 Astra/Luna/Sol y 6.1 Sol/Terra). Así una sesión larga crecía cerca
+del millón y cada vuelta reenviaba todo al precio alto. Al arrancar, omi retira esos valores una sola vez:
+sólo los `contextWindow: 1050000` de esos IDs en `modelOverrides` del proveedor `openai`. No toca otros
+modelos, proveedores ni definiciones `models`, y deja anotada la limpieza en `~/.omi/agent/omi-migrations.json`.
+Si querés la ventana completa, volvé a ponerla en `models.json`; desde entonces omi la respeta.
 
 Para la configuración del agente, omi sólo lee `~/.omi/agent` y el proyecto, del directorio actual hasta la raíz del repo.
 Por ejemplo, no carga `~/.pi/agent`, `~/.agents/skills` ni `~/AGENTS.md`. Para instrucciones globales usá `~/.omi/agent/AGENTS.md`.
@@ -255,7 +249,7 @@ el historial y la edición siguen usando el renderer de Pi; no hay un segundo pr
 | Ctrl 3 o `/omi-prs` | PRs abiertos de GitHub |
 | Ctrl 4 o `/omi-changes` | Cambios locales |
 | Ctrl 5 o `/omi-platform` | OMI: proyecto, servicios, ambientes y Foundations vigente con su origen |
-| **f** en OMI o `/omi-foundations` | Editar Foundations: comandos del catálogo y políticas `ask`/`auto`, con un sí; vale ya en la sesión ([detalle](docs/development-harness.md#editar-foundations-desde-la-pantalla-omi)) |
+| **f** en OMI o `/omi-foundations` | Editar Foundations en el panel vertical: patrones que requieren confirmación y políticas `ask`/`auto`; Guardar vale ya en la sesión ([detalle](docs/development-harness.md#foundations-comandos-y-permisos-por-repo)) |
 | Ctrl 6 o `/omi-workflow` | Progreso: recorrido completo del harness y modo previsto/real por etapa |
 | Ctrl K o `/omi` | Paleta de comandos (Ctrl K reemplaza borrar hasta fin de línea en el editor) |
 | F4 o `/omi-sidebar` | Mostrar / ocultar lateral |
@@ -312,11 +306,13 @@ Los criterios son configurables por repo en un bloque **`omi-development-triage`
 
 Explora código, resuelve inferencias y deja una receta persistente. Tiene tres rutas: **Directa**, **Diagnóstico** para bugs sin causa confirmada y **Con spec** para trabajo grande. Antes de escribir aprueba la receta completa: sola por defecto, o con tu revisión si Foundations dice `receta: ask`. Registra rojo/verde reales, commits por paso, verificación por caso y lentes; sólo entonces sube la rama y abre un **PR draft** (con `push_pr: ask`, antes pide permiso). No mergea, dispara workflows ni despliega.
 
+Después del PR draft, `/omi-work adopt | review | fix | land | ship` sigue el mismo trabajo por Review, correcciones, Land y Ship, cada efecto con su permiso (`ask` por defecto); se configura con `omi init --development` ([detalle](docs/development-harness.md#review-land-y-ship)).
+
 La lateral muestra **PROGRESO · #N** con ruta, etapa, actividad, pasos, checks y bloqueos, y el recorrido completo cuando hay altura. En compacto conserva los demás bloques y anuncia **Ctrl 6**: **6 · Progreso** (`/omi-workflow`) muestra todas las etapas, también pendientes, con estado textual y ejecución prevista separada de la real. Se desplaza con flechas, PgUp/PgDn o rueda; Esc vuelve a Chat. `?`/«sin observar» no atribuye una delegación: la receta sólo informa lo previsto; los lentes se identifican como llamadas aisladas, y los trabajos antiguos conservan modo desconocido. Clic o **`/omi-progress`** abre el detalle, también con la lateral oculta. El avance sale del estado y de resultados observados, no de frases del modelo. `/omi-work status`, `pause`, `resume`, `refresh`, `approve`, `pr` y `stop` permiten controlarlo; no hay un comando para empezar. Cargar una sesión no reejecuta efectos automáticamente.
 
-**Foundations** decide por repo, en las perillas del producto en la KB de Harness, qué comandos corren sin preguntar y si el arranque, la receta, los comandos fuera del catálogo y el PR draft piden un sí (`ask`) o no (`auto`). **Sin Foundations, nada pregunta:** los cuatro puntos van en `auto`. Para que uno pregunte, ponelo en `ask` con **f** en la vista OMI (`/omi-foundations`) o en el bloque de las perillas. Cada revisión nueva se aplica sola, con un aviso de qué cambió, y queda fija en la sesión; sin KB vale la última aceptada o, si no hay, el default. Un comando ya autorizado no vuelve a preguntar por cambiar de etiqueta (setup o caso D), ni al retomar.
+**Foundations v2** configura por repo, en las perillas del producto en la KB de Harness, **patrones glob que requieren confirmación**, no una allowlist, y si el arranque, la receta y el push + PR draft piden un sí (`ask`) o no (`auto`). **Sin Foundations v2 aceptada, nada pregunta:** los tres puntos van en `auto` y los comandos corren sin preguntar; un bloque v1 o inválido cuenta como ausente. Con v2, sólo los comandos simples que no coinciden con un patrón corren sin preguntar; la sintaxis compuesta o no soportada pide sí, y la receta aprobada no dispensa esa confirmación. Ejemplo: con `git push *`, `npm test` corre solo y `git push origin main` o `npm test && npm run build` piden sí. Cada revisión nueva de la KB se aplica sola, con un aviso de qué cambió, y queda fija en la sesión; sin KB vale la última aceptada o, si no hay, el default. El [panel vertical dedicado](docs/development-harness.md#foundations-comandos-y-permisos-por-repo) se abre con **f** en la vista OMI (`/omi-foundations`), `/omi-work foundations` o **Editar reglas**: precarga lo vigente, conserva borradores y sólo persiste/acepta con Guardar explícito. Abrir, cancelar o guardar no ejecuta un comando pendiente ni concede grants: se debe reintentar. El sí humano recuerda únicamente el comando exacto para ese trabajo/pedido, también al retomar; cambiar pedido/refresh lo invalida. Es sólo del harness, no del shell general, y no es un sandbox.
 
-La descripción humana del issue se conserva: receta, evidencia y acuerdos van en una **sección administrada al final del cuerpo**, entre `<!-- omi:harness:start -->` y `<!-- omi:harness:end -->`, que el harness reescribe sin tocar el pedido. No crea comentarios. Lo que la persona dice en el chat vale como autorización de alcance: el agente lo registra con su cita textual, sin editar el issue. El estado local vive bajo el Git common-dir, independiente del vínculo de infraestructura OMI. Este corte es para repos existentes; quedan afuera la etapa Fundación, prototipos, perfiles avanzados de modelos, Review externa, Land y Ship.
+La descripción humana del issue se conserva: receta, evidencia y acuerdos van en una **sección administrada al final del cuerpo**, entre `<!-- omi:harness:start -->` y `<!-- omi:harness:end -->`, que el harness reescribe sin tocar el pedido. No crea comentarios. Lo que la persona dice en el chat vale como autorización de alcance: el agente lo registra con su cita textual, sin editar el issue. El estado local vive bajo el Git common-dir, independiente del vínculo de infraestructura OMI. Este corte es para repos existentes; quedan afuera la etapa Fundación, prototipos y perfiles avanzados de modelos.
 
 [Contrato, permisos, recuperación y límites del harness](docs/development-harness.md).
 

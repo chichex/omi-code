@@ -248,7 +248,10 @@ test("development_flow los paths del commit son literales: un pathspec mágico n
 test("development_flow /omi-work stop sale de un harness bloqueado por estado inválido y lo muestra en el status", async (t) => {
 	const f = await developmentFixture(t); await f.start();
 	const { workflowPath } = await import("../src/harness/store.ts"); const { readFile, writeFile } = await import("node:fs/promises");
-	const path = workflowPath(f.checkout, 42); await writeFile(path, (await readFile(path, "utf8")).replace('"version": 1', '"version": 2'));
+	const path = workflowPath(f.checkout, 42); const original = await readFile(path, "utf8");
+	const corrupt = original.replace(/"version":\s*\d+/, '"version": 999');
+	assert.notEqual(corrupt, original, "la fixture introduce una versión futura de verdad");
+	await writeFile(path, corrupt);
 	await f.attach();
 	assert.ok(f.statuses.at(-1)?.includes("bloqueado"), "el bloqueo se ve aunque no haya estado");
 	assert.ok(await f.emit("tool_call", { toolName: "bash", input: { command: "true" } }), "bloqueado no habilita bash");
@@ -259,15 +262,16 @@ test("development_flow /omi-work stop sale de un harness bloqueado por estado in
 	assert.equal(await f.emit("tool_call", { toolName: "bash", input: { command: "true" } }), undefined, "al recargar la sesión sigue fuera del harness");
 });
 
-test("development_flow aprobar ofrece resumen y comandos completos autorizados sin volver a preguntar", async (t) => {
+test("development_flow aprobar ofrece resumen y comandos completos sin conceder grants implícitos", async (t) => {
 	const f = await developmentFixture(t, { foundations: ASK_ALL }); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan("large") });
 	await f.action({ action: "specified", spec: { why: "Dos valores", steps: [{ id: "C1", title: "Ambos", cases: ["D1", "D2"] }], playbook: ["Probar"] } });
 	await f.action({ action: "approve" });
 	const description = f.confirmationDetails[f.prompts.lastIndexOf("Aprobar receta y sincronizar issue")] ?? "";
 	assert.match(f.reviewScreens[0]!, /Resumen/); assert.match(f.reviewScreens[0]!, /Objetivo/);
-	assert.match(description, /sin volver a preguntar/); assert.match(description, /Pruebas y comandos exactos/);
+	assert.match(description, /aprobación general de receta NO concede grants/); assert.match(description, /Pruebas y comandos exactos/);
 	for (const c of (await f.state()).recipe!.cases) { assert.ok(description.includes(c.id)); assert.ok(description.includes(c.description)); assert.ok(description.includes(c.command)); }
-	assert.match(description, /commits locales/); assert.match(description, /No autoriza push, merge/);
+	const readable = description.split("\n").map((line) => line.replace(/^│ /, "").replace(/ │$/, "").trimEnd()).join(" ").replace(/\s+/g, " ");
+	assert.match(description, /commits locales/); assert.match(readable, /No autoriza push, merge/);
 });
 
 test("development_flow un directorio con un archivo protegido no deja el índice contaminado", async (t) => {

@@ -7,6 +7,7 @@ import { Value } from "typebox/value";
 import { SessionManager, type ExtensionAPI, type ExtensionContext, type ExtensionToolContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { processRunner, type Runner } from "../../src/core/exec.ts";
 import { developmentHarnessExtension } from "../../src/tui/development.ts";
+import type { DevelopmentDeps } from "../../src/tui/development-session.ts";
 import { readGit } from "../../src/tui/workspace/data.ts";
 import { createIssueWorktree } from "../../src/tui/workspace/issue-worktree.ts";
 import { ISSUE_TRIAGE_ENTRY, issueTriageState } from "../../src/tui/workspace/issue-triage.ts";
@@ -14,7 +15,7 @@ import type { Plan, Workflow } from "../../src/harness/model.ts";
 import { readWorkflow } from "../../src/harness/store.ts";
 import { issueDevelopmentTicket } from "../../src/tui/development-tickets.ts";
 import { tempDir, testIo } from "./io.ts";
-import { stripTerminalSequences, type Component, type TUI } from "@earendil-works/pi-tui";
+import { getKeybindings, stripTerminalSequences, type Component, type TUI } from "@earendil-works/pi-tui";
 import { getThemeByName } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import { emitLikePi } from "./pi-events.ts";
 import type { KbClient } from "../../src/tui/kb-client.ts";
@@ -24,15 +25,17 @@ import { foundationsDir } from "../../src/harness/foundations-trust.ts";
 import type { FoundationsPolicy } from "../../src/harness/foundations.ts";
 import { acceptFoundations } from "./foundations.ts";
 
-/** `foundations`: una revisión aceptada con esas políticas. Sin ella, vale el default: nada pregunta. */
-export async function developmentFixture(t: TestContext, options: { kb?: KbClient; foundations?: FoundationsPolicy } = {}) {
+/** `foundations`: una revisión v2 aceptada con esas políticas y `confirmar` (por defecto `*`). Sin ella, vale el default: nada pregunta. */
+/** `repo`: owner/name de origin y del issue. `github`: responde primero una llamada a gh (undefined sigue con la falsa de siempre). `deps`: puertos extra del harness. */
+export async function developmentFixture(t: TestContext, options: { kb?: KbClient; foundations?: FoundationsPolicy; confirmar?: readonly string[]; repo?: string; github?: (args: string[], input: string | undefined) => { code?: number; stdout: string } | undefined; deps?: Omit<DevelopmentDeps, "runner" | "kb"> } = {}) {
+	const repo = options.repo ?? "test/repo"; const github = options.github; const deps = options.deps ?? {};
 	const home = await realpath(await tempDir(t)); const root = join(home, "repo"); await mkdir(root);
 	const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-	git("init", "-b", "main"); git("config", "user.email", "test@example.test"); git("config", "user.name", "Test"); git("config", "commit.gpgsign", "false"); git("config", "core.hooksPath", "/dev/null"); git("remote", "add", "origin", "https://github.com/test/repo.git");
+	git("init", "-b", "main"); git("config", "user.email", "test@example.test"); git("config", "user.name", "Test"); git("config", "commit.gpgsign", "false"); git("config", "core.hooksPath", "/dev/null"); git("remote", "add", "origin", `https://github.com/${repo}.git`);
 	await writeFile(join(root, "value.cjs"), "module.exports = 1;\n"); await writeFile(join(root, "test.cjs"), 'require("node:assert/strict").equal(require("./value.cjs"), 1);\n');
 	await writeFile(join(root, "other.cjs"), "module.exports = 1;\n"); await writeFile(join(root, "other-test.cjs"), 'require("node:assert/strict").equal(require("./other.cjs"), 1);\n');
 	git("add", "."); git("commit", "-m", "test: initial");
-	const issue = { number: 42, title: "Corregir resultado", url: "https://github.com/test/repo/issues/42", labels: ["bug"], author: "test", updatedAt: "", draft: false, head: "", base: "", review: "" };
+	const issue = { number: 42, title: "Corregir resultado", url: `https://github.com/${repo}/issues/42`, labels: ["bug"], author: "test", updatedAt: "", draft: false, head: "", base: "", review: "" };
 	const tree = await createIssueWorktree((await readGit(root))!, issue, "fix");
 	const checkout = { root: await realpath(tree.worktree), commonDir: await realpath((await readGit(root))!.commonDir), branch: tree.branch, baseCommit: tree.baseCommit };
 	const manager = SessionManager.create(checkout.root, join(home, "sessions"));
@@ -46,8 +49,9 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 		// Sin override, la autorización conserva el sí/no de remote.confirmations; undefined explícito cancela.
 		select: defaultSelect, editor: (_title: string, prefill: string): string | undefined => prefill,
 		// Una tanda de preguntas: las teclas que la persona aprieta al verla. Sin teclas, la cierra: cancelar.
-		questions: (_screen: string): readonly string[] | undefined => undefined };
-	const selects: { title: string; options: string[] }[] = []; const editors: string[] = []; const asked: string[][] = []; const permissionScreens: string[][] = [];
+		questions: (_screen: string): readonly string[] | undefined => undefined,
+		foundations: (_screen: string): readonly string[] | undefined => undefined };
+	const selects: { title: string; options: string[] }[] = []; const editors: string[] = []; const asked: string[][] = []; const permissionScreens: string[][] = []; const foundationsScreens: string[][] = [];
 	const reviewScreens: string[] = []; let reviews = 0;
 	const calls: { command: string; args: string[]; input?: string }[] = []; const prompts: string[] = []; const confirmationDetails: string[] = []; const messages: string[] = []; const progress: unknown[] = []; const modelCalls: unknown[] = []; const statuses: (string | undefined)[] = [];
 	const runner: Runner = { async run(command, args, options) {
@@ -57,17 +61,19 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 		if (command === "git" && args.includes("ls-remote")) return { code: 0, stdout: `${execFileSync("git", ["rev-parse", "main"], { cwd: root, encoding: "utf8" }).trim()}\trefs/heads/main\n`, stderr: "" };
 		if (command === "git" && args.includes("fetch")) return { code: 0, stdout: "", stderr: "" };
 		if (command !== "gh") return processRunner.run(command, args, options);
+		const answered = github?.(args, options?.input);
+		if (answered) return { code: answered.code ?? 0, stdout: answered.stdout, stderr: "" };
 		let data: unknown = {};
-		if (args[0] === "issue" && args[1] === "list") data = [{ number: 41, title: "Antecedente cerrado", url: "https://github.com/test/repo/issues/41", state: "CLOSED" }];
+		if (args[0] === "issue" && args[1] === "list") data = [{ number: 41, title: "Antecedente cerrado", url: `https://github.com/${repo}/issues/41`, state: "CLOSED" }];
 		else if (args[0] === "issue" && args[1] === "view") data = { ...issue, title: remote.title, body: remote.body };
 		else if (args[0] === "issue" && args[1] === "edit") remote.body = options?.input ?? remote.body;
-		else if (args[0] === "repo") data = { nameWithOwner: "test/repo", url: "https://github.com/test/repo" };
+		else if (args[0] === "repo") data = { nameWithOwner: repo, url: `https://github.com/${repo}` };
 		else if (args[0] === "api" && args.includes("user")) data = { login: "test" };
-		else if (args[0] === "api" && args.includes("POST")) { const payload: unknown = JSON.parse(options?.input ?? "{}"); if (!payload || typeof payload !== "object" || !("body" in payload) || typeof payload.body !== "string") throw new Error("Comentario sin body"); const comment = { id: remote.comments.length + 1, body: payload.body, user: { login: "test" }, html_url: `https://github.com/test/repo/issues/42#issuecomment-${remote.comments.length + 1}` }; remote.comments.push(comment); data = comment; }
+		else if (args[0] === "api" && args.includes("POST")) { const payload: unknown = JSON.parse(options?.input ?? "{}"); if (!payload || typeof payload !== "object" || !("body" in payload) || typeof payload.body !== "string") throw new Error("Comentario sin body"); const comment = { id: remote.comments.length + 1, body: payload.body, user: { login: "test" }, html_url: `https://github.com/${repo}/issues/42#issuecomment-${remote.comments.length + 1}` }; remote.comments.push(comment); data = comment; }
 		else if (args[0] === "api" && args.includes("--paginate")) data = [remote.comments];
 		else if (args[0] === "pr" && args[1] === "create") { remote.pr = true; remote.prBody = options?.input ?? ""; remote.prs.push({ number: 8 + remote.prs.length, head: args[args.indexOf("--head") + 1]!, base: args[args.indexOf("--base") + 1]!, body: remote.prBody }); }
 		else if (args[0] === "pr" && (args[1] === "list" || args[1] === "view")) {
-			const view = (pr: (typeof remote.prs)[number]) => ({ number: pr.number, url: `https://github.com/test/repo/pull/${pr.number}`, state: "OPEN", isDraft: true, isCrossRepository: false, body: pr.body, headRefName: pr.head, baseRefName: pr.base, headRefOid: remote.pushed.get(pr.head) ?? execFileSync("git", ["rev-parse", "HEAD"], { cwd: checkout.root, encoding: "utf8" }).trim(), mergeCommit: null });
+			const view = (pr: (typeof remote.prs)[number]) => ({ number: pr.number, url: `https://github.com/${repo}/pull/${pr.number}`, state: "OPEN", isDraft: true, isCrossRepository: false, body: pr.body, headRefName: pr.head, baseRefName: pr.base, headRefOid: remote.pushed.get(pr.head) ?? execFileSync("git", ["rev-parse", "HEAD"], { cwd: checkout.root, encoding: "utf8" }).trim(), mergeCommit: null });
 			if (args[1] === "view") { const pr = remote.prs.find((p) => p.number === Number(args[2])); if (!pr) throw new Error(`PR inexistente: ${args[2]}`); data = view(pr); }
 			else data = remote.prs.filter((p) => p.head === args[args.indexOf("--head") + 1] && p.base === args[args.indexOf("--base") + 1]).map(view);
 		}
@@ -126,6 +132,21 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 						return decision;
 					} finally { dispose(); }
 				}
+				if (options?.blocked?.kind === "question" && options.blocked.message === "Configurar Foundations") {
+					let decision: unknown; let settled = false;
+					const component = factory(fakeTui({ columns: 80, rows: 24 }), darkTheme(), getKeybindings(), (value) => { if (!settled) { settled = true; decision = value; } });
+					const screens: string[] = []; foundationsScreens.push(screens);
+					const screen = () => component.render(80).map(stripTerminalSequences).join("\n");
+					Reflect.set(component, "focused", true);
+					try {
+						screens.push(screen());
+						for (const key of uiControl.foundations(screens[0]!) ?? []) {
+							if (settled) break;
+							component.handleInput?.(key); screens.push(screen());
+						}
+					} finally { component.dispose?.(); }
+					return decision;
+				}
 				if (options?.blocked?.kind === "question") {
 					const { value, screens } = await answerCustom(factory, (screen) => uiControl.questions(screen)); asked.push(screens); return value;
 				}
@@ -156,8 +177,8 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 		modelRegistry: { hasConfiguredAuth: () => true, streamSimple: (_model: unknown, input: unknown) => { modelCalls.push(input); return { result: async () => { modelControl.onResult(); return { stopReason: modelControl.stopReason, content: [{ type: "text", text: modelControl.reply(input) }], usage: { input: 1, output: 2, totalTokens: 3, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }; } }; } },
 	} as unknown as ExtensionContext;
 	const emit = (name: string, event: unknown = {}) => emitLikePi(events.get(name) ?? [], name, event, context);
-	if (options.foundations) await acceptFoundations(foundationsDir(home), options.foundations, options.kb ? { kbUrl: options.kb.url } : {});
-	const attach = async () => { busHandlers.clear(); events.clear(); tools.clear(); commands.clear(); const extension = developmentHarnessExtension(testIo({ homeDir: home, cwd: checkout.root }), [], { runner, ...(options.kb ? { kb: options.kb } : {}) }); if (typeof extension === "function") await extension(pi); else await extension.factory(pi); await questionsExtension().factory(pi); await emit("session_start"); };
+	if (options.foundations) await acceptFoundations(foundationsDir(home), options.foundations, { ...(options.kb ? { kbUrl: options.kb.url } : {}), ...(options.confirmar ? { confirmar: options.confirmar } : {}) });
+	const attach = async () => { busHandlers.clear(); events.clear(); tools.clear(); commands.clear(); const extension = developmentHarnessExtension(testIo({ homeDir: home, cwd: checkout.root }), [], { ...deps, runner, ...(options.kb ? { kb: options.kb } : {}) }); if (typeof extension === "function") await extension(pi); else await extension.factory(pi); await questionsExtension().factory(pi); await emit("session_start"); };
 	await attach();
 	const invoke = async (name: string, input: unknown, signal = new AbortController().signal) => {
 		const tool = tools.get(name); if (!tool || !Value.Check(tool.parameters, input)) throw new Error("Argumentos de tool inválidos");
@@ -169,7 +190,7 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 	const readReference = async () => { await emit("tool_execution_start", { toolName: "read", toolCallId: "read", args: { path: "value.cjs" } }); await emit("tool_call", { toolName: "read", toolCallId: "read", input: { path: "value.cjs" } }); await emit("tool_execution_end", { toolName: "read", toolCallId: "read", result: { content: [{ type: "text", text: "module.exports = 1;" }] }, isError: false }); };
 	const explore = async () => { await readReference(); await action({ action: "explored", exploration: { references: [{ path: "value.cjs", line: 1, detail: "Valor actual" }], findings: ["Devuelve 1"], approach: "Corregir el valor", missingFoundation: [], dependencies: [], disposition: "continue", reason: "Existe" } }); await action({ action: "inferences", inferences: [] }); };
 	const plan = (size: "small" | "large" = "small", causeKnown = true): Plan => ({ classification: { type: "fix", size, risk: "low", riskAreas: [], causeKnown }, objective: "Devolver 2", approach: "Corregir el valor exportado", scope: ["valor"], outOfScope: ["infra"], cases: [{ id: "D1", description: "Devuelve 2", command: "node test.cjs" }, ...(size === "large" ? [{ id: "D2", description: "Otro devuelve 2", command: "node other-test.cjs" }] : [])], lenses: ["quality"], executor: { mode: "inline", writers: 0 } });
-	return { home, checkout, manager, runner, remote, calls, statuses, selects, editors, asked, permissionScreens, activeTools: () => activeTools, prompts, confirmationDetails, messages, progress, modelCalls, modelControl, uiControl, reviewScreens, reviews: () => reviews, tools, context, emit, emitBus, attach, invoke, action, state, readReference, explore, plan, command: (input: string) => commands.get("omi-work")!.handler(input, context),
+	return { home, checkout, manager, runner, remote, calls, statuses, selects, editors, asked, permissionScreens, foundationsScreens, activeTools: () => activeTools, prompts, confirmationDetails, messages, progress, modelCalls, modelControl, uiControl, reviewScreens, reviews: () => reviews, tools, context, emit, emitBus, attach, invoke, action, state, readReference, explore, plan, command: (input: string) => commands.get("omi-work")!.handler(input, context),
 		/** Cualquier comando registrado, por ejemplo /omi-foundations. Falla si no existe. */
 		run: (name: string, input = "") => { const command = commands.get(name); if (!command) throw new Error(`Comando no registrado: /${name}`); return command.handler(input, context); },
 		// Lo que hace el panel de Issues o la tool del agente estando ya en el worktree del issue: un pedido de un solo uso y su sí.

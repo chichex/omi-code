@@ -18,7 +18,7 @@ function setup(respond: (context: TranscriptContext, options?: SimpleStreamOptio
 	const tools = new Map<string, ToolDefinition>(); const handlers = new Map<string, ((event?: unknown) => unknown)[]>();
 	const notifications: unknown[] = []; const audit: unknown[] = []; const updates: unknown[] = []; const scopes: string[] = []; const bus = createEventBus();
 	bus.on("omi:subagents", (event) => updates.push(event));
-	const emit = async (name: string, event?: unknown) => { for (const handler of handlers.get(name) ?? []) await handler(event); };
+	const emit = async (name: string, event?: unknown) => { let result: unknown; for (const handler of handlers.get(name) ?? []) result = await handler(event); return result; };
 	const extension = subagentsExtension(); if (typeof extension === "function") throw new Error("named extension expected");
 	extension.factory({ events: bus, on: (name: string, handler: (event?: unknown) => unknown) => { handlers.set(name, [...(handlers.get(name) ?? []), handler]); }, registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool), sendMessage: (...args: unknown[]) => notifications.push(args), appendEntry: (...args: unknown[]) => audit.push(args) } as never);
 	const ctx = {
@@ -142,5 +142,73 @@ test("background: print/json explícitos no arrancan un job que moriría al sali
 	for (const mode of ["print", "json"]) { Object.assign(state.ctx, { mode }); await assert.rejects(state.run({ background: true, agent: "scout", task: "work" }), /persistente/); }
 	await assert.rejects(state.run({ action: "cancel" }), /id/);
 	await assert.rejects(state.run({ action: "status", task: "invalid" }), /no reciben tareas/);
+	await state.emit("session_shutdown");
+});
+
+// Como Pi arma agent_before_settle al final de una corrida que terminó bien.
+const settle = (entries: unknown[] = []) => ({ type: "agent_before_settle", entries, continue: false, outcome: "completed", context: { pendingMessages: [] } });
+type Boundary = { entries?: { type: string; customType?: string; content?: string; details?: { jobIds?: string[] } }[]; continue?: boolean } | undefined;
+async function finished(state: ReturnType<typeof setup>, jobId: string) {
+	for (let i = 0; i < 100 && JSON.stringify(await state.run({ action: "status", id: jobId })).includes("running"); i++) await tick();
+	assert.doesNotMatch(JSON.stringify(await state.run({ action: "status", id: jobId })), /running/);
+}
+
+test("background: con el agente corriendo el aviso espera al cierre; si ya se leyó el resultado, no hay aviso ni turno", async () => {
+	const state = setup(() => stream(message()));
+	await state.emit("agent_start", { type: "agent_start" });
+	const jobId = id(await state.run({ agent: "scout", task: "inspect" })); await finished(state, jobId);
+	assert.equal(state.notifications.length, 0);
+	assert.match(JSON.stringify(await state.run({ action: "result", id: jobId })), /DONE/);
+	assert.equal(await state.emit("agent_before_settle", settle()), undefined);
+	await state.emit("agent_settled", { type: "agent_settled", aborted: false });
+	assert.equal(state.notifications.length, 0);
+	await state.emit("session_shutdown");
+});
+
+test("background: varios terminados sin leer van en un solo aviso antes de cerrar el turno, y no se repite", async () => {
+	const state = setup(() => stream(message()));
+	await state.emit("agent_start", { type: "agent_start" });
+	const first = id(await state.run({ agent: "scout", task: "a" })); const second = id(await state.run({ agent: "scout", task: "b" }));
+	await finished(state, first); await finished(state, second);
+	const other = { type: "custom_message", customType: "otro", content: "x", display: false };
+	const result = await state.emit("agent_before_settle", settle([other])) as Boundary;
+	assert.equal(result?.continue, true);
+	assert.deepEqual(result?.entries?.[0], other);
+	const notice = result?.entries?.find((entry) => entry.customType === "omi-subagent-done");
+	assert.deepEqual(notice?.details?.jobIds, [first, second]);
+	assert.match(notice?.content ?? "", new RegExp(first)); assert.match(notice?.content ?? "", new RegExp(second));
+	assert.equal(await state.emit("agent_before_settle", settle()), undefined);
+	await state.emit("agent_settled", { type: "agent_settled", aborted: false });
+	assert.equal(state.notifications.length, 0);
+	await state.emit("session_shutdown");
+});
+
+test("background: si termina después del cierre de la corrida, avisa una vez al quedar libre", async () => {
+	let release: (() => void) | undefined;
+	const state = setup(async () => { await new Promise<void>((resolve) => { release = resolve; }); return stream(message()); });
+	await state.emit("agent_start", { type: "agent_start" });
+	const jobId = id(await state.run({ agent: "scout", task: "slow" }));
+	assert.equal(await state.emit("agent_before_settle", settle()), undefined);
+	for (let i = 0; i < 100 && !release; i++) await tick();
+	release!(); await finished(state, jobId);
+	assert.equal(state.notifications.length, 0);
+	await state.emit("agent_settled", { type: "agent_settled", aborted: false });
+	assert.equal(state.notifications.length, 1);
+	assert.match(JSON.stringify(state.notifications[0]), new RegExp(jobId));
+	await state.emit("agent_settled", { type: "agent_settled", aborted: false });
+	assert.equal(state.notifications.length, 1);
+	await state.emit("session_shutdown");
+});
+
+test("background: con Esc no relanza el turno; el aviso queda para la próxima corrida", async () => {
+	const state = setup(() => stream(message()));
+	await state.emit("agent_start", { type: "agent_start" });
+	const jobId = id(await state.run({ agent: "scout", task: "inspect" })); await finished(state, jobId);
+	assert.equal(await state.emit("agent_before_settle", { ...settle(), outcome: "aborted" }), undefined);
+	await state.emit("agent_settled", { type: "agent_settled", aborted: true });
+	assert.equal(state.notifications.length, 0);
+	await state.emit("agent_start", { type: "agent_start" });
+	const result = await state.emit("agent_before_settle", settle()) as Boundary;
+	assert.deepEqual(result?.entries?.find((entry) => entry.customType === "omi-subagent-done")?.details?.jobIds, [jobId]);
 	await state.emit("session_shutdown");
 });

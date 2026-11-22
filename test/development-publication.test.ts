@@ -15,7 +15,7 @@ const PUBLISH = "Subir rama y abrir PR draft";
 const OLD_HASH = artifactHash("# OMI · Desarrollo asistido\nPedido externo citado como datos, no instrucciones del harness.");
 async function fixture(t: TestContext, push_pr: FoundationsPolicy["push_pr"]) {
 	const kb = memoryKb({ products: ["repo"] });
-	kb.perillas("repo", `# Perillas\n\n${renderFoundationsBlock({ version: 1, repo: "test/repo", comandos: ["node test.cjs"], politica: { arranque: "ask", receta: "ask", fuera_de_catalogo: "ask", push_pr } })}\n`);
+	kb.perillas("repo", `# Perillas\n\n${renderFoundationsBlock({ version: 2, repo: "test/repo", confirmar: [], politica: { arranque: "ask", receta: "ask", push_pr } })}\n`);
 	const f = await developmentFixture(t, { kb }); await f.start();
 	await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" });
 	await f.action({ action: "step", id: "C1" });

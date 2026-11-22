@@ -1,60 +1,92 @@
-// Defaults del producto sobre el catálogo de Pi; las decisiones explícitas del usuario ganan.
+// Retira los defaults de contexto largo que OMI escribía en models.json (#33, #34). Pi declara
+// 272.000 tokens para estos GPT y cobra el tramo caro arriba de eso: con 1.050.000, la sesión
+// compactaba recién cerca del millón y cada vuelta reenviaba cientos de miles de tokens al doble.
+// Corre una sola vez: después, un contextWindow que ponga la persona se respeta, sea cual sea.
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
-import { applyEdits, modify, parse, type ParseError } from "jsonc-parser";
+import { applyEdits, modify, parse, type JSONPath, type ParseError } from "jsonc-parser";
 import { reservePrivateFile } from "../core/files.ts";
 
-// Verificados por ID en https://developers.openai.com/api/docs/models/<id> (fuentes en README).
-// Sólo el proveedor openai: no inferir capacidades de otros GPT ni de Codex.
-const LONG_CONTEXT_MODELS = [
+// Los diez IDs del proveedor openai a los que OMI les agregaba el valor (ningún otro proveedor).
+const LEGACY_IDS = [
 	"gpt-5.4", "gpt-5.5", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra",
 	"gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol", "gpt-6.1-terra",
 ];
+const LEGACY_WINDOW = 1_050_000;
+const MIGRATIONS_FILE = "omi-migrations.json";
+const MIGRATION = "context-window-defaults";
 
-function object(value: unknown = {}): Record<string, unknown> {
-	if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid_models_config");
-	return value as Record<string, unknown>;
+type Json = Record<string, unknown>;
+const isObject = (value: unknown): value is Json => value !== null && typeof value === "object" && !Array.isArray(value);
+const isMissing = (error: unknown): boolean => error instanceof Error && "code" in error && error.code === "ENOENT";
+
+/** Las migraciones aplicadas, o undefined si el registro no se puede leer: entonces no se toca nada. */
+async function applied(path: string): Promise<string[] | undefined> {
+	try {
+		const value: unknown = JSON.parse(await readFile(path, "utf8"));
+		return isObject(value) && Array.isArray(value.applied) && value.applied.every((item) => typeof item === "string") ? value.applied : undefined;
+	} catch (error) { return isMissing(error) ? [] : undefined; }
 }
 
-/** No tocar el catálogo cacheado: Pi puede reemplazarlo al refrescar modelos. */
-export async function ensureModelDefaults(dir: string): Promise<void> {
+/** Las ediciones que sacan los valores de OMI, o undefined si el archivo no es válido para Pi. */
+function legacyEdits(parsed: unknown): JSONPath[] | undefined {
+	if (!isObject(parsed)) return undefined;
+	if (parsed.providers === undefined) return [];
+	if (!isObject(parsed.providers)) return undefined;
+	const openai = parsed.providers.openai;
+	if (openai === undefined) return [];
+	if (!isObject(openai) || (openai.models !== undefined && !Array.isArray(openai.models))) return undefined;
+	const overrides = openai.modelOverrides;
+	if (overrides === undefined) return [];
+	if (!isObject(overrides)) return undefined;
+	const base = ["providers", "openai", "modelOverrides"];
+	const edits: JSONPath[] = []; let kept = Object.keys(overrides).length;
+	for (const id of LEGACY_IDS) {
+		const override = overrides[id];
+		if (override === undefined) continue;
+		if (!isObject(override)) return undefined;
+		if (override.contextWindow !== LEGACY_WINDOW) continue;
+		if (Object.keys(override).length > 1) { edits.push([...base, id, "contextWindow"]); continue; }
+		edits.push([...base, id]); kept--;
+	}
+	// Sólo se borran los contenedores que quedan vacíos por esta limpieza. "providers" queda, aunque
+	// vacío: borrar la última clave del archivo se lleva los comentarios de arriba.
+	if (edits.length && kept === 0) {
+		edits.push(base);
+		if (Object.keys(openai).length === 1) edits.push(["providers", "openai"]);
+	}
+	return edits;
+}
+
+/** true si models.json quedó sin los valores de OMI (o no existe); false para reintentar al próximo arranque. */
+async function removeLegacyWindows(dir: string): Promise<boolean> {
 	let path = join(dir, "models.json");
-	let text = "{}\n";
+	let text: string;
 	try {
 		// El rename atómico debe reemplazar el destino, nunca romper un enlace de dotfiles.
-		const info = await lstat(path);
-		if (info.isSymbolicLink()) {
-			try { path = await realpath(path); } catch { return; }
-		}
+		if ((await lstat(path)).isSymbolicLink()) path = await realpath(path);
 		text = await readFile(path, "utf8");
-	} catch (error) {
-		if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) return;
-	}
-	const bom = text.startsWith("\uFEFF") ? "\uFEFF" : "";
+	} catch (error) { return isMissing(error); }
+	const bom = text.startsWith("﻿") ? "﻿" : "";
 	text = text.slice(bom.length);
 	const errors: ParseError[] = [];
 	const parsed: unknown = parse(text, errors);
-	if (errors.length) return; // Pi muestra sus errores; no reescribir configuración inválida.
-	let missing: string[];
-	try {
-		const config = object(parsed);
-		const providers = object(config.providers);
-		const openai = object(providers.openai);
-		const overrides = object(openai.modelOverrides);
-		if (openai.models !== undefined && !Array.isArray(openai.models)) return;
-		const models = Array.isArray(openai.models) ? openai.models.map((model: unknown) => object(model)) : [];
-		missing = LONG_CONTEXT_MODELS.filter((id) => {
-			const override = object(overrides[id]);
-			return !Object.hasOwn(override, "contextWindow")
-				&& !models.some((model) => model.id === id && Object.hasOwn(model, "contextWindow"));
-		});
-	} catch { return; }
-	if (!missing.length) return;
-	for (const id of missing) {
-		text = applyEdits(text, modify(text, ["providers", "openai", "modelOverrides", id, "contextWindow"], 1_050_000, {
-			formattingOptions: { insertSpaces: true, tabSize: 2 },
-		}));
-	}
+	if (errors.length) return false; // Pi muestra sus errores; no reescribir configuración inválida.
+	const edits = legacyEdits(parsed);
+	if (!edits) return false;
+	if (!edits.length) return true;
+	for (const target of edits) text = applyEdits(text, modify(text, target, undefined, { formattingOptions: { insertSpaces: true, tabSize: 2 } }));
 	const file = await reservePrivateFile(path);
 	await file.commit(bom + text);
+	return true;
+}
+
+/** Al arrancar, antes de Pi. No toca el catálogo cacheado: Pi puede reemplazarlo al refrescar modelos. */
+export async function ensureModelDefaults(dir: string): Promise<void> {
+	const registry = join(dir, MIGRATIONS_FILE);
+	const done = await applied(registry);
+	if (!done || done.includes(MIGRATION)) return;
+	if (!(await removeLegacyWindows(dir))) return;
+	const file = await reservePrivateFile(registry);
+	await file.commit(`${JSON.stringify({ applied: [...done, MIGRATION] }, null, 2)}\n`);
 }

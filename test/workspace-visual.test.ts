@@ -23,6 +23,7 @@ import { WORKSPACE_VIEWS, workspaceTabs } from "../src/tui/workspace/navigation.
 import { agentDir } from "../src/core/paths.ts";
 import { OmiSidebarSettings } from "../src/tui/workspace/sidebar-settings.ts";
 import { FoundationsGate } from "../src/tui/development-foundations.ts";
+import type { KbDoc } from "../src/tui/kb-client.ts";
 import { omiViewLines } from "../src/tui/workspace/read-views.ts";
 import { foundationsHash } from "../src/harness/foundations.ts";
 
@@ -735,13 +736,14 @@ test("workspace_OMI muestra Foundations vigente con su procedencia; f y la palet
 	const gate = new FoundationsGate({ kb: undefined, runner: { run: async () => ({ code: 1, stdout: "", stderr: "" }) }, trustDir: join(home, "trust"), now: () => "" });
 	const session = { cwd: home, hasUI: false, sessionManager: { getSessionFile: () => sessionFile } } as unknown as ExtensionContext;
 	gate.load(session); const base = await gate.pin(session);
-	const block = { version: 1 as const, repo: "test/repo", comandos: ["npm test"], politica: { arranque: "ask" as const, receta: "ask" as const, fuera_de_catalogo: "ask" as const, push_pr: "auto" as const } };
-	gate.replace(session, { ...base, origin: "kb", block, hash: foundationsHash(block), docId: "abcdef0123456789", author: "ana@example.test", date: "" });
+	const block = { version: 2 as const, repo: "test/repo", confirmar: ["npm test"], politica: { arranque: "ask" as const, receta: "ask" as const, push_pr: "auto" as const } };
+	const hash = foundationsHash(block); const perillas = { id: "abcdef0123456789", titulo: "Perillas", cuerpo: "", producto: "repo", tipo: "perillas" } as unknown as KbDoc;
+	gate.replace(session, { ...base, origin: "kb", block, hash, docId: "abcdef0123456789", author: "ana@example.test", date: "", notice: "", reading: { kind: "valid", key: { kbUrl: "https://kb.example.test/mcp", product: "repo", repo: "test/repo" }, block, hash, perillas } });
 	const ui = await visualHarness(home, { sessionFile, paletteAction: "Foundations" }); t.after(ui.stop);
 	await ui.command("omi-platform");
 	const screen = ui.frame().lines.map((line) => stripTerminalSequences(sliceByColumn(line, 0, 91))).join("\n");
 	assert.match(screen, new RegExp(`Foundations: KB · revisión ${foundationsHash(block).slice(0, 8)} · perillas abcdef01 · ana@example\\.test`));
-	assert.match(screen, /push \+ PR draft auto/); assert.match(screen, /Catálogo: npm test/);
+	assert.match(screen, /push \+ PR draft: auto/); assert.match(screen, /Patrones que requieren confirmación:\s+npm test/);
 	ui.input("f");
 	assert.deepEqual(ui.dispatched.at(-1), { text: "/omi-foundations", options: { expandPromptTemplates: true } });
 	await ui.command("omi");

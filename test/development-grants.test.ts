@@ -13,11 +13,11 @@ type Fixture = Awaited<ReturnType<typeof developmentFixture>>;
 const asked = (f: Fixture) => f.prompts.filter((title) => title === AUTHORIZE).length;
 async function approved(f: Fixture) { await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" }); }
 
-test("development_grants: un D de la receta aprobada corrido como setup no pide otro sí", async (t) => {
-	const f = await developmentFixture(t); await approved(f);
-	const before = asked(f);
+test("development_grants: receta general no concede el D; con v2 que lo exige pide sí y recién el grant evita repetirlo", async (t) => {
+	const f = await developmentFixture(t, { foundations: ASK_ALL }); await approved(f);
 	await f.invoke("omi_workflow_check", { kind: "setup", command: "node test.cjs" });
-	assert.equal(asked(f) - before, 0);
+	assert.equal(asked(f), 1); assert.deepEqual((await f.state()).grants?.map((grant) => grant.command), ["node test.cjs"]);
+	await f.invoke("omi_workflow_check", { kind: "setup", command: "node test.cjs" }); assert.equal(asked(f), 1);
 });
 
 test("development_grants: un setup autorizado no vuelve a preguntar después de recargar y /omi-work resume", async (t) => {
@@ -91,8 +91,9 @@ test("development_grants: un estado guardado sin permisos ni autor de la aprobac
 test("development_grants: la aprobación dice qué comandos siguen pidiendo permiso", async (t) => {
 	const f = await developmentFixture(t); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() });
 	const preview = approvalPreview(await f.state());
-	assert.match(preview, /comandos exactos de los casos D sin volver a preguntar, con cualquier etiqueta/);
-	assert.match(preview, /Otros comandos, también de setup, piden permiso una vez por trabajo sólo si Foundations dice fuera_de_catalogo: ask, salvo los del catálogo/);
+	assert.match(preview, /aprobación general de receta NO concede grants/);
+	assert.match(preview, /Sin Foundations v2 aceptada, nada pregunta/);
+	assert.match(preview, /un sí humano al comando exacto/);
 });
 
 // Un permiso es por comando y por pedido, no por receta: un replan por acuerdo del chat no cambia el pedido.
