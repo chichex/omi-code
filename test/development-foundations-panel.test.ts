@@ -116,8 +116,12 @@ test("foundations_panel: revisión muestra íntegros los avisos de todas las pol
 	assert.deepEqual(f.results, []); f.press(KEYS.esc); f.press(KEYS.esc); assert.deepEqual(f.results, [undefined]);
 });
 test("foundations_panel: review de reglas largas preserva espacios con marcadores de continuación literal", async () => {
-	const f = await mount(block([`cmd${" ".repeat(82)}TAIL`])); f.screen(); f.press("\x13");
-	assert.match(f.screen(), /^│ ↳/m); assert.deepEqual(f.results, []);
+	const rule = `cmd${" ".repeat(82)}TAIL`; const f = await mount(block([rule])); f.screen(); f.press("\x13");
+	const chunks = f.screen().split("\n").filter((line) => /^│ [│↳] /.test(line)).map((line) => line.slice(2, -2));
+	assert.equal(chunks.length, 2, "se recorren ambos tramos de la regla, no la leyenda del pie");
+	const literal = chunks.map((line, index) => index === chunks.length - 1 ? line.slice(2).trimEnd() : line.slice(2)).join("");
+	assert.equal(literal, `  + ${rule}`, "la revisión muestra el literal completo, incluidos los 82 espacios y TAIL");
+	assert.deepEqual(f.results, []);
 	f.press(KEYS.esc, KEYS.esc); assert.deepEqual(f.results, [undefined]);
 });
 test("foundations_panel: achicar a un pane no inspeccionable bloquea Guardar pero permite cancelar", async () => {

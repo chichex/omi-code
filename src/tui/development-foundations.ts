@@ -77,11 +77,12 @@ export async function decideFoundations(reading: FoundationsReading, ctx: Extens
 	if ("reason" in checked || foundationsHash(checked.block) !== reading.hash) return strictPin(reading, "Foundations inválido u obsoleto: configurá v2 de nuevo.");
 	if (deps.isCurrent?.() === false) return strictPin(reading, "La decisión de Foundations quedó obsoleta durante la lectura.");
 	const record = await readTrust(deps.trustDir, reading.key); const accepted = record?.accepted ?? null;
+	const saveTrust = (next: TrustRecord) => writeTrust(deps.trustDir, next, { expected: record ?? null, ...(deps.isCurrent ? { isCurrent: deps.isCurrent } : {}) });
 	const doc = reading.perillas;
 	const pin: FoundationsPin = { version: 2, origin: "kb", block: checked.block, hash: reading.hash, docId: doc.id, author: doc.autor ?? "", date: doc.fecha ?? "", notice: "", reading };
 	if (record && accepted?.blockHash === reading.hash) {
 		// Mismo bloque aceptado en otro documento: sólo se actualiza metadata local, nunca permisos ni KB.
-		if (accepted.docId !== doc.id && deps.isCurrent?.() !== false) await writeTrust(deps.trustDir, { ...record, accepted: { ...accepted, docId: doc.id, author: doc.autor ?? "", date: doc.fecha ?? "" } }).catch(() => {});
+		if (accepted.docId !== doc.id && deps.isCurrent?.() !== false) await saveTrust({ ...record, accepted: { ...accepted, docId: doc.id, author: doc.autor ?? "", date: doc.fecha ?? "" } }).catch(() => {});
 		return pin;
 	}
 	if (!ctx.hasUI) return strictPin(reading, "Hay una revisión de Foundations v2 no aceptada; aceptarla requiere UI.");
@@ -89,7 +90,7 @@ export async function decideFoundations(reading: FoundationsReading, ctx: Extens
 	if (!(await deps.confirm(ctx, "Aceptar Foundations", description))) return strictPin(reading, "Rechazaste la revisión de Foundations v2: no está aceptada.");
 	if (deps.isCurrent?.() === false) return strictPin(reading, "La decisión de Foundations quedó obsoleta; no se aceptó esa revisión anterior.");
 	const base: TrustRecord = record ?? { version: 2, ...reading.key, accepted: null, offerDeclined: false };
-	try { await writeTrust(deps.trustDir, { ...base, accepted: { docId: doc.id, blockHash: reading.hash, block: checked.block, author: doc.autor ?? "", date: doc.fecha ?? "", acceptedAt: deps.now() } }); }
+	try { await saveTrust({ ...base, accepted: { docId: doc.id, blockHash: reading.hash, block: checked.block, author: doc.autor ?? "", date: doc.fecha ?? "", acceptedAt: deps.now() } }); }
 	catch { return strictPin(reading, "No se pudo guardar la aceptación local; esta revisión no quedó activada."); }
 	return pin;
 }

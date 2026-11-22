@@ -76,8 +76,10 @@ export async function offerFoundations(ctx: ExtensionContext, session: Developme
 		try { return await askQuestions(ctx, batch, { signal: session.lifecycle.signal }); } finally { session.emit(); }
 	}, key);
 	if (choice === "never") {
-		const record = await readTrust(trustDir, key) ?? { version: 2 as const, ...key, accepted: null, offerDeclined: false };
-		await writeTrust(trustDir, { ...record, offerDeclined: true });
+		const existing = await readTrust(trustDir, key);
+		const record = existing ?? { version: 2 as const, ...key, accepted: null, offerDeclined: false };
+		// El descarte de una oferta tampoco puede borrar una aceptación guardada concurrentemente.
+		await writeTrust(trustDir, { ...record, offerDeclined: true }, { expected: existing ?? null });
 	} else if (choice === "build") {
 		try { await editFoundations(ctx, session, kb); }
 		catch (error) { ctx.ui.notify(visibleText(`No se pudo completar Foundations: ${error instanceof Error ? error.message : "error"}`), "warning"); }

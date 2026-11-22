@@ -38,6 +38,29 @@ test("foundations_concurrency: ningún modo interno puede aceptar un guardado qu
 	await assert.rejects(() => Reflect.apply(commitFoundationsSave, undefined, [kb, key, block(), prepared, { trustDir: dir, now: () => "now", signal: signal(), requireLatest: false }]), /cambi|nueva|vigente/i);
 	assert.equal(await readTrust(dir, key), undefined);
 });
+test("foundations_concurrency: confirmación A no sobrescribe la aceptación durable de Guardar B antes de replace", async (t) => {
+	const dir = await tempDir(t); const kb = memoryKb({ products: ["repo"] }); kb.perillas("repo", renderFoundationsBlock(block()));
+	const runner = { run: async () => ({ code: 0, stdout: "https://github.com/test/repo.git\n", stderr: "" }) };
+	let answer: (value: boolean) => void = () => { throw new Error("falta diálogo A"); };
+	const waiting = new Promise<boolean>((resolve) => { answer = resolve; });
+	let opened: () => void = () => { throw new Error("falta barrera A"); };
+	const shown = new Promise<void>((resolve) => { opened = resolve; });
+	const gate = new FoundationsGate({ kb, runner, trustDir: dir, now: () => "now", confirm: async () => { opened(); return waiting; } });
+	const ctx = { cwd: dir, hasUI: true, sessionManager: { getSessionFile: () => `${dir}/race-session` } } as ExtensionContext;
+	const pending = gate.pin(ctx); await shown;
+	const key = { kbUrl: kb.url, product: "repo", repo: "test/repo" }; const next = block(["git push *"]);
+	const prepared = await prepareFoundationsSave(kb, key, next, signal());
+	await commitFoundationsSave(kb, key, next, prepared, { trustDir: dir, now: () => "now", signal: signal(),
+		writeAcceptance: async (target, record) => {
+			await writeTrust(target, record);
+			// B ya escribió, pero onAccepted/replace no puede correr hasta que termine este callback.
+			// A pasa la generación antigua y termina DESPUÉS de la escritura de B, sin sleeps ni polling.
+			answer(true); await pending;
+		}, onAccepted: (pin) => gate.replace(ctx, pin),
+	});
+	assert.equal(gate.current(ctx)?.hash, foundationsHash(next));
+	assert.equal((await readTrust(dir, key))?.accepted?.blockHash, foundationsHash(next), "A no debe sobrescribir la aceptación durable de B");
+});
 for (const response of [false, true]) test(`foundations_concurrency: una aceptación pendiente (${response}) no pisa un pin guardado ni su confianza durable`, async (t) => {
 	const dir = await tempDir(t); const kb = memoryKb({ products: ["repo"] }); kb.perillas("repo", renderFoundationsBlock(block()));
 	const runner = { run: async () => ({ code: 0, stdout: "https://github.com/test/repo.git\n", stderr: "" }) };

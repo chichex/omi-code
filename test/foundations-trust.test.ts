@@ -112,6 +112,23 @@ test("foundations_trust: actualizar es atómico, mantiene 0600 y no deja tempora
 	assert.deepEqual((await readdir(dir)).filter((name) => name.endsWith(".tmp")), []);
 });
 
+test("foundations_trust: interrupción antes del reemplazo conserva bytes anteriores y no deja registro parcial", async (t) => {
+	const dir = foundationsDir(await tempDir(t)); const previous = record(); await writeTrust(dir, previous);
+	const path = trustPath(dir, key); const before = await readFile(path, "utf8");
+	const next = record({ accepted: { ...accepted(), docId: "doc-interrumpido" } }); let reached = 0;
+	await assert.rejects(() => Reflect.apply(writeTrust, undefined, [dir, next, {
+		beforeReplace: async (temporary: string, target: string) => {
+			reached++; assert.notEqual(temporary, target);
+			assert.equal(await readFile(target, "utf8"), before, "el destino conserva todos sus bytes durante la actualización");
+			assert.deepEqual(await readTrust(dir, key), previous, "lectores concurrentes siguen viendo la aceptación anterior completa");
+			assert.equal(await readFile(temporary, "utf8"), `${JSON.stringify(next, null, 2)}\n`, "el nuevo registro completo todavía está en un archivo distinto");
+			throw new Error("interrumpido antes del reemplazo");
+		},
+	}]), /interrumpido antes del reemplazo/);
+	assert.equal(reached, 1); assert.equal(await readFile(path, "utf8"), before); assert.deepEqual(await readTrust(dir, key), previous);
+	assert.deepEqual((await readdir(dir)).filter((name) => name.endsWith(".tmp")), []);
+});
+
 test("foundations_trust: «no ofrecer más» y nada aceptado sobreviven un corte", async (t) => {
 	const dir = foundationsDir(await tempDir(t));
 	await writeTrust(dir, record({ accepted: null, offerDeclined: true }));
