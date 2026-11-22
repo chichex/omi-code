@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, parse, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { migrateWorkflow, parseWorkflow, type Workflow, type WorkflowV2 } from "./model.ts";
 import { assertLifecycleContinuity, lifecycleReceiptReserveBytes } from "./lifecycle-invariants.ts";
+import { preserveCorrectionWorkflow } from "./correction-invariants.ts";
 
 const MAX_BYTES = 8 * 1024 * 1024;
 export class WorkflowConflictError extends Error {
@@ -131,6 +132,7 @@ export async function updateWorkflow(checkout: Workflow["checkout"], issueNumber
   if (current) {
    requireCondition(next.id === current.id, "no se puede reemplazar la identidad del workflow");
    assertLifecycleContinuity(current.lifecycle, next.lifecycle);
+   preserveCorrectionWorkflow(current, next);
   }
   const serialized = JSON.stringify(next, null, 2) + "\n";
   requireCondition(Buffer.byteLength(serialized) <= MAX_BYTES, "estado demasiado grande");

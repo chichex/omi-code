@@ -57,7 +57,7 @@ export function reserveLifecycleOperation(original: unknown, input: unknown, obs
  return finish(s);
 }
 function operationBase(op: EnabledLifecycle["operations"][number]) {
- return { id: op.id, key: op.key, kind: op.kind, subjectId: op.subjectId, targetId: op.targetId, correlationId: op.correlationId, retryOf: op.retryOf, configHash: op.configHash, decisionId: op.decisionId, history: op.history, ...(op.providerRequest ? { providerRequest: op.providerRequest } : {}) };
+ return { id: op.id, key: op.key, kind: op.kind, subjectId: op.subjectId, targetId: op.targetId, correlationId: op.correlationId, retryOf: op.retryOf, configHash: op.configHash, decisionId: op.decisionId, history: op.history, ...(op.providerRequest ? { providerRequest: op.providerRequest } : {}), ...(op.pushRequest ? { pushRequest: op.pushRequest } : {}) };
 }
 export function confirmLifecycleOperation(original: unknown, observed: unknown): EnabledLifecycle {
  const s = enabled(original); const receipt = checked(ReceiptSchema, observed); const index = s.operations.findIndex(o => o.id === receipt.operationId); const op = s.operations[index];

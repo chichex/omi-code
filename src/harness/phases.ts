@@ -7,7 +7,10 @@ export const PHASES_V1 = [
  { id: "implement", label: "Implementar" }, { id: "verify", label: "Verificar" }, { id: "pr", label: "Abrir PR draft" },
  { id: "done", label: "PR draft abierto" }, { id: "closed", label: "Cerrado sin cambio" },
 ] as const;
-export const PHASES = PHASES_V1;
+export const PHASES = [
+ ...PHASES_V1.slice(0, 9), { id: "review", label: "Review del PR" },
+ ...PHASES_V1.slice(9),
+] as const;
 export type Phase = typeof PHASES[number]["id"];
 export const PHASE_LABELS = Object.fromEntries(PHASES.map(p => [p.id, p.label])) as Record<Phase, string>;
 export function recipeRoute(c: Plan["classification"]): Recipe["route"] {

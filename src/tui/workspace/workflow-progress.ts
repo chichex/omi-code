@@ -4,7 +4,7 @@ import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { GitSnapshot } from "./data.ts";
 import { STAGE_STATUSES, OBSERVED_MODES, type StageProgress } from "../../harness/progress.ts";
-import { PHASES } from "../../harness/phases.ts";
+import { PHASES, PHASES_V1 } from "../../harness/phases.ts";
 import { field, notice, section, type ModalEntry } from "./modals.ts";
 import { fit, sidebarSection } from "./presentation.ts";
 
@@ -32,10 +32,12 @@ const identity = (value: unknown): value is string => typeof value === "string" 
 const cleanIdentity = (value: string): string => stripTerminalSequences(value).replace(/[\x00-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "");
 const oneOf = <T extends string>(values: readonly T[], value: unknown): value is T => typeof value === "string" && values.some(v => v === value);
 function parseStages(value: unknown): StageProgress[] | undefined {
- if (!Array.isArray(value) || value.length !== PHASES.length) return;
+ if (!Array.isArray(value)) return;
+ const catalog = value.length === PHASES.length ? PHASES : value.length === PHASES_V1.length ? PHASES_V1 : undefined;
+ if (!catalog) return;
  const stages: StageProgress[] = [];
  for (const [index, s] of value.entries()) {
-  const phase = PHASES[index];
+  const phase = catalog[index];
   if (!phase || !record(s) || s.id !== phase.id || typeof s.label !== "string" || typeof s.current !== "boolean" || !oneOf(STAGE_STATUSES, s.status) || !oneOf(OBSERVED_MODES, s.observed) || !oneOf(["unknown", "inline", "subagents"] as const, s.planned)) return;
   stages.push({ id: phase.id, label: clean(s.label), current: s.current, status: s.status, planned: s.planned, observed: s.observed });
  }

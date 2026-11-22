@@ -5,6 +5,7 @@ import { lifecycleKeyValid } from "./lifecycle-trust.ts";
 import { LifecycleStateSchema, type LifecycleState, type EnabledLifecycle } from "./lifecycle-state-schema.ts";
 import { dataHash, sameData } from "./lifecycle-value.ts";
 export { dataHash, sameData } from "./lifecycle-value.ts";
+import { validateCorrectionFacts, assertCorrectionContinuity } from "./correction-invariants.ts";
 export function lifecycleAssert(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(`Lifecycle: ${message}`); }
 export const subjectIdentity = (s: EnabledLifecycle["subjects"][number]): string => JSON.stringify([s.repo, s.number, s.headSha, s.baseSha, s.contentHash, s.mergedSha]);
 export function sourceKey(provider: string, externalId: string, operationId: string, subject: EnabledLifecycle["subjects"][number]): string {
@@ -75,6 +76,7 @@ export function validateLifecycleState(value: unknown, root?: { workflowId: stri
    }
   }
  }
+ validateCorrectionFacts(s);
  for (const collection of [s.checks, s.approvals]) { unique(collection.map(x => x.id), "checks/aprobaciones"); for (const item of collection) subject(item.subjectId); }
  return value;
 }
@@ -91,12 +93,14 @@ function prefix(previous: readonly unknown[], next: readonly unknown[], name: st
 export function assertLifecycleContinuity(before: LifecycleState, after: LifecycleState): void {
  if (before.status === "disabled") return;
  lifecycleAssert(after.status === "enabled" && sameData(before.root, after.root), "no se deshabilita ni reinicia el lifecycle inicializado");
+ assertCorrectionContinuity(before, after);
  prefix(before.pins, after.pins, "pins"); prefix(before.subjects, after.subjects, "subjects"); prefix(before.decisions, after.decisions, "decisions"); prefix(before.evidence, after.evidence, "evidence"); prefix(before.checks, after.checks, "checks"); prefix(before.approvals, after.approvals, "approvals");
  lifecycleAssert(after.operations.length >= before.operations.length, "no se borra el journal");
  for (const [index, old] of before.operations.entries()) {
   const next = after.operations[index]; lifecycleAssert(next, "operación perdida");
   const immutable = (op: typeof old) => [op.id, op.key, op.kind, op.subjectId, op.targetId, op.correlationId, op.retryOf, op.configHash, op.decisionId];
   lifecycleAssert(sameData(immutable(old), immutable(next)), "identidad de operación reescrita"); prefix(old.history, next.history, "journal history");
+  if (old.pushRequest) lifecycleAssert(sameData(old.pushRequest, next.pushRequest), "request push reclamado no se borra ni reescribe");
   if (old.providerRequest) lifecycleAssert(sameData(old.providerRequest, next.providerRequest), "request fijado antes del efecto no se borra ni reescribe");
   if (old.status === "confirmed") lifecycleAssert(sameData(old, next), "recibo confirmado reescrito");
   if (old.status === "unknown") lifecycleAssert(next.status !== "pending", "unknown no vuelve a pending");

@@ -1,6 +1,7 @@
 import { artifactHash, MAX_AGREEMENTS, MAX_ATTEMPTS, MAX_EVIDENCE, MAX_GRANTS, MAX_HISTORY, MAX_REVIEWS, MAX_STEPS, parseWorkflow, sourceHash, type Workflow, type WorkflowV2, type Exploration, type InferenceInput, type Plan, type Spec, type Evidence, type Review, type Step } from "./model.ts";
 
 import { recipeNextPhase, recipeRoute } from "./phases.ts";
+import { executionEvidence, executionReviews, assertCorrectionExecution } from "./execution-scope.ts";
 
 export type WorkflowEvent =
  | { type: "explored"; exploration: Exploration }
@@ -115,7 +116,7 @@ const SECURITY_FAILED = "el lente de seguridad falló sobre este contenido: bloq
 // posterior apruebe: el aviso no se borra tirándolo de nuevo, y el fail de seguridad sigue bloqueando.
 export function lensRunBlock(state: Workflow, lens: Review["lens"], fingerprint: string): string {
  const same = (r: Review) => r.lens === lens && r.fingerprint === fingerprint;
- const runs = state.reviews.filter(same); const last = runs.at(-1);
+ const runs = executionReviews(state).filter(same); const last = runs.at(-1);
  if (last?.verdict === "fail") {
   const after = state.reviews.slice(state.reviews.lastIndexOf(last) + 1);
   if (lens === "refuter" || !after.some(r => r.lens === "refuter" && r.fingerprint === fingerprint && r.verdict === "pass")) return lens === "security" ? "El lente de seguridad ya falló sobre este contenido y bloquea Verificar; corregí el cambio con retry" : `El lente ${lens} ya falló sobre este contenido; queda como aviso y no bloquea Verificar`;
@@ -133,6 +134,7 @@ function getStep(state: Workflow, id: string): Step {
  return step;
 }
 function activeEvidenceStep(state: Workflow, evidence: Evidence): Step {
+ assertCorrectionExecution(state);
  requirePhase(state, "implement"); requireCondition(state.status === "active" && isApproved(state), "falta aprobación vigente o hay un bloqueo");
  requireCondition(evidence.stepId, "falta paso de evidencia");
  const step = getStep(state, evidence.stepId);
@@ -180,21 +182,23 @@ function recordEvidence(state: Workflow, evidence: Evidence): void {
  state.evidence.push(evidence);
 }
 function verifiedEvidence(state: Workflow, fingerprint: string, head?: string): void {
+ assertCorrectionExecution(state);
+ const evidence = executionEvidence(state), reviews = executionReviews(state);
  requireCondition(state.status === "active" && !decisionBlock(state), "hay un bloqueo pendiente");
  requireCondition(isApproved(state) && state.recipe && state.steps.length && state.steps.every(s => s.status === "done" && s.commit), "faltan pasos o aprobación");
  for (const c of state.recipe.cases) {
-  const latest = state.evidence.findLast(e => e.kind === "verification" && e.caseId === c.id);
+  const latest = evidence.findLast(e => e.kind === "verification" && e.caseId === c.id);
   requireCondition(latest && successful(latest) && latest.command === c.command && latest.fingerprint === fingerprint && (head === undefined || latest.head === head), `falta verificación actual del caso ${c.id}`);
  }
  // Los lentes asesoran: cada uno pedido corre sobre este contenido y su fail/unknown queda como aviso.
  // Sólo un fail de seguridad bloquea.
  for (const lens of state.recipe.lenses) {
-  const review = state.reviews.findLast(r => r.lens === lens && r.fingerprint === fingerprint);
+  const review = reviews.findLast(r => r.lens === lens && r.fingerprint === fingerprint);
   requireCondition(review, `falta correr el lente ${lens} sobre este contenido`);
   requireCondition(review.verdict !== "pass" || review.findings.length === 0, `el lente ${lens} no puede aprobar con hallazgos`);
   requireCondition(lens !== "security" || review.verdict !== "fail", SECURITY_FAILED);
  }
- const gates = state.evidence.filter(e => e.kind === "gate" && e.fingerprint === fingerprint);
+ const gates = evidence.filter(e => e.kind === "gate" && e.fingerprint === fingerprint);
  for (const command of new Set(gates.map(e => e.command))) {
   const latest = gates.findLast(e => e.command === command);
   requireCondition(latest && successful(latest), "gate fallido");
@@ -209,6 +213,7 @@ function startStep(state: Workflow, id: string): void {
  step.status = "active";
 }
 function completeStep(state: Workflow, event: Extract<WorkflowEvent, { type: "step_completed" }>): void {
+ assertCorrectionExecution(state);
  requirePhase(state, "implement"); requireCondition(state.status === "active" && isApproved(state) && !decisionBlock(state), "falta aprobación vigente o hay un bloqueo");
  const step = getStep(state, event.id);
  const green = state.evidence.find(e => e.id === step.green);
@@ -227,6 +232,7 @@ function archiveAttempt(state: Workflow, reason: string, at: string): void {
 // Lo ya commiteado sigue hecho: no puede volver a dar rojo. La vuelta agrega un paso de
 // corrección que cubre todos los D y exige su propio rojo, verde y commit.
 function retry(state: Workflow, reason: string, at: string): void {
+ requireCondition(state.version !== 2 || state.pullRequest?.ownership !== "adopted", "post-PR usa corrección propia; retry no puede borrar publication ni presupuesto");
  requirePhase(state, "verify", "pr"); requireCondition(nonempty(reason), "falta motivo del reintento");
  requireCondition(state.status === "active" && !decisionBlock(state) && state.recipe, "hay un bloqueo pendiente");
  if (state.round >= state.maxRounds) { setBlock(state, EXHAUSTED); return; }
@@ -366,6 +372,7 @@ function applyEvent(state: Workflow, event: WorkflowEvent, at: string): void {
   case "source_changed": sourceChanged(state, event.source, at); return;
   case "agreed": agree(state, event, at); return;
   case "publishing": {
+   requireCondition(state.version !== 2 || state.pullRequest?.ownership !== "adopted", "post-PR conserva identidad: corresponde push normal, no otro PR");
    requirePhase(state, "pr"); const latest = state.evidence.findLast(e => e.kind === "verification");
    requireCondition(latest, "falta verificación"); verifiedEvidence(state, latest.fingerprint, event.head);
    requireCondition(nonempty(event.bodyHash), "falta hash del cuerpo");

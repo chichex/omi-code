@@ -5,6 +5,7 @@ import { Value } from "typebox/value";
 import { PHASES, PHASES_V1 } from "./phases.ts";
 import { LifecycleStateSchema } from "./lifecycle-state-schema.ts";
 import { validateLifecycleState } from "./lifecycle-invariants.ts";
+import { validateCorrectionWorkflow } from "./correction-invariants.ts";
 
 // Topes compartidos por el esquema y el reducer: el reducer los respeta antes de validar.
 export const MAX_HISTORY = 1000; export const MAX_STEPS = 50; export const MAX_ATTEMPTS = 100; export const MAX_EVIDENCE = 1000; export const MAX_REVIEWS = 100; export const MAX_AGREEMENTS = 50; export const MAX_GRANTS = 200;
@@ -97,7 +98,7 @@ export const WorkflowV1Schema = Type.Object({
 	observations: Type.Optional(Type.Array(Type.Object({ phase: LegacyPhaseSchema, round: Type.Integer({ minimum: 0, maximum: 10 }), inline: Type.Boolean(), subagent: Type.Boolean(), lens: Type.Boolean() }, { additionalProperties: false }), { maxItems: 121 })),
 	history: Type.Array(Type.Object({ at: text(100), phase: LegacyPhaseSchema, activity: text() }, { additionalProperties: false }), { maxItems: MAX_HISTORY }),
 }, { additionalProperties: false });
-const PullRequestSchema = Type.Union([Type.Null(), Type.Object({ number: Type.Integer({ minimum: 1 }), url: text(2048), head: text(128), branch: text(128), base: text(128), ownership: Type.Literal("unadopted") }, { additionalProperties: false })]);
+const PullRequestSchema = Type.Union([Type.Null(), Type.Object({ number: Type.Integer({ minimum: 1 }), url: text(2048), head: text(128), branch: text(128), base: text(128), ownership: Type.Enum(["unadopted", "adopted"]) }, { additionalProperties: false })]);
 export const WorkflowV2Schema = Type.Object({
  ...WorkflowV1Schema.properties, version: Type.Literal(2), phase: PhaseSchema,
  // Disabled no significa omitido/no-aplica ni permiso: habilitar/adoptar es una operación host explícita.
@@ -121,6 +122,7 @@ export function migrateWorkflow(value: unknown): WorkflowV2 {
    if (!repo || Number(repo[2]) !== value.source.number) throw new Error("Estado del harness inválido: lifecycle sin identidad GitHub comprobable");
    validateLifecycleState(value.lifecycle, { workflowId: value.id, issue: value.source.number, repo: repo[1]!.toLowerCase() });
   }
+  validateCorrectionWorkflow(value);
   return structuredClone(value);
  }
  if (!Value.Check(WorkflowV1Schema, value)) throw new Error("Estado del harness inválido; no se reemplaza ni se reinicia automáticamente");

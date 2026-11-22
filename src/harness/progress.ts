@@ -1,6 +1,6 @@
 // Proyección pura: no ejecuta, no acredita gates y no usa mensajes/historial como evidencia.
 import type { Workflow } from "./model.ts";
-import { PHASES, recipeNextPhase, type Phase } from "./phases.ts";
+import { PHASES, PHASES_V1, recipeNextPhase, type Phase } from "./phases.ts";
 import { expectedFailure, explorationBlock, isApproved, successful } from "./state.ts";
 import { lensWarnings } from "./lenses.ts";
 // warning: Verificar en curso o cumplida con avisos de lentes, que no bloquean.
@@ -22,6 +22,7 @@ function completed(s: Workflow, id: Phase): boolean {
   case "implement": return s.steps.length > 0 && s.steps.every(step => step.status === "done");
   case "verify": return s.phase === "pr" || s.phase === "done";
   case "pr": return s.publication.status === "opened";
+  case "review": return s.version === 2 && s.lifecycle.status === "enabled" && ["ready", "land", "ship", "delivered"].includes(s.lifecycle.stage);
   case "done": return s.phase === "done";
   case "closed": return s.phase === "closed";
  }
@@ -60,7 +61,7 @@ function observed(s: Workflow, phase: Phase): StageProgress["observed"] {
  return lens ? "isolated-lens" : "unknown";
 }
 export function workflowStages(s: Workflow): StageProgress[] {
- return PHASES.map(({ id, label }) => ({ id, label, current: s.phase === id,
+ return (s.version === 2 && s.lifecycle.status === "enabled" ? PHASES : PHASES_V1).map(({ id, label }) => ({ id, label, current: s.phase === id,
   status: s.phase === id ? currentStatus(s) : completed(s, id) ? (id === "verify" && lensWarnings(s).length ? "warning" : "done") : applicability(s, id),
   planned: id === "implement" ? s.recipe?.executor.mode ?? "unknown" : "unknown", observed: observed(s, id) }));
 }
