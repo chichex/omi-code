@@ -1,6 +1,6 @@
 // Proyección pura: no ejecuta, no acredita gates y no usa mensajes/historial como evidencia.
 import type { Workflow } from "./model.ts";
-import { PHASES, recipeNextPhase, type Phase } from "./phases.ts";
+import { PHASES, PHASES_V1, recipeNextPhase, type Phase } from "./phases.ts";
 import { expectedFailure, explorationBlock, isApproved, successful } from "./state.ts";
 import { lensWarnings } from "./lenses.ts";
 // warning: Verificar en curso o cumplida con avisos de lentes, que no bloquean.
@@ -20,14 +20,21 @@ function completed(s: Workflow, id: Phase): boolean {
   case "spec": return s.spec !== null;
   case "approve": return isApproved(s);
   case "implement": return s.steps.length > 0 && s.steps.every(step => step.status === "done");
-  case "verify": return s.phase === "pr" || s.phase === "done";
+  // Después de adoptar el PR, Verificar ya se cumplió salvo que una corrección lo vuelva a abrir (etapa actual).
+  case "verify": return s.phase === "pr" || s.phase === "done" || ["review", "land", "ship", "delivered"].includes(s.phase);
   case "pr": return s.publication.status === "opened";
+  case "review": return s.version === 2 && s.lifecycle.status === "enabled" && ["ready", "land", "ship", "delivered"].includes(s.lifecycle.stage);
+  case "land": return s.version === 2 && s.lifecycle.status === "enabled" && !!s.lifecycle.merges?.length;
+  case "ship": return s.version === 2 && s.lifecycle.status === "enabled" && s.lifecycle.completion !== undefined;
+  case "delivered": return s.version === 2 && s.lifecycle.status === "enabled" && s.lifecycle.completion?.outcome === "verified";
   case "done": return s.phase === "done";
   case "closed": return s.phase === "closed";
  }
 }
 function applicability(s: Workflow, id: Phase): "pending" | "conditional" | "not-applicable" {
  if (s.phase === "closed" && id !== "explore" && id !== "closed") return "not-applicable";
+ // Con lifecycle el PR draft ya no es el final: el «PR draft abierto» histórico no aplica.
+ if (id === "done" && s.version === 2 && s.lifecycle.status === "enabled") return "not-applicable";
  if (id === "closed") return s.recipe ? "not-applicable" : "conditional";
  if (id !== "diagnose" && id !== "spec") return "pending";
  if (!s.recipe) return "conditional";
@@ -60,7 +67,7 @@ function observed(s: Workflow, phase: Phase): StageProgress["observed"] {
  return lens ? "isolated-lens" : "unknown";
 }
 export function workflowStages(s: Workflow): StageProgress[] {
- return PHASES.map(({ id, label }) => ({ id, label, current: s.phase === id,
+ return (s.version === 2 && s.lifecycle.status === "enabled" ? PHASES : PHASES_V1).map(({ id, label }) => ({ id, label, current: s.phase === id,
   status: s.phase === id ? currentStatus(s) : completed(s, id) ? (id === "verify" && lensWarnings(s).length ? "warning" : "done") : applicability(s, id),
   planned: id === "implement" ? s.recipe?.executor.mode ?? "unknown" : "unknown", observed: observed(s, id) }));
 }

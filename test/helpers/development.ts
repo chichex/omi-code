@@ -7,6 +7,7 @@ import { Value } from "typebox/value";
 import { SessionManager, type ExtensionAPI, type ExtensionContext, type ExtensionToolContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { processRunner, type Runner } from "../../src/core/exec.ts";
 import { developmentHarnessExtension } from "../../src/tui/development.ts";
+import type { DevelopmentDeps } from "../../src/tui/development-session.ts";
 import { readGit } from "../../src/tui/workspace/data.ts";
 import { createIssueWorktree } from "../../src/tui/workspace/issue-worktree.ts";
 import { ISSUE_TRIAGE_ENTRY, issueTriageState } from "../../src/tui/workspace/issue-triage.ts";
@@ -25,14 +26,16 @@ import type { FoundationsPolicy } from "../../src/harness/foundations.ts";
 import { acceptFoundations } from "./foundations.ts";
 
 /** `foundations`: una revisión v2 aceptada con esas políticas y `confirmar` (por defecto `*`). Sin ella, vale el default: nada pregunta. */
-export async function developmentFixture(t: TestContext, options: { kb?: KbClient; foundations?: FoundationsPolicy; confirmar?: readonly string[] } = {}) {
+/** `repo`: owner/name de origin y del issue. `github`: responde primero una llamada a gh (undefined sigue con la falsa de siempre). `deps`: puertos extra del harness. */
+export async function developmentFixture(t: TestContext, options: { kb?: KbClient; foundations?: FoundationsPolicy; confirmar?: readonly string[]; repo?: string; github?: (args: string[], input: string | undefined) => { code?: number; stdout: string } | undefined; deps?: Omit<DevelopmentDeps, "runner" | "kb"> } = {}) {
+	const repo = options.repo ?? "test/repo"; const github = options.github; const deps = options.deps ?? {};
 	const home = await realpath(await tempDir(t)); const root = join(home, "repo"); await mkdir(root);
 	const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-	git("init", "-b", "main"); git("config", "user.email", "test@example.test"); git("config", "user.name", "Test"); git("config", "commit.gpgsign", "false"); git("config", "core.hooksPath", "/dev/null"); git("remote", "add", "origin", "https://github.com/test/repo.git");
+	git("init", "-b", "main"); git("config", "user.email", "test@example.test"); git("config", "user.name", "Test"); git("config", "commit.gpgsign", "false"); git("config", "core.hooksPath", "/dev/null"); git("remote", "add", "origin", `https://github.com/${repo}.git`);
 	await writeFile(join(root, "value.cjs"), "module.exports = 1;\n"); await writeFile(join(root, "test.cjs"), 'require("node:assert/strict").equal(require("./value.cjs"), 1);\n');
 	await writeFile(join(root, "other.cjs"), "module.exports = 1;\n"); await writeFile(join(root, "other-test.cjs"), 'require("node:assert/strict").equal(require("./other.cjs"), 1);\n');
 	git("add", "."); git("commit", "-m", "test: initial");
-	const issue = { number: 42, title: "Corregir resultado", url: "https://github.com/test/repo/issues/42", labels: ["bug"], author: "test", updatedAt: "", draft: false, head: "", base: "", review: "" };
+	const issue = { number: 42, title: "Corregir resultado", url: `https://github.com/${repo}/issues/42`, labels: ["bug"], author: "test", updatedAt: "", draft: false, head: "", base: "", review: "" };
 	const tree = await createIssueWorktree((await readGit(root))!, issue, "fix");
 	const checkout = { root: await realpath(tree.worktree), commonDir: await realpath((await readGit(root))!.commonDir), branch: tree.branch, baseCommit: tree.baseCommit };
 	const manager = SessionManager.create(checkout.root, join(home, "sessions"));
@@ -58,17 +61,19 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 		if (command === "git" && args.includes("ls-remote")) return { code: 0, stdout: `${execFileSync("git", ["rev-parse", "main"], { cwd: root, encoding: "utf8" }).trim()}\trefs/heads/main\n`, stderr: "" };
 		if (command === "git" && args.includes("fetch")) return { code: 0, stdout: "", stderr: "" };
 		if (command !== "gh") return processRunner.run(command, args, options);
+		const answered = github?.(args, options?.input);
+		if (answered) return { code: answered.code ?? 0, stdout: answered.stdout, stderr: "" };
 		let data: unknown = {};
-		if (args[0] === "issue" && args[1] === "list") data = [{ number: 41, title: "Antecedente cerrado", url: "https://github.com/test/repo/issues/41", state: "CLOSED" }];
+		if (args[0] === "issue" && args[1] === "list") data = [{ number: 41, title: "Antecedente cerrado", url: `https://github.com/${repo}/issues/41`, state: "CLOSED" }];
 		else if (args[0] === "issue" && args[1] === "view") data = { ...issue, title: remote.title, body: remote.body };
 		else if (args[0] === "issue" && args[1] === "edit") remote.body = options?.input ?? remote.body;
-		else if (args[0] === "repo") data = { nameWithOwner: "test/repo", url: "https://github.com/test/repo" };
+		else if (args[0] === "repo") data = { nameWithOwner: repo, url: `https://github.com/${repo}` };
 		else if (args[0] === "api" && args.includes("user")) data = { login: "test" };
-		else if (args[0] === "api" && args.includes("POST")) { const payload: unknown = JSON.parse(options?.input ?? "{}"); if (!payload || typeof payload !== "object" || !("body" in payload) || typeof payload.body !== "string") throw new Error("Comentario sin body"); const comment = { id: remote.comments.length + 1, body: payload.body, user: { login: "test" }, html_url: `https://github.com/test/repo/issues/42#issuecomment-${remote.comments.length + 1}` }; remote.comments.push(comment); data = comment; }
+		else if (args[0] === "api" && args.includes("POST")) { const payload: unknown = JSON.parse(options?.input ?? "{}"); if (!payload || typeof payload !== "object" || !("body" in payload) || typeof payload.body !== "string") throw new Error("Comentario sin body"); const comment = { id: remote.comments.length + 1, body: payload.body, user: { login: "test" }, html_url: `https://github.com/${repo}/issues/42#issuecomment-${remote.comments.length + 1}` }; remote.comments.push(comment); data = comment; }
 		else if (args[0] === "api" && args.includes("--paginate")) data = [remote.comments];
 		else if (args[0] === "pr" && args[1] === "create") { remote.pr = true; remote.prBody = options?.input ?? ""; remote.prs.push({ number: 8 + remote.prs.length, head: args[args.indexOf("--head") + 1]!, base: args[args.indexOf("--base") + 1]!, body: remote.prBody }); }
 		else if (args[0] === "pr" && (args[1] === "list" || args[1] === "view")) {
-			const view = (pr: (typeof remote.prs)[number]) => ({ number: pr.number, url: `https://github.com/test/repo/pull/${pr.number}`, state: "OPEN", isDraft: true, isCrossRepository: false, body: pr.body, headRefName: pr.head, baseRefName: pr.base, headRefOid: remote.pushed.get(pr.head) ?? execFileSync("git", ["rev-parse", "HEAD"], { cwd: checkout.root, encoding: "utf8" }).trim(), mergeCommit: null });
+			const view = (pr: (typeof remote.prs)[number]) => ({ number: pr.number, url: `https://github.com/${repo}/pull/${pr.number}`, state: "OPEN", isDraft: true, isCrossRepository: false, body: pr.body, headRefName: pr.head, baseRefName: pr.base, headRefOid: remote.pushed.get(pr.head) ?? execFileSync("git", ["rev-parse", "HEAD"], { cwd: checkout.root, encoding: "utf8" }).trim(), mergeCommit: null });
 			if (args[1] === "view") { const pr = remote.prs.find((p) => p.number === Number(args[2])); if (!pr) throw new Error(`PR inexistente: ${args[2]}`); data = view(pr); }
 			else data = remote.prs.filter((p) => p.head === args[args.indexOf("--head") + 1] && p.base === args[args.indexOf("--base") + 1]).map(view);
 		}
@@ -173,7 +178,7 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 	} as unknown as ExtensionContext;
 	const emit = (name: string, event: unknown = {}) => emitLikePi(events.get(name) ?? [], name, event, context);
 	if (options.foundations) await acceptFoundations(foundationsDir(home), options.foundations, { ...(options.kb ? { kbUrl: options.kb.url } : {}), ...(options.confirmar ? { confirmar: options.confirmar } : {}) });
-	const attach = async () => { busHandlers.clear(); events.clear(); tools.clear(); commands.clear(); const extension = developmentHarnessExtension(testIo({ homeDir: home, cwd: checkout.root }), [], { runner, ...(options.kb ? { kb: options.kb } : {}) }); if (typeof extension === "function") await extension(pi); else await extension.factory(pi); await questionsExtension().factory(pi); await emit("session_start"); };
+	const attach = async () => { busHandlers.clear(); events.clear(); tools.clear(); commands.clear(); const extension = developmentHarnessExtension(testIo({ homeDir: home, cwd: checkout.root }), [], { ...deps, runner, ...(options.kb ? { kb: options.kb } : {}) }); if (typeof extension === "function") await extension(pi); else await extension.factory(pi); await questionsExtension().factory(pi); await emit("session_start"); };
 	await attach();
 	const invoke = async (name: string, input: unknown, signal = new AbortController().signal) => {
 		const tool = tools.get(name); if (!tool || !Value.Check(tool.parameters, input)) throw new Error("Argumentos de tool inválidos");

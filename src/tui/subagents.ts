@@ -14,6 +14,8 @@ interface Job {
 	promise?: Promise<void>;
 	reported: boolean;
 	notify: boolean;
+	/** Terminó con el agente corriendo: su aviso espera al cierre del turno. */
+	pending?: boolean;
 }
 function textResult<T>(text: string, details: T): AgentToolResult<T>;
 function textResult(text: string): AgentToolResult<unknown>;
@@ -29,6 +31,23 @@ export function subagentsExtension(): InlineExtension {
 		const jobs = new Map<string, Job>();
 		const foreground = new Map<string, AbortController>();
 		let alive = true; let generation = 0;
+		// Un aviso encolado durante la corrida llegaba aunque el modelo ya hubiera leído el resultado, y cada
+		// uno abría otro turno (en el #69, 16 avisos viejos: 38 llamadas). Esperan al cierre del turno, van
+		// juntos y se descartan si el resultado ya se leyó.
+		let running = false;
+		const take = (): Job[] => {
+			const ready = [...jobs.values()].filter((job) => job.pending && job.notify && job.result && !job.reported);
+			for (const job of jobs.values()) job.pending = false;
+			for (const job of ready) job.notify = false;
+			return ready;
+		};
+		const notice = (ready: readonly Job[]) => ({
+			customType: "omi-subagent-done", display: true, details: { jobIds: ready.map((job) => job.id) },
+			content: ready.length === 1
+				? `Subagente ${ready[0]!.id}: ${jobState(ready[0]!)}. Obtené el resultado y su uso con subagent action:result id:${ready[0]!.id}.`
+				: `Subagentes terminados: ${ready.map((job) => `${job.id} (${jobState(job)})`).join(", ")}. Obtené cada resultado y su uso con subagent action:result y su id.`,
+		});
+		const announce = () => { const ready = take(); if (ready.length) pi.sendMessage(notice(ready), { triggerTurn: true, deliverAs: "followUp" }); };
 		const emit = (phase: "start" | "update" | "end", id: string, details: Details, args?: Params, isError?: boolean) => {
 			if (alive) pi.events.emit("omi:subagents", { phase, id, details: snapshot(details), ...(args ? { args } : {}), ...(isError === undefined ? {} : { isError }) });
 		};
@@ -47,6 +66,15 @@ export function subagentsExtension(): InlineExtension {
 			for (const controller of foreground.values()) controller.abort();
 		};
 		pi.on("session_tree", () => { stop(); jobs.clear(); });
+		pi.on("agent_start", () => { running = true; });
+		pi.on("agent_before_settle", (event) => {
+			if (!alive || event.outcome !== "completed") return;
+			const ready = take();
+			if (!ready.length) return;
+			return { entries: [...event.entries, { type: "custom_message" as const, ...notice(ready) }], continue: true };
+		});
+		// Con Esc no se relanza nada: el aviso queda para el cierre de la próxima corrida.
+		pi.on("agent_settled", (event) => { running = false; if (alive && !event?.aborted) announce(); });
 		pi.on("session_shutdown", async () => {
 			alive = false; stop(); unsubscribe();
 			// Give cooperative streams time to close before the extension runtime is discarded.
@@ -119,7 +147,7 @@ export function subagentsExtension(): InlineExtension {
 					if (alive && generation === epoch) {
 						emit("end", job.id, job.details, undefined, job.result.isError);
 						pi.appendEntry("omi-subagent-usage", { id: job.id, status: jobState(job), usage });
-						if (job.notify) pi.sendMessage({ customType: "omi-subagent-done", content: `Subagente ${job.id}: ${jobState(job)}. Obtené el resultado y su uso con subagent action:result id:${job.id}.`, display: true, details: { jobId: job.id } }, { triggerTurn: true, deliverAs: "followUp" });
+						if (job.notify) { job.pending = true; if (!running) announce(); }
 					}
 				}).catch(() => { /* A failed notification must not become an unhandled rejection. Result remains collectible. */ });
 				return textResult(`Trabajo ${job.id} iniciado en segundo plano. Seguí atendiendo al usuario: llegará un aviso al terminar. No esperes ni hagas polling.`, { jobId: job.id, background: true, ...snapshot(details) });

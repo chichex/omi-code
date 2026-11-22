@@ -20,9 +20,14 @@ import { effectivePolicy, foundationsLines } from "./development-foundations.ts"
 import { editFoundations } from "./development-foundations-setup.ts";
 import { HeldLoadout } from "./development-loadout.ts";
 import { syncWorkStack } from "./development-stack.ts";
+import { adoptLifecycle, landLifecycle, LIFECYCLE_COMMANDS, LifecycleDeclined, reviewLifecycle } from "./development-lifecycle.ts";
+import { fixLifecycle } from "./development-lifecycle-fix.ts";
+import { shipLifecycle } from "./development-lifecycle-ship.ts";
+import { LifecycleOnboarding } from "./development-lifecycle-onboarding.ts";
+import { continueDevelopment } from "./development-continue.ts";
 
 const KICKOFF = "Continuá el harness de desarrollo activo desde su etapa persistida. Respetá sus bloqueos y pedí los permisos pendientes; no saltees etapas.";
-const USAGE = "Uso: /omi-work resume | approve | pause | refresh | pr | stack | status | foundations | stop";
+const USAGE = "Uso: /omi-work resume | approve | pause | refresh | pr | stack | status | foundations | stop · después del PR draft: adopt | review | fix | land | ship";
 // Otra ventana preparando el mismo issue es una espera, no un error; también envuelto en un aviso.
 const busy = (error: unknown): boolean => error instanceof IssuePreparationBusyError || (error instanceof Error && error.cause instanceof IssuePreparationBusyError);
 
@@ -42,6 +47,7 @@ async function checkWriteTarget(root: string, path: string): Promise<void> {
 export function developmentHarnessExtension(io: Io, args: readonly string[], deps: DevelopmentDeps = {}): InlineExtension {
 	return { name: "omi-development", factory: async (pi: ExtensionAPI) => {
 		const session = new DevelopmentSession(pi, io, args, deps);
+		const onboarding = new LifecycleOnboarding(session);
 		// Pi lee sus rutas al importarse: se importa al cargar la extensión, no con el módulo.
 		const cli = (await import("@earendil-works/pi-coding-agent")).parseArgs([...args]);
 		const held = new HeldLoadout(pi, cli);
@@ -70,6 +76,8 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 		const startHere = async (ctx: ExtensionContext) => {
 			await session.start(ctx);
 			if (session.state?.status === "paused") await session.apply({ type: "resume" }, ctx);
+			// La oferta del lifecycle es al entrar al harness: las consultas simples y needs-info no llegan acá.
+			await onboarding.offer(ctx);
 			loadout(); proceed(ctx);
 		};
 		async function begin(token: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -114,7 +122,7 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 			pi.sendUserMessage(beginCommand(token), { expandPromptTemplates: true });
 		});
 		pi.registerCommand("omi-work", {
-			description: "Harness de desarrollo: resume, approve, pause, refresh, pr, stack, status, foundations, stop",
+			description: "Harness de desarrollo: resume, approve, pause, refresh, pr, stack, status, foundations, stop; y después del PR draft adopt, review, fix, land, ship",
 			handler: async (input, ctx) => {
 				try {
 					const command = input.trim() || "status";
@@ -123,6 +131,18 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 					if (command === "foundations") { await editFoundations(ctx, session, deps.kb); loadout(); return; }
 					const [verb, ...rest] = command.split(/\s+/);
 					if (verb === BEGIN_SUBCOMMAND) { await begin(rest.join(" "), ctx); return; }
+					// Review, correcciones, Land y Ship: comandos de la persona; cada efecto pide su permiso.
+					if ((LIFECYCLE_COMMANDS as readonly string[]).includes(command)) {
+						let continueWork = false;
+						try {
+							if (command === "adopt") await adoptLifecycle(session, ctx);
+							else if (command === "review") await reviewLifecycle(session, ctx);
+							else if (command === "fix") continueWork = await fixLifecycle(session, ctx);
+							else if (command === "land") await landLifecycle(session, ctx);
+							else await shipLifecycle(session, ctx);
+						} catch (error) { if (!(error instanceof LifecycleDeclined)) throw error; ctx.ui.notify(error.message, "info"); }
+						loadout(); if (continueWork) proceed(ctx); return;
+					}
 					if (["resume", "approve", "pr", "stack"].includes(command)) await session.foundations.pin(ctx);
 					if (command === "resume") {
 						await session.restore(ctx, true); session.current(ctx);
@@ -152,7 +172,7 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 			},
 		});
 		// Pi ya restauró las tools de la rama: con el harness activo, las restringidas.
-		pi.on("session_start", async (event, ctx) => { held.recall(ctx.sessionManager.getBranch(), event.reason === "reload" ? "reload" : "start"); session.foundations.load(ctx); await session.restore(ctx); loadout(); });
+		pi.on("session_start", async (event, ctx) => { held.recall(ctx.sessionManager.getBranch(), event.reason === "reload" ? "reload" : "start"); session.foundations.load(ctx); onboarding.detect(ctx.cwd); await session.restore(ctx); loadout(); });
 		pi.on("session_tree", async (_event, ctx) => { held.recall(ctx.sessionManager.getBranch(), "tree"); await session.restore(ctx); loadout(); });
 		pi.on("session_shutdown", () => { readsInFlight.clear(); session.shutdown(); });
 		pi.on("before_agent_start", (event, ctx) => {
@@ -218,5 +238,6 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 			return { result: { output: "Harness activo: usá omi_workflow_check para comandos observados y autorizados, o /omi-work stop para salir explícitamente del flujo.", exitCode: 1, cancelled: false, truncated: false } };
 		});
 		observeDevelopment(pi, session);
+		continueDevelopment(pi, session);
 	} };
 }

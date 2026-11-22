@@ -1,0 +1,22 @@
+// Contratos Land: hechos observados separados de riesgo/consentimiento y resultado de entrega.
+import { Type, type Static } from "typebox";
+import { PullSchema, ReviewSchema, id, sha, text } from "./lifecycle-github-schema.ts";
+const closed = { additionalProperties: false } as const;
+const hash = Type.String({ pattern: "^[a-f0-9]{64}$" });
+export const LandPullSchema = Type.Object({ ...PullSchema.properties, mergeable: Type.Union([Type.Boolean(), Type.Null()]), mergeable_state: text(100), user: Type.Object({ login: text(100) }) });
+const Check = Type.Object({ id, context: text(), appId: Type.Union([id, Type.Null()]), source: Type.Enum(["status", "check-run"]), state: Type.Enum(["success", "failure", "pending", "unknown"]) }, closed);
+const Required = Type.Object({ context: text(), appId: Type.Union([id, Type.Null()]) }, closed);
+export const LandProtectionSchema = Type.Object({ status: Type.Enum(["known", "unknown"]), requiredChecks: Type.Union([Type.Array(Required, { maxItems: 1000 }), Type.Null()]), requiredReviewCount: Type.Union([Type.Integer({ minimum: 0, maximum: 1000 }), Type.Null()]), constraints: Type.Array(text(), { maxItems: 1000 }), allowedMethods: Type.Union([Type.Array(Type.Enum(["squash", "merge", "rebase"]), { maxItems: 3 }), Type.Null()]), actorCanPush: Type.Union([Type.Boolean(), Type.Null()]) }, closed);
+export const LandFindingSchema = Type.Object({ externalId: text(), source: Type.Enum(["review", "inline", "comment"]), reviewer: Type.Union([text(), Type.Null()]), body: Type.String({ maxLength: 4000 }), commitSha: Type.Union([sha, Type.Null()]), binding: Type.Enum(["head", "outdated", "unbound"]), path: Type.Union([text(4096), Type.Null()]), line: Type.Union([id, Type.Null()]), resolved: Type.Union([Type.Boolean(), Type.Null()]), outdated: Type.Boolean() }, closed);
+export const ReviewerPermissionSchema = Type.Object({ login: text(100), permission: Type.Enum(["admin", "maintain", "write", "triage", "read", "none", "unknown"]) }, closed);
+export const LandFactsSchema = Type.Object({ complete: Type.Boolean(), localVerified: Type.Boolean(), baseUpToDate: Type.Union([Type.Boolean(), Type.Null()]), reviewerPermissions: Type.Array(ReviewerPermissionSchema, { maxItems: 1000 }), repo: text(200), number: id, headSha: sha, baseSha: sha, contentHash: hash, pull: LandPullSchema, checkState: Type.Enum(["success", "failure", "pending", "unknown", "not-required"]), checks: Type.Array(Check, { maxItems: 1000 }), findings: Type.Array(LandFindingSchema, { maxItems: 1000 }), reviews: Type.Array(ReviewSchema, { maxItems: 1000 }), protection: LandProtectionSchema, problems: Type.Array(text(4000), { maxItems: 100 }) }, closed);
+export type LandFacts = Static<typeof LandFactsSchema>;
+export const LandRiskSchema = Type.Object({ risk: Type.Enum(["low", "high", "unknown"]), source: Type.Enum(["person", "policy", "model"]), scopeHash: hash, authorityHash: Type.Optional(hash) }, closed);
+export type LandRisk = Static<typeof LandRiskSchema>;
+export const ReadyLandSchema = Type.Object({ subjectId: text(), configHash: hash, sourceHash: hash, recipeHash: hash, ledgerHash: hash, hash, risk: LandRiskSchema, facts: LandFactsSchema, summary: Type.String({ maxLength: 1000000 }), at: text(100) }, closed);
+export type ReadyLand = Static<typeof ReadyLandSchema>;
+export const LandRequestSchema = Type.Object({ repo: text(200), pr: id, subjectId: text(), headSha: sha, baseSha: sha, branch: text(128), base: text(128), method: Type.Enum(["squash", "merge", "rebase"]), snapshotHash: hash, configHash: hash, correlationId: text() }, closed);
+export type LandRequest = Static<typeof LandRequestSchema>;
+export const DraftReadyRequestSchema = Type.Object({ repo: text(200), pr: id, subjectId: text(), headSha: sha, baseSha: sha, branch: text(128), base: text(128), configHash: hash, correlationId: text() }, closed);
+export type DraftReadyRequest = Static<typeof DraftReadyRequestSchema>;
+export const MergeFactSchema = Type.Object({ subjectId: text(), mergedSubjectId: text(), repo: text(200), pr: id, headSha: sha, mergeSha: sha, base: text(128), source: Type.Enum(["external", "operation"]), operationId: Type.Optional(text()), mergedAt: Type.Optional(text(100)), at: text(100) }, closed);

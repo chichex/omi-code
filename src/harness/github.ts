@@ -98,6 +98,12 @@ async function recover(workflow: Workflow, repo: string, target: Target, runner:
  if (workflow.publication.status !== "pending" || pr.state !== "OPEN" || pr.isDraft !== true || pr.isCrossRepository !== false || pr.headRefName !== target.branch || pr.baseRefName !== target.base || pr.headRefOid !== target.head || pr.body !== target.body || typeof pr.number !== "number" || !Number.isSafeInteger(pr.number) || pr.number < 1 || pr.url !== `https://github.com/${repo}/pull/${pr.number}`) throw new Error("PR existente ajeno, editado, de una publicación anterior, cerrado, no draft o con otro HEAD; no se edita ni se duplica: revisalo en GitHub");
  return { number: pr.number, url: String(pr.url), head: String(pr.headRefOid) };
 }
+/** Sólo lectura: el draft del PR único que ya abrió este recibo pendiente. Sin push ni create; ajeno o editado falla. */
+export async function findPublishedDraft(workflow: Workflow, runner: Runner = processRunner, signal?: AbortSignal): Promise<Published | null> {
+ const body = renderPullRequestBody(workflow); if (workflow.publication.status !== "pending") throw new Error("No hay una publicación pendiente");
+ const repo = await assertRepository(workflow, runner, signal);
+ return recover(workflow, repo, { branch: workflow.checkout.branch, base: "main", head: workflow.publication.head, body }, runner, signal);
+}
 // Con position, publica ese PR del stack con las mismas validaciones: su rama, su base y el commit de su grupo.
 // HEAD sigue siendo el de arriba, el verificado: el checkout no puede moverse mientras se publica el stack.
 export async function publishDraft(workflow: Workflow, runner: Runner = processRunner, signal?: AbortSignal, position?: StackPosition): Promise<Published> {

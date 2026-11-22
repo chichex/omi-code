@@ -16,7 +16,7 @@ export interface Scope {
 export async function openScope(runtime: ToolRuntime): Promise<Scope> {
 	const link = await readProjectLink(runtime.io.cwd);
 	const { client } = await openSession(runtime.io, runtime.apiUrl);
-	const organization = await resolveOrganization(client, link.organizationSlug);
+	const organization = await resolveOrganization(client, link.organizationSlug, runtime.signal);
 	const projectPath = `/organizations/${encodeURIComponent(organization.organization_id)}/projects/${encodeURIComponent(link.projectSlug)}`;
 	return { client, link, projectPath };
 }
@@ -57,8 +57,8 @@ export function environmentPath(scope: Scope, service: string, environment: stri
 	return `${servicePath(scope, service)}/environments/${encodeURIComponent(environment)}`;
 }
 
-export function readService(scope: Scope, service: string): Promise<ServiceView> {
-	return scope.client.request("GET", servicePath(scope, service), ServiceSchema);
+export function readService(scope: Scope, service: string, signal?: AbortSignal): Promise<ServiceView> {
+	return scope.client.request("GET", servicePath(scope, service), ServiceSchema, signal ? { signal } : {});
 }
 
 export function environmentOf(service: ServiceView, name: string): EnvironmentView {

@@ -248,7 +248,10 @@ test("development_flow los paths del commit son literales: un pathspec mágico n
 test("development_flow /omi-work stop sale de un harness bloqueado por estado inválido y lo muestra en el status", async (t) => {
 	const f = await developmentFixture(t); await f.start();
 	const { workflowPath } = await import("../src/harness/store.ts"); const { readFile, writeFile } = await import("node:fs/promises");
-	const path = workflowPath(f.checkout, 42); await writeFile(path, (await readFile(path, "utf8")).replace('"version": 1', '"version": 2'));
+	const path = workflowPath(f.checkout, 42); const original = await readFile(path, "utf8");
+	const corrupt = original.replace(/"version":\s*\d+/, '"version": 999');
+	assert.notEqual(corrupt, original, "la fixture introduce una versión futura de verdad");
+	await writeFile(path, corrupt);
 	await f.attach();
 	assert.ok(f.statuses.at(-1)?.includes("bloqueado"), "el bloqueo se ve aunque no haya estado");
 	assert.ok(await f.emit("tool_call", { toolName: "bash", input: { command: "true" } }), "bloqueado no habilita bash");

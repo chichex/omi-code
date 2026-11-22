@@ -7,7 +7,7 @@ import { Value } from "typebox/value";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Io } from "../cli/io.ts";
 import { processRunner, type Runner } from "../core/exec.ts";
-import { parseWorkflow, type Workflow, type Phase } from "../harness/model.ts";
+import { parseWorkflow, type Workflow, type WorkflowV2, type Phase } from "../harness/model.ts";
 export interface ObservationOrigin { id: string; source: string; epoch: number; phase: Phase; round: number }
 import type { ReadReceipt } from "../harness/references.ts";
 import { createWorkflow, recipeApprovalHash, transition, type WorkflowEvent } from "../harness/state.ts";
@@ -29,16 +29,20 @@ import type { KbClient } from "./kb-client.ts";
 import { FoundationsGate, foundationsLines } from "./development-foundations.ts";
 import { foundationsDir } from "../harness/foundations-trust.ts";
 import { showCommandChoices } from "./development-command-dialog.ts";
+import { lifecycleLines } from "../harness/lifecycle-progress.ts";
+import type { LifecyclePorts } from "./development-lifecycle.ts";
 
 export const DEVELOPMENT_ANCHOR = "omi-development-workflow";
 const AnchorSchema = Type.Object({ id: Type.String(), root: Type.String(), issue: Type.Integer({ minimum: 1 }), revision: Type.Integer({ minimum: 0 }), disabled: Type.Optional(Type.Boolean()) });
-export interface DevelopmentDeps { runner?: Runner; now?: () => string; loader?: BeginLoader; kb?: KbClient }
+export interface DevelopmentDeps { runner?: Runner; now?: () => string; loader?: BeginLoader; kb?: KbClient; lifecycle?: LifecyclePorts }
 // El preflight y el documento íntegro se comparten con la revisión TUI y RPC.
 export function approvalPreview(state: Workflow): string { return approvalText(approvalDocument(state)); }
 export class DevelopmentSession {
 	state: Workflow | undefined;
 	onChange: (() => void) | undefined;
 	lockedReason = "";
+	/** Una tool del harness cerró el turno a propósito (pausa, PR, un no de la persona): no se retoma solo. */
+	turnYielded = false;
 	readonly reads = new Map<string, ReadReceipt>();
 	readonly runner: Runner;
 	readonly now: () => string;
@@ -79,11 +83,16 @@ export class DevelopmentSession {
 	readonly foundations: FoundationsGate;
 	/** Sólo el host usa este cliente para el guardado explícito desde el panel; no es una tool del modelo. */
 	readonly kb: KbClient | undefined;
+	/** Lifecycle post-PR: lecturas GitHub acotadas (sin runner inyectado, el del harness) y puertos de prueba. */
+	readonly githubRunner: Runner | undefined;
+	readonly lifecyclePorts: LifecyclePorts;
+	/** Dueño de las actividades del lifecycle que abre esta sesión. */
+	readonly owner = randomUUID();
 	constructor(pi: ExtensionAPI, io: Io, args: readonly string[], deps: DevelopmentDeps = {}) {
 		this.pi = pi; this.io = io;
 		this.runner = deps.runner ?? processRunner; this.now = deps.now ?? (() => new Date().toISOString());
 		this.offline = developmentOffline(args, io.env);
-		this.kb = deps.kb;
+		this.kb = deps.kb; this.githubRunner = deps.runner; this.lifecyclePorts = deps.lifecycle ?? {};
 		this.foundations = new FoundationsGate({ kb: deps.kb, runner: this.runner, trustDir: foundationsDir(io.homeDir), now: this.now });
 	}
 	private anchor(): void {
@@ -172,6 +181,27 @@ export class DevelopmentSession {
 			this.anchor(); this.emit(); return this.state;
 		});
 	}
+	/** Reducer del host (lifecycle) sobre el estado vigente en disco; la revisión avanza una vez. */
+	async update(ctx: ExtensionContext, change: (saved: WorkflowV2) => WorkflowV2): Promise<WorkflowV2> {
+		return this.serialize(async () => {
+			const expected = this.current(ctx);
+			const saved = await readWorkflow(expected.checkout, expected.source.number);
+			if (!saved || saved.id !== expected.id) throw new Error("El trabajo cambió o desapareció");
+			const next = await updateWorkflow(expected.checkout, expected.source.number, saved.revision, (current) => {
+				if (!current || current.id !== expected.id) throw new Error("El trabajo cambió o desapareció");
+				return { ...change(parseWorkflow(JSON.stringify(current))), revision: current.revision + 1 };
+			});
+			this.state = parseWorkflow(JSON.stringify(next)); this.anchor(); this.emit(); return this.state;
+		});
+	}
+	/** Adopta lo que escribió el coordinador raíz (performLifecycleOperation) sin ejecutar nada. */
+	async reload(ctx: ExtensionContext): Promise<void> {
+		await this.serialize(async () => {
+			const expected = this.current(ctx); const saved = await readWorkflow(expected.checkout, expected.source.number);
+			if (!saved || saved.id !== expected.id) throw new Error("El trabajo cambió o desapareció");
+			this.state = saved; this.anchor(); this.emit();
+		});
+	}
 	async fresh(ctx: ExtensionContext): Promise<boolean> {
 		const state = this.current(ctx);
 		if (this.offline) throw new Error("Esta acción necesita contrastar el issue vigente con GitHub; quitá --offline");
@@ -251,6 +281,8 @@ export class DevelopmentSession {
 	async publish(ctx: ExtensionContext): Promise<void> {
 		if (!(await this.fresh(ctx))) return;
 		let state = this.current(ctx);
+		// Un PR adoptado por el lifecycle no se republica: la corrección va al mismo PR con /omi-work fix y su propio sí.
+		if (state.version === 2 && state.pullRequest?.ownership === "adopted") throw new Error("El PR ya es del lifecycle: la corrección se publica en el mismo PR con /omi-work fix, con su propio permiso.");
 		if (state.phase !== "pr") throw new Error("Primero completá todos los pasos y la verificación del cambio actual");
 		const snapshot = await inspectCheckout(state.checkout, this.runner, this.lifecycle.signal);
 		if (!snapshot.clean) throw new Error("El worktree cambió después de verificar. Volvé a Implementar/Verificar.");
@@ -316,5 +348,5 @@ export class DevelopmentSession {
 		this.state = undefined; this.lockedReason = ""; this.emit();
 	}
 	shutdown(): void { this.alive = false; this.epoch++; this.lifecycle.abort(); }
-	status(): string { return this.lockedReason || (this.state ? `${PHASE_LABELS[this.state.phase]} · ${this.state.status}\n${this.state.activity}\n${this.state.blockedReason}\nDetalle: /omi-progress` : "Sin harness activo. Pedí un cambio en el chat o elegí un issue en Issues. /omi-work resume | approve | pause | refresh | pr | stop"); }
+	status(): string { return this.lockedReason || (this.state ? [`${PHASE_LABELS[this.state.phase]} · ${this.state.status}`, this.state.activity, this.state.blockedReason, ...lifecycleLines(this.state), "Detalle: /omi-progress"].filter(Boolean).join("\n") : "Sin harness activo. Pedí un cambio en el chat o elegí un issue en Issues. /omi-work resume | approve | pause | refresh | pr | stop"); }
 }

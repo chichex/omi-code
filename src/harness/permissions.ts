@@ -2,6 +2,7 @@
 import { relative, resolve, sep } from "node:path";
 import type { Workflow } from "./model.ts";
 import { isApproved } from "./state.ts";
+import { currentCorrection, correctionExecutionBlock } from "./execution-scope.ts";
 
 export const WORKFLOW_TOOLS = ["omi_workflow", "omi_workflow_check", "omi_workflow_inspect", "omi_workflow_lens", "omi_workflow_commit"];
 /** Preguntarle a la persona no cambia nada: vale en toda etapa. Su respuesta no es un acuerdo ni un permiso. */
@@ -11,7 +12,10 @@ const READ_ROLES = new Set(["scout", "planner", "reviewer"]);
 
 export function workflowToolAllowed(state: Workflow, name: string, input: Record<string, unknown>): boolean {
 	if (READ.has(name) || WORKFLOW_TOOLS.includes(name) || name === ASK_TOOL) return true;
-	const implementing = state.phase === "implement" && state.status === "active" && isApproved(state) && state.steps.some((step) => step.status === "active");
+	const correction = currentCorrection(state);
+	const ownedPostPr = state.version === 2 && state.pullRequest?.ownership === "adopted";
+	const implementing = state.phase === "implement" && state.status === "active" && isApproved(state) && state.steps.some((step) => step.status === "active")
+		&& !correctionExecutionBlock(state) && (!ownedPostPr || correction?.status === "coding" && state.version === 2 && state.lifecycle.status === "enabled" && state.lifecycle.operations.some(o => o.id === correction.operationId && o.kind === "correction" && o.status === "pending"));
 	if (name === "write" || name === "edit") return implementing;
 	if (name !== "subagent") return false;
 	if (input.action === "status" || input.action === "result" || input.action === "cancel") return true;
