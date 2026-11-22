@@ -121,6 +121,18 @@ test("Runner espera terminación y escala SIGTERM de un hijo silencioso que lo i
  } finally { if (pid) try { process.kill(pid, "SIGKILL"); } catch {} }
 });
 
+// Muerto = no existe o quedó zombie: en Linux init recoge al huérfano un instante después del close,
+// y mientras tanto kill(pid, 0) todavía lo encuentra. Un proceso que sigue corriendo nunca pasa.
+async function exited(pid: number, ms = 1000): Promise<boolean> {
+ for (const end = Date.now() + ms; ;) {
+  try { process.kill(pid, 0); } catch { return true; }
+  const stat = process.platform === "linux" ? await readFile(`/proc/${pid}/stat`, "utf8").catch(() => "") : "";
+  if (stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3) === "Z") return true;
+  if (Date.now() >= end) return false;
+  await new Promise(resolve => setTimeout(resolve, 10));
+ }
+}
+
 test("cancelación corta grupo de helpers aunque padre salga y descendiente conserve stdout", async t => {
  const directory = await tempDir(t), file = join(directory, "helper-pid"), controller = new AbortController(); let helper = 0;
  const child = `const fs=require('node:fs');process.on('SIGTERM',()=>{});fs.writeFileSync(${JSON.stringify(file)},String(process.pid));setInterval(()=>{},20)`;
@@ -128,7 +140,7 @@ test("cancelación corta grupo de helpers aunque padre salga y descendiente cons
  const pending = processRunner.run(process.execPath, ["-e", parent], { signal: controller.signal }).then(() => null, error => error as unknown);
  try {
   for (let i = 0; i < 100 && !helper; i++) { helper = await readFile(file, "utf8").then(Number, () => 0); if (!helper) await new Promise(resolve => setTimeout(resolve, 20)); } assert.ok(helper); controller.abort();
-  const result = await Promise.race([pending, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("descendiente sobrevivió al deadline")), 1200))]); assert.ok(result); assert.throws(() => process.kill(helper, 0));
+  const result = await Promise.race([pending, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("descendiente sobrevivió al deadline")), 1200))]); assert.ok(result); assert.ok(await exited(helper), "el descendiente sigue corriendo");
  } finally { if (helper) try { process.kill(helper, "SIGKILL"); } catch {} }
 });
 
