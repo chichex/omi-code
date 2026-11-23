@@ -109,7 +109,7 @@ test("foundations_setup v2: fallo no deja aceptación pendiente; éxito guarda s
 	const kb = memoryKb({ products: ["repo"] }); kb.perillas("repo", HUMAN); const dir = foundationsDir(await tempDir(t));
 	kb.hook = (tool) => tool === "guardar" ? "error" : undefined; await assert.rejects(save(kb, dir), /KB no disponible/); assert.equal(await readTrust(dir, key(kb)), undefined);
 	kb.hook = () => {}; await save(kb, dir); const stored: unknown = JSON.parse(await readFile(trustPath(dir, key(kb)), "utf8"));
-	assert.deepEqual(Object.keys(stored && typeof stored === "object" ? stored : {}).sort(), ["accepted", "kbUrl", "offerDeclined", "product", "repo", "version"]);
+	assert.deepEqual(Object.keys(stored && typeof stored === "object" ? stored : {}).sort(), ["accepted", "deferred", "kbUrl", "product", "repo", "version"]);
 });
 // Mantener el transporte real de Pi por HTTP: cambios de versión no pueden simular éxito de persistencia.
 async function createHttpKb(t: TestContext) {

@@ -48,7 +48,7 @@ test("foundations_pin: missing/invalid/unavailable usan la última v2 aceptada; 
 	const empty = await tempDir(t);
 	for (const next of failures) byDefault(await decideFoundations(next, ctx, { trustDir: empty, now: () => "now" }));
 	const dir = await tempDir(t);
-	await writeTrust(dir, { version: 2, ...key, accepted: { docId: "old", blockHash: reading.hash, block: value, author: "", date: "", acceptedAt: "now" }, offerDeclined: false });
+	await writeTrust(dir, { version: 2, ...key, accepted: { docId: "old", blockHash: reading.hash, block: value, author: "", date: "", acceptedAt: "now" }, deferred: null });
 	for (const next of failures) {
 		const result = await decideFoundations(next, ctx, { trustDir: dir, now: () => "now" });
 		assert.equal(result.origin, "local", next.kind); assert.deepEqual(effectivePolicy(result).command, { block: value, accepted: true }, next.kind);

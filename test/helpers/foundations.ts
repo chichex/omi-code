@@ -13,7 +13,7 @@ export async function acceptFoundations(dir: string, politica: FoundationsPolicy
 	const repo = options.repo ?? "test/repo";
 	const block: FoundationsBlock = { version: 2, repo, confirmar: [...(options.confirmar ?? CONFIRM_ALL)], politica: { ...politica } };
 	await writeTrust(dir, {
-		version: 2, kbUrl: options.kbUrl ?? HARNESS_KB_URL, product: repo.split("/")[1]!, repo, offerDeclined: false,
+		version: 2, kbUrl: options.kbUrl ?? HARNESS_KB_URL, product: repo.split("/")[1]!, repo, deferred: null,
 		accepted: { docId: "test-foundations", blockHash: foundationsHash(block), block, author: "test", date: "2026-11-19", acceptedAt: "2026-11-19T00:00:00Z" },
 	});
 	return block;

@@ -98,7 +98,7 @@ export async function decideFoundations(reading: FoundationsReading, ctx: Extens
 	// La persona la escribió en la KB: se aplica sin preguntar, también sin UI, y el aviso dice qué cambió.
 	const diff = foundationsDiff(accepted?.block, checked.block, { product: reading.key.product, kbUrl: reading.key.kbUrl, docId: doc.id, ...(doc.autor ? { author: doc.autor } : {}), ...(doc.fecha ? { date: doc.fecha } : {}) });
 	const applied = `Foundations: se aplica la revisión nueva de la KB, sin preguntar.\n\n${diff}\n\nVale en esta sesión y en las siguientes hasta que cambie en la KB. Nunca habilita merge, tags, workflows, deploys ni secretos; no es un sandbox.`;
-	const base: TrustRecord = record ?? { version: 2, ...reading.key, accepted: null, offerDeclined: false };
+	const base: TrustRecord = record ?? { version: 2, ...reading.key, accepted: null, deferred: null };
 	try { await saveTrust({ ...base, accepted: { docId: doc.id, blockHash: reading.hash, block: checked.block, author: doc.autor ?? "", date: doc.fecha ?? "", acceptedAt: deps.now() } }); }
 	catch {
 		const notice = "No se pudo registrar la aceptación: vale en esta sesión y se vuelve a avisar en la próxima.";

@@ -14,11 +14,15 @@ const Text = (max = 2000) => Type.String({ maxLength: max });
 const RecordSchema = Type.Object({
 	version: Type.Literal(2), kbUrl: Text(), product: Text(200), repo: Text(200),
 	accepted: Type.Union([Type.Object({ docId: Text(200), blockHash: Type.String({ pattern: "^[0-9a-f]{64}$" }), block: Type.Unknown(), author: Text(400), date: Text(100), acceptedAt: Text(100) }, { additionalProperties: false }), Type.Null()]),
-	offerDeclined: Type.Boolean(),
+	// «Más adelante» del setup, por revisión de la KB. `offerDeclined` es del corte anterior: se lee para no perder la aceptación y no se vuelve a escribir.
+	deferred: Type.Optional(Type.Union([Type.Object({ revision: Text(256), at: Text(100) }, { additionalProperties: false }), Type.Null()])),
+	offerDeclined: Type.Optional(Type.Boolean()),
 }, { additionalProperties: false });
 export interface TrustKey { kbUrl: string; product: string; repo: string }
 export interface AcceptedRevision { docId: string; blockHash: string; block: FoundationsBlock; author: string; date: string; acceptedAt: string }
-export interface TrustRecord extends TrustKey { version: 2; accepted: AcceptedRevision | null; offerDeclined: boolean }
+export interface TrustRecord extends TrustKey { version: 2; accepted: AcceptedRevision | null; deferred: { revision: string; at: string } | null }
+/** Para el diagnóstico: el formato anterior no es lo mismo que nada, aunque tampoco vale. */
+export type TrustInspection = { kind: "missing" } | { kind: "legacy" } | { kind: "invalid" } | { kind: "valid"; record: TrustRecord };
 
 export const foundationsDir = (homeDir: string): string => join(agentDir(homeDir), "foundations");
 export function trustPath(dir: string, key: TrustKey): string {
@@ -37,24 +41,44 @@ async function safeDirectory(dir: string, create: boolean): Promise<boolean> {
 	} catch (error) { if (codeIs(error, "ENOENT")) return false; throw error; }
 }
 
-/** El registro de esta KB, producto y repo; corrupto, ajeno o inseguro cuenta como nada aceptado. */
-export async function readTrust(dir: string, key: TrustKey): Promise<TrustRecord | undefined> {
+type RawTrust = { kind: "missing" } | { kind: "invalid" } | { kind: "raw"; value: unknown };
+/** Sólo lectura: sin directorio o archivo es ausencia; inseguro, enorme o JSON roto, ilegible. */
+async function rawTrust(dir: string, key: TrustKey): Promise<RawTrust> {
 	try {
-		if (!(await safeDirectory(dir, false))) return undefined;
+		if (!(await safeDirectory(dir, false))) return { kind: "missing" };
 		const file = await open(trustPath(dir, key), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-		let raw: string;
 		try {
 			const entry = await file.stat();
-			if (!entry.isFile() || entry.nlink !== 1 || entry.size > MAX_BYTES) return undefined;
-			raw = (await file.readFile()).toString("utf8");
+			if (!entry.isFile() || entry.nlink !== 1 || entry.size > MAX_BYTES) return { kind: "invalid" };
+			return { kind: "raw", value: JSON.parse((await file.readFile()).toString("utf8")) };
 		} finally { await file.close(); }
-		const value: unknown = JSON.parse(raw);
-		if (!Value.Check(RecordSchema, value) || value.kbUrl !== key.kbUrl || value.product !== key.product || value.repo !== key.repo) return undefined;
-		if (!value.accepted) return { ...value, accepted: null };
-		const checked = checkBlock(value.accepted.block);
-		if ("reason" in checked || foundationsHash(checked.block) !== value.accepted.blockHash || checked.block.repo !== key.repo) return undefined;
-		return { ...value, accepted: { ...value.accepted, block: checked.block } };
-	} catch { return undefined; }
+	} catch (error) { return codeIs(error, "ENOENT") ? { kind: "missing" } : { kind: "invalid" }; }
+}
+function parseTrust(value: unknown, key: TrustKey): TrustRecord | undefined {
+	if (!Value.Check(RecordSchema, value) || value.kbUrl !== key.kbUrl || value.product !== key.product || value.repo !== key.repo) return undefined;
+	// Mismo orden de claves que escriben los callers: el guardado compara JSON serializado.
+	const record = (accepted: AcceptedRevision | null): TrustRecord => ({ version: value.version, kbUrl: value.kbUrl, product: value.product, repo: value.repo, accepted, deferred: value.deferred ?? null });
+	if (!value.accepted) return record(null);
+	const checked = checkBlock(value.accepted.block);
+	if ("reason" in checked || foundationsHash(checked.block) !== value.accepted.blockHash || checked.block.repo !== key.repo) return undefined;
+	return record({ ...value.accepted, block: checked.block });
+}
+/** El registro de esta KB, producto y repo; corrupto, ajeno o inseguro cuenta como nada aceptado. */
+export async function readTrust(dir: string, key: TrustKey): Promise<TrustRecord | undefined> {
+	const raw = await rawTrust(dir, key);
+	try { return raw.kind === "raw" ? parseTrust(raw.value, key) : undefined; } catch { return undefined; }
+}
+const sameIdentity = (value: object, key: TrustKey) => "kbUrl" in value && value.kbUrl === key.kbUrl && "product" in value && value.product === key.product && "repo" in value && value.repo === key.repo;
+/** Como readTrust, pero distingue un registro de este repo en un formato anterior. No migra ni reescribe nada. */
+export async function inspectTrust(dir: string, key: TrustKey): Promise<TrustInspection> {
+	const raw = await rawTrust(dir, key);
+	if (raw.kind !== "raw") return raw;
+	let record: TrustRecord | undefined;
+	try { record = parseTrust(raw.value, key); } catch { return { kind: "invalid" }; }
+	if (record) return { kind: "valid", record };
+	const value = raw.value;
+	const older = !!value && typeof value === "object" && "version" in value && typeof value.version === "number" && value.version < 2 && sameIdentity(value, key);
+	return older ? { kind: "legacy" } : { kind: "invalid" };
 }
 
 export interface TrustWriteOptions {
