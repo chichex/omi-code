@@ -68,6 +68,10 @@ test("development_stack_flow por defecto (todo auto): publicar y actualizar el s
 	assert.ok(!f.prompts.includes("Subir rama y abrir PR draft"), "push_pr: auto no pregunta");
 	assert.ok(f.messages.some((m) => m.includes("push + PR draft auto") && m.includes(`${branch}-2 → ${branch}-1`)), "el aviso muestra cada rama y su base");
 	assertTwoDrafts(run);
+	const { publication } = await f.state();
+	assert.ok(publication.status === "opened" && publication.stack?.length === 2, "quedaron dos PRs abiertos");
+	const notice = f.messages.find((m) => /PRs draft abiertos/.test(m)) ?? "";
+	for (const pull of publication.stack) assert.ok(notice.includes(`#${pull.number} ${pull.url}`), `el aviso trae el PR #${pull.number} y su URL`);
 	const before = f.calls.length;
 	await f.command("stack");
 	assert.ok(!f.prompts.includes("Actualizar el stack de PRs"), "actualizar sigue push_pr: auto y no pregunta");

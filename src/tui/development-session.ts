@@ -23,7 +23,7 @@ import { developmentProgress, PHASE_LABELS } from "./development-view.ts";
 import { borderedLoader, type WaitLoader } from "./development-loader.ts";
 import { developmentOffline } from "./development-tickets.ts";
 import { approvalDocument, approvalText, type ApprovalDocument } from "./development-approval.ts";
-import { PUBLICATION_TITLE, publicationDocument, publicationSummary } from "./development-publication.ts";
+import { PUBLICATION_TITLE, publicationDocument, publicationSummary, publishedNotice } from "./development-publication.ts";
 import { showApprovalReview } from "./development-approval-view.ts";
 import type { KbClient } from "./kb-client.ts";
 import { FoundationsGate, foundationsLines } from "./development-foundations.ts";
@@ -304,6 +304,7 @@ export class DevelopmentSession {
 		if (state.publication.status === "none" || replaces) state = await this.apply({ type: "publishing", head, bodyHash: proposal.bodyHash, ...(replaces ? { replaces } : {}) }, ctx);
 		const receipt = await publishWork(state, this.runner, this.lifecycle.signal);
 		await this.apply({ type: "published", ...receipt }, ctx);
+		ctx.ui.notify(publishedNotice(receipt), "info");
 		await updateIssueSection(this, ctx);
 	}
 	// Revisión íntegra de un documento: navegable en la TUI, el texto entero en RPC. Volver, cerrar o cancelar no aprueban.
