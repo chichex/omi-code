@@ -254,3 +254,16 @@ test("request/resolved SHA se persiste antes del dispatch y sobrevive al cambio 
  assert.deepEqual(await resolveGhaReviewRequest(reloaded, "review-op", client, AbortSignal.timeout(1000)), request());
  await assert.rejects(persistGhaReviewRequest(root.checkout, 42, "review-op", { ...request(), workflow: { ...request().workflow, sha: "f".repeat(40) } }));
 });
+
+test("workflow: el contexto runner sólo aparece dentro de steps; en el env de un job GitHub invalida el archivo entero", async () => {
+ const workflow = await readFile(new URL("../.github/workflows/claude-review.yml", import.meta.url), "utf8");
+ // GitHub no ofrece `runner` en jobs.<id>.env: el archivo no valida y cada push deja un run fallido.
+ const offending: string[] = []; let jobEnv = false;
+ for (const line of workflow.split("\n")) {
+  const indent = line.length - line.trimStart().length;
+  if (line.trim() === "" || line.trimStart().startsWith("#")) continue;
+  if (indent <= 4) jobEnv = /^ {4}env:\s*$/.test(line);
+  else if (jobEnv && /\$\{\{\s*runner\./.test(line)) offending.push(line.trim());
+ }
+ assert.deepEqual(offending, []);
+});
