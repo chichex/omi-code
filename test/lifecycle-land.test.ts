@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createWorkflow, recipeApprovalHash } from "../src/harness/state.ts";
-import { sourceHash, type WorkflowV2, type Plan } from "../src/harness/model.ts";
+import { sourceHash, type WorkflowV2, type Plan, type Review } from "../src/harness/model.ts";
 import { defaultLifecycleConfig, lifecycleHash } from "../src/harness/lifecycle-config.ts";
 import * as life from "../src/harness/lifecycle-state.ts";
 import { landReadiness, prepareLand, landPullRequest, acceptObservedMerge } from "../src/harness/lifecycle-land.ts";
@@ -162,4 +162,49 @@ test("merge externo observado es Land hecho, no entrega, sin reabrir ni mutar PR
  const next = acceptObservedMerge(r, observed, { source: "external", at }); assert.equal(next.phase, "ship"); assert.equal(next.lifecycle.status, "enabled"); if (next.lifecycle.status !== "enabled") return;
  assert.equal(next.lifecycle.stage, "ship"); const current = next.lifecycle.currentSubject; assert.equal(next.lifecycle.subjects.find(s => s.id === current)?.mergedSha, merge); assert.notEqual(next.status, "complete"); assert.deepEqual(next.publication, r.publication); assert.equal(next.lifecycle.budget.attemptsUsed, r.lifecycle.status === "enabled" ? r.lifecycle.budget.attemptsUsed : -1);
  assert.throws(() => acceptObservedMerge(r, { ...observed, head: { ...observed.head, sha: "d".repeat(40) } }, { source: "external", at }));
+});
+
+// Seguridad en riesgo alto: sin pass sobre el contenido que se mergea, Land sigue listo pero el merge pide el sí.
+const SECURITY_HOLD = "Seguridad sin veredicto en un cambio de riesgo alto: el merge pide tu sí";
+function highRisk(r: WorkflowV2, security: Review[]): WorkflowV2 {
+ assert.ok(r.recipe && r.approval && r.lifecycle.status === "enabled");
+ r.recipe = { ...r.recipe, classification: { ...r.recipe.classification, risk: "high" }, lenses: ["compliance", "security"] }; r.approval = { ...r.approval, recipeHash: recipeApprovalHash(r) };
+ const p = structuredClone(r.lifecycle.pins.at(-1)); assert.ok(p); p.accepted.block.land.maxRisk = "high"; p.accepted.blockHash = lifecycleHash(p.accepted.block); r.lifecycle = life.applyLifecyclePin(r.lifecycle, p);
+ r.reviews = [{ lens: "compliance", fingerprint: fp, verdict: "pass", findings: [], at }, ...security]; return r;
+}
+const highWitness = (r: WorkflowV2) => ({ ...risk(r), risk: "high" });
+const security = (verdict: Review["verdict"], extra: Partial<Review> = {}): Review => ({ lens: "security", fingerprint: fp, verdict, findings: verdict === "pass" ? [] : ["Falta revisar la entrada"], at, ...extra });
+const firstKey = (summary: string) => { const value: unknown = JSON.parse(summary); assert.ok(value && typeof value === "object"); return Object.entries(value)[0]; };
+
+for (const [label, reviews] of [["unknown juzgado", [security("unknown")]], ["sin resultado", [security("unknown", { noResult: true })]], ["sin correr", []], ["pass de otro contenido", [security("pass", { fingerprint: "d".repeat(64) })]]] as const) test(`riesgo alto con Seguridad ${label}: listo para merge, pero el merge pide el sí con el motivo primero`, () => {
+ const r = highRisk(shipKnown(workflow("auto")), [...reviews]), readiness = landReadiness(r, facts(), highWitness(r));
+ assert.equal(readiness.ready, true, readiness.reasons.join("; ")); assert.equal(readiness.auto, false);
+ assert.deepEqual(readiness.attention, [SECURITY_HOLD]);
+ assert.deepEqual(firstKey(readiness.summary), ["attention", SECURITY_HOLD]);
+ assert.equal(prepareLand(r, facts(), highWitness(r), at).phase, "land", "no bloquea Land: sólo saca el auto");
+});
+
+test("riesgo alto con Seguridad en fail sobre el contenido: el aviso no dice «sin veredicto»", () => {
+ const r = highRisk(shipKnown(workflow("auto")), [security("fail")]), readiness = landReadiness(r, facts(), highWitness(r));
+ assert.equal(readiness.auto, false); assert.deepEqual(readiness.attention, ["Seguridad en fail en un cambio de riesgo alto: el merge pide tu sí"]);
+});
+
+test("riesgo alto con Seguridad pass sobre el contenido: auto-Land no cambia", () => {
+ const r = highRisk(shipKnown(workflow("auto")), [security("pass")]), readiness = landReadiness(r, facts(), highWitness(r));
+ assert.equal(readiness.ready, true, readiness.reasons.join("; ")); assert.equal(readiness.auto, true); assert.deepEqual(readiness.attention, []);
+ assert.notEqual(firstKey(readiness.summary)?.[0], "attention"); assert.doesNotMatch(readiness.summary, /Seguridad sin veredicto/);
+});
+
+test("riesgo bajo con Seguridad unknown o sin correr: auto-Land no cambia", () => {
+ for (const reviews of [[security("unknown")], [security("unknown", { noResult: true })], []]) {
+  const r = shipKnown(workflow("auto")); r.reviews = reviews; const readiness = landReadiness(r, facts(), risk(r));
+  assert.equal(readiness.auto, true); assert.deepEqual(readiness.attention, []);
+ }
+});
+
+test("riesgo alto con Seguridad sin pass: una decisión por política no mergea", async () => {
+ const original = highRisk(shipKnown(workflow("auto")), [security("unknown", { noResult: true })]);
+ const r = prepareLand(original, facts(), highWitness(original), at); assert.ok(r.lifecycle.status === "enabled" && r.lifecycle.ready);
+ r.lifecycle = life.reserveLifecycleOperation(r.lifecycle, { id: "land1", key: "land1", kind: "land", subjectId: "subject", targetId: null, correlationId: "land1", retryOf: null }, { id: "land-decision", kind: "land", subjectId: "subject", targetId: null, configHash: r.lifecycle.pinHash, source: "policy", effectHash: r.lifecycle.ready.hash, at }, "process", at);
+ const p = ports(r); await assert.rejects(landPullRequest(r, "land1", p), /auto-Land no habilitado/); assert.equal(p.runner.commands.length, 0); assert.equal(p.claims(), 0);
 });

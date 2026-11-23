@@ -247,3 +247,119 @@ test("subagent: trunca resultados y updates; conserva la salida completa en un a
 		assert.ok(updates.every((update) => JSON.stringify(update).length < 15000));
 	} finally { await rm(outputFile.replace(/\/output.txt$/, ""), { recursive: true, force: true }); }
 });
+
+// Errores del proveedor: un turno con error no corrió sus tools, así que se puede pedir de nuevo desde el mismo contexto.
+function failure(errorMessage: string): AssistantMessage {
+	return { ...message(""), content: [], stopReason: "error", errorMessage };
+}
+async function until(condition: () => boolean, what: string): Promise<void> {
+	for (let i = 0; i < 1000; i++) { if (condition()) return; await new Promise(setImmediate); }
+	assert.fail(`No ocurrió: ${what}`);
+}
+async function settle(): Promise<void> { for (let i = 0; i < 20; i++) await new Promise(setImmediate); }
+type Outcome = { results: { status: string; turns: number; output: string; activity: string }[] };
+
+test("subagent: un error transitorio se reintenta a los 2 s desde el último resultado, sin repetir tools", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const contexts: string[] = []; let calls = 0;
+	const { run, seen } = setup((context) => {
+		calls++; contexts.push(JSON.stringify(context.messages));
+		if (calls === 1) return stream(toolMessage(1));
+		if (calls === 2) return stream(failure("Our servers are currently overloaded"));
+		return stream(message("Listo: cambio verificado."));
+	});
+	const pending = run({ agent: "worker", task: "implement" });
+	await until(() => calls === 2, "el turno con error"); await settle();
+	t.mock.timers.tick(1999); await settle();
+	assert.equal(calls, 2, "no reintenta antes de 2 s");
+	t.mock.timers.tick(1);
+	const result = await pending;
+	const first = (result.details as Outcome).results[0]!;
+	assert.equal(calls, 3); assert.deepEqual(seen, ["read"], "la tool del primer turno corre una sola vez");
+	assert.equal(result.isError, false); assert.equal(first.status, "done");
+	assert.equal(first.output, "Listo: cambio verificado.");
+	assert.equal(first.turns, 2, "el turno fallido que se reintenta no cuenta");
+	assert.equal(contexts[2], contexts[1], "el reintento sigue del mismo contexto, sin el mensaje con error");
+	assert.equal(result.usage?.totalTokens, 36, "el uso suma también el turno fallido");
+});
+
+test("subagent: cuota o autenticación no se reintentan y el error conserva lo recuperado", async () => {
+	for (const error of ["429 insufficient_quota: You exceeded your current quota", "401 Unauthorized"]) {
+		let calls = 0;
+		const { run } = setup(() => {
+			calls++;
+			if (calls === 1) return stream(toolMessage(1, "Avance: leí src/auth.ts."));
+			if (calls === 2) return stream(failure(error));
+			throw new Error("No reintenta un error que no es transitorio");
+		});
+		const result = await run({ agent: "worker", task: "x" });
+		const first = (result.details as Outcome).results[0]!;
+		assert.equal(calls, 2, error); assert.equal(result.isError, true); assert.equal(first.status, "error");
+		assert.equal(first.output, `### Interrupción\nInterrumpido por un error del proveedor: ${error}. Revisar archivos y verificaciones antes de continuar.\n\n### Información recuperada\nAvance: leí src/auth.ts.`);
+	}
+});
+
+for (const cut of ["Esc", "10 minutos"] as const) test(`subagent: ${cut} durante la espera del reintento corta sin otra llamada`, async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	let calls = 0; const controller = new AbortController(); const activities: string[] = [];
+	const { run } = setup(() => { calls++; return stream(failure("Unable to connect. Is the computer able to access the url?")); });
+	const pending = run({ agent: "scout", task: "x" }, controller.signal, (update) => activities.push(...(update as { details: Outcome }).details.results.map((r) => r.activity)));
+	await until(() => activities.includes("reintento 1/3"), "el aviso del reintento"); await settle();
+	if (cut === "Esc") controller.abort(); else t.mock.timers.tick(10 * 60_000);
+	const result = await pending;
+	assert.equal(calls, 1); assert.equal(result.isError, true);
+	assert.equal((result.details as Outcome).results[0]!.output, cut === "Esc" ? "Subagente cancelado." : "Subagente: límite de 10 minutos.");
+});
+
+test("subagent: agotados 3 reintentos (2, 4 y 8 s) devuelve la interrupción con lo recuperado", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	let calls = 0;
+	const errors = ["Our servers are currently overloaded", "Unable to connect", "529 Overloaded", "Our servers are currently overloaded.\n{\"type\":\"overloaded_error\"}"];
+	const { run, seen } = setup(() => ++calls === 1 ? stream(toolMessage(1, "Parcial útil: falta verificar.")) : stream(failure(errors[calls - 2]!)));
+	const pending = run({ agent: "worker", task: "x" });
+	for (const [index, delay] of [2000, 4000, 8000].entries()) {
+		await until(() => calls === index + 2, `el error ${index + 1}`); await settle();
+		t.mock.timers.tick(delay - 1); await settle();
+		assert.equal(calls, index + 2, `no reintenta antes de ${delay} ms`);
+		t.mock.timers.tick(1);
+	}
+	const result = await pending;
+	const first = (result.details as Outcome).results[0]!;
+	assert.equal(calls, 5, "el pedido inicial y 3 reintentos"); assert.deepEqual(seen, ["read"]);
+	assert.equal(result.isError, true); assert.equal(first.status, "error"); assert.equal(first.turns, 2);
+	assert.equal(first.output, "### Interrupción\nInterrumpido por un error del proveedor tras 3 reintentos: Our servers are currently overloaded. Revisar archivos y verificaciones antes de continuar.\n\n### Información recuperada\nParcial útil: falta verificar.");
+	assert.equal(result.usage?.totalTokens, 60, "el uso suma todos los pedidos");
+});
+
+test("subagent: agotados los reintentos sin texto recuperable lo dice", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	let calls = 0;
+	const { run } = setup(() => ++calls === 1 ? stream(toolMessage(1)) : stream(failure("Unable to connect")));
+	const pending = run({ agent: "worker", task: "x" });
+	for (const [index, delay] of [2000, 4000, 8000].entries()) {
+		await until(() => calls === index + 2, `el error ${index + 1}`); await settle();
+		t.mock.timers.tick(delay);
+	}
+	const result = await pending;
+	assert.equal(calls, 5);
+	assert.equal((result.details as Outcome).results[0]!.output, "Interrumpido por un error del proveedor tras 3 reintentos: Unable to connect; sin resumen recuperable; revisar archivos y verificaciones antes de continuar");
+});
+
+test("subagent: el turno reintentado no cuenta para el límite y el cierre reservado sigue en el turno 32", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	let calls = 0;
+	const { run, seen } = setup((context) => {
+		calls++;
+		if (calls === 31) return stream(failure("Our servers are currently overloaded"));
+		if (context.messages.filter((m) => m.role === "user").length === 2) return stream(message("Avances: parcial. Archivos: src/a.ts. Verificaciones: ninguna. Pendientes: probar."));
+		return stream(toolMessage(calls));
+	});
+	const pending = run({ agent: "worker", task: "loop" });
+	await until(() => calls === 31, "el turno 31 con error"); await settle();
+	t.mock.timers.tick(2000);
+	const result = await pending;
+	const first = (result.details as Outcome).results[0]!;
+	assert.equal(calls, 33, "30 turnos con tools, el error, el turno 31 reintentado y el cierre");
+	assert.equal(seen.length, 31); assert.equal(first.turns, 32);
+	assert.match(first.output, /Interrumpido por límite de turnos/); assert.match(first.output, /### Información recuperada\nAvances: parcial\. Archivos: src\/a\.ts/);
+});

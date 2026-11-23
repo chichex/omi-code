@@ -241,7 +241,7 @@ export async function landLifecycle(session: DevelopmentSession, ctx: ExtensionC
 	await session.update(ctx, saved => prepareLand(saved, observed.facts, risk, session.now()));
 	({ state, s } = enabledWork(session, ctx));
 	const intent = newIntent(s, "land"); let merged: unknown;
-	const description = [`${client.repo} PR #${subject.number} · ${config.land.method} · HEAD ${subject.headSha.slice(0, 12)} → ${subject.base}`, `Checks: ${observed.facts.checks.map(c => `${c.context} ${c.state}`).join(", ") || "ninguno"}`, `Reviews: ${observed.facts.reviews.map(r => `${r.user?.login ?? "?"} ${r.state}`).join(", ") || "ninguna"}`, "", "Mergear integra el cambio; no lo entrega. Ship se verifica después."].join("\n");
+	const description = [...readiness.attention.flatMap(reason => [`${reason}.`, ""]), `${client.repo} PR #${subject.number} · ${config.land.method} · HEAD ${subject.headSha.slice(0, 12)} → ${subject.base}`, `Checks: ${observed.facts.checks.map(c => `${c.context} ${c.state}`).join(", ") || "ninguno"}`, `Reviews: ${observed.facts.reviews.map(r => `${r.user?.login ?? "?"} ${r.state}`).join(", ") || "ninguna"}`, "", "Mergear integra el cambio; no lo entrega. Ship se verifica después."].join("\n");
 	try {
 		await operate(session, ctx, intent, activity => decide(session, ctx, intent, s, `Mergear el PR #${subject.number}`, description, { mode: config.land.mode, human: !readiness.auto || s.root.repo === OWN_REPO, effectHash: readiness.hash, activity, chain }),
 			async reserved => {

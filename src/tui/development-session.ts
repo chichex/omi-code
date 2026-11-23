@@ -33,10 +33,12 @@ import { lifecycleLines, lifecyclePauseLine } from "../harness/lifecycle-progres
 import { correctionPushGuide } from "../harness/after-draft-guide.ts";
 import type { LifecyclePorts } from "./development-lifecycle.ts";
 import { LifecycleContinuityHost } from "./development-lifecycle-continuity.ts";
+import { LENS_CALL_POLICY, type LensCallPolicy } from "./development-lens-call.ts";
 
 export const DEVELOPMENT_ANCHOR = "omi-development-workflow";
 const AnchorSchema = Type.Object({ id: Type.String(), root: Type.String(), issue: Type.Integer({ minimum: 1 }), revision: Type.Integer({ minimum: 0 }), disabled: Type.Optional(Type.Boolean()) });
-export interface DevelopmentDeps { runner?: Runner; now?: () => string; loader?: WaitLoader; kb?: KbClient; lifecycle?: LifecyclePorts; classifyTimeoutMs?: number }
+/** lensCall: plazo y backoff de cada parte de un lente; sólo los tests lo acortan. */
+export interface DevelopmentDeps { runner?: Runner; now?: () => string; loader?: WaitLoader; kb?: KbClient; lifecycle?: LifecyclePorts; classifyTimeoutMs?: number; lensCall?: LensCallPolicy }
 // El preflight y el documento íntegro se comparten con la revisión TUI y RPC.
 export function approvalPreview(state: Workflow): string { return approvalText(approvalDocument(state)); }
 export class DevelopmentSession {
@@ -51,6 +53,7 @@ export class DevelopmentSession {
 	/** Espera con Esc para cancelar: clasificar un pedido o leer la KB. */
 	readonly loader: WaitLoader;
 	readonly lifecycle = new AbortController();
+	readonly lensCall: LensCallPolicy;
 	readonly continuity = new LifecycleContinuityHost(this);
 	private context: ExtensionContext | undefined;
 	// Último vínculo válido de la conversación: permite salir aunque el estado no se pueda leer.
@@ -97,7 +100,7 @@ export class DevelopmentSession {
 		this.pi = pi; this.io = io;
 		this.runner = deps.runner ?? processRunner; this.now = deps.now ?? (() => new Date().toISOString()); this.loader = deps.loader ?? borderedLoader;
 		this.offline = developmentOffline(args, io.env);
-		this.kb = deps.kb; this.githubRunner = deps.runner; this.lifecyclePorts = deps.lifecycle ?? {};
+		this.kb = deps.kb; this.githubRunner = deps.runner; this.lifecyclePorts = deps.lifecycle ?? {}; this.lensCall = deps.lensCall ?? LENS_CALL_POLICY;
 		this.foundations = new FoundationsGate({ kb: deps.kb, runner: this.runner, trustDir: foundationsDir(io.homeDir), now: this.now });
 	}
 	private anchor(): void {

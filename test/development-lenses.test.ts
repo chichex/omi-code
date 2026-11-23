@@ -9,8 +9,8 @@ import { developmentFixture } from "./helpers/development.ts";
 type LensCall = { systemPrompt: string; messages: { content: { text: string }[] }[] };
 const material = (call: unknown) => JSON.parse((call as LensCall).messages[0]!.content[0]!.text);
 
-async function verifying(t: TestContext, lenses: Plan["lenses"] = ["compliance"], extra: Record<string, string> = {}) {
-	const f = await developmentFixture(t); await f.start(); await f.explore();
+async function verifying(t: TestContext, lenses: Plan["lenses"] = ["compliance"], extra: Record<string, string> = {}, deps: Parameters<typeof developmentFixture>[1] = {}) {
+	const f = await developmentFixture(t, deps); await f.start(); await f.explore();
 	await f.action({ action: "planned", plan: { ...f.plan(), lenses } }); await f.action({ action: "approve" });
 	await f.action({ action: "step", id: "C1" });
 	await f.write("test.cjs", 'require("node:assert/strict").equal(require("./value.cjs"), 2);\n'); await f.invoke("omi_workflow_check", { kind: "red", command: "node test.cjs", stepId: "C1" });
@@ -145,4 +145,77 @@ test("development_lenses un aviso se corrige con amend sin gastar vuelta: se rep
 	await f.action({ action: "verified" });
 	state = await f.state(); assert.equal(state.phase, "pr"); assert.equal(state.round, 0);
 	assert.equal(f.modelCalls.filter(isQuality).length, 1);
+});
+
+// Reintento acotado por parte: plazos y backoff cortos para no esperar minutos en el test.
+const FAST = { deps: { lensCall: { timeoutMs: 200, baseDelayMs: 1, graceMs: 50 } } };
+const OFFLINE = "OAuth refresh failed for openai: Unable to connect. Is the computer able to access the url?";
+const answer = (result: { content: unknown[] }) => JSON.parse((result.content[0] as { text: string }).text) as { notice?: string; noResult?: true };
+const warnings = (f: Awaited<ReturnType<typeof verifying>>) => (f.progress.at(-1) as { progress: { warnings: string[] } }).progress.warnings;
+
+test("development_lenses reintenta sólo lo transitorio: conexión o cuelgue y después ok da pass con el uso sumado; cuota y un unknown juzgado no se reintentan", async (t) => {
+	const f = await verifying(t, ["quality", "compliance", "reliability", "resilience"], {}, FAST);
+	let before = f.modelCalls.length;
+	f.modelControl.script = [{ stopReason: "error", errorMessage: OFFLINE }];
+	const quality = await f.invoke("omi_workflow_lens", { lens: "quality" });
+	assert.equal(f.modelCalls.length - before, 2, "un reintento"); assert.equal(quality.usage?.totalTokens, 6, "se suma el uso de los dos intentos");
+	assert.equal((await f.state()).reviews.at(-1)?.verdict, "pass");
+	assert.deepEqual(f.modelControl.options.slice(before).map((o) => o.maxTokens), [16384, 16384]);
+	before = f.modelCalls.length; f.modelControl.script = [{ stopReason: "error", errorMessage: "429 insufficient_quota: You exceeded your current quota" }];
+	await f.invoke("omi_workflow_lens", { lens: "compliance" });
+	assert.equal(f.modelCalls.length - before, 1, "cuota no se reintenta");
+	assert.deepEqual((await f.state()).reviews.at(-1)?.findings, ["Sin resultado del lente: cuota o facturación del proveedor (1 intento)"]);
+	before = f.modelCalls.length; f.modelControl.reply = () => JSON.stringify({ verdict: "unknown", findings: ["No se puede saber si D1 cubre el pedido"] });
+	const judged = await f.invoke("omi_workflow_lens", { lens: "reliability" });
+	assert.equal(f.modelCalls.length - before, 1, "un unknown del modelo es un veredicto: no se re-tira");
+	assert.equal(answer(judged).noResult, undefined); assert.match(answer(judged).notice ?? "", /No repitas el lente/);
+	f.modelControl.reply = () => '{"verdict":"pass","findings":[]}';
+	before = f.modelCalls.length; f.modelControl.script = ["hang"];
+	const hung = await f.invoke("omi_workflow_lens", { lens: "resilience" });
+	assert.equal(f.modelCalls.length - before, 2, "el plazo de la parte corta el cuelgue y se reintenta"); assert.equal(hung.usage?.totalTokens, 3);
+	assert.equal((await f.state()).reviews.at(-1)?.verdict, "pass");
+});
+
+test("development_lenses sin resultado tras 3 intentos: unknown con la causa por categoría, se puede volver a correr y no llega al refuter; el PR lo distingue de un unknown juzgado", async (t) => {
+	const f = await verifying(t, ["quality", "compliance", "refuter"], {}, FAST);
+	const before = f.modelCalls.length;
+	f.modelControl.script = Array.from({ length: 3 }, () => ({ stopReason: "error" as const, errorMessage: OFFLINE }));
+	const missing = await f.invoke("omi_workflow_lens", { lens: "quality" });
+	assert.equal(f.modelCalls.length - before, 3); assert.equal(missing.usage?.totalTokens, 9); assert.equal(missing.isError, false);
+	const review = (await f.state()).reviews.at(-1)!;
+	assert.deepEqual({ verdict: review.verdict, noResult: review.noResult, findings: review.findings }, { verdict: "unknown", noResult: true, findings: ["Sin resultado del lente: conexión (3 intentos)"] });
+	assert.match(answer(missing).notice ?? "", /Volvé a correr este lente antes de verified; no gasta veredictos/);
+	assert.doesNotMatch(answer(missing).notice ?? "", /No repitas/);
+	assert.ok(warnings(f).some((w) => /quality/.test(w) && /sin resultado/.test(w) && /conexión \(3 intentos\)/.test(w)), JSON.stringify(warnings(f)));
+	assert.ok((f.progress.at(-1) as { progress: { details: string[] } }).progress.details.includes("Lente quality: unknown · sin resultado"));
+	f.modelControl.reply = (input) => JSON.stringify((input as LensCall).systemPrompt.includes("Intentá refutar") ? { verdict: "pass", findings: [] } : { verdict: "unknown", findings: ["No se puede saber si D1 cubre el pedido"] });
+	await f.invoke("omi_workflow_lens", { lens: "compliance" });
+	await f.invoke("omi_workflow_lens", { lens: "refuter" });
+	assert.deepEqual(material(f.modelCalls.at(-1)).findings.map((r: { lens: string }) => r.lens), ["compliance"], "lo que quedó sin resultado no es un hallazgo para refutar");
+	// Volver a correrlo está permitido: no gasta veredictos. Si vuelve a quedar sin resultado, queda como aviso.
+	f.modelControl.script = Array.from({ length: 3 }, () => ({ stopReason: "error" as const, errorMessage: OFFLINE }));
+	await f.invoke("omi_workflow_lens", { lens: "quality" });
+	assert.equal((await f.state()).reviews.filter((r) => r.lens === "quality").length, 2);
+	await f.action({ action: "verified" }); await f.action({ action: "publish" });
+	assert.match(f.remote.prBody, /^ {2}- \*\*Calidad:\*\* ⚠️ unknown · sin resultado\n {4}- Sin resultado del lente: conexión \(3 intentos\)$/m);
+	assert.match(f.remote.prBody, /^ {2}- \*\*Cumplimiento:\*\* ⚠️ unknown$/m);
+	assert.match(f.remote.body, /^- \*\*Calidad:\*\* ⚠️ unknown · sin resultado$/m, "la sección del issue también lo distingue");
+	assert.doesNotMatch(JSON.stringify(await f.state()) + f.remote.prBody + f.remote.body, /OAuth|Unable to connect/, "el error crudo del proveedor no se guarda ni se publica");
+});
+
+test("development_lenses un abort de la persona no reintenta: ni durante la llamada ni durante el backoff", async (t) => {
+	const f = await verifying(t, ["quality"], {}, { deps: { lensCall: { timeoutMs: 60_000, baseDelayMs: 60_000, graceMs: 50 } } });
+	// La persona cancela apenas el modelo recibió la llamada: nunca antes, durante las lecturas de Git.
+	const cancelAfterCall = (controller: AbortController) => { const calls = f.modelCalls.length; const timer = setInterval(() => { if (f.modelCalls.length > calls) { clearInterval(timer); setTimeout(() => controller.abort(), 10); } }, 2); };
+	const before = f.modelCalls.length; const cancel = new AbortController(); const started = Date.now();
+	f.modelControl.script = [{ stopReason: "error", errorMessage: OFFLINE }];
+	cancelAfterCall(cancel);
+	const canceled = await f.invoke("omi_workflow_lens", { lens: "quality" }, cancel.signal);
+	assert.equal(f.modelCalls.length - before, 1); assert.ok(Date.now() - started < 30_000, "el backoff se corta con el abort");
+	assert.equal(canceled.usage?.totalTokens, 3, "conserva el uso consumido");
+	const review = (await f.state()).reviews.at(-1)!;
+	assert.equal(review.verdict, "unknown"); assert.equal(review.noResult, true); assert.match(review.findings[0]!, /cancelada/);
+	const during = new AbortController(); f.modelControl.script = ["hang"]; cancelAfterCall(during);
+	await f.invoke("omi_workflow_lens", { lens: "quality" }, during.signal);
+	assert.equal(f.modelCalls.length - before, 2, "un abort durante la llamada tampoco reintenta");
 });

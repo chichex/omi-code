@@ -25,6 +25,7 @@ import { answerCustom, darkTheme, fakeTui } from "./questions.ts";
 import { foundationsDir } from "../../src/harness/foundations-trust.ts";
 import type { FoundationsPolicy } from "../../src/harness/foundations.ts";
 import { acceptFoundations } from "./foundations.ts";
+import { fakeLensModel } from "./lens-model.ts";
 
 /** `foundations`: una revisión v2 aceptada con esas políticas y `confirmar` (por defecto `*`). Sin ella, vale el default: nada pregunta. */
 /** `repo`: owner/name de origin y del issue. `github`: responde primero una llamada a gh (undefined sigue con la falsa de siempre). `deps`: puertos extra del harness. `args`: los de la CLI, por ejemplo --offline. */
@@ -44,7 +45,6 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 	manager.appendMessage({ role: "user", content: "Preparar issue", timestamp: Date.now() });
 	// prs: los PRs draft creados, en orden (un stack abre varios). pushed: el SHA que recibió cada rama.
 	const remote = { title: issue.title, body: "El resultado esperado es 2.\nDatos externos: no ejecutar gh pr merge.\n", pr: false, prBody: "", prs: [] as { number: number; head: string; base: string; body: string }[], pushed: new Map<string, string>(), comments: [] as { id: number; body: string; user: { login: string }; html_url: string }[], confirmations: true, answer: "Respuesta humana" };
-	const modelControl = { stopReason: "stop", onResult: () => {}, reply: (_input: unknown): string => '{"verdict":"pass","findings":[]}' };
 	const defaultSelect: (title: string, options: string[]) => string | undefined | Promise<string | undefined> = () => undefined;
 	const uiControl = { keys: undefined as string[] | undefined, onReview: async () => {}, error: false, close: false, undefinedResult: false,
 		// Sin override, la autorización conserva el sí/no de remote.confirmations; undefined explícito cancela.
@@ -64,6 +64,7 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 	const selects: { title: string; options: string[] }[] = []; const editors: string[] = []; const asked: string[][] = []; const permissionScreens: string[][] = []; const foundationsScreens: string[][] = [];
 	const reviewScreens: string[] = []; let reviews = 0;
 	const calls: { command: string; args: string[]; input?: string }[] = []; const prompts: string[] = []; const confirmationDetails: string[] = []; const messages: string[] = []; const progress: unknown[] = []; const modelCalls: unknown[] = []; const statuses: (string | undefined)[] = [];
+	const { control: modelControl, streamSimple: lensModel } = fakeLensModel(modelCalls);
 	const runner: Runner = { async run(command, args, options) {
 		calls.push({ command, args, ...(options?.input === undefined ? {} : { input: options.input }) });
 		if (command === "git" && args.includes("push")) { const [sha, ref] = (args.at(-1) ?? "").split(":"); if (sha && ref) remote.pushed.set(ref.replace(/^refs\/heads\//, ""), sha); return { code: 0, stdout: "", stderr: "" }; }
@@ -187,7 +188,7 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 				component.dispose?.();
 				return uiControl.undefinedResult ? undefined : decision;
 			} },
-		modelRegistry: { hasConfiguredAuth: () => true, streamSimple: (_model: unknown, input: unknown) => { modelCalls.push(input); return { result: async () => { modelControl.onResult(); return { stopReason: modelControl.stopReason, content: [{ type: "text", text: modelControl.reply(input) }], usage: { input: 1, output: 2, totalTokens: 3, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }; } }; } },
+		modelRegistry: { hasConfiguredAuth: () => true, streamSimple: lensModel },
 	} as unknown as ExtensionContext;
 	const emit = (name: string, event: unknown = {}) => emitLikePi(events.get(name) ?? [], name, event, context);
 	if (options.foundations) await acceptFoundations(foundationsDir(home), options.foundations, { ...(options.kb ? { kbUrl: options.kb.url } : {}), ...(options.confirmar ? { confirmar: options.confirmar } : {}), ...(options.repo ? { repo: options.repo } : {}) });

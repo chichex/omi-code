@@ -334,6 +334,7 @@ function recordReview(state: Workflow, review: Review): void {
  const blocked = lensRunBlock(state, review.lens, review.fingerprint); requireCondition(!blocked, blocked);
  requireCondition(state.reviews.length < MAX_REVIEWS, "los lentes de esta vuelta llegaron al tope; hacé retry o refresh");
  requireCondition(review.verdict !== "pass" || review.findings.length === 0, "un lente con hallazgos no puede aprobar");
+ requireCondition(!review.noResult || review.verdict === "unknown", "un lente sin resultado sólo puede quedar unknown");
  state.reviews.push(review);
 }
 // La UI/adapter es la única autoridad que puede emitir approved o autorizar una reproducción.

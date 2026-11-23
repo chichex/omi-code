@@ -10,8 +10,10 @@ import { landLedgerHash } from "./land-invariants.ts";
 import { LandFactsSchema, LandRiskSchema, type LandFacts, type LandRisk, type ReadyLand } from "./land-schema.ts";
 import { PullSchema } from "./lifecycle-github-schema.ts";
 import { effectiveGitHubReviews } from "./github-review-opinions.ts";
+import { landSecurityHold } from "./land-security.ts";
 export { landPullRequest } from "./land-operation.ts";
-export interface LandReadiness { ready: boolean; auto: boolean; reasons: string[]; summary: string; hash: string }
+// attention: motivos por los que el merge pide el sí de la persona aunque Land diga auto; no lo bloquean.
+export interface LandReadiness { ready: boolean; auto: boolean; reasons: string[]; attention: string[]; summary: string; hash: string }
 function approvalFacts(f: LandFacts, configured: string[], required: number): boolean {
  const { valid, latest, forHead } = effectiveGitHubReviews(f.reviews, f.headSha); if (!valid) return false;
  if ([...forHead.values()].some(r => r.state === "CHANGES_REQUESTED")) return false;
@@ -19,7 +21,7 @@ function approvalFacts(f: LandFacts, configured: string[], required: number): bo
  return approved.length >= required && configured.every(r => approved.includes(r.toLowerCase()));
 }
 export function landReadiness(original: unknown, observed: unknown, witness: unknown): LandReadiness {
- const result: LandReadiness = { ready: false, auto: false, reasons: [], summary: "", hash: "" };
+ const result: LandReadiness = { ready: false, auto: false, reasons: [], attention: [], summary: "", hash: "" };
  try {
   const state = parseWorkflow(JSON.stringify(original)); lifecycleAssert(state.lifecycle.status === "enabled" && state.pullRequest?.ownership === "adopted" && state.status === "active" && isApproved(state), "falta trabajo/PR adoptado y receta vigente");
   const s = state.lifecycle, config = currentLifecyclePin(s).accepted.block, subject = s.subjects.find(x => x.id === s.currentSubject);
@@ -43,14 +45,14 @@ export function landReadiness(original: unknown, observed: unknown, witness: unk
    const o = entry.observations.at(-1); return o?.provider === "github" && o.externalId === finding.externalId && o.subjectId === subject.id && o.text === finding.body && o.resolved === (finding.resolved === true) && o.outdated === finding.outdated;
   }), "nuevo comentario/hallazgo sin disposición en ledger");
   lifecycleAssert(risk.scopeHash === recipeApprovalHash(state) && risk.risk !== "unknown" && (risk.risk !== "high" || config.land.maxRisk === "high"), "riesgo/alcance desconocido o superior al aceptado");
-  result.ready = true;
-  result.auto = config.land.mode === "auto" && config.ship.status !== "unconfigured" && f.repo !== "chichex/omi-code" && risk.source !== "model" && !!risk.authorityHash;
+  result.ready = true; const hold = landSecurityHold(state, risk, subject.contentHash); result.attention = hold ? [hold] : [];
+  result.auto = !hold && config.land.mode === "auto" && config.ship.status !== "unconfigured" && f.repo !== "chichex/omi-code" && risk.source !== "model" && !!risk.authorityHash;
   result.hash = landSnapshotHash(state, f, risk);
-  result.summary = JSON.stringify({ objective: state.recipe?.objective, scope: state.recipe?.scope, outOfScope: state.recipe?.outOfScope, repo: f.repo, pr: f.number, headSha: f.headSha, baseSha: f.baseSha, base: subject.base, method: config.land.method,
+  result.summary = JSON.stringify({ ...(hold ? { attention: hold } : {}), objective: state.recipe?.objective, scope: state.recipe?.scope, outOfScope: state.recipe?.outOfScope, repo: f.repo, pr: f.number, headSha: f.headSha, baseSha: f.baseSha, base: subject.base, method: config.land.method,
    checks: f.checks, reviews: f.reviews.map(({ id, user, state, commit_id }) => ({ id, reviewer: user?.login, state, headSha: commit_id })), findings: s.ledger, warnings: state.reviews.filter(r => r.verdict !== "pass"), risk,
    ship: config.ship, note: "Listo para merge no es permiso de merge ni entrega; se releen hechos/reglas antes del efecto" }, null, 2);
   lifecycleAssert(Buffer.byteLength(result.summary) <= 1000000, "resumen demasiado grande; no se recorta para aprobar");
- } catch (e) { result.ready = false; result.auto = false; result.reasons.push(e instanceof Error ? e.message : "Land desconocido"); }
+ } catch (e) { result.ready = false; result.auto = false; result.attention = []; result.reasons.push(e instanceof Error ? e.message : "Land desconocido"); }
  return result;
 }
 export function landSnapshotHash(state: WorkflowV2, facts: LandFacts, risk: LandRisk): string {
