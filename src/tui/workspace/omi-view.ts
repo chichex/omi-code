@@ -53,16 +53,17 @@ export function omiViewLines(t: Theme, snapshot: OmiSnapshot, width: number): st
 	const ready = config?.status === "ready" ? config : undefined;
 	const heading = (title: string) => ["", t.fg("accent", ` ${title}`)];
 	const lines = [t.bold(" OMI"), ...wrapped([HELP], width).map((line) => t.fg("dim", line)), "", t.fg("accent", ` PROYECTO OMI · ${age(at, now)}`)];
-	if (error) lines.push(t.fg("warning", ` ${error}${project ? " · datos desactualizados" : ""}`));
+	if (error) lines.push(...wrapped([`${error}${project ? " · datos desactualizados" : ""}`], width).map((line) => t.fg("warning", line)));
 	if (project) {
-		lines.push(` ${text(project)}`, "", t.fg("accent", " SERVICIOS Y AMBIENTES"));
+		lines.push(...wrapped([project], width), "", t.fg("accent", " SERVICIOS Y AMBIENTES"));
 		for (const service of services) {
-			lines.push(t.bold(` ${text(service)}`));
+			lines.push(...wrapped([service], width).map((line) => t.bold(line)));
 			const serviceEnvironments = environments.filter((environment) => environment.service === service);
-			for (const environment of serviceEnvironments) lines.push(text(`   ${environment.name} · ${environment.version ?? "sin versión"} · ${environment.state}`));
-			if (!serviceEnvironments.length) lines.push(t.fg("muted", "   Sin ambientes informados."));
+			// El estado va al final: partir la línea lo deja a la vista.
+			for (const environment of serviceEnvironments) lines.push(...wrapped([`  ${environment.name} · ${environment.version ?? "sin versión"} · ${environment.state}`], width));
+			if (!serviceEnvironments.length) lines.push(...wrapped(["  Sin ambientes informados."], width).map((line) => t.fg("muted", line)));
 		}
-	} else if (!error) lines.push(at ? " Sin proyecto OMI vinculado. Usá omi init para vincularlo." : " Consultando vínculo y ambientes OMI…");
+	} else if (!error) lines.push(...wrapped([at ? "Sin proyecto OMI vinculado. Usá omi init para vincularlo." : "Consultando vínculo y ambientes OMI…"], width));
 	// Sin datos, cada sección dice por qué; con datos, cada una muestra lo suyo.
 	const rows = (build: (shown: ConfigSnapshot) => string[]) => config?.status === "ready" ? build(config.snapshot) : wrapped([waiting(config, session)], width);
 	lines.push(...heading("FOUNDATIONS · cuándo te pide confirmación el agente"), ...wrapped(foundations(pin, ready?.snapshot), width));

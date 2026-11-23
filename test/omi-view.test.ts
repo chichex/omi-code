@@ -210,6 +210,24 @@ test("omi_view: sin datos de configuración lo dice con el motivo, también sin 
 	assert.ok(refreshing.includes(" No se pudo actualizar: la KB no conectó a tiempo. Se muestra la lectura anterior."));
 });
 
+// El estado va al final de la línea del ambiente: cortarla esconde justo el dato útil.
+test("omi_view: a 80 y 40 columnas el proyecto, cada ambiente con su estado y el error se parten sin cortar", () => {
+	const project = "acme-latam/plataforma-de-pagos", service = "facturacion-electronica-api", version = "v2026.11.23-rc.1+build.4521.arm64";
+	const error = "No se pudo consultar OMI: la API respondió 503 después de tres intentos seguidos";
+	const environments = [{ service, name: "produccion-sudamerica-este-norte", state: "running", version }, { service, name: "stage", state: "failed" }];
+	for (const width of [80, 40]) {
+		const snapshot: OmiSnapshot = { project, services: [service], environments, error, at: 1, now: 3000, pin: undefined, config: undefined, session: true };
+		const lines = omiViewLines(theme, snapshot, width).map((line) => stripTerminalSequences(line).trimEnd());
+		assert.ok(lines.every((line) => visibleWidth(line) <= width), `${width} columnas`);
+		const shown = prose(lines);
+		for (const value of [project, service, `produccion-sudamerica-este-norte · ${version} · running`, "stage · sin versión · failed", `${error} · datos desactualizados`]) assert.ok(shown.includes(value), `${value} entero a ${width}`);
+		const environment = lines.findIndex((line) => line.includes("produccion-sudamerica-este-norte"));
+		assert.ok(lines.slice(environment, environment + 3).every((line) => line.startsWith("   ")), "un ambiente partido sigue con la sangría de la lista");
+		const unlinked = omiViewLines(theme, { ...snapshot, project: undefined, services: [], environments: [], error: undefined }, width).map((line) => stripTerminalSequences(line).trimEnd());
+		assert.ok(prose(unlinked).includes("Sin proyecto OMI vinculado. Usá omi init para vincularlo."), `sin vínculo, el aviso entero a ${width}`);
+	}
+});
+
 test("omi_view: a 80 y 40 columnas nada se corta: las líneas largas se parten y conservan la sangría", () => {
 	const long = Array.from({ length: 8 }, (_, i) => `npm run check:${i} --workspace=packages/muy-largo-${i}`);
 	const block = foundations(long), config = view({ foundations: block }); assert.ok(config.status === "ready");
