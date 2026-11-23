@@ -273,3 +273,13 @@ test("recomendaciones: sin GHA detectado sólo continuidad; con continuidad y GH
  assert.deepEqual((await g.status()).recommendations, [], "GitHub explícito no se reemplaza por recomendación");
  const down = await reviewRepo(t); down.kb.available = "KB caída"; assert.deepEqual((await down.status()).recommendations, []);
 });
+
+// Cambio de requisito del dueño (2026-11-23): una revisión pendiente de aceptar también se ofrece sola.
+test("pendiente de aceptar se ofrece aunque no haya recomendaciones; en consultas simples no", async t => {
+ const f = await fixture(t), withContinuity = legacyBlock(b => { b.continuity = { entry: "ask", review: "ask", fix: "ask", land: "manual", ship: "manual" }; });
+ f.kb.perillas("app", `# Perillas de app\n\n${renderLifecycleBlock(withContinuity)}\n`);
+ const pending = await f.status(), local = await readLifecycleTrust(f.trustDir, key);
+ assert.equal(pending.status, "pending"); assert.deepEqual(pending.recommendations, []);
+ assert.equal(shouldOfferLifecycleOnboarding("harness", pending, local), true);
+ assert.equal(shouldOfferLifecycleOnboarding("simple", pending, local), false); assert.equal(shouldOfferLifecycleOnboarding("needs-info", pending, local), false);
+});

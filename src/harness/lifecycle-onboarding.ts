@@ -23,10 +23,10 @@ export function lifecycleOnboardingStatus(reading: LifecycleReading, local: Life
  if (evaluation.status === "pending") return { status: "pending", revision: `lifecycle:${reading.hash}`, reason: "Revisión lifecycle sin aceptar localmente", recommendations };
  return { status: reading.block.ship.status, revision: `lifecycle:${reading.hash}`, reason: `Ship ${reading.block.ship.status}`, recommendations };
 }
-/** Al entrar al harness, sin config o con recomendaciones; nunca en consultas simples/needs-info ni otra vez para la misma revisión postergada. */
+/** Sin config, pendiente de aceptar o con recomendaciones; nunca en consultas simples/needs-info ni otra vez para la misma revisión postergada. */
 export function shouldOfferLifecycleOnboarding(intent: "harness" | "simple" | "needs-info", state: LifecycleOnboardingState, local: LifecycleTrustReading): boolean {
  const deferred = local.kind === "valid" && local.record.deferred?.revision === state.revision;
- return intent === "harness" && state.revision !== null && !deferred && (state.status === "unconfigured" || state.recommendations.length > 0);
+ return intent === "harness" && state.revision !== null && !deferred && (state.status === "unconfigured" || state.status === "pending" || state.recommendations.length > 0);
 }
 export interface LifecycleOnboardingDeps {
  kb: KbClient | undefined; key: LifecycleKey; cwd: string; base: string; trustDir: string; detection: LifecycleDetection;
