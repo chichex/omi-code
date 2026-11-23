@@ -7,7 +7,7 @@ import type { Io } from "../cli/io.ts";
 import { isInside } from "../core/files.ts";
 import { ASK_TOOL, workflowToolAllowed, workflowWritePath, WORKFLOW_TOOLS } from "../harness/permissions.ts";
 import { afterDraft } from "../harness/execution-scope.ts";
-import { afterDraftToolBlock } from "../harness/after-draft-guide.ts";
+import { afterDraftToolBlock, afterDraftUserBash } from "../harness/after-draft-guide.ts";
 import { referenceDigest } from "../harness/references.ts";
 import { developmentInstructions } from "./development-view.ts";
 import { singlePrPlanning } from "./development-single-pr.ts";
@@ -259,7 +259,8 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 		});
 		pi.on("user_bash", () => {
 			if (!session.state && !session.lockedReason) return;
-			return { result: { output: "Harness activo: usá omi_workflow_check para comandos observados y autorizados, o /omi-work stop para salir explícitamente del flujo.", exitCode: 1, cancelled: false, truncated: false } };
+			const output = session.state && afterDraft(session.state) ? afterDraftUserBash(session.state) : "Harness activo: usá omi_workflow_check para comandos observados y autorizados, o /omi-work stop para salir explícitamente del flujo.";
+			return { result: { output, exitCode: 1, cancelled: false, truncated: false } };
 		});
 		observeDevelopment(pi, session);
 		continueDevelopment(pi, session);

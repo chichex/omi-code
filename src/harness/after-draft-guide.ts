@@ -63,6 +63,10 @@ export function correctionPushGuide(state: Workflow): string {
 export function afterDraftToolBlock(state: Workflow, tool: string): string {
  return `Harness: ${tool} no está habilitada después del PR draft. ${owners(state)}. ${NO_WORKFLOWS}. ${nextLine(state)}`;
 }
+/** Aviso de un `!comando` de la persona después del draft: el próximo paso es un /omi-work, no una tool del agente. */
+export function afterDraftUserBash(state: Workflow): string {
+ return `Harness activo después del PR draft: los comandos con ! no corren en este trabajo. Para salir del flujo, /omi-work stop.\nPróximo paso: ${afterDraftNextStep(state)}.`;
+}
 /** Error de omi_workflow_check después del draft: con el trabajo terminado, pausado o activo fuera de una corrección. */
 export function afterDraftCheckError(state: Workflow): string {
  const inactive = state.status === "complete" || state.status === "paused" ? `El trabajo no está activo (${PHASE_LABELS[state.phase]}). ` : "";

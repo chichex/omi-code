@@ -519,7 +519,7 @@ No hay garantía de atomicidad entre cambios humanos del issue y todas las accio
 
 El PR draft es el final por defecto. Para seguir el mismo trabajo se puede habilitar continuidad explícita en la configuración aceptada, o usar los comandos manuales. La continuidad la ejecuta el host: el agente no tiene tools para estos efectos; ni `bash` ni `omi_workflow` reservan, mergean, despachan ni despliegan.
 
-Después del draft, el agente no corre Review, Land ni Ship: se los pasa a la persona como comandos `/omi-work`, nunca como comandos de terminal ni disparando workflows. Su contexto, el motivo de una tool bloqueada y el error de `omi_workflow_check` dicen quién corre cada efecto y el **próximo paso** del estado. El próximo paso es el de la pausa de la continuidad, si hay una vigente. Si no, sale del estado guardado como lo elegiría la cadena, sin repetir una Review ya registrada. Ejemplos:
+Después del draft, el agente no corre Review, Land ni Ship: se los pasa a la persona como comandos `/omi-work`, nunca como comandos de terminal ni disparando workflows. Su contexto, el motivo de una tool bloqueada y el error de `omi_workflow_check` dicen quién corre cada efecto y el **próximo paso** del estado. Un `!comando` de la persona tampoco corre: el aviso le da ese próximo paso y `/omi-work stop` para salir del flujo, sin mandarla a `omi_workflow_check`. El próximo paso es el de la pausa de la continuidad, si hay una vigente. Si no, sale del estado guardado como lo elegiría la cadena, sin repetir una Review ya registrada. Ejemplos:
 
 ```text
 PR draft abierto, sin adoptar  → corré /omi-work adopt y después /omi-work review; si la continuidad está configurada, adopt ya sigue con la Review

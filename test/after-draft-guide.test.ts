@@ -121,3 +121,20 @@ test("publish con el PR adoptado y fix en la continuidad: no pide /omi-work fix 
   return true;
  });
 });
+
+test("!comando de la persona después del draft: el aviso guía a /omi-work y al próximo paso, no a omi_workflow_check", async t => {
+ const { f } = await continuityFixture(t, { historical: true });
+ assert.equal((await f.state()).phase, "done");
+ const output = async () => ((await f.emit("user_bash", {})) as { result?: { output?: string; exitCode?: number } } | undefined)?.result;
+ const draftResult = await output();
+ assert.equal(draftResult?.exitCode, 1, "el comando no corre");
+ const text = draftResult?.output ?? "";
+ assert.doesNotMatch(text, /omi_workflow_check/, "una tool del agente no le sirve a la persona");
+ assert.match(text, /después del PR draft/);
+ assert.match(text, /\/omi-work stop/, "sigue diciendo cómo salir del flujo");
+ assert.equal(/Próximo paso: ([^\n]*)/.exec(text)?.[1], "corré /omi-work adopt y después /omi-work review; si la continuidad está configurada, adopt ya sigue con la Review.");
+ await f.command("adopt");
+ const adoptedText = (await output())?.output ?? "";
+ assert.doesNotMatch(adoptedText, /omi_workflow_check/);
+ assert.equal(/Próximo paso: ([^\n]*)/.exec(adoptedText)?.[1], "corré /omi-work review.");
+});
