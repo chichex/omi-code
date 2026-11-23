@@ -17,7 +17,7 @@ async function harness(home: string, options: { args?: string[]; setting?: strin
 		ui: {
 			get theme() { return theme; }, getTheme: getThemeByName,
 			setTheme: (value: Theme) => { applied.push(value); theme = value; setThemeInstance(value); },
-			setHeader() {}, setFooter() {}, notify() {}, getEditorComponent: () => () => undefined,
+			setHeader() {}, setFooter() {}, setWidget() {}, notify() {}, getEditorComponent: () => () => undefined,
 			onTerminalInput: () => () => {},
 		},
 	} as unknown as ExtensionContext;

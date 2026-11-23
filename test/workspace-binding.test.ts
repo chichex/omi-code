@@ -22,7 +22,7 @@ async function harness(home: string, options: { authenticated?: boolean; busy?: 
 		getContextUsage: () => ({ tokens: 1000, contextWindow: 200000, percent: .5 }),
 		modelRegistry: { getAvailable: () => { throw new Error("No enumerar fuera de --models"); }, hasConfiguredAuth: () => options.authenticated !== false },
 		ui: {
-			getTheme: () => undefined, setHeader() {}, setFooter() {}, getEditorComponent: () => () => undefined,
+			getTheme: () => undefined, setHeader() {}, setFooter() {}, setWidget() {}, getEditorComponent: () => () => undefined,
 			onTerminalInput: (handler: typeof terminalInput) => { terminalInput = handler; return () => { terminalInput = undefined; }; }, notify: (message: string) => notifications.push(message),
 			custom: async (factory: (_ui: unknown, _theme: unknown, _keys: unknown, done: (result: PickerResult) => void) => OmiModelPicker) => {
 				pickerCount++; let result: PickerResult | undefined;

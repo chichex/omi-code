@@ -14,6 +14,12 @@ export interface SubagentTask {
 	endedAt?: number;
 }
 
+export interface SubagentSummary {
+	running: number;
+	pending: number;
+	latest: Pick<SubagentTask, "agent" | "activity"> | undefined;
+}
+
 const ROLES = new Set(["scout", "planner", "reviewer", "worker"]);
 const MAX_TASKS = 8;
 const HISTORY_BATCHES = 8;
@@ -23,13 +29,27 @@ function record(value: unknown): Record<string, unknown> | undefined {
 }
 function label(value: unknown, width: number): string {
 	// Bound work as well as storage. Strip escape sequences before removing control bytes.
-	return typeof value === "string" ? fit(text(stripTerminalSequences(value.slice(0, 2048))).replace(/[\u202a-\u202e\u2066-\u2069]/g, "").replace(/\s+/g, " ").trim(), width).trimEnd() : "";
+	return typeof value === "string" ? fit(text(stripTerminalSequences(value.slice(0, 2048)).replace(/\s+/g, " ")).replace(/[\u202a-\u202e\u2066-\u2069]/g, "").replace(/\s+/g, " ").trim(), width).trimEnd() : "";
 }
 function active(task: SubagentTask): boolean { return task.status === "running" || task.status === "pending"; }
 
 /** Keeps only sidebar metadata, never tool payloads, outputs, usage or private history. */
 export class SubagentMonitor {
 	private batches = new Map<string, Batch>();
+	private activityOrder = new WeakMap<SubagentTask, number>();
+	private sequence = 0;
+
+	get summary(): SubagentSummary {
+		let running = 0; let pending = 0; let latest: SubagentTask | undefined; let latestOrder = 0;
+		for (const batch of this.batches.values()) for (const task of batch.tasks) {
+			if (task.status === "pending") pending++;
+			if (task.status !== "running") continue;
+			running++;
+			const order = this.activityOrder.get(task) ?? 0;
+			if (task.activity && order > latestOrder) { latest = task; latestOrder = order; }
+		}
+		return { running, pending, latest: latest ? { agent: latest.agent, activity: latest.activity } : undefined };
+	}
 
 	get tasks(): SubagentTask[] {
 		// Copies prevent callers from mutating the monitor or retaining its internal records.
@@ -62,6 +82,7 @@ export class SubagentMonitor {
 		for (const [index, task] of batch.tasks.entries()) {
 			const result = record(results[index]);
 			if (!result || !active(task)) continue;
+			const previousActivity = task.activity; const previousTurns = task.turns; const previousStatus = task.status;
 			if (typeof result.agent === "string" && ROLES.has(result.agent)) task.agent = result.agent;
 			if (typeof result.turns === "number" && Number.isFinite(result.turns)) task.turns = Math.max(task.turns, Math.min(1_000_000, Math.max(0, Math.floor(result.turns))));
 			if (typeof result.activity === "string") task.activity = label(result.activity, 48);
@@ -70,6 +91,11 @@ export class SubagentMonitor {
 				task.status = status;
 				if (status === "running") task.startedAt ??= Date.now();
 				if (!active(task)) { task.endedAt = Date.now(); task.activity = ""; }
+			}
+			// Full snapshots repeat other tasks' metadata. Only new observable activity
+			// changes recency; identical tool calls within a turn are indistinguishable.
+			if (task.status === "running" && task.activity && (task.activity !== previousActivity || task.turns > previousTurns || previousStatus !== "running")) {
+				this.activityOrder.set(task, ++this.sequence);
 			}
 		}
 	}
@@ -88,7 +114,7 @@ export class SubagentMonitor {
 		this.prune();
 	}
 
-	clear(): void { this.batches.clear(); }
+	clear(): void { this.batches.clear(); this.activityOrder = new WeakMap(); this.sequence = 0; }
 
 	private close(batch: Batch): void {
 		for (const task of batch.tasks) if (active(task)) {
