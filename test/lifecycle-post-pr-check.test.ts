@@ -36,9 +36,25 @@ test("PR adoptado en Review: setup no dispara un workflow y guía a /omi-work re
   assert.ok(error instanceof Error);
   assert.match(error.message, /\/omi-work review/);
   assert.match(error.message, /corrección en curso/);
+  assert.match(error.message, /Próximo paso para la persona: corré \/omi-work review\./);
   return true;
  });
  assert.deepEqual(executed, [], "no llegó al ejecutor");
+});
+
+test("PR draft abierto: omi_workflow_check no está activo y guía a /omi-work adopt y /omi-work review", async t => {
+ const fixture = await continuityFixture(t, { historical: true });
+ const state = await fixture.f.state();
+ assert.equal(state.phase, "done"); assert.equal(state.status, "complete");
+ const { executed, check } = await setupChecker(fixture);
+ await assert.rejects(check(DISPATCH), (error: unknown) => {
+  assert.ok(error instanceof Error);
+  assert.match(error.message, /^El trabajo no está activo \(PR draft abierto\)/);
+  assert.match(error.message, /no dispara workflows/);
+  assert.match(error.message, /Próximo paso para la persona: corré \/omi-work adopt y después \/omi-work review/);
+  return true;
+ });
+ assert.deepEqual(executed, []);
 });
 
 test("setup corre durante una corrección en curso y deja de correr con la corrección verificada sin push", async t => {

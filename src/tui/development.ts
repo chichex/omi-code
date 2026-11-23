@@ -6,6 +6,8 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, InlineExt
 import type { Io } from "../cli/io.ts";
 import { isInside } from "../core/files.ts";
 import { ASK_TOOL, workflowToolAllowed, workflowWritePath, WORKFLOW_TOOLS } from "../harness/permissions.ts";
+import { afterDraft } from "../harness/execution-scope.ts";
+import { afterDraftToolBlock } from "../harness/after-draft-guide.ts";
 import { referenceDigest } from "../harness/references.ts";
 import { developmentInstructions } from "./development-view.ts";
 import { singlePrPlanning } from "./development-single-pr.ts";
@@ -202,7 +204,8 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 			if (pendingBegin) return { block: true, reason: "Hay un pedido de desarrollo esperando la confirmación de la persona. Terminá el turno sin otras tools." };
 			if (!session.state && !session.lockedReason) return;
 			if (session.lockedReason && !["read", "grep", "find", "ls", ASK_TOOL, ...WORKFLOW_TOOLS].includes(event.toolName)) return { block: true, reason: session.lockedReason };
-			if (session.state && !workflowToolAllowed(session.state, event.toolName, event.input)) return { block: true, reason: `Harness: ${event.toolName} no está habilitada en esta etapa. Usá omi_workflow y omi_workflow_check; no eludas la receta, evidencia ni permisos.` };
+			// Después del draft, omi_workflow_check tampoco corre: el motivo manda a los comandos /omi-work de la persona.
+			if (session.state && !workflowToolAllowed(session.state, event.toolName, event.input)) return { block: true, reason: afterDraft(session.state) ? afterDraftToolBlock(session.state, event.toolName) : `Harness: ${event.toolName} no está habilitada en esta etapa. Usá omi_workflow y omi_workflow_check; no eludas la receta, evidencia ni permisos.` };
 			if (session.state && event.toolName === "read" && typeof event.input.path === "string") {
 				try {
 					const path = await realpath(resolve(session.state.checkout.root, event.input.path.replace(/^@/, "")));

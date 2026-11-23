@@ -6,6 +6,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isInside } from "../core/files.ts";
 import type { Evidence, EvidenceKind, Workflow } from "../harness/model.ts";
 import { commandAuthorization } from "../harness/authorization.ts";
+import { afterDraftCheckError } from "../harness/after-draft-guide.ts";
 import { expectedFailure, isApproved, recipeApprovalHash, successful } from "../harness/state.ts";
 import { inspectCheckout, assertStepCommit } from "../harness/git.ts";
 import { runWorkflowCommand, type WorkflowCommandResult } from "../harness/commands.ts";
@@ -15,13 +16,12 @@ import type { DevelopmentSession } from "./development-session.ts";
 import { authorizeProjectCommand } from "./development-command-authorization.ts";
 
 export interface CheckInput { kind: EvidenceKind | "setup"; command: string; stepId?: string; caseId?: string; timeoutSeconds?: number }
-const AFTER_DRAFT_CHECK = "Después del PR draft, omi_workflow_check sólo corre durante una corrección en curso: no dispara workflows ni comandos sueltos. Review, Land y Ship de este PR los corre la persona con /omi-work review | fix | land | ship, o los encadena la continuidad configurada.";
 /** En qué etapa corre cada etiqueta. Setup no acredita nada: prepara el checkout en cualquier etapa activa hasta el PR
  * draft; después, sólo durante una corrección en curso. */
 function assertCheckPhase(state: Workflow, kind: CheckInput["kind"]): void {
 	assertCorrectionExecution(state);
+	if (afterDraft(state)) throw new Error(afterDraftCheckError(state));
 	if (state.status === "paused" || state.status === "complete") throw new Error("El trabajo no está activo");
-	if (afterDraft(state)) throw new Error(AFTER_DRAFT_CHECK);
 	if (kind === "setup") return;
 	// Resolver inferencias admite volver a registrar explored: también puede volver a reproducir.
 	if (kind === "reproduction") {
