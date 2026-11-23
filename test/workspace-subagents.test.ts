@@ -132,6 +132,46 @@ test("bus: valida envelopes, aplica details iniciales y termina sin inventar éx
 	assert.deepEqual(monitor.tasks, []);
 });
 
+test("resumen: agrega lotes y elige sólo última actividad observable de running", () => {
+	const monitor = new SubagentMonitor();
+	assert.deepEqual(monitor.summary, { running: 0, pending: 0, latest: undefined });
+	monitor.start("first", { tasks: [task("worker"), task("scout"), task("planner")] });
+	monitor.update("first", snapshot({ status: "running", activity: "read", turns: 1 }, { status: "pending", activity: "NO_PENDING" }));
+	monitor.start("second", task("reviewer"));
+	monitor.update("second", snapshot({ status: "running", activity: "grep", turns: 2 }));
+	const expected = { running: 2, pending: 2, latest: { agent: "reviewer", activity: "grep" } };
+	assert.deepEqual(monitor.summary, expected);
+	// Un snapshot completo idéntico no hace más reciente a otra tarea.
+	monitor.update("first", snapshot({ status: "running", activity: "read", turns: 1 }, { status: "pending", activity: "NO_PENDING" }));
+	assert.deepEqual(monitor.summary, expected);
+	// La misma tool en un turno posterior sí es una observación nueva.
+	monitor.update("first", snapshot({ status: "running", activity: "read", turns: 2 }));
+	assert.deepEqual(monitor.summary.latest, { agent: "worker", activity: "read" });
+	monitor.update("second", snapshot({ status: "running", activity: "ls", turns: 2 }));
+	assert.deepEqual(monitor.summary.latest, { agent: "reviewer", activity: "ls" });
+	const copy = monitor.summary.latest!; copy.activity = "MUTATED";
+	assert.equal(monitor.summary.latest?.activity, "ls");
+	monitor.end("second", snapshot({ status: "done", activity: "NO_TERMINAL" }), false);
+	assert.deepEqual(monitor.summary, { running: 1, pending: 2, latest: { agent: "worker", activity: "read" } });
+	monitor.update("first", snapshot({ status: "running", activity: "" }));
+	assert.deepEqual(monitor.summary, { running: 1, pending: 2, latest: undefined });
+	monitor.end("first", undefined, true);
+	assert.deepEqual(monitor.summary, { running: 0, pending: 0, latest: undefined });
+	monitor.clear(); monitor.update("first", snapshot({ status: "running", activity: "OLD" }));
+	assert.deepEqual(monitor.summary, { running: 0, pending: 0, latest: undefined });
+});
+
+test("resumen: actividad sanitizada y estados terminales nunca se presentan como actuales", () => {
+	for (const status of ["done", "error", "skipped"]) {
+		const monitor = new SubagentMonitor(); monitor.start("job", task());
+		monitor.update("job", snapshot({ status: "running", activity: "\x1b[31m漢字🙂\n\u202eread" }));
+		assert.equal(monitor.summary.latest?.activity, "漢字🙂 read");
+		monitor.update("job", snapshot({ status, activity: "PRIVATE_TERMINAL" }));
+		assert.deepEqual(monitor.summary, { running: 0, pending: 0, latest: undefined });
+		assert.doesNotMatch(JSON.stringify(monitor), /PRIVATE_TERMINAL/);
+	}
+});
+
 test("panel: reserva duración aun con nombres de tools largos y mantiene cola visible en overflow", () => {
 	const theme = getThemeByName("dark")!; const monitor = new SubagentMonitor();
 	monitor.start("eight", { tasks: Array.from({ length: 8 }, () => task()) });

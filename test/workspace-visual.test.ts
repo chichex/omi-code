@@ -30,7 +30,7 @@ import { foundationsHash } from "../src/harness/foundations.ts";
 
 const theme = { fg: (_role: string, value: string) => value, bold: (value: string) => value, style: (value: string) => value, getColorMode: () => "truecolor" } as unknown as Theme;
 
-async function visualHarness(home: string, options: { env?: Record<string, string>; cwd?: string; trusted?: boolean; online?: boolean; paletteAction?: string; browserCode?: number; theme?: Theme; entries?: SessionEntry[]; detailKey?: string; sessionFile?: string; sessionDir?: string; sessionHeader?: SessionHeader; mode?: string; classic?: boolean; settingsKeys?: string[] } = {}) {
+async function visualHarness(home: string, options: { env?: Record<string, string>; cwd?: string; trusted?: boolean; online?: boolean; paletteAction?: string; browserCode?: number; theme?: Theme; entries?: SessionEntry[]; detailKey?: string; sessionFile?: string; sessionDir?: string; sessionHeader?: SessionHeader; mode?: string; classic?: boolean; incompatibleLayout?: boolean; regular?: boolean; settingsKeys?: string[] } = {}) {
 	const activeTheme = options.theme ?? theme;
 	const modals: { lines: string[]; width: number; dispatchedBefore: number }[] = [];
 	const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
@@ -46,10 +46,11 @@ async function visualHarness(home: string, options: { env?: Record<string, strin
 	const resources = new Container(); const chat = new Container(); const document = new Container();
 	// El header viejo, sus márgenes y anuncios técnicos no deben ocupar el centro.
 	document.addChild(new Text("HEADER INTERNO", 0, 1)); document.addChild(resources); document.addChild(chat);
-	const editor = new Container(); const footer = new Container();
+	const editor = new Container(); const footer = new Container(); const above = new Container();
+	const widgets = new Map<string, Component>();
 	const ui = {
-		[Symbol.for("@earendil-works/pi-tui/viewport")]: true, mode: "fullscreen", terminal: { columns: 132, rows: 40 },
-		children: [document, new Container(), new Container(), new Container(), editor, new Container(), footer],
+		[Symbol.for("@earendil-works/pi-tui/viewport")]: true, mode: options.regular ? "regular" : "fullscreen", terminal: { columns: 132, rows: 40 },
+		children: [document, new Container(), new Container(), above, editor, new Container(), footer, ...(options.incompatibleLayout ? [new Container()] : [])],
 		requestRender() { renders++; }, setLayoutRoot: (next: Component) => { root = next; }, hasOverlay: () => false, setFocus: (component: Component) => { focus = component; },
 	} as unknown as TUI;
 	const ctx = {
@@ -60,6 +61,14 @@ async function visualHarness(home: string, options: { env?: Record<string, strin
 		getContextUsage: () => unknownUsage ? undefined : { tokens: 56000, contextWindow: 200000, percent: 28 },
 		ui: {
 			theme: activeTheme, getTheme: () => undefined, setHeader() {}, getEditorComponent: () => undefined,
+			setWidget: (key: string, factory: ((ui: TUI, theme: Theme) => Component) | undefined) => {
+				widgets.get(key)?.dispose?.(); widgets.delete(key);
+				if (factory) widgets.set(key, factory(ui, activeTheme));
+				// Pi 1.5.1 renderWidgetContainer: leading spacer, then the registered components.
+				above.clear(); above.addChild(new Text("", 0, 0));
+				for (const component of widgets.values()) above.addChild(component);
+				ui.requestRender();
+			},
 			getToolsExpanded: () => toolsExpanded, setToolsExpanded: (value: boolean) => { toolsExpanded = value; for (const component of chat.children) if (component instanceof ToolExecutionComponent) component.setExpanded(value); },
 			setFooter: (factory: (ui: TUI, theme: Theme, data: unknown) => Component) => footer.addChild(factory(ui, activeTheme, { getExtensionStatuses: () => new Map() })),
 			setEditorComponent: (factory: (ui: TUI, theme: unknown, keys: unknown) => Component) => editor.addChild(factory(ui, { borderColor: (value: string) => value }, { getKeys: () => ["ctrl+l"], matches: () => false })),
@@ -94,6 +103,8 @@ async function visualHarness(home: string, options: { env?: Record<string, strin
 	return {
 		resources, chat, prompts, confirmations, commands, paletteOptions, browserCalls, notices, modals, dispatched, switches, authChecks: () => authChecks,
 		events, subscriptions: () => subscriptions, renders: () => renders, hasLayout: () => !!root,
+		widgetLines: (width = 80) => [...widgets.values()].flatMap((component) => component.render(width)),
+		widgetCount: () => widgets.size,
 		emitSession: (name: string, event: unknown = {}) => handlers.get(name)?.(event, ctx),
 		restore: (next: SessionEntry[]) => { entries = next; handlers.get("session_tree")?.({}, ctx); },
 		terminal: (data: string) => terminalInput?.(data),
@@ -686,6 +697,74 @@ test("workspace_SUBAGENTS: bus real, render inmediato, sigue al quedar padre idl
 	const stoppedRenders = ui.renders();
 	ui.events.emit("omi:subagents", { phase: "start", id: "after-shutdown", args: { agent: "worker", task: "Ignorar" } });
 	assert.equal(ui.renders(), stoppedRenders, "shutdown quita el listener y deja de tocar UI");
+});
+
+test("workspace_indicador: línea agregada en chat, última running, temas y geometría sin historial", async (t) => {
+	for (const appearance of ["dark", "light"]) {
+		const ui = await visualHarness(await tempDir(t), { theme: getThemeByName(appearance)! }); t.after(ui.stop); ui.messages();
+		const start = (id: string, agent: string, activity: string) => ui.events.emit("omi:subagents", { phase: "start", id, args: { agent, task: "PRIVATE_TASK" }, details: { results: [{ status: "running", activity, output: "PRIVATE_OUTPUT" }] } });
+		start("first", "worker", "read"); start("second", "reviewer", "grep");
+		ui.events.emit("omi:subagents", { phase: "start", id: "queued", args: { agent: "scout", task: "NO_PENDING" } });
+		for (const sidebar of [true, false]) {
+			if (!sidebar) await ui.command("omi-sidebar");
+			for (const [width, height] of [[132, 40], [110, 26], [80, 24], [40, 24], [28, 16]] as const) {
+				const lines = ui.frame(width, height).lines.map(stripTerminalSequences);
+				const mainWidth = sidebar && width >= 110 ? width - 41 : width;
+				const main = lines.slice(3, -3).map((line) => sliceByColumn(line, 0, mainWidth));
+				const indicator = main.filter((line) => /2 activos · 1 en cola/.test(line));
+				assert.equal(indicator.length, 1, `${appearance} ${width}x${height}: ${main.join("\n")}`);
+				if (mainWidth >= 80) assert.match(indicator[0]!, /Subagentes.*última: reviewer · grep/);
+				assert.equal(lines.length, height); assert.ok(lines.every((line) => visibleWidth(line) <= width));
+				assert.match(lines[height - 4]!, /Enter enviar/); assert.match(lines[height - 1]!, /Modelo: Modelo real/);
+				assert.match(main.join("\n"), /CONVERSACIÓN REAL/);
+				assert.doesNotMatch(main.join("\n"), /PRIVATE_|NO_PENDING|Ejecutando|\d+%/);
+			}
+		}
+		ui.events.emit("omi:subagents", { phase: "end", id: "second", details: { results: [{ status: "done" }] } });
+		assert.match(ui.widgetLines(100).map(stripTerminalSequences).join("\n"), /1 activos · 1 en cola.*última: worker · read/);
+		await ui.emitSession("agent_settled");
+		assert.match(ui.widgetLines(100).map(stripTerminalSequences).join("\n"), /1 activos · 1 en cola/);
+		assert.equal(ui.chat.children.length, 1); assert.deepEqual(ui.dispatched, []);
+	}
+});
+
+test("workspace_indicador: anima silencios, cola estática y limpia timers en terminal/tree/start/shutdown", async (t) => {
+	const ui = await visualHarness(await tempDir(t)); t.after(ui.stop);
+	t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 1000 });
+	const start = (id: string, status = "running") => ui.events.emit("omi:subagents", { phase: "start", id, args: { agent: "worker", task: "Tarea" }, details: { results: [{ status }] } });
+	const line = () => ui.widgetLines(100).map(stripTerminalSequences).join("\n");
+	start("queue", "pending"); assert.match(line(), /0 activos · 1 en cola/);
+	let before = ui.renders(); const queued = line(); t.mock.timers.tick(1000);
+	assert.equal(ui.renders(), before); assert.equal(line(), queued);
+	for (const status of ["done", "error", "skipped"]) {
+		start(status); const first = line(); before = ui.renders();
+		t.mock.timers.tick(120);
+		assert.equal(ui.renders(), before + 1, "el tick sólo solicita un render sin esperar polling de recursos");
+		assert.notEqual(line(), first, "cambia el frame sin eventos ni actividad, aun con padre idle");
+		ui.events.emit("omi:subagents", { phase: "end", id: status, details: { results: [{ status }] }, isError: status !== "done" });
+		assert.match(line(), /0 activos · 1 en cola/); assert.doesNotMatch(line(), /última:/);
+		before = ui.renders(); t.mock.timers.tick(1000); assert.equal(ui.renders(), before);
+	}
+	start("tree"); ui.restore([]); assert.equal(line(), "");
+	before = ui.renders(); t.mock.timers.tick(1000); assert.equal(ui.renders(), before);
+	ui.events.emit("omi:subagents", { phase: "update", id: "tree", details: { results: [{ status: "running", activity: "OLD" }] } });
+	assert.equal(line(), "");
+	start("restart"); await ui.emitSession("session_start"); assert.equal(line(), "");
+	before = ui.renders(); t.mock.timers.tick(240); assert.equal(ui.renders(), before);
+	start("shutdown"); await ui.stop(); assert.equal(ui.widgetCount(), 0); assert.equal(ui.subscriptions(), 0);
+	before = ui.renders(); t.mock.timers.tick(1000); assert.equal(ui.renders(), before);
+});
+
+test("workspace_indicador: widget público funciona con layout incompatible y modo regular", async (t) => {
+	for (const regular of [false, true]) {
+		const ui = await visualHarness(await tempDir(t), { incompatibleLayout: true, regular }); t.after(ui.stop);
+		assert.equal(ui.hasLayout(), false);
+		ui.events.emit("omi:subagents", { phase: "start", id: "fallback", args: { agent: "scout", task: "Tarea" }, details: { results: [{ status: "running", activity: "read" }] } });
+		const lines = ui.widgetLines(80).map(stripTerminalSequences);
+		assert.equal(lines.length, 1); assert.match(lines[0]!, /1 activos · 0 en cola.*última: scout · read/);
+		for (const width of [0, 1, 4, 8, 16, 28, 40, 80]) for (const line of ui.widgetLines(width)) assert.equal(visibleWidth(line), width);
+		assert.equal(ui.chat.children.length, 0); assert.deepEqual(ui.dispatched, []);
+	}
 });
 
 test("workspace_SUBAGENTS: ocho tareas, overflow y clics de todas las secciones sobreviven a resize", async (t) => {

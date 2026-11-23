@@ -20,6 +20,7 @@ import { workspaceSidebar } from "./sidebar.ts";
 import { WorkflowProgressMonitor, workflowProgressDetail, workflowProgressView } from "./workflow-progress.ts";
 import { GithubInspector } from "./github-inspector.ts";
 import { consumeSubagentEvent, SubagentMonitor } from "./subagents.ts";
+import { SubagentIndicator } from "./subagent-indicator.ts";
 import { readBranchPullRequest, type BranchPullRequest } from "./pull-request.ts";
 import { restoreIssueTriage, type IssueTriageState } from "./issue-triage.ts";
 import { discoverLegacyPreparations, loadIssuePreparations, rememberIssueSession, type IssuePreparationEntry } from "./issue-registry.ts";
@@ -62,6 +63,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		let unsubscribeInput: (() => void) | undefined; let finishModal: (() => void) | undefined;
 		const controller = new AbortController(); const sampleResources = resourceReader();
 		const theme = (): Theme => ctx.ui.theme;
+		const subagentIndicator = new SubagentIndicator(subagents, theme, () => { if (active) tui?.requestRender(); });
 		// Sólo presentación: el mensaje original sigue intacto en el historial y en el contexto del modelo.
 		pi.registerMarkdownTransformer((markdown, context) => active && context.messageType === "user" && markdown.trim()
 			? `**${theme().fg("accent", "▌ Vos")}**\n\n${markdown}` : markdown);
@@ -385,10 +387,11 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		pi.on("session_start", async (_event, context) => {
 			if (context.mode !== "tui") return;
 			ctx = context; prefs = await loadWorkspacePreferences(io.homeDir); session = sessionStats(ctx.sessionManager.getBranch()); active = true;
-			unsubscribeSubagents?.(); subagents.clear();
+			unsubscribeSubagents?.(); subagents.clear(); subagentIndicator.dispose();
+			ctx.ui.setWidget("omi-subagents-activity", () => subagentIndicator);
 			unsubscribeWorkflow?.(); workflow.clear();
 			unsubscribeWorkflow = pi.events.on("omi:workflow", (event) => { if (active && workflow.consume(event)) { if (!workflow.current(ctx.cwd, git)) progressPane.offset = 0; changed(); } });
-			unsubscribeSubagents = pi.events.on("omi:subagents", (event) => { if (active && consumeSubagentEvent(subagents, event)) changed(); });
+			unsubscribeSubagents = pi.events.on("omi:subagents", (event) => { if (active && consumeSubagentEvent(subagents, event)) { subagentIndicator.sync(); changed(); } });
 			issueTriage = restoreIssueTriage(ctx.sessionManager.getBranch(), ctx.cwd);
 			if (!parsed.useTheme && !pi.getSettings().theme) {
 				const base = ctx.ui.getTheme("dark");
@@ -431,7 +434,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			working = !ctx.isIdle();
 			timer = setInterval(() => { void refreshLocal(); }, 3000); timer.unref(); if (parsed.offline || !ctx.isProjectTrusted()) void refreshRemote(); void refreshLocal(); changed();
 		});
-		pi.on("session_shutdown", async () => { active = false; unsubscribeWorkflow?.(); unsubscribeWorkflow = undefined; workflow.clear(); unsubscribeSubagents?.(); unsubscribeSubagents = undefined; subagents.clear(); controller.abort(); if (timer) clearInterval(timer); unsubscribeInput?.(); finishModal?.(); finishModal = undefined; if (tui && baseRoot && isViewportTUI(tui)) tui.setLayoutRoot(baseRoot); await Promise.all([saveQueue, issueSessionTask?.catch(() => {}), mainSessionTask?.catch(() => {})]); });
+		pi.on("session_shutdown", async () => { active = false; unsubscribeWorkflow?.(); unsubscribeWorkflow = undefined; workflow.clear(); unsubscribeSubagents?.(); unsubscribeSubagents = undefined; subagents.clear(); subagentIndicator.dispose(); if (ctx?.mode === "tui") ctx.ui.setWidget("omi-subagents-activity", undefined); controller.abort(); if (timer) clearInterval(timer); unsubscribeInput?.(); finishModal?.(); finishModal = undefined; if (tui && baseRoot && isViewportTUI(tui)) tui.setLayoutRoot(baseRoot); await Promise.all([saveQueue, issueSessionTask?.catch(() => {}), mainSessionTask?.catch(() => {})]); });
 		pi.on("before_agent_start", (_event, context) => { ctx = context; working = true; activity = "Preparando turno"; changed(); });
 		pi.on("agent_start", (_event, context) => { ctx = context; working = true; activity = "Trabajando"; changed(); });
 		pi.on("agent_settled", (_event, context) => { ctx = context; working = false; runningTools.clear(); activity = "Listo"; void refreshLocal(); changed(); });
@@ -442,6 +445,6 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		const update = (_event: unknown, context: ExtensionContext): void => { ctx = context; session = sessionStats(ctx.sessionManager.getBranch()); changed(); };
 		pi.on("message_end", update); pi.on("session_compact", update); pi.on("session_compact_failed", update);
 		pi.on("model_select", update); pi.on("thinking_level_select", update);
-		pi.on("session_tree", (_event, context) => { workflow.clear(); progressPane.offset = 0; subagents.clear(); issueTriage = restoreIssueTriage(context.sessionManager.getBranch(), context.cwd); update(_event, context); });
+		pi.on("session_tree", (_event, context) => { workflow.clear(); progressPane.offset = 0; subagents.clear(); subagentIndicator.dispose(); issueTriage = restoreIssueTriage(context.sessionManager.getBranch(), context.cwd); update(_event, context); });
 	} };
 }
