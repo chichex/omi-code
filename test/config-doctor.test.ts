@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { configLines, diagnoseConfig, FORMATO_ANTERIOR, stopsAtDraft, type ConfigDoctorInput } from "../src/harness/config-doctor.ts";
 import { foundationsHash, type FoundationsBlock } from "../src/harness/foundations.ts";
-import type { TrustRecord } from "../src/harness/foundations-trust.ts";
+import type { TrustInspection, TrustRecord } from "../src/harness/foundations-trust.ts";
 import type { LifecycleOnboardingState } from "../src/harness/lifecycle-onboarding.ts";
 import type { LifecycleTrustReading } from "../src/harness/lifecycle-trust.ts";
 import type { FoundationsReading } from "../src/tui/development-foundations.ts";
@@ -53,9 +53,23 @@ test("config_doctor: un registro local o un bloque de la KB del formato anterior
 	assert.deepEqual(kb.foundations, { kind: "run", revision: "foundations:legacy" });
 	const invalid = diagnoseConfig(input({ kind: "invalid", key, reason: "JSON inválido", perillas }));
 	assert.equal(item(invalid, "foundations").status, "invalido"); assert.match(item(invalid, "foundations").message, /JSON inválido/);
-	assert.deepEqual(invalid.foundations, { kind: "run", revision: "foundations:invalid:JSON inválido" });
+	assert.equal(invalid.foundations.kind, "run"); assert.match(invalid.foundations.kind === "run" ? invalid.foundations.revision : "", /^foundations:invalid:[0-9a-f]{16}$/, "la revisión identifica el bloque, no su motivo");
 	const unreadable = diagnoseConfig(input({ kind: "missing", key, perillas }, { foundations: { reading: { kind: "missing", key, perillas }, local: { kind: "invalid" } } }));
 	assert.equal(item(unreadable, "foundations").status, "invalido"); assert.equal(unreadable.foundations.kind, "run");
+});
+
+test("config_doctor: dos bloques inválidos por el mismo motivo son revisiones distintas; editar otra parte de las perillas no la cambia", () => {
+	const SCHEMA = "no cumple el esquema (version 2, repo owner/name en minúsculas, confirmar y tres políticas ask|auto, sin otros campos)";
+	const fenced = (json: string, rest = "") => ({ ...perillas, cuerpo: `# Perillas\n\n\`\`\`omi-foundations\n${json}\n\`\`\`\n${rest}` });
+	const revision = (doc: KbDoc, local: TrustInspection = { kind: "missing" }) => diagnoseConfig(input({ kind: "invalid", key, reason: SCHEMA, perillas: doc }, { foundations: { reading: { kind: "invalid", key, reason: SCHEMA, perillas: doc }, local } })).foundations;
+	const first = fenced('{"version":2,"repo":"acme/app","confirmar":[]}'), second = fenced('{"version":2,"repo":"acme/app","politica":{}}');
+	const seen = revision(first); assert.equal(seen.kind, "run");
+	const id = seen.kind === "run" ? seen.revision : "";
+	assert.notDeepEqual(revision(second), seen, "otra causa real es otra revisión");
+	assert.equal(revision(second, { kind: "valid", record: deferredOnly(id) }).kind, "run", "postergar el primero no posterga el segundo");
+	assert.deepEqual(revision(first, { kind: "valid", record: deferredOnly(id) }), { kind: "deferred", revision: id }, "el mismo bloque sigue postergado");
+	const lifecycleSaved = fenced('{"version":2,"repo":"acme/app","confirmar":[]}', "\n```omi-development-lifecycle\n{}\n```\n");
+	assert.deepEqual(revision(lifecycleSaved), seen, "guardar el lifecycle en las mismas perillas no vuelve a ofrecer Foundations");
 });
 
 test("config_doctor: una v2 vigente (KB o última aceptada) está ok y no corre nada", () => {

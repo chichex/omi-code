@@ -1,7 +1,10 @@
 // Diagnóstico de lo que falta configurar para el harness: Foundations, lifecycle y proyecto OMI.
 // Puro y sin I/O: recibe lo que la sesión ya leyó. Decide qué parte del setup corre, nunca la corre.
 // Una KB caída u offline es «no disponible», nunca «falta»: sin lectura no se ofrece nada.
+import { createHash } from "node:crypto";
 import type { FoundationsReading } from "../tui/development-foundations.ts";
+import { fences } from "./fences.ts";
+import { FOUNDATIONS_INFO } from "./foundations.ts";
 import type { TrustInspection } from "./foundations-trust.ts";
 import type { LifecycleDetection } from "./lifecycle-detect.ts";
 import { lifecycleMissing, shouldOfferLifecycleOnboarding, type LifecycleOnboardingState } from "./lifecycle-onboarding.ts";
@@ -27,6 +30,12 @@ const LATER = " Postergado para esta revisión.";
 const RESOLVABLE: readonly ConfigStatus[] = ["falta", "formato-anterior", "pendiente", "invalido"];
 
 type FoundationsItem = Omit<ConfigItem, "id" | "area">;
+/** Un bloque inválido se identifica por el texto de sus bloques omi-foundations: el motivo se repite entre bloques
+ * distintos, y el resto de las perillas (por ejemplo, el lifecycle) no es lo que la persona postergó. */
+function invalidRevision(body: string): string {
+	const blocks = fences(body).filter((fence) => fence.info === FOUNDATIONS_INFO).map((fence) => body.slice(fence.contentStart, fence.contentEnd));
+	return `foundations:invalid:${createHash("sha256").update(JSON.stringify(blocks)).digest("hex").slice(0, 16)}`;
+}
 /** Sin bloque v2 aceptado (ni en la KB ni el último local) es lo que falta; la revisión identifica qué vio la persona. */
 function foundationsStatus(reading: FoundationsReading, local: TrustInspection): { item: FoundationsItem; revision: string | null } {
 	if (reading.kind === "none") return { item: { status: "no-aplica", message: `Foundations no aplica: ${reading.reason}.`, resolve: "Hace falta un origin en github.com cuyo nombre sea un producto tuyo en la KB." }, revision: null };
@@ -34,7 +43,7 @@ function foundationsStatus(reading: FoundationsReading, local: TrustInspection):
 	if (reading.kind === "valid") return { item: { status: "ok", message: `Foundations en la KB · revisión ${reading.hash.slice(0, 8)}.`, resolve: "Para cambiarlo: /omi-foundations." }, revision: null };
 	const accepted = local.kind === "valid" && local.record.accepted !== null;
 	if (reading.kind === "invalid" && !reading.legacy) {
-		return { item: { status: "invalido", message: `El bloque de Foundations de la KB es inválido (${reading.reason}). ${accepted ? "Vale la última revisión aceptada." : "Rige el default: nada pregunta."}`, resolve: "Configuralo de nuevo con /omi-setup: empieza de cero, sin heredar permisos." }, revision: `foundations:invalid:${reading.reason}` };
+		return { item: { status: "invalido", message: `El bloque de Foundations de la KB es inválido (${reading.reason}). ${accepted ? "Vale la última revisión aceptada." : "Rige el default: nada pregunta."}`, resolve: "Configuralo de nuevo con /omi-setup: empieza de cero, sin heredar permisos." }, revision: invalidRevision(reading.perillas.cuerpo) };
 	}
 	const revision = reading.kind === "invalid" ? "foundations:legacy" : "foundations:missing";
 	if (accepted) return { item: { status: "ok", message: `La KB no tiene Foundations para ${reading.key.repo}: vale la última revisión aceptada en esta máquina.`, resolve: "Para guardarla en la KB: /omi-foundations." }, revision: null };

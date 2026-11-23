@@ -639,7 +639,7 @@ Nunca offline, sin UI (print o RPC), con la KB no disponible, ni al restaurar, r
 
 El wizard del lifecycle necesita la rama base de `origin/HEAD`. Sin ella, el disparo automático lo omite sin avisar, y `/omi-setup` dice cómo resolverlo: «corré git remote set-head origin --auto y volvé con /omi-setup».
 
-Cada parte tiene **Más adelante**, que se guarda por revisión: Foundations en su registro local y el lifecycle en su aceptación. No se vuelve a ofrecer solo hasta que esa revisión cambie; `/omi-setup` corre también lo postergado. **Esc** corta el setup: no guarda nada de lo que faltaba. Guardar escribe sólo la KB y la aceptación local: no ejecuta comandos, workflows, merge ni deploy.
+Cada parte tiene **Más adelante**, que se guarda por revisión: Foundations en su registro local y el lifecycle en su aceptación. No se vuelve a ofrecer solo hasta que esa revisión cambie; `/omi-setup` corre también lo postergado. Un bloque de Foundations inválido es otra revisión si cambia su texto, aunque el motivo sea el mismo; editar otra parte de las perillas no la cambia. **Esc** corta el setup: no guarda nada de lo que faltaba. Guardar escribe sólo la KB y la aceptación local: no ejecuta comandos, workflows, merge ni deploy.
 
 Cada ítem tiene un estado: `ok`, `falta`, `formato anterior`, `pendiente`, `inválido`, `no disponible`, `postergado` o `no aplica`. Sin nada para correr, `/omi-setup` muestra el diagnóstico. Ejemplo, sin login en la KB:
 
