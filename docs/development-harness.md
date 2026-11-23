@@ -320,6 +320,8 @@ Un trabajo grande puede terminar en varios PRs encadenados (un **stack**) en vez
 
 Lo decide el agente al escribir la spec (ruta Con spec) y lo aprueba la persona con la receta. Conviene cuando el cambio no se revisa bien en un solo PR. Ejemplos: más de unas 400 líneas de diff, o partes que se revisan y mergean por separado (modelo, lógica, UI). Cada PR tiene que pasar sus tests solo. Sin stack, el trabajo va en un solo PR, como siempre. Directa tiene un solo paso: siempre un PR.
 
+Con un [lifecycle](#review-land-y-ship) aceptado que encadena la entrada (`continuity.entry` en `auto` o `ask`), el trabajo va en un solo PR: la cadena adopta un PR y no adopta stacks. La guía de la receta y de la spec se lo dice al agente, y `specified` con `stack` falla sin registrar nada ni tocar GitHub. El error le pide mandar `specified` otra vez sin `stack`, con los mismos pasos C. Si la configuración no se puede leer (KB caída, cambios sin aceptar, sin configurar u `--offline`), vale lo de siempre: el stack se permite. Con `entry: manual` o sin `continuity`, también.
+
 ### Cómo se declara
 
 En `specified`, junto a los pasos, `stack` agrupa los pasos C en PRs:
@@ -537,7 +539,7 @@ Ejemplo, con Review por GitHub y Ship por una release:
 
 Un comentario ya corregido que la Review vuelve a ver en el HEAD nuevo se confirma con `/omi-work fix` («Ya corregidos»), sin gastar otra ronda. Con continuidad, confirmarlos es progreso. Si quedan hallazgos nuevos, la cadena sigue con una ronda sólo para ellos, con su propio sí «Corregir N hallazgo(s)»; sin rondas, pausa por rondas. Si `/omi-work fix` los confirma todos y esta sesión ya observó la Review de ese HEAD, la cadena sigue con Land sin repetirla. Land no avanza con hallazgos pendientes ni operaciones inciertas. Un merge no es una entrega: Ship la verifica después. Ship `not-applicable` termina sin entrega y `manual` queda como entrega declarada, nunca como Entrega verificada.
 
-Límites de este corte: no se adopta un stack de PRs (ver [Stack de PRs](#stack-de-prs)); un comentario de GitHub sin texto no cuenta como hallazgo; Ship OMI sólo observa (`observe`): publicar o desplegar desde acá no está conectado; los probes health/version de un destino GHA no tienen verificador conectado y quedan como desconocidos; la recuperación (stop, rollback, fix-forward) la decide una persona fuera de estos comandos. Una actividad que quedó abierta en otro proceso bloquea efectos nuevos hasta reconciliarla.
+Límites de este corte: no se adopta un stack de PRs (con la entrada encadenada el trabajo va en un solo PR; ver [Stack de PRs](#stack-de-prs)); un comentario de GitHub sin texto no cuenta como hallazgo; Ship OMI sólo observa (`observe`): publicar o desplegar desde acá no está conectado; los probes health/version de un destino GHA no tienen verificador conectado y quedan como desconocidos; la recuperación (stop, rollback, fix-forward) la decide una persona fuera de estos comandos. Una actividad que quedó abierta en otro proceso bloquea efectos nuevos hasta reconciliarla.
 
 ### Continuidad opt-in: entrada y avance por etapa
 

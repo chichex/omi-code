@@ -8,6 +8,7 @@ import { isInside } from "../core/files.ts";
 import { ASK_TOOL, workflowToolAllowed, workflowWritePath, WORKFLOW_TOOLS } from "../harness/permissions.ts";
 import { referenceDigest } from "../harness/references.ts";
 import { developmentInstructions } from "./development-view.ts";
+import { singlePrPlanning } from "./development-single-pr.ts";
 import { observeDevelopment } from "./development-observation.ts";
 import { DevelopmentSession, type DevelopmentDeps } from "./development-session.ts";
 import { registerDevelopmentTools } from "./development-tools.ts";
@@ -185,14 +186,15 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 		pi.on("session_start", async (event, ctx) => { held.recall(ctx.sessionManager.getBranch(), event.reason === "reload" ? "reload" : "start"); session.foundations.load(ctx); onboarding.detect(ctx.cwd); await session.restore(ctx); loadout(); });
 		pi.on("session_tree", async (_event, ctx) => { held.recall(ctx.sessionManager.getBranch(), "tree"); await session.restore(ctx); loadout(); });
 		pi.on("session_shutdown", () => { readsInFlight.clear(); session.shutdown(); });
-		pi.on("before_agent_start", (event, ctx) => {
+		pi.on("before_agent_start", async (event, ctx) => {
 			if (session.lockedReason) {
 				event.systemPromptOptions.sections ??= {};
 				event.systemPromptOptions.sections.omi_development = `Harness bloqueado: ${session.lockedReason}. No cambiar archivos ni ejecutar comandos. Pedí recuperación humana con /omi-work resume.`;
 			} else if (session.state) {
+				const state = session.state, foundations = effectivePolicy(session.foundations.current(ctx), state);
+				const singlePr = await singlePrPlanning(session, state);
 				event.systemPromptOptions.sections ??= {};
-				const foundations = effectivePolicy(session.foundations.current(ctx), session.state);
-				event.systemPromptOptions.sections.omi_development = developmentInstructions(session.state, foundations.command.block?.confirmar ?? [], foundations.command.accepted);
+				event.systemPromptOptions.sections.omi_development = developmentInstructions(state, foundations.command.block?.confirmar ?? [], foundations.command.accepted, singlePr);
 			}
 		});
 		pi.on("tool_call", async (event, ctx) => {
