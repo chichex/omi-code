@@ -100,6 +100,7 @@ async function runTask(task: Task, result: TaskResult, ctx: ExtensionToolContext
 	if (signal.aborted) abort(); else signal.addEventListener("abort", abort, { once: true });
 	const timer = setTimeout(() => controller.abort(new Error("Subagente: límite de 10 minutos.")), TIMEOUT_MS);
 	let limitReached = false;
+	let partialOutput = "";
 	let failed = false;
 	let agent: Agent | undefined;
 	let unsubscribe = () => {};
@@ -115,23 +116,31 @@ async function runTask(task: Task, result: TaskResult, ctx: ExtensionToolContext
 			},
 			// Usa el modelo, proveedor (incluso custom) y auth resueltos del padre; no API keys del shell.
 			streamFn: (model, context, options) => ctx.modelRegistry.streamSimple(model, context, options),
-			finishTurn({ message }) {
-				if (result.turns >= MAX_TURNS && message.stopReason === "toolUse") {
+			finishTurn({ message, toolResults }) {
+				if (result.turns >= MAX_TURNS) {
 					limitReached = true;
 					return { action: "end" };
+				}
+				if (result.turns === MAX_TURNS - 1 && toolResults.length > 0 && message.stopReason !== "error" && message.stopReason !== "aborted") {
+					agent?.steer({
+						role: "user", timestamp: Date.now(),
+						content: "Este es tu último turno reservado para cierre por límite de turnos. No continúes trabajando ni uses tools. Respondé con un resumen de avances, archivos afectados, verificaciones realmente ejecutadas y sus resultados, y pendientes. No inventes evidencia ni infieras fallos de tests del corte; indicá lo que no verificaste.",
+					});
 				}
 			},
 		});
 		unsubscribe = agent.subscribe((event) => {
 			if (event.type === "message_end" && event.message.role === "assistant") {
 				const message = event.message;
+				const text = message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+				if (text.trim()) partialOutput = text;
 				result.turns++;
 				addUsage(result.usage, message.usage);
 				if (message.stopReason === "error" || message.stopReason === "aborted") {
 					failed = true; result.status = "error";
 					result.output = message.errorMessage || `Subagente: ${message.stopReason}`;
 				} else {
-					result.output = message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+					result.output = text;
 				}
 				update();
 			} else if (event.type === "tool_execution_start") {
@@ -143,7 +152,10 @@ async function runTask(task: Task, result: TaskResult, ctx: ExtensionToolContext
 			result.status = "error";
 			result.output = signal.aborted ? "Subagente cancelado." : "Subagente: límite de 10 minutos.";
 		} else if (limitReached) {
-			result.status = "error"; result.output = `Subagente: límite de ${MAX_TURNS} turnos.`;
+			result.status = "error";
+			result.output = partialOutput.trim()
+				? `### Interrupción\nInterrumpido por límite de turnos (${MAX_TURNS} requests). Revisar archivos y verificaciones antes de continuar.\n\n### Información recuperada\n${partialOutput}`
+				: "Interrumpido por límite de turnos; sin resumen recuperable; revisar archivos y verificaciones antes de continuar";
 		} else if (!failed) {
 			result.status = result.output.trim() ? "done" : "error";
 			if (!result.output.trim()) result.output = "El subagente terminó sin respuesta.";

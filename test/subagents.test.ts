@@ -165,6 +165,75 @@ test("subagent: detiene un loop de tools a los 32 turnos", async () => {
 	assert.equal(calls, 32); assert.equal(result.isError, true);
 });
 
+function toolMessage(turn: number, text = ""): AssistantMessage {
+	const result = message(text); result.stopReason = "toolUse";
+	result.content.push({ type: "thinking", thinking: "PRIVATE_THINKING" }, { type: "toolCall", id: String(turn), name: "read", arguments: {} });
+	return result;
+}
+
+for (const cooperative of [true, false]) test(`subagent: cierre reservado ${cooperative ? "cooperativo" : "ignorado"} interrumpe chain`, async () => {
+	let calls = 0;
+	const { run, seen } = setup((context) => {
+		calls++;
+		const users = context.messages.filter((m) => m.role === "user");
+		assert.equal(users.length, calls < 32 ? 1 : 2);
+		if (calls === 32) {
+			const closing = JSON.stringify(users.at(-1));
+			assert.match(closing, /cierre/i);
+			for (const word of [/avances/i, /archivos/i, /verificaciones/i, /pendientes/i]) assert.match(closing, word);
+			if (cooperative) return stream(message("Avances: cambio parcial. Archivos: src/example.ts. Verificaciones: no ejecutadas. Pendientes: probar."));
+		}
+		return stream(toolMessage(calls, calls === 8 ? "Parcial útil: falta verificar." : ""));
+	});
+	const result = await run({ chain: [{ agent: "scout", task: "loop" }, { agent: "worker", task: "NEVER" }] });
+	const details = result.details as { results: { status: string; turns: number; output: string }[] };
+	assert.equal(calls, 32); assert.equal(result.isError, true);
+	assert.equal(details.results[0]!.status, "error"); assert.equal(details.results[0]!.turns, 32);
+	assert.equal(details.results[1]!.status, "pending");
+	assert.equal(result.usage?.totalTokens, 32 * 12);
+	assert.equal(seen.length, cooperative ? 31 : 32);
+	const output = details.results[0]!.output;
+	assert.match(output, /Interrumpido por límite de turnos/);
+	assert.match(output, /### Información recuperada/);
+	assert.match(output, cooperative ? /src\/example.ts/ : /Parcial útil/);
+	assert.doesNotMatch(output, /PRIVATE_THINKING|READ_OK|tests fallaron|No hubo cambios/);
+});
+
+test("subagent: sin texto recuperable usa fallback explícito", async () => {
+	let calls = 0;
+	const { run } = setup(() => stream(toolMessage(++calls)));
+	const result = await run({ agent: "scout", task: "loop" });
+	assert.equal(calls, 32); assert.equal(result.isError, true);
+	assert.equal((result.details as { results: { output: string }[] }).results[0]!.output, "Interrumpido por límite de turnos; sin resumen recuperable; revisar archivos y verificaciones antes de continuar");
+});
+
+test("subagent: final normal en turno 31 no solicita cierre ni cambia salida", async () => {
+	let calls = 0;
+	const { run } = setup((context) => {
+		assert.equal(context.messages.filter((m) => m.role === "user").length, 1);
+		return stream(++calls === 31 ? message("Final normal") : toolMessage(calls));
+	});
+	const result = await run({ agent: "scout", task: "finish" });
+	assert.equal(calls, 31); assert.equal(result.isError, false);
+	assert.equal((result.details as { results: { output: string }[] }).results[0]!.output, "Final normal");
+});
+
+test("subagent: parcial largo interrumpido conserva archivo privado y updates acotados", async () => {
+	let calls = 0; const large = "avances reales ".repeat(20000);
+	const { run } = setup(() => stream(toolMessage(++calls, calls === 9 ? large : "")));
+	const updates: unknown[] = [];
+	const result = await run({ agent: "scout", task: "loop" }, undefined, (update) => updates.push(update));
+	const first = (result.details as { results: { outputFile?: string }[] }).results[0]!;
+	assert.ok(first.outputFile);
+	try {
+		const full = await readFile(first.outputFile, "utf8");
+		assert.match(full, /Interrumpido por límite de turnos/); assert.ok(full.endsWith(large));
+		assert.equal((await stat(first.outputFile)).mode & 0o777, 0o600);
+		assert.ok(JSON.stringify(result).length < 15000);
+		assert.ok(updates.every((update) => JSON.stringify(update).length < 15000));
+	} finally { await rm(first.outputFile.replace(/\/output.txt$/, ""), { recursive: true, force: true }); }
+});
+
 test("subagent: trunca resultados y updates; conserva la salida completa en un archivo privado", async () => {
 	const large = "respuesta ".repeat(20000);
 	const { run } = setup(() => stream(message(large)));
