@@ -18,7 +18,8 @@
 #     anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
 
 name: Claude Review
-run-name: ${{ inputs.correlation_id != '' && format('omi-review-v1 PR #{0} {1}', inputs.pr, inputs.correlation_id) || format('Claude Review PR #{0}', inputs.pr) }}
+# Entre comillas: sin ellas, el " #" de "PR #{0}" es un comentario de YAML y corta la expresión.
+run-name: "${{ inputs.correlation_id != '' && format('omi-review-v1 PR #{0} {1}', inputs.pr, inputs.correlation_id) || format('Claude Review PR #{0}', inputs.pr) }}"
 
 on:
   workflow_dispatch:
@@ -276,8 +277,11 @@ jobs:
       CORRELATION_ID: ${{ inputs.correlation_id }}
       REVIEW_MODEL: ${{ inputs.model }}
       REVIEW_EFFORT: ${{ inputs.effort }}
-      REVIEW_DIRECTORY: ${{ runner.temp }}/omi-review-v1
     steps:
+      # GitHub no ofrece el contexto `runner` en el env del job: ahí invalida el
+      # archivo entero y cada push deja un run fallido. RUNNER_TEMP sí existe acá.
+      - name: Directorio privado del review
+        run: echo "REVIEW_DIRECTORY=$RUNNER_TEMP/omi-review-v1" >> "$GITHUB_ENV"
       # Producer/imports/lockfile proceden del workflow autorizado, NO del PR.
       - uses: actions/checkout@v4
         with:
