@@ -53,7 +53,9 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 		questions: (_screen: string): readonly string[] | undefined => undefined,
 		foundations: (_screen: string): readonly string[] | undefined => undefined,
 		/** Esc en el loader de una espera: el trabajo se aborta y no hay resultado. */
-		cancelLoader: false };
+		cancelLoader: false,
+		/** Lo que la persona tiene escrito en el editor del chat, sin mandar. */
+		editorText: "" };
 	const loaderTitles: string[] = [];
 	// Loader de paso: registra qué espera mostraría y corre el trabajo; con cancelLoader, la persona apretó Esc.
 	const loader: NonNullable<DevelopmentDeps["loader"]> = async (_ctx, title, work) => {
@@ -108,7 +110,7 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 		appendEntry: (name: string, data: unknown) => manager.appendCustomEntry(name, data), sendUserMessage: (text: string) => messages.push(text),
 	} as unknown as ExtensionAPI;
 	const context = { cwd: checkout.root, mode: "tui", hasUI: true, sessionManager: manager, model: { id: "mock", provider: "mock", input: ["text"] }, thinkingLevel: "off", isProjectTrusted: () => true, isIdle: () => true, hasPendingMessages: () => false,
-		ui: { setStatus: (_key: string, value: string | undefined) => { statuses.push(value); }, notify: (message: string) => messages.push(message), confirm: async (title: string, description: string) => { prompts.push(title); confirmationDetails.push(description); return remote.confirmations; }, input: async () => remote.answer,
+		ui: { setStatus: (_key: string, value: string | undefined) => { statuses.push(value); }, notify: (message: string) => messages.push(message), confirm: async (title: string, description: string) => { prompts.push(title); confirmationDetails.push(description); return remote.confirmations; }, input: async () => remote.answer, getEditorText: () => uiControl.editorText,
 			select: async (title: string, options: string[]) => {
 				selects.push({ title, options });
 				if (title.startsWith("Autorizar comando del proyecto")) {

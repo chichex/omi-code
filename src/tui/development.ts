@@ -191,7 +191,7 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 			},
 		});
 		// Pi ya restauró las tools de la rama: con el harness activo, las restringidas.
-		pi.on("session_start", async (event, ctx) => { held.recall(ctx.sessionManager.getBranch(), event.reason === "reload" ? "reload" : "start"); session.foundations.load(ctx); onboarding.detect(ctx.cwd); await session.restore(ctx); loadout(); setup.sessionStarted(event.reason, ctx); config.observe(ctx); });
+		pi.on("session_start", async (event, ctx) => { held.recall(ctx.sessionManager.getBranch(), event.reason === "reload" ? "reload" : "start"); session.foundations.load(ctx); onboarding.detect(ctx.cwd); await session.restore(ctx); loadout(); setup.sessionStarted(event.reason, ctx, cli.messages.length > 0 || cli.fileArgs.length > 0); config.observe(ctx); });
 		pi.on("session_tree", async (_event, ctx) => { held.recall(ctx.sessionManager.getBranch(), "tree"); await session.restore(ctx); loadout(); });
 		pi.on("session_shutdown", () => { readsInFlight.clear(); config.shutdown(); session.shutdown(); });
 		pi.on("before_agent_start", async (event, ctx) => {

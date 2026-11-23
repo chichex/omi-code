@@ -31,6 +31,10 @@ const LIFECYCLE: Record<Exclude<LifecycleOnboardingOutcome["kind"], "unavailable
 	declined: "Lifecycle sin guardar: no se escribió nada.",
 };
 const revision = (part: SetupPart) => part.kind === "none" ? null : part.revision;
+const typingNotice = (parts: Parts) => {
+	const missing = [parts.foundations.kind !== "none" && "Foundations", parts.lifecycle.kind !== "none" && "el lifecycle"].filter(Boolean).join(" y ");
+	return `Falta configurar ${missing}. No abrí el setup porque estabas escribiendo. Cuando quieras: /omi-setup.`;
+};
 
 export class ConfigSetup {
 	private readonly offered = new Set<string>();
@@ -41,9 +45,10 @@ export class ConfigSetup {
 		this.session = session; this.config = config;
 		this.background = deps.background ?? ((work) => { void work.catch(() => {}); });
 	}
-	/** Sólo una sesión interactiva nueva (arranque o /new, sin mensajes); restore, reload, resume y fork nunca. */
-	sessionStarted(reason: SessionStartEvent["reason"] | undefined, ctx: ExtensionContext): void {
-		if (reason !== "startup" && reason !== "new") return;
+	/** Sólo una sesión interactiva nueva (arranque o /new, sin mensajes); restore, reload, resume y fork nunca.
+	 * `initialPrompt`: la CLI trae un prompt (`omi "…"`); ese arranque empieza con un turno, no con el setup. */
+	sessionStarted(reason: SessionStartEvent["reason"] | undefined, ctx: ExtensionContext, initialPrompt = false): void {
+		if (reason !== "startup" && reason !== "new" || reason === "startup" && initialPrompt) return;
 		if (this.session.state || this.session.lockedReason || ctx.sessionManager.getEntries().some((entry) => entry.type === "message")) return;
 		this.background(this.offer(ctx, "session"));
 	}
@@ -71,6 +76,8 @@ export class ConfigSetup {
 			if (parts.foundations.kind === "none" && parts.lifecycle.kind === "none") return;
 			// Al abrir una sesión, no interrumpe un turno que ya empezó ni una sesión que cambió mientras leía.
 			if (trigger === "session" && (session.state || !ctx.isIdle() || ctx.hasPendingMessages())) return;
+			// El modal toma el foco: lo que la persona tipea caería en sus opciones. Sólo se avisa.
+			if (trigger === "session" && ctx.ui.getEditorText().trim()) { ctx.ui.notify(typingNotice(parts), "info"); return; }
 			await this.run(ctx, snapshot, parts, trigger);
 		} catch (error) {
 			if (session.lifecycle.signal.aborted) return;

@@ -76,6 +76,22 @@ test("config_setup: una sesión interactiva nueva lo ofrece sola; resume, reload
 	assert.equal(saves(f.kb), 0); assert.equal(await readTrust(foundationsDir(f.home), trustKey(f.kb)), undefined);
 });
 
+// El setup abre un modal que toma el foco: lo que la persona tipea caería en sus opciones («2» es Más adelante).
+test("config_setup: una sesión nueva no abre el setup si la persona ya está escribiendo o arrancó con un prompt", async (t) => {
+	const f = await fixture(t); f.uiControl.questions = () => ["2", KEYS.enter];
+	f.uiControl.editorText = "arreglá los 2 bugs";
+	await f.session("startup");
+	assert.equal(f.asked.length, 0, "con texto en el editor no se abre ninguna pregunta");
+	assert.equal(await readTrust(foundationsDir(f.home), trustKey(f.kb)), undefined, "no se postergó nada por una tecla al pasar");
+	assert.ok(f.messages.some((message) => /Falta configurar Foundations y el lifecycle/.test(message) && /estabas escribiendo/.test(message) && /\/omi-setup/.test(message)), "avisa qué falta y cómo seguir");
+	f.uiControl.editorText = "  \n"; f.uiControl.questions = () => [KEYS.esc];
+	await f.session("new"); assert.deepEqual(titles(f), ["Foundations de"], "un editor en blanco no frena la oferta");
+	const prompted = await fixture(t, { args: ["arreglá los 2 bugs"] }); prompted.uiControl.questions = () => [KEYS.esc];
+	await prompted.session("startup");
+	assert.equal(prompted.asked.length, 0, "omi \"prompt\": la sesión arranca con un turno, no con el setup");
+	await prompted.session("new"); assert.deepEqual(titles(prompted), ["Foundations de"], "/new no trae el prompt del arranque");
+});
+
 test("config_setup: sin UI, offline o con la KB caída no se ofrece ni al arrancar el harness ni al abrir una sesión", async (t) => {
 	const rpc = await fixture(t); Reflect.set(rpc.context, "mode", "rpc"); await rpc.start(); await rpc.session("startup");
 	assert.equal(rpc.asked.length, 0, "sin TUI no hay a quién preguntar");
