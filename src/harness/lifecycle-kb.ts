@@ -70,6 +70,8 @@ export function lifecycleDiff(previous: LifecycleConfig | undefined, next: Lifec
 export interface LifecycleSaveDeps {
  trustDir: string; expectedRevision: number | undefined; signal: AbortSignal; now: () => string;
  beforeAccept?: () => Promise<void>;
+ /** Posterga la revisión aceptada en la misma escritura; sin valor, conserva la postergación previa. */
+ deferred?: NonNullable<LifecycleTrust["deferred"]>;
  /** Frontera de persistencia inyectable para probar resultados inciertos después de rename. */
  writeAcceptance?: typeof writeLifecycleTrust;
 }
@@ -88,7 +90,7 @@ function acceptance(reading: Extract<LifecycleReading, { kind: "valid" }>, now: 
 }
 async function saveAcceptance(deps: LifecycleSaveDeps, key: LifecycleKey, pin: LifecycleAcceptance): Promise<void> {
  const local = await assertLocal(deps, key);
- const next: LifecycleTrust = { version: 1, ...key, revision: local ? local.revision + 1 : 0, accepted: pin, deferred: local?.deferred ?? null };
+ const next: LifecycleTrust = { version: 1, ...key, revision: local ? local.revision + 1 : 0, accepted: pin, deferred: deps.deferred ?? local?.deferred ?? null };
  deps.signal.throwIfAborted();
  try { await (deps.writeAcceptance ?? writeLifecycleTrust)(deps.trustDir, key, deps.expectedRevision, next); }
  catch { throw new AcceptanceUnconfirmed(); }

@@ -8,7 +8,8 @@ const STAGES = ["entry", "review", "fix", "land", "ship"] as const;
 const NAMES = { entry: "Entrada tras draft", review: "Review", fix: "Fix", land: "Land", ship: "Ship" };
 export const CONTINUITY_NOTICE = "Continuidad no autoriza efectos: push conserva autoridad Foundations independiente; merge y dispatch siguen siendo humanos en omi-code. Guardar no inicia acciones; deshabilitar sólo afecta acciones futuras, no revierte efectos remotos.";
 const choice = (answers: QuestionAnswer[], id: string) => answers.find(a => a.id === id)?.options[0];
-function question(id: string, header: string, prompt: string, options: [string, string][]): Question {
+/** Pregunta cerrada del wizard: la primera opción es la recomendada y no hay texto libre. */
+export function question(id: string, header: string, prompt: string, options: [string, string][]): Question {
  return { id, header, question: prompt, options: options.map(([label, description]) => ({ label, description })), multiSelect: false, recommended: true, freeText: false };
 }
 function stageQuestion(stage: typeof STAGES[number]): Question {

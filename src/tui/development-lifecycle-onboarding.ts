@@ -34,14 +34,15 @@ export class LifecycleOnboarding {
 			const reading = session.foundations.current(ctx)?.reading;
 			if (!reading || !["valid", "missing", "invalid"].includes(reading.kind) || !("key" in reading) || reading.key.repo !== repo || reading.key.kbUrl !== key.kbUrl) return;
 			const trustDir = lifecycleTrustDir(session.io.homeDir), local = await readLifecycleTrust(trustDir, key);
-			const status = lifecycleOnboardingStatus(lifecycleFromPerillas(key, "perillas" in reading ? reading.perillas : null), local);
+			// Las recomendaciones de Review dependen de lo detectado: la lectura ya corre en segundo plano desde la sesión.
+			this.detect(state.checkout.root);
+			const detection = await this.detection ?? await detectLifecycle(state.checkout.root, signal);
+			const status = lifecycleOnboardingStatus(lifecycleFromPerillas(key, "perillas" in reading ? reading.perillas : null), local, detection);
 			if (!shouldOfferLifecycleOnboarding("harness", status, local) || !status.revision || this.offered.has(status.revision)) return;
 			this.offered.add(status.revision);
 			const base = await session.runner.run("git", ["-c", "core.fsmonitor=false", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], { cwd: state.checkout.root, signal });
 			const branch = base.code === 0 ? base.stdout.trim().replace(/^origin\//, "") : "";
 			if (!branch) return;
-			this.detect(state.checkout.root);
-			const detection = await this.detection ?? await detectLifecycle(state.checkout.root, signal);
 			const outcome = await runLifecycleOnboarding({ kb, key, cwd: state.checkout.root, base: branch, trustDir, detection, ask: batch => askQuestions(ctx, batch, { signal }), now: session.now, signal });
 			if (outcome.kind === "saved" || outcome.kind === "deferred") ctx.ui.notify(MESSAGES[outcome.kind], "info");
 		} catch { /* El onboarding es una oferta: si falla, el harness sigue igual y nada queda aceptado. */ }

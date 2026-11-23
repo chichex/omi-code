@@ -12,6 +12,8 @@ import { credentialsPath } from "../src/core/paths.ts";
 import { lifecycleTrustDir, readLifecycleTrust } from "../src/harness/lifecycle-trust.ts";
 import { tempDir, testIo } from "./helpers/io.ts";
 import { memoryKb, mockKb, type MemoryKb } from "./helpers/mock-kb.ts";
+import { acceptLifecycleConfig } from "./helpers/lifecycle.ts";
+import { defaultLifecycleConfig } from "../src/harness/lifecycle-config.ts";
 import { serviceView, startMockOmi } from "./helpers/mock-omi.ts";
 
 const key = { kbUrl: "https://kb.example.test/mcp", product: "app", repo: "acme/app" };
@@ -73,7 +75,7 @@ test("--development --check --json sólo lee: sin prompts, escrituras ni login, 
  for (const interactive of [false, true]) {
   const f = await development(t, { interactive }), before = [...await tree(f.home), ...await tree(f.repo)];
   assert.equal(await f.run(["--development", "--check", "--json"]), 0, f.io.errors());
-  const report = JSON.parse(f.io.output()); assert.equal(report.status, "unconfigured"); assert.equal(report.repo, "acme/app"); assert.equal(report.product, "app"); assert.equal(report.canStartEffects, false); assert.deepEqual(report.detection.workflows, [{ file: "release.yml", dispatch: true, release: false }]);
+  const report = JSON.parse(f.io.output()); assert.equal(report.status, "unconfigured"); assert.equal(report.repo, "acme/app"); assert.equal(report.product, "app"); assert.equal(report.canStartEffects, false); assert.deepEqual(report.detection.workflows, [{ file: "release.yml", dispatch: true, release: false, contract: null }]); assert.deepEqual(report.recommendations, [{ kind: "continuity", message: "Continuidad sin configurar: el trabajo para en el PR draft" }]);
   assert.deepEqual(f.io.prompts, []); assert.deepEqual([...await tree(f.home), ...await tree(f.repo)], before, "check no escribe home ni repo"); assert.ok(f.kb.calls.every(c => READS.has(c.tool)), "sólo lecturas KB");
   assert.deepEqual([f.host.created, f.host.closed], [1, 1], "host diferido abierto y cerrado explícitamente");
  }
@@ -120,4 +122,22 @@ test("host headless real: sin login no arranca Pi ni escribe; con login reusa lo
  const before = await tree(agent), host = await headlessKbHost(io, AbortSignal.timeout(20000), kb.url);
  try { assert.deepEqual(await host.kb?.ready(cwd, AbortSignal.timeout(15000)), { ready: true }); assert.deepEqual(await host.kb?.products(AbortSignal.timeout(5000)), ["app"]); } finally { await host.close(); }
  assert.deepEqual(await tree(agent), before, "reusa los stores de Pi sin reescribirlos"); assert.ok(kb.calls.every(c => READS.has(c.tool)));
+});
+
+test("--check informa recomendaciones de una config aceptada y el wizard CLI pasa la Review a GHA con Sonnet", async t => {
+ const review = await readFile(new URL("../.github/workflows/claude-review.yml", import.meta.url), "utf8");
+ const legacy = defaultLifecycleConfig("acme/app", "main"); legacy.ship = { status: "not-applicable", targets: [] };
+ const f = await development(t, { interactive: true, answers: ["1", "1", "2", "1", "1"] });
+ await writeFile(join(f.repo, ".github/workflows/claude-review.yml"), review); await acceptLifecycleConfig(f.kb, f.home, f.repo, legacy);
+ const check = testIo({ homeDir: f.home, cwd: f.repo }); assert.equal(await developmentInit(["--development", "--check", "--json"], check, { host: f.host.factory }), 0, check.errors());
+ const report = JSON.parse(check.output()); assert.equal(report.status, "not-applicable"); assert.equal(report.canStartEffects, true);
+ assert.deepEqual(report.recommendations.map((r: { kind: string }) => r.kind), ["continuity", "review-gha"]); assert.deepEqual(report.recommendations[1].workflows, ["claude-review.yml"]);
+ assert.deepEqual(report.detection.workflows.find((w: { file: string }) => w.file === "claude-review.yml"), { file: "claude-review.yml", dispatch: true, release: false, contract: "omi-review-v1" });
+ const text = testIo({ homeDir: f.home, cwd: f.repo }); assert.equal(await developmentInit(["--development", "--check"], text, { host: f.host.factory }), 0);
+ assert.match(text.output(), /Recomendación: Continuidad sin configurar: el trabajo para en el PR draft/); assert.match(text.output(), /Recomendación: .*claude-review\.yml/);
+ assert.equal(await f.run(["--development"]), 0, f.io.errors());
+ assert.match(f.io.output(), /Mantener Ship actual[\s\S]*GitHub Actions · claude-review\.yml \(omi-review-v1\) \(Recomendada\)[\s\S]*Sonnet/);
+ const local = await readLifecycleTrust(lifecycleTrustDir(f.home), key); assert.ok(local.kind === "valid");
+ assert.deepEqual(local.record.accepted?.block.review.provider, { kind: "gha", workflow: "claude-review.yml", ref: "main", contract: "omi-review-v1", model: "claude-sonnet-5-5" });
+ assert.match(f.io.output(), /review\.provider\.model: claude-sonnet-5-5/);
 });

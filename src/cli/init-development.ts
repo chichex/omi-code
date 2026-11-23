@@ -48,9 +48,9 @@ export async function developmentInit(args: string[], io: Io, deps: DevelopmentI
 		if (!lifecycleKeyValid(key)) throw new OmiError("development_repo_unknown", `${repo} no tiene un nombre que sea un producto de la KB; no se configuró nada`);
 		const trustDir = lifecycleTrustDir(io.homeDir), detection = await detectLifecycle(root, signal);
 		if (check) {
-			const reading = await readLifecycle(host.kb, key, root, signal), local = await readLifecycleTrust(trustDir, key), state = lifecycleOnboardingStatus(reading, local);
-			const report = { repo, product: key.product, kbUrl: key.kbUrl, status: state.status, revision: state.revision, reason: state.reason, canStartEffects: evaluateLifecycle(reading, local).canStartEffects, deferred: local.kind === "valid" ? local.record.deferred : null, detection };
-			if (json) printJson(report, io); else io.out(`Lifecycle ${repo}: ${state.status} · ${state.reason}`);
+			const reading = await readLifecycle(host.kb, key, root, signal), local = await readLifecycleTrust(trustDir, key), state = lifecycleOnboardingStatus(reading, local, detection);
+			const report = { repo, product: key.product, kbUrl: key.kbUrl, status: state.status, revision: state.revision, reason: state.reason, canStartEffects: evaluateLifecycle(reading, local).canStartEffects, deferred: local.kind === "valid" ? local.record.deferred : null, recommendations: state.recommendations, detection };
+			if (json) printJson(report, io); else io.out([`Lifecycle ${repo}: ${state.status} · ${state.reason}`, ...state.recommendations.map(r => `Recomendación: ${r.message}`)].join("\n"));
 			return EXIT_OK;
 		}
 		if (!base) throw new OmiError("development_base_unknown", "No se detectó la rama base (origin/HEAD); no se configuró nada", { hint: "`git remote set-head origin --auto` y volvé a correr `omi init --development`" });
