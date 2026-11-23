@@ -118,3 +118,11 @@ test("autonomía: las instrucciones del agente no dicen que un permiso humano es
 	}
 	assert.match(developmentInstructions({ ...state, phase: "approve" }), /Foundations/, "dice quién decide si pregunta");
 });
+
+// El #82 puso «Push, PR, …» en outOfScope y frenó en «Abrir PR draft» diciendo que quedaban fuera de la receta.
+test("autonomía: el push y el PR draft cierran el flujo; la receta no los excluye y outOfScope no frena publish", async (t) => {
+	const f = await developmentFixture(t); await f.start();
+	const state = await f.state();
+	assert.match(developmentInstructions({ ...state, phase: "recipe" }), /push y el PR draft[^.]*no van en outOfScope/, "la receta no excluye el cierre del flujo");
+	assert.match(developmentInstructions({ ...state, phase: "pr" }), /publish es parte de la receta aprobada, aunque outOfScope nombre push o PR/, "un outOfScope que los nombra no frena publish");
+});
