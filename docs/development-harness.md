@@ -552,9 +552,23 @@ El bloque opcional `continuity` del lifecycle configura **cuándo continuar**, n
 }
 ```
 
-- `entry` controla la adopción del draft recién publicado y confirmado por este trabajo. No adopta drafts históricos al cargar. `/omi-work adopt` sigue disponible y exige confirmación humana.
+- `entry` controla la adopción del draft recién publicado y confirmado por este trabajo. No adopta drafts históricos al cargar. `/omi-work adopt` sigue disponible y exige confirmación humana. Con `entry: ask` hay un único sí: el de la adopción, «Habilitar Review, Land y Ship en el PR #8». Muestra el PR, la rama, el HEAD y la configuración que se fija (Review, Land, presupuesto y continuidad), y va antes de leer GitHub. Si la configuración cambia mientras espera, no se adopta.
 - `review`, `fix`, `land` y `ship` controlan el siguiente paso de la cadena. `auto` lo intenta si los guardrails permiten; `ask` pide continuar; `manual` espera el comando correspondiente. El sí para continuar no reemplaza el permiso del efecto: por ejemplo, `continuity.review:auto` con `review.mode:ask` sigue preguntando antes de Review.
 - La cadena sólo parte de publicación confirmada, comandos lifecycle explícitos o la verificación de una corrección. No hay timers ni efectos por restore, reload o cambio de sesión. Una confirmación o evaluación tardía del contexto anterior se descarta. Un cambio del pin de entrada no hereda el sí dado a otra configuración.
+
+Con `ask` hay un solo sí de continuidad por etapa. Si el primer efecto de la etapa ya pide un sí humano, ese diálogo lo lleva: agrega «Continuidad en ask: al aceptar, la cadena sigue con …» y el mismo sí autoriza ese efecto y la continuidad. Si el primer efecto corre solo, porque su permiso está en `auto`, la continuidad se pregunta aparte y antes, por ejemplo «Continuidad · Review del PR #8». Nunca se saltea el sí de un efecto: los siguientes de la etapa piden el suyo, como el merge después de «listo para review». `auto` sigue sin conceder permisos. Si la predicción falla (por ejemplo, el pin fresco de la etapa dejó el efecto en `auto`), la continuidad se pregunta antes de ese efecto. Un no a cualquiera de esos diálogos pausa la cadena como rechazo y no ejecuta nada.
+
+Ejemplo en `chichex/omi-code`, con todo en `ask`, Review por GitHub, el PR en draft y Ship que no aplica:
+
+```text
+/omi-work adopt → sí · Habilitar Review, Land y Ship en el PR #8
+Review          → sí · Review del PR #8 (también sigue la cadena)
+Land            → sí · Marcar el PR #8 listo para review (también sigue la cadena)
+                → sí · Mergear el PR #8
+Ship            → sí · Continuidad · Ship del PR #8
+```
+
+El push de una corrección verificada no es otra ronda y el diálogo lo dice. Con `push_pr: auto` de Foundations se pregunta «Continuidad · Publicar la corrección (push) en el PR #8». Con `push_pr: ask`, el diálogo «Push de la corrección al PR #8» lleva la continuidad.
 
 Con `continuity.fix:auto` y `corrections.mode:auto`, los hallazgos actuales pasan por un evaluador aislado, sin tools ni conversación del implementador. Contrasta cada hallazgo con la receta aprobada y el diff íntegro; sólo habilita código si acredita alcance y riesgo bajo del grupo actual. Un texto remoto, la severidad o el riesgo declarado en la receta no bastan. Ambigüedad, fuera de alcance, human-required, respuesta inválida/error/cancelación o contexto insuficiente pausan sin abrir una ronda. La evaluación queda ligada a receta, pin, sujeto, grupo y material observado; no concede push, merge ni entrega.
 
