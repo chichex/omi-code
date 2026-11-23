@@ -24,6 +24,7 @@ type Parts = { foundations: SetupPart; lifecycle: SetupPart };
 const READ_TIMEOUT_MS = 30_000;
 const NOW = "Configurar ahora", LATER = "Más adelante";
 const CANCELLED = "Configuración cancelada: no se guardó nada más. Volvé con /omi-setup.";
+const BUSY = "Ya hay un setup abierto. Terminalo o cerralo con Esc, y volvé con /omi-setup. No se cambió nada.";
 const LIFECYCLE: Record<Exclude<LifecycleOnboardingOutcome["kind"], "unavailable" | "invalid">, string> = {
 	saved: "Lifecycle guardado en la KB y aceptado. No se ejecutó ningún workflow, merge ni deploy.",
 	deferred: "Lifecycle postergado para esta revisión: no se vuelve a ofrecer solo hasta que cambie. Volvé con /omi-setup.",
@@ -38,6 +39,8 @@ const typingNotice = (parts: Parts) => {
 
 export class ConfigSetup {
 	private readonly offered = new Set<string>();
+	/** Un setup a la vez: el modal de uno reemplazaría al del otro y la persona vería un «cancelado» que no eligió. */
+	private busy = false;
 	private readonly session: DevelopmentSession;
 	private readonly config: ConfigState;
 	private readonly background: (work: Promise<void>) => void;
@@ -76,11 +79,13 @@ export class ConfigSetup {
 			// Sin rama base el wizard no puede correr: el aviso es de /omi-setup, no de cada sesión.
 			if (parts.lifecycle.kind !== "none" && !await this.base(ctx)) parts.lifecycle = { kind: "none" };
 			if (parts.foundations.kind === "none" && parts.lifecycle.kind === "none") return;
+			// Si la persona ya abrió /omi-setup mientras se leía, manda ése.
+			if (this.busy) return;
 			// Al abrir una sesión, no interrumpe un turno que ya empezó ni una sesión que cambió mientras leía.
 			if (trigger === "session" && (session.state || !ctx.isIdle() || ctx.hasPendingMessages())) return;
 			// El modal toma el foco: lo que la persona tipea caería en sus opciones. Sólo se avisa.
 			if (trigger === "session" && ctx.ui.getEditorText().trim()) { ctx.ui.notify(typingNotice(parts), "info"); return; }
-			await this.run(ctx, snapshot, parts, trigger);
+			await this.exclusive(() => this.run(ctx, snapshot, parts, trigger));
 		} catch (error) {
 			if (session.lifecycle.signal.aborted) return;
 			try { ctx.ui.notify(`No se pudo ofrecer la configuración: ${error instanceof Error ? error.message : "falló la lectura"}. Volvé con /omi-setup.`, "warning"); } catch { /* La sesión ya no está. */ }
@@ -92,6 +97,12 @@ export class ConfigSetup {
 		if (!canAsk(ctx)) throw new Error("Configurar requiere la TUI interactiva de OMI.");
 		if (session.offline) throw new Error("Sin red (--offline o PI_OFFLINE): no se puede leer ni guardar la configuración en la KB. No se cambió nada.");
 		if (!session.kb) throw new Error("KB no disponible: no se puede leer ni guardar la configuración. No se cambió nada.");
+		if (this.busy) throw new Error(BUSY);
+		await this.exclusive(() => this.configure(ctx));
+	}
+	/** La lectura y el setup de /omi-setup, con el setup ya tomado. */
+	private async configure(ctx: ExtensionContext): Promise<void> {
+		const session = this.session;
 		const reading = await session.loader(ctx, "Leyendo la configuración de la KB", (cancel) => session.foundations.read(ctx, AbortSignal.any([session.lifecycle.signal, cancel, AbortSignal.timeout(READ_TIMEOUT_MS)])));
 		if (!reading) { ctx.ui.notify("Lectura cancelada: no se abrió nada ni se cambió nada.", "info"); return; }
 		const snapshot = await this.config.snapshot(ctx, reading, false); this.config.show(ctx, snapshot);
@@ -99,6 +110,11 @@ export class ConfigSetup {
 		const parts: Parts = { foundations: snapshot.diagnosis.foundations, lifecycle: snapshot.diagnosis.lifecycle };
 		if (parts.foundations.kind === "none" && parts.lifecycle.kind === "none") { ctx.ui.notify([...configLines(snapshot.diagnosis), "Nada para configurar desde acá."].join("\n"), "info"); return; }
 		await this.run(ctx, snapshot, parts, "command");
+	}
+	/** Toma el setup sin ceder el turno entre el chequeo de `busy` y la marca. */
+	private async exclusive(work: () => Promise<void>): Promise<void> {
+		this.busy = true;
+		try { await work(); } finally { this.busy = false; }
 	}
 	/** En orden: Foundations y después el lifecycle. Esc en cualquiera corta el resto. Lo ofrecido no vuelve solo en esta sesión. */
 	private async run(ctx: ExtensionContext, snapshot: ConfigSnapshot, parts: Parts, trigger: SetupTrigger): Promise<void> {

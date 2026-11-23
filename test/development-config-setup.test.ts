@@ -9,6 +9,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { FORMATO_ANTERIOR } from "../src/harness/config-doctor.ts";
 import { foundationsDir, readTrust, trustPath } from "../src/harness/foundations-trust.ts";
 import { lifecycleTrustDir, readLifecycleTrust } from "../src/harness/lifecycle-trust.ts";
+import type { WaitLoader } from "../src/tui/development-loader.ts";
 import { developmentFixture } from "./helpers/development.ts";
 import { autoContinuity, continuityFixture } from "./helpers/lifecycle-continuity.ts";
 import { memoryKb, type MemoryKb } from "./helpers/mock-kb.ts";
@@ -22,12 +23,12 @@ const git = (root: string, ...args: string[]) => execFileSync("git", args, { cwd
 /** La rama base que el wizard del lifecycle lee de origin/HEAD. */
 const originHead = (root: string) => git(root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
 
-/** `head: false`: origin sin origin/HEAD, como un `git remote add` sin set-head. */
-async function fixture(t: TestContext, options: { body?: string | null; available?: string; args?: readonly string[]; head?: boolean } = {}) {
+/** `head: false`: origin sin origin/HEAD, como un `git remote add` sin set-head. `loader`: la espera de una lectura a pedido. */
+async function fixture(t: TestContext, options: { body?: string | null; available?: string; args?: readonly string[]; head?: boolean; loader?: WaitLoader } = {}) {
 	const kb = memoryKb({ products: ["repo"] }); if (options.body) kb.perillas("repo", options.body);
 	if (options.available) kb.available = options.available;
 	const background: Promise<void>[] = [];
-	const f = await developmentFixture(t, { kb, ...(options.args ? { args: options.args } : {}), deps: { background: (work) => { background.push(work); } } });
+	const f = await developmentFixture(t, { kb, ...(options.args ? { args: options.args } : {}), deps: { background: (work) => { background.push(work); }, ...(options.loader ? { loader: options.loader } : {}) } });
 	if (options.head !== false) originHead(f.checkout.root);
 	/** Una sesión interactiva nueva del mismo checkout: otra instancia de la extensión, sin mensajes. */
 	const session = async (reason: string) => {
@@ -91,6 +92,27 @@ test("config_setup: una sesión nueva no abre el setup si la persona ya está es
 	await prompted.session("startup");
 	assert.equal(prompted.asked.length, 0, "omi \"prompt\": la sesión arranca con un turno, no con el setup");
 	await prompted.session("new"); assert.deepEqual(titles(prompted), ["Foundations de"], "/new no trae el prompt del arranque");
+});
+
+// Un setup a la vez: el modal de uno reemplazaría al del otro y la persona vería un «cancelado» que no eligió.
+test("config_setup: la oferta de una sesión nueva y /omi-setup no abren dos setups a la vez", async (t) => {
+	const cancelled = (messages: string[]) => messages.filter((message) => /Configuración cancelada/.test(message)).length;
+	// /omi-setup primero: la oferta de fondo termina de leer mientras el comando todavía espera su lectura.
+	let during: (() => Promise<void>) | undefined;
+	const f = await fixture(t, { loader: async (_ctx, _title, work) => { await during?.(); return work(new AbortController().signal); } });
+	f.uiControl.questions = () => [KEYS.esc];
+	Reflect.set(f.context, "sessionManager", SessionManager.create(f.checkout.root, join(f.home, "sessions-race"))); await f.attach();
+	during = async () => { during = undefined; await f.emit("session_start", { reason: "startup" }); await f.settled(); };
+	await f.run("omi-setup");
+	assert.deepEqual(titles(f), ["Foundations de"], "sólo abre el setup que la persona pidió");
+	assert.equal(cancelled(f.messages), 1, "un solo «cancelado»: el Esc de la persona");
+	// La oferta primero: con su modal abierto, /omi-setup avisa en vez de abrir otro.
+	const g = await fixture(t); let pending: Promise<void> | undefined;
+	g.uiControl.questions = (screen) => { if (/Foundations de/.test(screen)) pending ??= g.run("omi-setup"); return [KEYS.esc]; };
+	await g.session("startup"); await pending;
+	assert.deepEqual(titles(g), ["Foundations de"], "el comando no abre un segundo setup");
+	assert.ok(g.messages.some((message) => /Ya hay un setup abierto/.test(message) && /\/omi-setup/.test(message)), "dice por qué y cómo seguir");
+	assert.equal(cancelled(g.messages), 1); assert.equal(saves(g.kb), 0);
 });
 
 test("config_setup: sin UI, offline o con la KB caída no se ofrece ni al arrancar el harness ni al abrir una sesión", async (t) => {
