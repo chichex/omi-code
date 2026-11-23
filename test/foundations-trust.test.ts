@@ -5,13 +5,13 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { agentDir } from "../src/core/paths.ts";
 import { foundationsHash, type FoundationsBlock } from "../src/harness/foundations.ts";
-import { foundationsDir, readTrust, trustPath, writeTrust, type TrustRecord } from "../src/harness/foundations-trust.ts";
+import { foundationsDir, inspectTrust, readTrust, trustPath, writeTrust, type TrustRecord } from "../src/harness/foundations-trust.ts";
 import { tempDir } from "./helpers/io.ts";
 
 const key = { kbUrl: "https://kb.example.test/mcp", product: "omi-code", repo: "chichex/omi-code" };
 const block: FoundationsBlock = { version: 2, repo: "chichex/omi-code", confirmar: ["git push *"], politica: { arranque: "ask", receta: "ask", push_pr: "ask" } };
 const accepted = () => ({ docId: "doc-1", blockHash: foundationsHash(block), block, author: "ana@example.test", date: "2026-11-18T00:00:00Z", acceptedAt: "2026-11-18T01:00:00Z" });
-const record = (overrides: Partial<TrustRecord> = {}): TrustRecord => ({ version: 2, ...key, accepted: accepted(), offerDeclined: false, ...overrides });
+const record = (overrides: Partial<TrustRecord> = {}): TrustRecord => ({ version: 2, ...key, accepted: accepted(), deferred: null, ...overrides });
 
 test("foundations_trust: ida y vuelta bajo <OMI_HOME>/agent/foundations con 0700 y 0600", async (t) => {
 	const home = await tempDir(t); const dir = foundationsDir(home);
@@ -129,9 +129,38 @@ test("foundations_trust: interrupción antes del reemplazo conserva bytes anteri
 	assert.deepEqual((await readdir(dir)).filter((name) => name.endsWith(".tmp")), []);
 });
 
-test("foundations_trust: «no ofrecer más» y nada aceptado sobreviven un corte", async (t) => {
+// Cambio de requisito del dueño (2026-11-23): «Más adelante» se recuerda por revisión de la KB, no como un «no ofrecer más» global.
+test("foundations_trust: «Más adelante» por revisión y nada aceptado sobreviven un corte", async (t) => {
 	const dir = foundationsDir(await tempDir(t));
-	await writeTrust(dir, record({ accepted: null, offerDeclined: true }));
+	await writeTrust(dir, record({ accepted: null, deferred: { revision: "missing:doc-1", at: "2026-11-23T00:00:00Z" } }));
 	const read = await readTrust(dir, key);
-	assert.equal(read?.offerDeclined, true); assert.equal(read?.accepted, null);
+	assert.deepEqual(read?.deferred, { revision: "missing:doc-1", at: "2026-11-23T00:00:00Z" }); assert.equal(read?.accepted, null);
+});
+test("foundations_trust: un registro v2 con el «no ofrecer más» anterior conserva su aceptación y al reescribirse ya no lo lleva", async (t) => {
+	const dir = foundationsDir(await tempDir(t)); await mkdir(dir, { recursive: true, mode: 0o700 });
+	const { deferred: _unused, ...rest } = record();
+	await writeFile(trustPath(dir, key), `${JSON.stringify({ ...rest, offerDeclined: true }, null, 2)}\n`, { mode: 0o600 });
+	const read = await readTrust(dir, key);
+	assert.deepEqual(read, record(), "la aceptación sigue valiendo y el campo viejo no se expone");
+	assert.ok(read); await writeTrust(dir, { ...read, deferred: { revision: "missing:none", at: "2026-11-23T00:00:00Z" } }, { expected: read });
+	const stored: unknown = JSON.parse(await readFile(trustPath(dir, key), "utf8"));
+	assert.deepEqual(Object.keys(stored && typeof stored === "object" ? stored : {}).sort(), ["accepted", "deferred", "kbUrl", "product", "repo", "version"]);
+});
+test("foundations_trust: inspeccionar distingue ausente, formato anterior, ilegible y vigente sin migrar ni reescribir", async (t) => {
+	const dir = foundationsDir(await tempDir(t));
+	assert.deepEqual(await inspectTrust(dir, key), { kind: "missing" }, "sin directorio");
+	await mkdir(dir, { recursive: true, mode: 0o700 });
+	assert.deepEqual(await inspectTrust(dir, key), { kind: "missing" }, "sin archivo");
+	const path = trustPath(dir, key);
+	const legacy = `${JSON.stringify({ version: 1, ...key, accepted: null, offerDeclined: false }, null, "\t")}\n`;
+	await writeFile(path, legacy, { mode: 0o600 });
+	assert.deepEqual(await inspectTrust(dir, key), { kind: "legacy" });
+	assert.equal(await readTrust(dir, key), undefined, "leer sigue sin reutilizarlo");
+	assert.equal(await readFile(path, "utf8"), legacy, "inspeccionar no migra ni reescribe");
+	await writeFile(path, JSON.stringify({ version: 1, ...key, repo: "otro/repo", accepted: null }), { mode: 0o600 });
+	assert.deepEqual(await inspectTrust(dir, key), { kind: "invalid" }, "un v1 ajeno no es el formato anterior de este repo");
+	await writeFile(path, "{ roto", { mode: 0o600 });
+	assert.deepEqual(await inspectTrust(dir, key), { kind: "invalid" });
+	await writeTrust(dir, record());
+	assert.deepEqual(await inspectTrust(dir, key), { kind: "valid", record: record() });
 });

@@ -1,5 +1,5 @@
 // El panel configura v2 sólo con Guardar. Git temporal, KB en memoria o MCP HTTP falso, nunca KB real.
-// Arrancar el harness sin Foundations no lo ofrece: sin Foundations v2 nada pregunta.
+// Arrancar el harness sin Foundations lo ofrece una vez (Configurar ahora o Más adelante); Esc no escribe nada.
 import assert from "node:assert/strict";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -32,17 +32,25 @@ const SAVE = ["\x13", "\x13"];
 /** El panel abre en la primera política: tres filas abajo está Reglas de comandos y Enter abre su editor. */
 const TO_RULES = [KEYS.down, KEYS.down, KEYS.down, KEYS.enter];
 
-test("foundations_setup v2: arrancar el harness sin Foundations no ofrece armarlo ni pregunta nada", async (t) => {
+// Cambio de requisito del dueño (2026-11-23): lo que falta configurar se detecta solo y corre Foundations al arrancar.
+test("foundations_setup v2: arrancar el harness sin Foundations lo ofrece; Esc no escribe y Más adelante posterga esa revisión", async (t) => {
 	for (const body of [HUMAN, null]) {
-		const f = await fixture(t, body); f.uiControl.questions = () => ["1"]; await f.start();
-		assert.equal(f.asked.length, 0, "sin la oferta"); assert.equal(f.selects.length, 0); assert.deepEqual(f.prompts, []);
-		assert.equal(f.foundationsScreens.length, 0); assert.equal(saves(f.kb), 0);
-		assert.equal(await readTrust(foundationsDir(f.home), key(f.kb)), undefined, "nada en el registro local");
+		const f = await fixture(t, body); f.uiControl.questions = () => [KEYS.esc]; await f.start();
+		assert.equal(f.asked.length, 1, "una sola oferta: Esc corta el setup"); const offer = f.asked[0]![0]!;
+		assert.match(offer, /Foundations de test\/repo/); assert.match(offer, /Configurar ahora/); assert.match(offer, /Más adelante/); assert.match(offer, /Sin Foundations para test\/repo/);
+		assert.equal(f.selects.length, 0); assert.deepEqual(f.prompts, []); assert.equal(f.foundationsScreens.length, 0); assert.equal(saves(f.kb), 0);
+		assert.equal(await readTrust(foundationsDir(f.home), key(f.kb)), undefined, "Esc no deja nada en el registro local");
+		assert.equal((await f.state()).phase, "explore", "el harness sigue igual");
+		const later = await fixture(t, body); later.uiControl.questions = (screen) => /Foundations de/.test(screen) ? ["2"] : [KEYS.esc]; await later.start();
+		assert.equal(later.foundationsScreens.length, 0, "Más adelante no abre el panel"); assert.equal(saves(later.kb), 0);
+		const stored = await readTrust(foundationsDir(later.home), key(later.kb));
+		assert.equal(stored?.accepted, null, "postergar no acepta nada"); assert.equal(stored?.deferred?.revision, "foundations:missing");
 	}
 });
 test("foundations_setup v2: /omi-foundations abre el panel integrado y sólo Guardar persiste/acepta, preservando perillas", async (t) => {
 	const f = await fixture(t); f.uiControl.foundations = () => [...TO_RULES, ...typed("git push *"), ...SAVE];
-	await f.start(); await f.run("omi-foundations"); assert.equal(f.asked.length, 0, "no hay wizard de comandos/políticas por pestañas"); assert.equal(f.editors.length, 0);
+	// Arrancar ofrece el setup (Esc lo corta): /omi-foundations abre el panel directo, sin tandas de preguntas.
+	await f.start(); const offered = f.asked.length; await f.run("omi-foundations"); assert.equal(f.asked.length, offered, "no hay wizard de comandos/políticas por pestañas"); assert.equal(f.editors.length, 0);
 	assert.equal(f.foundationsScreens.length, 1); assert.equal(saves(f.kb), 1);
 	const saved = f.kb.documents.at(-1)!; assert.ok(saved.cuerpo.startsWith(HUMAN));
 	const parsed = parseFoundations(saved.cuerpo, REPO); assert.ok(parsed.status === "valid"); assert.deepEqual(parsed.block, fresh(["git push *"]));
@@ -109,7 +117,7 @@ test("foundations_setup v2: fallo no deja aceptación pendiente; éxito guarda s
 	const kb = memoryKb({ products: ["repo"] }); kb.perillas("repo", HUMAN); const dir = foundationsDir(await tempDir(t));
 	kb.hook = (tool) => tool === "guardar" ? "error" : undefined; await assert.rejects(save(kb, dir), /KB no disponible/); assert.equal(await readTrust(dir, key(kb)), undefined);
 	kb.hook = () => {}; await save(kb, dir); const stored: unknown = JSON.parse(await readFile(trustPath(dir, key(kb)), "utf8"));
-	assert.deepEqual(Object.keys(stored && typeof stored === "object" ? stored : {}).sort(), ["accepted", "kbUrl", "offerDeclined", "product", "repo", "version"]);
+	assert.deepEqual(Object.keys(stored && typeof stored === "object" ? stored : {}).sort(), ["accepted", "deferred", "kbUrl", "product", "repo", "version"]);
 });
 // Mantener el transporte real de Pi por HTTP: cambios de versión no pueden simular éxito de persistencia.
 async function createHttpKb(t: TestContext) {

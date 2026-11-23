@@ -13,7 +13,8 @@ import { field, notice, OmiCommandPalette, OmiInfoModal } from "./modals.ts";
 import { CompactTranscript, Lines, ReadView } from "./components.ts";
 import { transcriptRoots, workspaceEditor, workspaceFooter, workspaceHeader, workspaceRoot, workspaceWelcome } from "./chrome.ts";
 import { actionsDetail, branchPrDetail, contextDetail, resourcesDetail, subagentsDetail, workspaceDetail, type InfoDetail } from "./details.ts";
-import { changesViewLines, githubViewLines, omiViewLines, type GithubView } from "./read-views.ts";
+import { changesViewLines, githubViewLines, type GithubView } from "./read-views.ts";
+import { omiViewLines } from "./omi-view.ts";
 import { WORKSPACE_VIEWS, type WorkspaceView } from "./navigation.ts";
 import { ACTION_GROUPS, readActionRuns, type ActionGroup, type ActionState } from "./github-actions.ts";
 import { workspaceSidebar } from "./sidebar.ts";
@@ -25,7 +26,8 @@ import { readBranchPullRequest, type BranchPullRequest } from "./pull-request.ts
 import { restoreIssueTriage, type IssueTriageState } from "./issue-triage.ts";
 import { discoverLegacyPreparations, loadIssuePreparations, rememberIssueSession, type IssuePreparationEntry } from "./issue-registry.ts";
 import { developmentOffline, holdSessionSwitch, requestDevelopmentBegin, sessionSwitchOwner } from "../development-tickets.ts";
-import { foundationsSummary, sessionFoundationsPin } from "../development-foundations.ts";
+import { sessionFoundationsPin } from "../development-foundations.ts";
+import { CONFIG_EVENT, CONFIG_REFRESH_EVENT, sessionConfigView } from "../development-config-view.ts";
 import { preparePrincipalSession, PrincipalSessionBusyError } from "./main-workspace.ts";
 
 type View = WorkspaceView;
@@ -42,7 +44,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 		let view: View = "chat"; let working = false; let blocked = false; let activity = "Listo";
 		const runningTools = new Map<string, string>();
 		const subagents = new SubagentMonitor(); let unsubscribeSubagents: (() => void) | undefined;
-		const workflow = new WorkflowProgressMonitor(); let unsubscribeWorkflow: (() => void) | undefined;
+		const workflow = new WorkflowProgressMonitor(); let unsubscribeWorkflow: (() => void) | undefined; let unsubscribeConfig: (() => void) | undefined;
 		let git: GitSnapshot | undefined; let gitError = false; let resources: Resources | undefined;
 		const github: Record<GithubView, GithubList> = { issues: emptyGithubList(), prs: emptyGithubList() };
 		let actions: Record<ActionGroup, ActionState> = { reviews: {}, releases: {} };
@@ -246,12 +248,18 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			if (!ctx.isIdle() || ctx.hasPendingMessages()) { ctx.ui.notify("Esperá a que termine el turno antes de editar Foundations.", "warning"); return; }
 			pi.sendUserMessage("/omi-foundations", { expandPromptTemplates: true });
 		}
+		// El setup también es del harness: corre lo que falta configurar (Foundations y lifecycle).
+		function configureMissing(): void {
+			if (!ctx.isIdle() || ctx.hasPendingMessages()) { ctx.ui.notify("Esperá a que termine el turno antes de configurar.", "warning"); return; }
+			pi.sendUserMessage("/omi-setup", { expandPromptTemplates: true });
+		}
 		async function palette(): Promise<void> {
 			if (!active || finishModal) return;
 			const actions: [string, () => void | Promise<void>][] = [...WORKSPACE_VIEWS.map((item): [string, () => void] => [item.label, () => switchView(item.id)]),
 				["Progreso de desarrollo", showProgress], ["Foundations", editFoundations], ["PR de la rama actual", showBranchPr], ["GitHub Actions", showActions], ["Subagentes", showSubagents], ["Elegir modelo", showModel], ["Ventana de contexto", showContext], ["Ubicación / worktree", showWorkspace], ["Recursos del equipo", showResources], ["Mostrar / ocultar lateral", toggleSidebar], ["Personalizar lateral", customizeSidebar], ["Alternar detalle de herramientas", () => { ctx.ui.setToolsExpanded(!ctx.ui.getToolsExpanded()); }], ["Actualizar datos", () => { void refreshLocal(); void refreshRemote(); }],
 				["Trabajar en el issue seleccionado", workOnSelectedIssue]];
 			if (git?.linked) actions.splice(WORKSPACE_VIEWS.length, 0, ["Volver al repo principal", () => pi.sendUserMessage("/omi-main", { expandPromptTemplates: true })]);
+			actions.splice(actions.findIndex(([label]) => label === "Foundations") + 1, 0, ["Configurar lo que falta", configureMissing]);
 			let selected: string | undefined;
 			try {
 				selected = await ctx.ui.custom<string | undefined>((ui, _theme, keys, done) => {
@@ -348,10 +356,12 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			} finally { mainSessionTask = undefined; mainBusy = false; release(); changed(); }
 		}
 		pi.registerCommand("omi-main", { description: "Volver del worktree al repo principal y retomar su sesión, sin cambiar ramas", handler: returnToPrincipal });
-		const foundations = (): string[] => { const file = ctx.sessionManager.getSessionFile(); return foundationsSummary(file ? sessionFoundationsPin(file) : undefined); };
-		const omiPane = new ReadView((width) => omiViewLines(theme(), { project, services, environments, error: envError, at: envAt, now: Date.now(), foundations: foundations() }, width), (data) => {
+		// Foundations, lifecycle y lo que falta los publica el harness (otra extensión): la vista sólo los lee.
+		const omiSnapshot = () => { const file = ctx.sessionManager.getSessionFile(); return { project, services, environments, error: envError, at: envAt, now: Date.now(), session: !!file, pin: file ? sessionFoundationsPin(file) : undefined, config: file ? sessionConfigView(file) : undefined }; };
+		const omiPane = new ReadView((width) => omiViewLines(theme(), omiSnapshot(), width), (data) => {
 			if (matchesKey(data, "escape")) { switchView("chat"); return true; }
-			if (data === "r") { void refreshRemote(); return true; }
+			if (data === "r") { void refreshRemote(); const file = ctx.sessionManager.getSessionFile(); if (file) pi.events.emit(CONFIG_REFRESH_EVENT, { sessionFile: file }); return true; }
+			if (data === "s") { configureMissing(); return true; }
 			if (data === "f") { editFoundations(); return true; }
 			return false;
 		}, changed, () => rows() - 6);
@@ -392,6 +402,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			unsubscribeWorkflow?.(); workflow.clear();
 			unsubscribeWorkflow = pi.events.on("omi:workflow", (event) => { if (active && workflow.consume(event)) { if (!workflow.current(ctx.cwd, git)) progressPane.offset = 0; changed(); } });
 			unsubscribeSubagents = pi.events.on("omi:subagents", (event) => { if (active && consumeSubagentEvent(subagents, event)) { subagentIndicator.sync(); changed(); } });
+			unsubscribeConfig?.(); unsubscribeConfig = pi.events.on(CONFIG_EVENT, () => { if (active) changed(); });
 			issueTriage = restoreIssueTriage(ctx.sessionManager.getBranch(), ctx.cwd);
 			if (!parsed.useTheme && !pi.getSettings().theme) {
 				const base = ctx.ui.getTheme("dark");
@@ -434,7 +445,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			working = !ctx.isIdle();
 			timer = setInterval(() => { void refreshLocal(); }, 3000); timer.unref(); if (parsed.offline || !ctx.isProjectTrusted()) void refreshRemote(); void refreshLocal(); changed();
 		});
-		pi.on("session_shutdown", async () => { active = false; unsubscribeWorkflow?.(); unsubscribeWorkflow = undefined; workflow.clear(); unsubscribeSubagents?.(); unsubscribeSubagents = undefined; subagents.clear(); subagentIndicator.dispose(); if (ctx?.mode === "tui") ctx.ui.setWidget("omi-subagents-activity", undefined); controller.abort(); if (timer) clearInterval(timer); unsubscribeInput?.(); finishModal?.(); finishModal = undefined; if (tui && baseRoot && isViewportTUI(tui)) tui.setLayoutRoot(baseRoot); await Promise.all([saveQueue, issueSessionTask?.catch(() => {}), mainSessionTask?.catch(() => {})]); });
+		pi.on("session_shutdown", async () => { active = false; unsubscribeWorkflow?.(); unsubscribeWorkflow = undefined; workflow.clear(); unsubscribeSubagents?.(); unsubscribeSubagents = undefined; unsubscribeConfig?.(); unsubscribeConfig = undefined; subagents.clear(); subagentIndicator.dispose(); if (ctx?.mode === "tui") ctx.ui.setWidget("omi-subagents-activity", undefined); controller.abort(); if (timer) clearInterval(timer); unsubscribeInput?.(); finishModal?.(); finishModal = undefined; if (tui && baseRoot && isViewportTUI(tui)) tui.setLayoutRoot(baseRoot); await Promise.all([saveQueue, issueSessionTask?.catch(() => {}), mainSessionTask?.catch(() => {})]); });
 		pi.on("before_agent_start", (_event, context) => { ctx = context; working = true; activity = "Preparando turno"; changed(); });
 		pi.on("agent_start", (_event, context) => { ctx = context; working = true; activity = "Trabajando"; changed(); });
 		pi.on("agent_settled", (_event, context) => { ctx = context; working = false; runningTools.clear(); activity = "Listo"; void refreshLocal(); changed(); });

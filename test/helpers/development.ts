@@ -8,6 +8,7 @@ import { SessionManager, type ExtensionAPI, type ExtensionContext, type Extensio
 import { processRunner, type Runner } from "../../src/core/exec.ts";
 import { developmentHarnessExtension } from "../../src/tui/development.ts";
 import type { DevelopmentDeps } from "../../src/tui/development-session.ts";
+import type { ConfigSetupDeps } from "../../src/tui/development-config-setup.ts";
 import { readGit } from "../../src/tui/workspace/data.ts";
 import { createIssueWorktree } from "../../src/tui/workspace/issue-worktree.ts";
 import { ISSUE_TRIAGE_ENTRY, issueTriageState } from "../../src/tui/workspace/issue-triage.ts";
@@ -26,9 +27,9 @@ import type { FoundationsPolicy } from "../../src/harness/foundations.ts";
 import { acceptFoundations } from "./foundations.ts";
 
 /** `foundations`: una revisión v2 aceptada con esas políticas y `confirmar` (por defecto `*`). Sin ella, vale el default: nada pregunta. */
-/** `repo`: owner/name de origin y del issue. `github`: responde primero una llamada a gh (undefined sigue con la falsa de siempre). `deps`: puertos extra del harness. */
-export async function developmentFixture(t: TestContext, options: { kb?: KbClient; foundations?: FoundationsPolicy; confirmar?: readonly string[]; repo?: string; github?: (args: string[], input: string | undefined) => { code?: number; stdout: string } | undefined; deps?: Omit<DevelopmentDeps, "runner" | "kb"> } = {}) {
-	const repo = options.repo ?? "test/repo"; const github = options.github; const deps = options.deps ?? {};
+/** `repo`: owner/name de origin y del issue. `github`: responde primero una llamada a gh (undefined sigue con la falsa de siempre). `deps`: puertos extra del harness. `args`: los de la CLI, por ejemplo --offline. */
+export async function developmentFixture(t: TestContext, options: { kb?: KbClient; foundations?: FoundationsPolicy; confirmar?: readonly string[]; repo?: string; github?: (args: string[], input: string | undefined) => { code?: number; stdout: string } | undefined; deps?: Omit<DevelopmentDeps & ConfigSetupDeps, "runner" | "kb">; args?: readonly string[] } = {}) {
+	const repo = options.repo ?? "test/repo"; const github = options.github; const deps = options.deps ?? {}; const args = options.args ?? [];
 	const home = await realpath(await tempDir(t)); const root = join(home, "repo"); await mkdir(root);
 	const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 	git("init", "-b", "main"); git("config", "user.email", "test@example.test"); git("config", "user.name", "Test"); git("config", "commit.gpgsign", "false"); git("config", "core.hooksPath", "/dev/null"); git("remote", "add", "origin", `https://github.com/${repo}.git`);
@@ -92,7 +93,10 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 	const events = new Map<string, ((event: unknown, context: ExtensionContext) => unknown)[]>(); const tools = new Map<string, ToolDefinition>();
 	const commands = new Map<string, { handler: (args: string, ctx: ExtensionContext) => Promise<void> }>(); let activeTools = ["read", "bash", "write", "edit", "omi_ask"]; // Pi activa omi_ask, model-only, al registrarla.
 	const busHandlers = new Map<string, Set<(event: unknown) => unknown>>();
+	// Todo lo que el harness publica por el bus, en orden: por ejemplo omi:config para la pestaña OMI.
+	const busEvents: { name: string; event: unknown }[] = [];
 	const emitBus = async (name: string, event: unknown) => {
+		busEvents.push({ name, event });
 		if (name === "omi:workflow") progress.push(event);
 		await Promise.all([...(busHandlers.get(name) ?? [])].map(handler => handler(event)));
 	};
@@ -187,7 +191,7 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 	} as unknown as ExtensionContext;
 	const emit = (name: string, event: unknown = {}) => emitLikePi(events.get(name) ?? [], name, event, context);
 	if (options.foundations) await acceptFoundations(foundationsDir(home), options.foundations, { ...(options.kb ? { kbUrl: options.kb.url } : {}), ...(options.confirmar ? { confirmar: options.confirmar } : {}), ...(options.repo ? { repo: options.repo } : {}) });
-	const attach = async () => { busHandlers.clear(); events.clear(); tools.clear(); commands.clear(); const extension = developmentHarnessExtension(testIo({ homeDir: home, cwd: checkout.root }), [], { loader, ...deps, runner, ...(options.kb ? { kb: options.kb } : {}) }); if (typeof extension === "function") await extension(pi); else await extension.factory(pi); await questionsExtension().factory(pi); await emit("session_start"); };
+	const attach = async () => { busHandlers.clear(); events.clear(); tools.clear(); commands.clear(); const extension = developmentHarnessExtension(testIo({ homeDir: home, cwd: checkout.root }), args, { loader, ...deps, runner, ...(options.kb ? { kb: options.kb } : {}) }); if (typeof extension === "function") await extension(pi); else await extension.factory(pi); await questionsExtension().factory(pi); await emit("session_start"); };
 	await attach();
 	const invoke = async (name: string, input: unknown, signal = new AbortController().signal) => {
 		const tool = tools.get(name); if (!tool || !Value.Check(tool.parameters, input)) throw new Error("Argumentos de tool inválidos");
@@ -199,7 +203,7 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 	const readReference = async () => { await emit("tool_execution_start", { toolName: "read", toolCallId: "read", args: { path: "value.cjs" } }); await emit("tool_call", { toolName: "read", toolCallId: "read", input: { path: "value.cjs" } }); await emit("tool_execution_end", { toolName: "read", toolCallId: "read", result: { content: [{ type: "text", text: "module.exports = 1;" }] }, isError: false }); };
 	const explore = async () => { await readReference(); await action({ action: "explored", exploration: { references: [{ path: "value.cjs", line: 1, detail: "Valor actual" }], findings: ["Devuelve 1"], approach: "Corregir el valor", missingFoundation: [], dependencies: [], disposition: "continue", reason: "Existe" } }); await action({ action: "inferences", inferences: [] }); };
 	const plan = (size: "small" | "large" = "small", causeKnown = true): Plan => ({ classification: { type: "fix", size, risk: "low", riskAreas: [], causeKnown }, objective: "Devolver 2", approach: "Corregir el valor exportado", scope: ["valor"], outOfScope: ["infra"], cases: [{ id: "D1", description: "Devuelve 2", command: "node test.cjs" }, ...(size === "large" ? [{ id: "D2", description: "Otro devuelve 2", command: "node other-test.cjs" }] : [])], lenses: ["quality"], executor: { mode: "inline", writers: 0 } });
-	return { home, checkout, manager, runner, remote, calls, statuses, selects, editors, asked, permissionScreens, foundationsScreens, loader, loaderTitles, activeTools: () => activeTools, prompts, confirmationDetails, messages, progress, modelCalls, modelControl, uiControl, reviewScreens, reviews: () => reviews, tools, context, emit, emitBus, attach, invoke, action, state, readReference, explore, plan, command: (input: string) => commands.get("omi-work")!.handler(input, context),
+	return { home, checkout, manager, runner, remote, calls, statuses, selects, editors, asked, permissionScreens, foundationsScreens, loader, loaderTitles, activeTools: () => activeTools, prompts, confirmationDetails, messages, progress, modelCalls, modelControl, uiControl, reviewScreens, reviews: () => reviews, tools, context, emit, emitBus, busEvents, attach, invoke, action, state, readReference, explore, plan, command: (input: string) => commands.get("omi-work")!.handler(input, context),
 		/** Cualquier comando registrado, por ejemplo /omi-foundations. Falla si no existe. */
 		run: (name: string, input = "") => { const command = commands.get(name); if (!command) throw new Error(`Comando no registrado: /${name}`); return command.handler(input, context); },
 		// Lo que hace el panel de Issues o la tool del agente estando ya en el worktree del issue: un pedido de un solo uso y su sí.

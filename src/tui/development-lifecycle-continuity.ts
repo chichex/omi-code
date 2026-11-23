@@ -7,6 +7,7 @@ import type { LifecycleConfig } from "../harness/lifecycle-schema.ts";
 import { acceptedPin, adoptLifecycle, freshPin, landLifecycle, LifecycleDeclined, reviewLifecycle, type ObservedLifecycleReview } from "./development-lifecycle.ts";
 import { shipLifecycle } from "./development-lifecycle-ship.ts";
 import { fixLifecycle } from "./development-lifecycle-fix.ts";
+import { offerSetupAfterPublication } from "./development-config-setup.ts";
 import type { DevelopmentSession } from "./development-session.ts";
 
 /** Un cerrojo por sesión, sin timers, callbacks de onChange ni reconstrucción de hechos desde recibos. */
@@ -20,6 +21,7 @@ export class LifecycleContinuityHost {
   // Capturado en la misma llamada a publish, nunca obtenido de un evento restore.
   const publication = { head: state.publication.head, number: state.publication.number, revision: state.revision };
   await this.run(ctx, "publication-confirmed", null, publication);
+  await offerSetupAfterPublication(this.session, ctx); // Sin lifecycle, pendiente o sin continuidad: ofrece el wizard; nunca adopta.
  }
  async advance(ctx: ExtensionContext, observed: ObservedLifecycleReview | null = null): Promise<void> {
   await this.run(ctx, "advance", observed);

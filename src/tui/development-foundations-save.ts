@@ -96,7 +96,7 @@ async function persistSave(kb: KbClient, key: TrustKey, block: FoundationsBlock,
 		await deps.beforeAccept?.();
 		assertCurrent();
 		const hash = foundationsHash(block);
-		const record: TrustRecord = initialTrust ?? { version: 2, ...key, accepted: null, offerDeclined: false };
+		const record: TrustRecord = initialTrust ?? { version: 2, ...key, accepted: null, deferred: null };
 		const nextRecord: TrustRecord = { ...record, accepted: { docId: stored.id, blockHash: hash, block, author: stored.autor ?? "", date: stored.fecha ?? "", acceptedAt: deps.now() } };
 		await (deps.writeAcceptance ?? writeTrust)(deps.trustDir, nextRecord, {
 			expected: initialTrust ?? null, isCurrent: () => isCurrent() && !signal.aborted,

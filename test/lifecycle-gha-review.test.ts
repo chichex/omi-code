@@ -29,8 +29,8 @@ const artifact = () => ({ version: 1, contract: "omi-review-v1", ...metadata(), 
 const run = () => ({ id: 1001, workflow_id: 7, path: ".github/workflows/review.yml", head_sha: workflowSha, head_branch: "main", event: "workflow_dispatch", display_title: `omi-review-v1 PR #42 ${correlationId}`, run_attempt: 1, status: "completed", conclusion: "success", created_at: at, repository: { full_name: repo } });
 const current = () => ({ repo, pr: 42, headSha: head, baseSha: base });
 const finding = (id = "F1") => ({ id, severity: "high", message: "Falta manejar error", path: "src/app.ts", line: 10 });
-function reserved(source: "person" | "policy" = "person", ownerRepo = repo) {
- const block = defaultLifecycleConfig(ownerRepo, "main"); block.review = { mode: source === "person" ? "ask" : "auto", provider: { kind: "gha", workflow: "review.yml", ref: "main", contract: "omi-review-v1" }, timeoutSeconds: 60 };
+function reserved(source: "person" | "policy" = "person", ownerRepo = repo, tuning: { model?: "claude-sonnet-5-5"; effort?: "high" } = {}) {
+ const block = defaultLifecycleConfig(ownerRepo, "main"); block.review = { mode: source === "person" ? "ask" : "auto", provider: { kind: "gha", workflow: "review.yml", ref: "main", contract: "omi-review-v1", ...tuning }, timeoutSeconds: 60 };
  const pin = { key: { kbUrl: "https://kb.example.test/mcp", product: "app", repo: ownerRepo }, accepted: { block, blockHash: lifecycleHash(block), docId: "pin", author: "Ada", date: at, acceptedAt: at } };
  let lifecycle = life.initializeLifecycle({ workflowId: "root", issue: 42, repo: ownerRepo }, pin);
  lifecycle = life.bindLifecycleSubject(lifecycle, { id: "subject", repo: ownerRepo, number: 42, branch: "feat/work", base: "main", headSha: head, baseSha: base, contentHash: "c".repeat(64), mergedSha: null }, { id: "adoption", source: "person", at });
@@ -98,6 +98,16 @@ test("respuesta de dispatch perdida se reconcilia por correlación única sin re
  assert.equal((await startGhaReview(reserved(), request(), p)).status, "pass");
  assert.equal(p.runner.commands.length, 1); assert.deepEqual(p.runner.commands[0]?.args.slice(0, 2), ["workflow", "run"]);
  assert.ok(p.runner.commands[0]?.args.includes(`expected_head_sha=${head}`)); assert.ok(p.runner.commands[0]?.args.includes(`correlation_id=${correlationId}`));
+});
+
+test("dispatch pasa model y effort del provider sólo si están configurados", async () => {
+ const plain = ports(); assert.equal((await startGhaReview(reserved(), request(), plain)).status, "pass");
+ const args = plain.runner.commands[0]?.args ?? []; assert.ok(!args.some(a => /^(?:model|effort)=/.test(a)), "sin model/effort decide el default del workflow");
+ const tuned = ports(); assert.equal((await startGhaReview(reserved("person", repo, { model: "claude-sonnet-5-5", effort: "high" }), request(), tuned)).status, "pass");
+ const sent = tuned.runner.commands[0]?.args ?? [];
+ assert.deepEqual(sent.slice(-4), ["-f", "model=claude-sonnet-5-5", "-f", "effort=high"]); assert.equal(sent.filter(a => a === "-f").length, 5);
+ const model = ports(); await startGhaReview(reserved("person", repo, { model: "claude-sonnet-5-5" }), request(), model);
+ assert.deepEqual((model.runner.commands[0]?.args ?? []).slice(-2), ["-f", "model=claude-sonnet-5-5"]); assert.ok(!(model.runner.commands[0]?.args ?? []).some(a => a.startsWith("effort=")));
 });
 
 test("observación timeout/sin artefacto/duplicidad permanece unknown sin redispatch", async () => {

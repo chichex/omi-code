@@ -2,6 +2,7 @@
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 import { lifecycleRef } from "./lifecycle-config.ts";
+import { GhaReviewEffortSchema, GhaReviewModelSchema } from "./lifecycle-schema.ts";
 import { sameData } from "./lifecycle-value.ts";
 const closed = { additionalProperties: false } as const;
 const text = (maxLength = 256) => Type.String({ minLength: 1, maxLength, pattern: "\\S" });
@@ -24,7 +25,7 @@ export const GhaRunSchema = Type.Object({ id, workflow_id: id, path: text(1000),
  status: text(100), conclusion: Type.Union([text(100), Type.Null()]), created_at: text(100), repository: Type.Object({ full_name: text(200) }) });
 export type GhaRun = Static<typeof GhaRunSchema>;
 const InputsSchema = Type.Object({ pr: Type.String({ pattern: "^[1-9][0-9]*$", maxLength: 16 }), expected_head_sha: Type.Optional(Type.String({ maxLength: 64 })), correlation_id: Type.Optional(Type.String({ maxLength: 128 })),
- model: Type.Optional(Type.Enum(["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1", "claude-haiku-4-5"])), effort: Type.Optional(Type.Enum(["low", "medium", "high", "xhigh", "max"])) }, closed);
+ model: Type.Optional(GhaReviewModelSchema), effort: Type.Optional(GhaReviewEffortSchema) }, closed);
 export function parseReviewDispatchInputs(input: unknown): { kind: "legacy"; pr: number } | { kind: "strong"; pr: number; headSha: string; correlationId: string } {
  if (!Value.Check(InputsSchema, input)) throw new Error("Inputs de review inválidos");
  const pr = Number(input.pr); if (!Number.isSafeInteger(pr) || pr < 1) throw new Error("PR inválido");
@@ -37,7 +38,11 @@ export function checkedGhaRequest(input: unknown): GhaReviewRequest {
  if (!Value.Check(GhaReviewRequestSchema, input) || !lifecycleRef(input.workflow.ref) || !Number.isFinite(Date.parse(input.createdAfter))) throw new Error("Identidad/ref/correlación de review GHA inválidos");
  return structuredClone(input);
 }
-export const reviewRunName = (input: unknown): string => { const r = checkedGhaRequest(input); return `omi-review-v1 PR #${r.pr} ${r.correlationId}`; };
+// Marcadores del contrato que el host exige al run y al artefacto; el detector de onboarding busca los mismos.
+export const REVIEW_CONTRACT = "omi-review-v1";
+export const REVIEW_RUN_PREFIX = `${REVIEW_CONTRACT} PR #`;
+export const REVIEW_ARTIFACT_FILE = "review.json";
+export const reviewRunName = (input: unknown): string => { const r = checkedGhaRequest(input); return `${REVIEW_RUN_PREFIX}${r.pr} ${r.correlationId}`; };
 export function uniqueReviewFindings(findings: Static<typeof ReviewFindingSchema>[]): { valid: boolean; findings: Static<typeof ReviewFindingSchema>[] } {
  const unique = new Map<string, Static<typeof ReviewFindingSchema>>();
  for (const finding of findings) {
