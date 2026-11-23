@@ -134,7 +134,7 @@ test("bus: valida envelopes, aplica details iniciales y termina sin inventar éx
 
 test("resumen: agrega lotes y elige sólo última actividad observable de running", () => {
 	const monitor = new SubagentMonitor();
-	assert.deepEqual(monitor.summary, { running: 0, pending: 0, latest: undefined });
+	assert.deepEqual({ ...monitor.summary }, { running: 0, pending: 0, latest: undefined });
 	monitor.start("first", { tasks: [task("worker"), task("scout"), task("planner")] });
 	monitor.update("first", snapshot({ status: "running", activity: "read", turns: 1 }, { status: "pending", activity: "NO_PENDING" }));
 	monitor.start("second", task("reviewer"));

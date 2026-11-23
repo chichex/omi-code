@@ -47,7 +47,8 @@ async function visualHarness(home: string, options: { env?: Record<string, strin
 	// El header viejo, sus márgenes y anuncios técnicos no deben ocupar el centro.
 	document.addChild(new Text("HEADER INTERNO", 0, 1)); document.addChild(resources); document.addChild(chat);
 	const editor = new Container(); const footer = new Container(); const above = new Container();
-	const widgets = new Map<string, Component>();
+	type Widget = Component & { dispose?(): void };
+	const widgets = new Map<string, Widget>();
 	const ui = {
 		[Symbol.for("@earendil-works/pi-tui/viewport")]: true, mode: options.regular ? "regular" : "fullscreen", terminal: { columns: 132, rows: 40 },
 		children: [document, new Container(), new Container(), above, editor, new Container(), footer, ...(options.incompatibleLayout ? [new Container()] : [])],
@@ -61,7 +62,7 @@ async function visualHarness(home: string, options: { env?: Record<string, strin
 		getContextUsage: () => unknownUsage ? undefined : { tokens: 56000, contextWindow: 200000, percent: 28 },
 		ui: {
 			theme: activeTheme, getTheme: () => undefined, setHeader() {}, getEditorComponent: () => undefined,
-			setWidget: (key: string, factory: ((ui: TUI, theme: Theme) => Component) | undefined) => {
+			setWidget: (key: string, factory: ((ui: TUI, theme: Theme) => Widget) | undefined) => {
 				widgets.get(key)?.dispose?.(); widgets.delete(key);
 				if (factory) widgets.set(key, factory(ui, activeTheme));
 				// Pi 1.5.1 renderWidgetContainer: leading spacer, then the registered components.
