@@ -2,12 +2,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Workflow } from "../src/harness/model.ts";
-import { autoContinuity, continuityFixture } from "./helpers/lifecycle-continuity.ts";
-import { AT, lifecycleConfig } from "./helpers/lifecycle.ts";
-import { renderLifecycleBlock, type LifecycleConfig } from "../src/harness/lifecycle-config.ts";
-import { acceptLifecycle } from "../src/harness/lifecycle-kb.ts";
-import { lifecycleTrustDir, readLifecycleTrust } from "../src/harness/lifecycle-trust.ts";
-import type { MemoryKb } from "./helpers/mock-kb.ts";
+import { autoContinuity, continuityFixture, reacceptLifecycleConfig } from "./helpers/lifecycle-continuity.ts";
+import { lifecycleConfig } from "./helpers/lifecycle.ts";
 
 const pauseOf = (state: Workflow) => state.version === 2 ? state.continuityPause : undefined;
 const count = (text: string, part: string) => text.split(part).length - 1;
@@ -15,13 +11,6 @@ async function agentPrompt(f: Awaited<ReturnType<typeof continuityFixture>>["f"]
  const event = { systemPromptOptions: { sections: {} as Record<string, string> } };
  await f.emit("before_agent_start", event);
  return event.systemPromptOptions.sections.omi_development ?? "";
-}
-/** Reacepta otra revisión sobre la aceptación vigente, como lo haría una persona con el wizard. */
-async function reaccept(kb: MemoryKb, home: string, cwd: string, block: LifecycleConfig): Promise<void> {
- const key = { kbUrl: kb.url, product: "app", repo: block.repo }, trustDir = lifecycleTrustDir(home);
- const trust = await readLifecycleTrust(trustDir, key); assert.ok(trust.kind === "valid", "ya hay una aceptación vigente");
- kb.perillas(key.product, `# Perillas de ${key.product}\n\n${renderLifecycleBlock(block)}\n`);
- assert.ok(await acceptLifecycle(kb, key, cwd, { trustDir, expectedRevision: trust.record.revision, now: () => AT, signal: AbortSignal.timeout(5000), confirm: async () => true }));
 }
 const emittedPause = (event: unknown): unknown => event && typeof event === "object" && "progress" in event && event.progress && typeof event.progress === "object" && "lifecyclePause" in event.progress ? event.progress.lifecyclePause : undefined;
 
@@ -62,7 +51,7 @@ test("si el pin fresco quita la continuidad a mitad de cadena, el motivo es prop
   const state = await f.state();
   if (!replaced && state.version === 2 && state.lifecycle.status === "enabled") {
    replaced = true;
-   await reaccept(kb, f.home, f.checkout.root, lifecycleConfig("acme/app", block => { block.review.mode = "auto"; block.ship = { status: "not-applicable", targets: [] }; }));
+   await reacceptLifecycleConfig(kb, f.home, f.checkout.root, lifecycleConfig("acme/app", block => { block.review.mode = "auto"; block.ship = { status: "not-applicable", targets: [] }; }));
   }
   return currentPerillas(...args);
  };

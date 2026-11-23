@@ -3,6 +3,9 @@ import { test } from "node:test";
 import { autoContinuity, continuityFixture } from "./helpers/lifecycle-continuity.ts";
 import { acceptLifecycleConfig, lifecycleConfig } from "./helpers/lifecycle.ts";
 
+/** Con entry ask, el sí de entrada es el diálogo de adopción del PR recién publicado (#8 en el fixture). */
+const ENTRY = "Habilitar Review, Land y Ship en el PR #8";
+
 test("a fresh-entry yes cannot authorize a replacement reviewer pin", async t => {
  const { f, gh, kb } = await continuityFixture(t, { change: block => {
   block.continuity = { ...autoContinuity, entry: "ask" };
@@ -11,7 +14,7 @@ test("a fresh-entry yes cannot authorize a replacement reviewer pin", async t =>
  let replaced = false;
  f.context.ui.confirm = async (title, detail, options) => {
   const answer = await confirm(title, detail, options);
-  if (/Continuidad/.test(title)) {
+  if (title === ENTRY) {
    assert.equal(replaced, false, "the replacement pin must not inherit or reprompt the original yes");
    assert.equal(answer, true);
    replaced = true;
@@ -96,7 +99,7 @@ for (const interruption of ["restore", "abort"] as const) {
   const confirm = f.context.ui.confirm.bind(f.context.ui);
   f.context.ui.confirm = async (title, detail, options) => {
    const answer = await confirm(title, detail, options);
-   if (/Continuidad/.test(title)) {
+   if (title === ENTRY) {
     if (interruption === "restore") await f.emit("session_tree", {});
     else controller.abort();
    }

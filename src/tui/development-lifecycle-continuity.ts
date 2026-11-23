@@ -3,13 +3,15 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { currentLifecyclePin } from "../harness/lifecycle-budget.ts";
 import { lifecycleHash } from "../harness/lifecycle-config.ts";
 import { selectLifecycleContinuation, type ContinuitySelection, type ContinuityStage } from "../harness/lifecycle-continuity.ts";
+import { firstEffectGate } from "../harness/lifecycle-continuity-gates.ts";
 import { continuityPauseRecord, type PauseCause } from "../harness/continuity-pause.ts";
 import { continuityPauseLine } from "../harness/continuity-pause-text.ts";
 import type { Workflow } from "../harness/model.ts";
 import type { LifecycleConfig } from "../harness/lifecycle-schema.ts";
-import { acceptedPin, adoptLifecycle, freshPin, landLifecycle, LifecycleDeclined, reviewLifecycle, type ObservedLifecycleReview } from "./development-lifecycle.ts";
+import { acceptedPin, adoptLifecycle, freshPin, landLifecycle, lifecycleRepo, LifecycleDeclined, OWN_REPO, reviewLifecycle, type ObservedLifecycleReview } from "./development-lifecycle.ts";
 import { shipLifecycle } from "./development-lifecycle-ship.ts";
-import { fixLifecycle } from "./development-lifecycle-fix.ts";
+import { fixLifecycle, pushLifecycleCorrection } from "./development-lifecycle-fix.ts";
+import { ChainConsent } from "./development-lifecycle-chain.ts";
 import type { DevelopmentSession } from "./development-session.ts";
 
 /** Un «manual» con un pin vigente sin continuity no lo eligió nadie: la quitó el pin fresco a mitad de cadena. */
@@ -17,6 +19,9 @@ function selectedPause(selection: Extract<ContinuitySelection, { kind: "pause" }
  const disabled = selection.reason === "manual" && state.version === 2 && state.lifecycle.status === "enabled" && !currentLifecyclePin(state.lifecycle).accepted.block.continuity;
  return { reason: disabled ? "continuity-disabled" : selection.reason, stage: selection.stage };
 }
+type Chosen = Extract<ContinuitySelection, { kind: "action" }>;
+/** go sin chain: continuidad auto, que no pregunta ni concede permisos. */
+type Consent = { kind: "go"; chain: ChainConsent | undefined } | { kind: "declined" };
 /** Un cerrojo por sesión, sin timers, callbacks de onChange ni reconstrucción de hechos desde recibos. */
 export class LifecycleContinuityHost {
  private running = false;
@@ -45,6 +50,18 @@ export class LifecycleContinuityHost {
   this.session.turnYielded = true;
   const saved = await this.session.update(ctx, current => ({ ...current, continuityPause: continuityPauseRecord(current, cause, this.session.now()) }));
   if (saved.continuityPause) ctx.ui.notify(continuityPauseLine(saved.continuityPause), "info");
+ }
+ /** Continuidad ask: un solo sí por etapa. Si el primer efecto ya pregunta, viaja en ese diálogo; si no, se pide acá.
+  * Si la predicción falla, la etapa la pide antes del primer efecto que no pregunte (ChainConsent.ensure). */
+ private async consent(ctx: ExtensionContext, state: Workflow, selection: Chosen, config: LifecycleConfig, pr: number | undefined): Promise<Consent> {
+  if (selection.mode !== "ask" || state.version !== 2) return { kind: "go", chain: undefined };
+  const chain = new ChainConsent(this.session, ctx, selection.action, pr);
+  const pushPolicy = selection.action === "push" ? (await this.session.foundations.policy(ctx, state)).politica.push_pr : undefined;
+  const gate = firstEffectGate({ action: selection.action, lifecycle: state.lifecycle, config, ownRepo: lifecycleRepo(state) === OWN_REPO, pushPolicy });
+  if (gate === "human") return { kind: "go", chain };
+  if (!(await chain.ask(gate))) return { kind: "declined" };
+  await this.session.assertUnchanged(state, ctx);
+  return { kind: "go", chain };
  }
  private async run(ctx: ExtensionContext, trigger: "publication-confirmed" | "advance", observed: ObservedLifecycleReview | null,
   publication?: { head: string; number: number; revision: number }): Promise<void> {
@@ -86,23 +103,30 @@ export class LifecycleContinuityHost {
     if (selection.kind === "complete" || selection.kind === "yield") return;
     if (selection.kind === "pause") { await this.pause(ctx, selectedPause(selection, state)); return; }
     stage = selection.stage;
-    const key = `${selection.action}:${state.version === 2 && state.lifecycle.status === "enabled" ? state.lifecycle.currentSubject : publication?.head}`;
+    const enabled = state.version === 2 && state.lifecycle.status === "enabled" ? state.lifecycle : undefined;
+    const key = `${selection.action}:${enabled ? enabled.currentSubject : publication?.head}`;
     if (actions.has(key)) { await this.pause(ctx, { reason: "no-progress", stage }); return; }
     actions.add(key);
-    if (selection.mode === "ask") {
-     const approved = await this.session.confirm(ctx, `Continuidad · ${selection.stage}`, `Continuar con ${selection.action}. Esto no autoriza sus efectos: conservan sus permisos independientes.`);
-     if (!approved) { await this.pause(ctx, { reason: "declined", stage }); return; }
-     await this.session.assertUnchanged(state, ctx);
-    }
+    const pr = enabled ? enabled.subjects.find(subject => subject.id === enabled.currentSubject)?.number : publication?.number;
+    const decision = await this.consent(ctx, state, selection, enabled ? currentLifecyclePin(enabled).accepted.block : config, pr);
+    if (decision.kind === "declined") { await this.pause(ctx, { reason: "declined", stage }); return; }
+    const consent = decision.chain;
     assertCurrent();
-    if (selection.action === "adopt") {
-     if (!publication || !config || !(await adoptLifecycle(this.session, ctx, { ...publication, pinHash: lifecycleHash(config) }))) { await this.pause(ctx, { reason: "not-adopted", stage }); return; }
-    } else if (selection.action === "fix") {
-     if (await fixLifecycle(this.session, ctx, { source: "chain" })) return; // El turno del modelo hace TDD y todos los D.
-    } else if (selection.action === "review") observed = await reviewLifecycle(this.session, ctx);
-    else if (selection.action === "land") {
-     if (!(await landLifecycle(this.session, ctx))) { await this.pause(ctx, { reason: "declined", stage }); return; }
-    } else await shipLifecycle(this.session, ctx);
+    switch (selection.action) {
+     case "adopt":
+      if (!publication || !(await adoptLifecycle(this.session, ctx, { ...publication, pinHash: lifecycleHash(config) }, consent))) { await this.pause(ctx, { reason: "not-adopted", stage }); return; }
+      break;
+     case "fix":
+      if (await fixLifecycle(this.session, ctx, { source: "chain", chain: consent })) return; // El turno del modelo hace TDD y todos los D.
+      break;
+     case "push": await pushLifecycleCorrection(this.session, ctx, consent); break;
+     case "review": observed = await reviewLifecycle(this.session, ctx, consent); break;
+     case "land":
+      if (!(await landLifecycle(this.session, ctx, consent))) { await this.pause(ctx, { reason: "declined", stage }); return; }
+      break;
+     case "ship": await shipLifecycle(this.session, ctx, consent); break;
+     default: { const unhandled: never = selection.action; throw new Error(`Acción de continuidad desconocida: ${String(unhandled)}`); }
+    }
     trigger = "advance";
    }
   } catch (error) {

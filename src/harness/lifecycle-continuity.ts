@@ -5,7 +5,8 @@ import type { EnabledLifecycle, LifecycleState } from "./lifecycle-state-schema.
 import type { SelectedPause } from "./continuity-pause.ts";
 
 export type ContinuityStage = keyof LifecycleContinuity;
-export type ContinuityAction = "adopt" | "review" | "fix" | "land" | "ship";
+/** push publica la corrección ya verificada en el mismo PR; fix abre o confirma una ronda. Ambas son de la etapa fix. */
+export type ContinuityAction = "adopt" | "review" | "fix" | "push" | "land" | "ship";
 export type ContinuitySelection =
  | { kind: "action"; action: ContinuityAction; stage: ContinuityStage; mode: Exclude<ContinuityMode, "manual"> }
  | { kind: "pause"; reason: SelectedPause; stage?: ContinuityStage }
@@ -71,8 +72,8 @@ function correction(input: ContinuityInput, s: EnabledLifecycle, config: Lifecyc
  if ((round.status === "coding" || round.status === "planned") && ["implement", "verify"].includes(input.workflow.phase)) {
   return { kind: "yield", reason: "correction-model" };
  }
- // La vuelta ya consumió su ronda: publicar la verificación no reserva una ronda adicional.
- if (input.workflow.phase === "pr" || round.status === "verified") return offer(config, "fix", "fix");
+ // La vuelta ya consumió su ronda: publicar la verificación es un push, no otra ronda.
+ if (input.workflow.phase === "pr" || round.status === "verified") return offer(config, "fix", "push");
  return pause("correction-facts-required");
 }
 /** Selecciona UNA acción, sin efectuar I/O, reservar operaciones ni conceder permisos.

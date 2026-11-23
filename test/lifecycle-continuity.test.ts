@@ -128,9 +128,12 @@ test("active correction yields model implement/verify; correction PR follows fix
  for (const phase of ["implement", "verify"] as const) {
   i.workflow.phase = phase; assert.deepEqual(select(i), { kind: "yield", reason: "correction-model" });
  }
- i.workflow.phase = "pr"; action(i, "fix");
- s.budget.roundsUsed = 2; action(i, "fix");
- s.corrections = [{ ...r, status: "verified", newSubjectId: "head2", head: "e".repeat(40), fingerprint: "f".repeat(64) }]; action(i, "fix");
+ // Publicar la corrección es push, no otra ronda: el selector lo distingue para el diálogo de continuidad.
+ i.workflow.phase = "pr"; action(i, "push", "auto", "fix");
+ s.budget.roundsUsed = 2; action(i, "push", "auto", "fix");
+ s.corrections = [{ ...r, status: "verified", newSubjectId: "head2", head: "e".repeat(40), fingerprint: "f".repeat(64) }]; action(i, "push", "auto", "fix");
+ enabled(i).pins[0]!.accepted.block.continuity!.fix = "ask"; action(i, "push", "ask", "fix");
+ enabled(i).pins[0]!.accepted.block.continuity!.fix = "manual"; pause(i, "manual");
  s.corrections = [{ ...r, status: "failed", failedHead: r.startHead, failedFingerprint: r.startFingerprint, reason: "verification failed" }]; pause(i, "correction-failed");
 });
 
@@ -198,7 +201,7 @@ test("the reserved coding correction yields without replay; PR continues fix, un
  assert.deepEqual(select(i), { kind: "yield", reason: "correction-model" });
  i.workflow.phase = "verify";
  assert.deepEqual(select(i), { kind: "yield", reason: "correction-model" });
- i.workflow.phase = "pr"; action(i, "fix");
+ i.workflow.phase = "pr"; action(i, "push", "auto", "fix");
  s.operations[1] = { ...op, id: r.operationId, kind: "correction", status: "unknown", reason: "uncertain" };
  pause(i, "operation-unsettled");
 });
