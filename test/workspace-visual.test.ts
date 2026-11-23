@@ -873,6 +873,8 @@ test("workspace_OMI muestra Foundations completo con su procedencia; f, s y la p
 	assert.match(screen(), /Estado: configurado · revisión [0-9a-f]{8} · aceptada en esta máquina/);
 	assert.match(screen(), /Review: ask · revisor local aislado sobre el diff fijo/); assert.match(screen(), /Deshabilitada: el trabajo para en el PR draft/);
 	assert.match(screen(), /✗ Lifecycle · falta: Continuidad sin configurar: el trabajo para en el PR draft\./, "lo que falta se lista con su estado");
+	// A 80×24 lo largo se parte, no se corta: el final de la política sigue a la vista.
+	assert.match(ui.frame(80, 24).lines.map(stripTerminalSequences).join(" ").replace(/\s+/g, " "), /abre el PR draft sin preguntar; nunca mergea ni fuerza\./);
 	const refreshes: unknown[] = []; const off = ui.events.on(CONFIG_REFRESH_EVENT, (event: unknown) => refreshes.push(event));
 	ui.input("r"); off();
 	assert.deepEqual(refreshes, [{ sessionFile }], "r también le pide al harness releer la configuración");
