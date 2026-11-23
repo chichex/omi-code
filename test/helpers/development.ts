@@ -50,7 +50,16 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 		select: defaultSelect, editor: (_title: string, prefill: string): string | undefined => prefill,
 		// Una tanda de preguntas: las teclas que la persona aprieta al verla. Sin teclas, la cierra: cancelar.
 		questions: (_screen: string): readonly string[] | undefined => undefined,
-		foundations: (_screen: string): readonly string[] | undefined => undefined };
+		foundations: (_screen: string): readonly string[] | undefined => undefined,
+		/** Esc en el loader de una espera: el trabajo se aborta y no hay resultado. */
+		cancelLoader: false };
+	const loaderTitles: string[] = [];
+	// Loader de paso: registra qué espera mostraría y corre el trabajo; con cancelLoader, la persona apretó Esc.
+	const loader: NonNullable<DevelopmentDeps["loader"]> = async (_ctx, title, work) => {
+		loaderTitles.push(title);
+		if (uiControl.cancelLoader) return undefined;
+		return work(new AbortController().signal);
+	};
 	const selects: { title: string; options: string[] }[] = []; const editors: string[] = []; const asked: string[][] = []; const permissionScreens: string[][] = []; const foundationsScreens: string[][] = [];
 	const reviewScreens: string[] = []; let reviews = 0;
 	const calls: { command: string; args: string[]; input?: string }[] = []; const prompts: string[] = []; const confirmationDetails: string[] = []; const messages: string[] = []; const progress: unknown[] = []; const modelCalls: unknown[] = []; const statuses: (string | undefined)[] = [];
@@ -178,7 +187,7 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 	} as unknown as ExtensionContext;
 	const emit = (name: string, event: unknown = {}) => emitLikePi(events.get(name) ?? [], name, event, context);
 	if (options.foundations) await acceptFoundations(foundationsDir(home), options.foundations, { ...(options.kb ? { kbUrl: options.kb.url } : {}), ...(options.confirmar ? { confirmar: options.confirmar } : {}) });
-	const attach = async () => { busHandlers.clear(); events.clear(); tools.clear(); commands.clear(); const extension = developmentHarnessExtension(testIo({ homeDir: home, cwd: checkout.root }), [], { ...deps, runner, ...(options.kb ? { kb: options.kb } : {}) }); if (typeof extension === "function") await extension(pi); else await extension.factory(pi); await questionsExtension().factory(pi); await emit("session_start"); };
+	const attach = async () => { busHandlers.clear(); events.clear(); tools.clear(); commands.clear(); const extension = developmentHarnessExtension(testIo({ homeDir: home, cwd: checkout.root }), [], { loader, ...deps, runner, ...(options.kb ? { kb: options.kb } : {}) }); if (typeof extension === "function") await extension(pi); else await extension.factory(pi); await questionsExtension().factory(pi); await emit("session_start"); };
 	await attach();
 	const invoke = async (name: string, input: unknown, signal = new AbortController().signal) => {
 		const tool = tools.get(name); if (!tool || !Value.Check(tool.parameters, input)) throw new Error("Argumentos de tool inválidos");
@@ -190,7 +199,7 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 	const readReference = async () => { await emit("tool_execution_start", { toolName: "read", toolCallId: "read", args: { path: "value.cjs" } }); await emit("tool_call", { toolName: "read", toolCallId: "read", input: { path: "value.cjs" } }); await emit("tool_execution_end", { toolName: "read", toolCallId: "read", result: { content: [{ type: "text", text: "module.exports = 1;" }] }, isError: false }); };
 	const explore = async () => { await readReference(); await action({ action: "explored", exploration: { references: [{ path: "value.cjs", line: 1, detail: "Valor actual" }], findings: ["Devuelve 1"], approach: "Corregir el valor", missingFoundation: [], dependencies: [], disposition: "continue", reason: "Existe" } }); await action({ action: "inferences", inferences: [] }); };
 	const plan = (size: "small" | "large" = "small", causeKnown = true): Plan => ({ classification: { type: "fix", size, risk: "low", riskAreas: [], causeKnown }, objective: "Devolver 2", approach: "Corregir el valor exportado", scope: ["valor"], outOfScope: ["infra"], cases: [{ id: "D1", description: "Devuelve 2", command: "node test.cjs" }, ...(size === "large" ? [{ id: "D2", description: "Otro devuelve 2", command: "node other-test.cjs" }] : [])], lenses: ["quality"], executor: { mode: "inline", writers: 0 } });
-	return { home, checkout, manager, runner, remote, calls, statuses, selects, editors, asked, permissionScreens, foundationsScreens, activeTools: () => activeTools, prompts, confirmationDetails, messages, progress, modelCalls, modelControl, uiControl, reviewScreens, reviews: () => reviews, tools, context, emit, emitBus, attach, invoke, action, state, readReference, explore, plan, command: (input: string) => commands.get("omi-work")!.handler(input, context),
+	return { home, checkout, manager, runner, remote, calls, statuses, selects, editors, asked, permissionScreens, foundationsScreens, loader, loaderTitles, activeTools: () => activeTools, prompts, confirmationDetails, messages, progress, modelCalls, modelControl, uiControl, reviewScreens, reviews: () => reviews, tools, context, emit, emitBus, attach, invoke, action, state, readReference, explore, plan, command: (input: string) => commands.get("omi-work")!.handler(input, context),
 		/** Cualquier comando registrado, por ejemplo /omi-foundations. Falla si no existe. */
 		run: (name: string, input = "") => { const command = commands.get(name); if (!command) throw new Error(`Comando no registrado: /${name}`); return command.handler(input, context); },
 		// Lo que hace el panel de Issues o la tool del agente estando ya en el worktree del issue: un pedido de un solo uso y su sí.

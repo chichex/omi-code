@@ -29,7 +29,10 @@ export async function editFoundations(ctx: ExtensionContext, session: Developmen
 		if (state) await session.assertUnchanged(state, ctx);
 	};
 	await assertCurrent();
-	const reading = await session.foundations.read(ctx, ioSignal()); editable(reading);
+	// Leer la KB puede tardar: sin espera visible, f en la pantalla OMI parecía no hacer nada.
+	const reading = await session.loader(ctx, "Leyendo Foundations de la KB", (cancel) => session.foundations.read(ctx, AbortSignal.any([ioSignal(), cancel])));
+	if (!reading) { ctx.ui.notify("Lectura de Foundations cancelada: no se abrió el panel ni se cambió nada.", "info"); return false; }
+	editable(reading);
 	if (state && issueRepo(state.source.url) !== reading.key.repo) throw new Error("El repo de origin no coincide con el issue; no se cambió Foundations.");
 	const key = reading.key; const trustDir = foundationsDir(session.io.homeDir);
 	const record = await readTrust(trustDir, key);
