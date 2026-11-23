@@ -6,6 +6,7 @@ import { defaultLifecycleConfig, defaultLifecycleTarget, type LifecycleConfig, t
 import { commitLifecycleSave, evaluateLifecycle, lifecycleDiff, prepareLifecycleSave, readLifecycle, type LifecycleReading } from "./lifecycle-kb.ts";
 import { readLifecycleTrust, writeLifecycleTrust, type LifecycleAcceptance, type LifecycleKey, type LifecycleTrustReading } from "./lifecycle-trust.ts";
 import type { LifecycleDetection } from "./lifecycle-detect.ts";
+import { configureLifecycleContinuity, CONTINUITY_NOTICE } from "./lifecycle-wizard.ts";
 
 export interface LifecycleOnboardingState { status: "unconfigured" | "pending" | "configured" | "manual" | "not-applicable" | "invalid" | "unavailable"; revision: string | null; reason: string }
 /** Sin config, configurado, no-aplica y no se pudo consultar son estados distintos: KB caída nunca es ausencia. */
@@ -90,7 +91,10 @@ export async function runLifecycleOnboarding(deps: LifecycleOnboardingDeps): Pro
   if (answers.status === "cancelled") return { kind: "cancelled" };
   block = withShip(current, shipTarget(answers.answers, options, current.land.base));
  } else throw new Error("Respuesta de onboarding inválida; no se guardó nada");
- const summary = lifecycleDiff(record?.accepted?.block, block, key);
+ const configured = await configureLifecycleContinuity(block, deps.ask);
+ if (!configured) return { kind: "cancelled" };
+ signal.throwIfAborted(); block = configured;
+ const summary = `${lifecycleDiff(record?.accepted?.block, block, key)}\n${CONTINUITY_NOTICE}`;
  const accept = await deps.ask({ title: "Resumen antes de guardar", questions: [closed("accept", "Guardar", "¿Guardar en la KB y aceptar esta configuración?", [[SAVE, "Escribe perillas y aceptación local; no ejecuta nada"], [SKIP, "No escribe nada"]], false, { detail: summary })] });
  if (accept.status === "cancelled" || chosen(accept.answers, "accept") !== SAVE) return { kind: "declined" };
  const prepared = await prepareLifecycleSave(deps.kb, key, block, signal, reading.kind === "valid" ? reading.hash : null, deps.cwd);
