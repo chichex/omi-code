@@ -6,7 +6,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { issueRepository, type WorkflowV2 } from "../harness/model.ts";
 import { recipeApprovalHash } from "../harness/state.ts";
 import { inspectCheckout } from "../harness/git.ts";
-import { evaluateLifecycle, lifecycleDiff, readLifecycle } from "../harness/lifecycle-kb.ts";
+import { evaluateLifecycle, lifecycleDiff, readLifecycle, type LifecycleEvaluation } from "../harness/lifecycle-kb.ts";
 import { lifecycleTrustDir, readLifecycleTrust, type LifecycleKey } from "../harness/lifecycle-trust.ts";
 import { GitHubReadClient } from "../harness/lifecycle-github-read.ts";
 import { PullSchema, githubChecked } from "../harness/lifecycle-github-schema.ts";
@@ -61,13 +61,23 @@ export function enabledWork(session: DevelopmentSession, ctx: ExtensionContext):
 export function currentSubject(s: EnabledLifecycle) {
 	const subject = s.subjects.find(x => x.id === s.currentSubject); if (!subject) throw new Error("Falta el sujeto adoptado del PR"); return subject;
 }
+// En la TUI, lo que falta configurar o aceptar se resuelve con /omi-setup; la terminal queda para lo que el setup no corre.
+const UNREADY: Record<Exclude<LifecycleEvaluation["status"], "accepted">, string> = {
+	missing: "sin configurar para {repo}: configuralo con /omi-setup",
+	pending: "con cambios sin aceptar para {repo}: aceptalo con /omi-setup",
+	unavailable: "no disponible para {repo}: revisá el login de la KB en /mcp o la red",
+	invalid: "inválido para {repo}: revisá el bloque lifecycle de las perillas en la KB o corré omi init --development en una terminal",
+};
 /** La configuración aceptada vigente (KB + aceptación local). Pendiente, ausente o caída nunca inicia efectos. */
 export async function acceptedPin(session: DevelopmentSession, state: WorkflowV2): Promise<LifecyclePin> {
 	const repo = lifecycleRepo(state);
 	const key: LifecycleKey = { kbUrl: session.kb?.url ?? HARNESS_KB_URL, product: repo.split("/")[1] ?? "", repo };
 	const reading = await readLifecycle(session.kb, key, state.checkout.root, session.lifecycle.signal);
 	const evaluation = evaluateLifecycle(reading, await readLifecycleTrust(lifecycleTrustDir(session.io.homeDir), key));
-	if (!evaluation.canStartEffects || !evaluation.observationPin) throw new Error(`Lifecycle ${evaluation.status === "pending" ? "con cambios sin aceptar" : evaluation.status === "missing" ? "sin configurar" : "no disponible"} para ${repo}: configuralo y aceptalo con omi init --development. No se inició ningún efecto.`);
+	if (!evaluation.canStartEffects || !evaluation.observationPin) {
+		const status = evaluation.status === "accepted" ? "invalid" : evaluation.status;
+		throw new Error(`Lifecycle ${UNREADY[status].replace("{repo}", repo)}. No se inició ningún efecto.`);
+	}
 	return { key, accepted: evaluation.observationPin };
 }
 /** Fija la revisión aceptada vigente antes de un efecto; cambiar de KB/repo no se acepta. */

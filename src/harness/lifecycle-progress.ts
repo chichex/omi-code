@@ -49,7 +49,7 @@ export function lifecycleLines(state: Workflow): string[] {
   `Hallazgos: ${blocks.length} pendiente(s) · ${corrected} con disposición vigente`,
   ...(active ? [`Corrección en curso: ronda ${rounds.indexOf(active) + 1} · ${active.status}`] : []),
   ...(merge ? [`Merge observado ${merge.mergeSha.slice(0, 12)}: integrado, no entregado por sí solo`] : []),
-  ...(pin.ship.status === "configured" ? pin.ship.targets.map(t => { const d = s.deliveries?.findLast(x => x.targetId === t.id && x.subjectId === s.currentSubject); return `Ship ${t.id}: ${d ? d.result.state : merge ? "sin verificar" : "espera el merge"}`; }) : [`Ship: ${pin.ship.status === "unconfigured" ? "sin configurar (omi init --development)" : pin.ship.status}`]),
+  ...(pin.ship.status === "configured" ? pin.ship.targets.map(t => { const d = s.deliveries?.findLast(x => x.targetId === t.id && x.subjectId === s.currentSubject); return `Ship ${t.id}: ${d ? d.result.state : merge ? "sin verificar" : "espera el merge"}`; }) : [`Ship: ${pin.ship.status === "unconfigured" ? "sin configurar (/omi-setup)" : pin.ship.status}`]),
   ...(s.completion ? [`Resultado: ${OUTCOMES[s.completion.outcome]}`] : []),
   ...lifecycleBlocks(state).map(b => `Bloqueo: ${b}`),
  ];

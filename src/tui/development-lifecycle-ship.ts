@@ -40,7 +40,7 @@ export async function shipLifecycle(session: DevelopmentSession, ctx: ExtensionC
 	const { s } = enabledWork(session, ctx); const config = currentLifecyclePin(s).accepted.block, subject = currentSubject(s);
 	if (s.stage !== "ship" || !subject.mergedSha) throw new Error(s.completion ? `Ship ya terminó: ${OUTCOMES[s.completion.outcome]}` : "Ship espera el merge observado: /omi-work land.");
 	const ship = config.ship;
-	if (ship.status === "unconfigured") throw new Error("Ship sin configurar: el merge está hecho pero la entrega no se verifica. Configuralo con omi init --development.");
+	if (ship.status === "unconfigured") throw new Error("Ship sin configurar: el merge está hecho pero la entrega no se verifica. Configuralo con /omi-setup.");
 	if (ship.status === "manual") {
 		const description = `Merge ${subject.mergedSha.slice(0, 12)} del PR #${subject.number}. Declarás que el cambio está entregado; OMI no lo verifica y queda como entrega manual.`;
 		if (!(await (chain ? chain.confirmEffect("Declarar la entrega manual", description) : session.confirm(ctx, "Declarar la entrega manual", description)))) { ctx.ui.notify("No se declaró nada.", "info"); return; }

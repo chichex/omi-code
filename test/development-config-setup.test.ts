@@ -143,3 +143,27 @@ test("config_setup: con continuidad configurada o la KB caída, publicar no ofre
 	down.kb.available = "KB caída"; await down.f.command("pr");
 	assert.equal(down.f.asked.length, 0, "sin lectura no se ofrece");
 });
+
+// Integración de áreas: en la TUI, lo que falta de configurar se resuelve con /omi-setup, no con un comando de terminal.
+test("config_setup: sin lifecycle en la KB, publicar y /omi-work adopt mandan a /omi-setup", async (t) => {
+	const { f, gh, kb } = await continuityFixture(t); originHead(f.checkout.root);
+	kb.perillas("app", "# Perillas de app\n");
+	f.uiControl.questions = () => [KEYS.esc];
+	await f.command("pr");
+	await f.command("adopt");
+	const notices = f.messages.filter((message) => /^Lifecycle sin configurar para acme\/app/.test(message));
+	assert.equal(notices.length, 2, "publicar y adopt lo avisan");
+	for (const notice of notices) { assert.match(notice, /\/omi-setup/); assert.doesNotMatch(notice, /omi init --development/); }
+	const state = await f.state();
+	assert.equal(state.version === 2 && state.lifecycle.status, "disabled"); assert.deepEqual(gh.mutations, []);
+});
+
+test("config_setup: con el PR adoptado y Ship sin configurar, /omi-work status manda a /omi-setup", async (t) => {
+	const { f } = await continuityFixture(t, { change: (block) => { block.ship = { status: "unconfigured", targets: [] }; } }); originHead(f.checkout.root);
+	f.uiControl.questions = () => [KEYS.esc];
+	await f.command("pr"); await f.command("adopt");
+	const state = await f.state(); assert.equal(state.version === 2 && state.lifecycle.status, "enabled", "adopt habilita el lifecycle");
+	await f.command("status");
+	const status = f.messages.at(-1) ?? "";
+	assert.match(status, /Ship: sin configurar \(\/omi-setup\)/); assert.doesNotMatch(status, /omi init --development/);
+});
