@@ -160,6 +160,31 @@ test("new HEAD requires its own Review, pushed correction never replays fix", ()
  action(i, "review");
 });
 
+test("last admitted correction can finish model work, but exhausted attempts cannot reserve push", () => {
+ const i = reviewed(), s = enabled(i), op = s.operations[0]!, r = round();
+ s.stage = "corrections";
+ s.corrections = [{ ...r, status: "coding" }];
+ s.operations.push({ ...op, id: r.operationId, kind: "correction", status: "pending" });
+ s.budget.attemptsUsed = s.pins[0]!.accepted.block.budget.maxAttempts;
+ for (const phase of ["implement", "verify"] as const) {
+  i.workflow.phase = phase;
+  assert.deepEqual(select(i), { kind: "yield", reason: "correction-model" });
+ }
+ i.workflow.phase = "pr"; pause(i, "budget-exhausted");
+ i.workflow.phase = "implement";
+ s.budget.activeMilliseconds = s.pins[0]!.accepted.block.budget.activeSeconds * 1000;
+ pause(i, "budget-exhausted");
+});
+
+test("reobserved corrected findings can reach human confirmation without another round", () => {
+ const i = reviewed(); finding(i); const s = enabled(i), f = s.ledger[0]!;
+ s.evidence.push({ id: "verified1", subjectId: "head1", operationId: "review1", kind: "verification", outcome: "pass", at });
+ f.dispositions.push({ findingId: f.id, subjectId: "old-head", observationHash: f.observations[0]!.hash, observationSequence: 1, reason: "fixed before review", at, status: "corrected", evidenceIds: ["verified1"] });
+ s.budget.roundsUsed = s.pins[0]!.accepted.block.corrections.maxRounds;
+ action(i, "fix");
+ s.evidence = []; pause(i, "rounds-exhausted");
+});
+
 test("the reserved coding correction yields without replay; PR continues fix, unknown never does", () => {
  const i = reviewed(), s = enabled(i), r = round(), op = s.operations[0]!;
  s.corrections = [{ ...r, status: "coding" }]; s.stage = "corrections";

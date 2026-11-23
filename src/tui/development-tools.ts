@@ -89,7 +89,13 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 				case "verified": {
 					const snapshot = await inspectCheckout(session.current(ctx).checkout, session.runner, signal);
 					if (!snapshot.clean) throw new Error("Verificar requiere el cambio commiteado y limpio");
-					await session.apply({ type: "verified", fingerprint: snapshot.fingerprint }, ctx); break;
+					await session.apply({ type: "verified", fingerprint: snapshot.fingerprint }, ctx);
+					const verified = session.current(ctx);
+					if (verified.version === 2 && verified.lifecycle.status === "enabled") {
+						await session.continuity.advance(ctx);
+						terminate = session.turnYielded;
+					}
+					break;
 				}
 				case "retry": await session.apply({ type: "retry", reason: checked(text(), input.reason) }, ctx); break;
 				case "amend": {
@@ -105,7 +111,7 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 					else if (!(await session.confirm(ctx, "Volver a explorar", discards))) { terminate = true; break; }
 					await session.refresh(ctx); break;
 				}
-				case "publish": await session.publish(ctx); terminate = true; break;
+				case "publish": await session.publish(ctx); terminate = session.current(ctx).phase !== "implement"; break;
 				case "stack": await syncWorkStack(session, ctx); terminate = true; break;
 				case "agreed": note = await registerAgreement(session, { quote: checked(text(2000), input.quote), summary: checked(text(2000), input.agreement), replan: input.replan === true }, ctx); break;
 			}
