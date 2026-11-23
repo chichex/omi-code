@@ -15,10 +15,19 @@ const NO_WORKFLOWS = "No dispares workflows (por ejemplo, gh workflow run) ni le
 const adopted = (state: Workflow) => state.version === 2 && state.lifecycle.status === "enabled";
 /** El lifecycle no adopta un stack publicado: adopt lo rechaza, así que la guía no lo ofrece. */
 const stacked = (state: Workflow) => state.publication.status === "opened" && !!state.publication.stack;
-/** Una Review pedida en el chat, también con GHA, es un comando de la persona: adopt la habilita la primera vez. */
+const REVIEW_ASKED = "Si la persona pide una Review, también con GHA";
+const REVIEW_RUNS = "corre la Review configurada y, si es gha, OMI dispara el workflow configurado con el sí que corresponda";
+/** Con el merge observado (Ship o la entrega cerrada) la Review ya no tiene PR que revisar. */
+const MERGED_STAGES: ReadonlySet<string> = new Set(["ship", "delivered", "complete"]);
+/** Una Review pedida en el chat, también con GHA, es un comando de la persona: adopt la habilita la primera vez.
+ * Adoptado, /omi-work review sólo corre en la etapa Review: en otra etapa la guía no la ofrece. */
 function ghaReview(state: Workflow): string {
- if (stacked(state)) return "Si la persona pide una Review, también con GHA: el lifecycle no adopta stacks y no la corre sobre estos PRs";
- return `Si la persona pide una Review, también con GHA, es ${adopted(state) ? "/omi-work review" : "/omi-work adopt y después /omi-work review"}: corre la Review configurada y, si es gha, OMI dispara el workflow configurado con el sí que corresponda`;
+ if (stacked(state)) return `${REVIEW_ASKED}: el lifecycle no adopta stacks y no la corre sobre estos PRs`;
+ if (state.version !== 2 || state.lifecycle.status !== "enabled") return `${REVIEW_ASKED}, es /omi-work adopt y después /omi-work review: ${REVIEW_RUNS}`;
+ const s = state.lifecycle;
+ if (s.stage === "review") return `${REVIEW_ASKED}, es /omi-work review: ${REVIEW_RUNS}`;
+ if (MERGED_STAGES.has(s.stage) || s.subjects.some(subject => subject.id === s.currentSubject && subject.mergedSha)) return `${REVIEW_ASKED}: el PR ya está mergeado y la Review no aplica`;
+ return `${REVIEW_ASKED}: /omi-work review sólo corre en la etapa Review y este PR está en otra; seguí el próximo paso`;
 }
 const enabledPin = (state: Workflow) => {
  if (state.version !== 2 || state.lifecycle.status !== "enabled") return undefined;

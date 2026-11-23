@@ -55,6 +55,31 @@ test("PR adoptado: el próximo paso sale del estado guardado, sin repetir la Rev
  assert.equal(next(developmentInstructions(reviewed())), "corré /omi-work fix; usa los hallazgos ya registrados.", "con hallazgos registrados no pide otra Review");
 });
 
+/** El PR adoptado en otra etapa del lifecycle; `merged` deja el merge observado en el sujeto. */
+function atStage(stage: "corrections" | "ready" | "land" | "ship" | "delivered" | "complete", phase: WorkflowV2["phase"], merged: boolean, status: WorkflowV2["status"] = "active"): WorkflowV2 {
+ const r = adopted(); assert.ok(r.lifecycle.status === "enabled");
+ const subjects = r.lifecycle.subjects.map(s => ({ ...s, mergedSha: merged ? "d".repeat(40) : null }));
+ return { ...r, phase, status, lifecycle: { ...r.lifecycle, stage, subjects } };
+}
+const reviewOffer = (text: string) => /Si la persona pide una Review[^\n]*/.exec(text)?.[0] ?? "";
+
+test("Review pedida en el chat: /omi-work review sólo se ofrece en la etapa Review", () => {
+ assert.match(reviewOffer(developmentInstructions(adopted())), /GHA, es \/omi-work review: corre la Review configurada/, "en la etapa Review la ofrece");
+ // Caso real: con el merge observado la guía decía «nada: terminó» y a la vez ofrecía una Review que falla.
+ const merged = { ship: atStage("ship", "ship", true), delivered: atStage("delivered", "delivered", true, "complete"), complete: atStage("complete", "ship", true, "complete") };
+ for (const [where, state] of Object.entries(merged)) {
+  const offer = reviewOffer(developmentInstructions(state));
+  assert.doesNotMatch(offer, /\/omi-work (adopt|review)/, where);
+  assert.match(offer, /el PR ya está mergeado y la Review no aplica/, where);
+ }
+ const unmerged = { corrections: atStage("corrections", "review", false), ready: atStage("ready", "land", false), land: atStage("land", "land", false) };
+ for (const [where, state] of Object.entries(unmerged)) {
+  const offer = reviewOffer(developmentInstructions(state));
+  assert.doesNotMatch(offer, /es \/omi-work (adopt|review)/, where);
+  assert.match(offer, /\/omi-work review sólo corre en la etapa Review/, where);
+ }
+});
+
 test("stack publicado: la guía no manda a /omi-work adopt ni review, que no adoptan stacks", () => {
  const r = draft(); assert.ok(r.publication.status === "opened");
  const pull = (index: number, base: string) => ({ title: `Parte ${index}`, steps: ["C1"], branch: `feat/work-${index}`, base, head, number: 40 + index, url: `https://github.com/${repo}/pull/${40 + index}`, status: "draft" as const });

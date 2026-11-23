@@ -531,6 +531,8 @@ Stack publicado               → mergealos en orden con su sí
 
 Con un stack publicado, la guía no ofrece `/omi-work adopt` ni `/omi-work review`, tampoco para una Review con GHA: el lifecycle no adopta stacks y adopt lo rechaza.
 
+Con el PR adoptado, la guía ofrece `/omi-work review` sólo en la etapa Review, que es donde corre. Con el merge observado (Ship, entrega verificada o cerrada) dice que el PR ya está mergeado y la Review no aplica. En otra etapa (Correcciones, Listo para merge, Land) dice que la Review no corre ahí y manda al próximo paso. Ejemplo: en Ship, «revisá el PR» no termina en un `/omi-work review` que falla con «Review corre en la etapa Review; ahora: ship».
+
 Si falta configurar algo que corre el [setup](#setup-de-lo-que-falta) (por ejemplo, el lifecycle), el contexto del agente lo dice y el agente le pasa `/omi-setup` a la persona: no lo configura ni edita la KB.
 
 Caso real: la persona pidió «corré las reviews con GHA» y el agente le pasó un `gh workflow run`. Ahora la respuesta es `/omi-work adopt` y `/omi-work review`: con Review `gha`, OMI dispara el workflow configurado con su permiso (en `chichex/omi-code`, siempre con el sí de la persona). Con el PR adoptado y `continuity.fix` en `auto` o `ask`, el agente no pide `/omi-work fix` para el push: la cadena lo hace al marcar `verified`, con el permiso `push_pr` de Foundations. Con `fix: manual` o sin continuidad, sí lo pide.
