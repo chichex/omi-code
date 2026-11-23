@@ -91,10 +91,25 @@ test("--development sin UI sale 2 sin abrir el host; los flags no conceden permi
 test("--development interactivo usa el wizard compartido sin modelo: Enter cancela, guardar exige el sí", async t => {
  const esc = await development(t, { interactive: true, answers: [""] }); assert.equal(await esc.run(["--development"]), 0, esc.io.errors());
  assert.match(esc.io.output(), /no se guardó nada/i); assert.deepEqual(await readLifecycleTrust(lifecycleTrustDir(esc.home), key), { kind: "missing" }); assert.ok(!esc.kb.calls.some(c => c.tool === "guardar")); assert.equal(esc.host.closed, 1);
- const f = await development(t, { interactive: true, answers: ["3", "1"] }); assert.equal(await f.run(["--development"]), 0, f.io.errors());
+ const f = await development(t, { interactive: true, answers: ["3", "1", "1"] }); assert.equal(await f.run(["--development"]), 0, f.io.errors());
  assert.match(f.io.output(), /Configurar ahora[\s\S]*Más adelante[\s\S]*Este repo no necesita Ship/); assert.match(f.io.output(), /ship\.status: unconfigured → not-applicable/);
- assert.equal(f.kb.calls.filter(c => c.tool === "guardar").length, 1); const local = await readLifecycleTrust(lifecycleTrustDir(f.home), key); assert.ok(local.kind === "valid"); assert.equal(local.record.accepted?.block.ship.status, "not-applicable"); assert.equal(f.host.closed, 1);
+ assert.equal(f.kb.calls.filter(c => c.tool === "guardar").length, 1); const local = await readLifecycleTrust(lifecycleTrustDir(f.home), key); assert.ok(local.kind === "valid"); assert.equal(local.record.accepted?.block.ship.status, "not-applicable"); assert.equal(local.record.accepted?.block.continuity, undefined); assert.equal(f.host.closed, 1);
  const check = testIo({ homeDir: f.home, cwd: f.repo }); assert.equal(await developmentInit(["--development", "--check", "--json"], check, { host: f.host.factory }), 0); assert.equal(JSON.parse(check.output()).status, "not-applicable");
+});
+
+test("--development CLI configura continuidad explícita y cancelar esa pregunta no guarda", async t => {
+ const cancel = await development(t, { interactive: true, answers: ["3", ""] });
+ assert.equal(await cancel.run(["--development"]), 0);
+ assert.ok(!cancel.kb.calls.some(c => c.tool === "guardar"));
+ const f = await development(t, { interactive: true, answers: ["3", "2", "2", "1", "3", "3", "3", "1"] });
+ assert.equal(await f.run(["--development"]), 0, f.io.errors());
+ const local = await readLifecycleTrust(lifecycleTrustDir(f.home), key);
+ assert.ok(local.kind === "valid");
+ assert.deepEqual(local.record.accepted?.block.continuity, { entry: "auto", review: "ask", fix: "manual", land: "manual", ship: "manual" });
+ assert.match(f.io.output(), /continuity.entry: auto/);
+ assert.match(f.io.output(), /Foundations/);
+ assert.equal(f.kb.calls.filter(c => c.tool === "guardar").length, 1);
+ assert.equal(f.host.closed, 1);
 });
 
 test("host headless real: sin login no arranca Pi ni escribe; con login reusa los stores de Pi contra la KB falsa y cierra", async t => {
