@@ -29,6 +29,8 @@ import { shipLifecycle } from "./development-lifecycle-ship.ts";
 import { LifecycleOnboarding } from "./development-lifecycle-onboarding.ts";
 import { registerConfigSetup, type ConfigSetupDeps } from "./development-config-setup.ts";
 import { ConfigState } from "./development-config-state.ts";
+import { sessionConfigView } from "./development-config-view.ts";
+import { configGuide } from "../harness/config-guide.ts";
 import { continueDevelopment } from "./development-continue.ts";
 
 const KICKOFF = "Continuá el harness de desarrollo activo desde su etapa persistida. Respetá sus bloqueos y pedí los permisos pendientes; no saltees etapas.";
@@ -200,7 +202,10 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 				const state = session.state, foundations = effectivePolicy(session.foundations.current(ctx), state);
 				const singlePr = await singlePrPlanning(session, state);
 				event.systemPromptOptions.sections ??= {};
-				event.systemPromptOptions.sections.omi_development = developmentInstructions(state, foundations.command.block?.confirmar ?? [], foundations.command.accepted, singlePr);
+				// Lo que la pestaña OMI ya diagnosticó, sin leer la KB en el turno.
+				const file = ctx.sessionManager.getSessionFile(), view = file ? sessionConfigView(file) : undefined;
+				const missing = configGuide(view?.status === "ready" ? view.snapshot.diagnosis : undefined);
+				event.systemPromptOptions.sections.omi_development = developmentInstructions(state, foundations.command.block?.confirmar ?? [], foundations.command.accepted, singlePr, missing);
 			}
 		});
 		pi.on("tool_call", async (event, ctx) => {

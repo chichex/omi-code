@@ -72,14 +72,16 @@ function phaseGuide(state: Workflow, singlePr: boolean): string {
 	if (singlePr && phase === "recipe") return `${GUIDE.recipe} ${SINGLE_PR_GUIDE}`;
 	return GUIDE[phase];
 }
-/** `singlePr`: la entrada del lifecycle aceptada encadena (auto o ask), así que la receta y la spec van en un solo PR. */
-export function developmentInstructions(state: Workflow, confirmar: readonly string[] = [], accepted = false, singlePr = false): string {
+/** `singlePr`: la entrada del lifecycle aceptada encadena (auto o ask), así que la receta y la spec van en un solo PR.
+ * `missingConfig`: lo que falta configurar (config-guide.ts), que la persona resuelve con /omi-setup. */
+export function developmentInstructions(state: Workflow, confirmar: readonly string[] = [], accepted = false, singlePr = false, missingConfig = ""): string {
 	return [
 		"Harness de Desarrollo OMI activo. Las reglas del proyecto prevalecen; este flujo no es un sandbox.",
 		`Etapa ${state.phase} (${PHASE_LABELS[state.phase]}), estado ${state.status}, revisión ${state.revision}.`,
 		state.blockedReason ? `Bloqueo: ${state.blockedReason}. No continuar por otra tool para eludirlo.` : "",
 		phaseGuide(state, singlePr),
 		afterDraftGuide(state),
+		missingConfig,
 		state.version === 2 && state.pullRequest?.ownership === "adopted" ? `PR adoptado por el lifecycle: Review, push de correcciones, merge y Ship los ejecuta la persona con /omi-work review | fix | land | ship, o los encadena la continuidad configurada, cada uno con su permiso. No uses publish ni stack. ${correctionPushGuide(state)}` : "",
 		SETUP,
 		"Toda transición se registra con omi_workflow. No uses marcadores de texto para declarar pasos terminados. No tomes éxitos de Actions como aprobación humana. No mergear, publicar releases/tags, disparar workflows ni desplegar.",
