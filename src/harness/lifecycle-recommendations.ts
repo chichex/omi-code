@@ -11,9 +11,10 @@ export const CONTINUITY_MISSING = "Continuidad sin configurar: el trabajo para e
 const MAX_REVIEW_WORKFLOWS = 4;
 
 export interface ReviewCandidate { file: string; tuning: ReviewTuning }
-/** Workflows que declaran omi-review-v1, con el model/effort que acepta cada uno, en el orden del detector y acotados para una tanda. */
+/** Workflows que declaran omi-review-v1, con el model/effort que acepta cada uno, en el orden del detector y acotados para una tanda.
+ * Sin los que exigen model o effort sin default: el wizard puede no fijarlos y GitHub rechazaría el dispatch. */
 export function reviewCandidates(detection: LifecycleDetection | undefined): ReviewCandidate[] {
- return (detection?.workflows ?? []).flatMap(w => w.contract === REVIEW_CONTRACT ? [{ file: w.file, tuning: w.tuning }] : []).slice(0, MAX_REVIEW_WORKFLOWS);
+ return (detection?.workflows ?? []).flatMap(w => w.contract === REVIEW_CONTRACT && !w.tuning.required ? [{ file: w.file, tuning: w.tuning }] : []).slice(0, MAX_REVIEW_WORKFLOWS);
 }
 export const reviewWorkflows = (detection: LifecycleDetection | undefined): string[] => reviewCandidates(detection).map(w => w.file);
 /** `block` null es sin configuración: Review local por defecto y sin continuidad. Sin detección no recomienda GHA. */

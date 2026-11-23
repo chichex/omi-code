@@ -35,6 +35,13 @@ function dispatchInput(lines: string[], name: string): { value: string; body: Ra
 }
 /** El workflow se puede disparar con `gh workflow run` y declara el input `name`. */
 export const declaresDispatchInput = (text: string, name: string): boolean => dispatchInput(text.split(/\r?\n/), name) !== null;
+/** El input exige un valor: `required: true` sin `default`. Si no se manda, GitHub rechaza el dispatch. */
+export function dispatchInputRequired(text: string, name: string): boolean {
+ const lines = text.split(/\r?\n/), input = dispatchInput(lines, name);
+ if (!input) return false;
+ if (input.value) return /\brequired[ \t]*:[ \t]*true\b/i.test(input.value) && !/\bdefault[ \t]*:/.test(input.value);
+ return entry(lines, input.body, "required")?.value.toLowerCase() === "true" && !entry(lines, input.body, "default");
+}
 /** De `allowed`, los valores que el input `name` de workflow_dispatch acepta. Sin el input, ninguno; un string, todos. */
 export function dispatchInputValues<T extends string>(text: string, name: string, allowed: readonly T[]): T[] {
  const lines = text.split(/\r?\n/), input = dispatchInput(lines, name);

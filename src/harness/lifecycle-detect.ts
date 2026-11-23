@@ -5,12 +5,14 @@ import { lstat, open, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { parseProjectLink } from "../project/link.ts";
 import { REVIEW_ARTIFACT_FILE, REVIEW_CONTRACT, REVIEW_RUN_PREFIX } from "./gha-review-contract.ts";
-import { declaresDispatchInput, dispatchInputValues } from "./lifecycle-detect-inputs.ts";
+import { declaresDispatchInput, dispatchInputRequired, dispatchInputValues } from "./lifecycle-detect-inputs.ts";
 import { GhaReviewEffortSchema, GhaReviewModelSchema, type GhaReviewEffort, type GhaReviewModel } from "./lifecycle-schema.ts";
 const MAX_BYTES = 256 * 1024, MAX_WORKFLOWS = 50, MAX_SCRIPTS = 100;
 const MANIFESTS = ["Cargo.toml", "Dockerfile", "Makefile", "go.mod", "package.json", "pyproject.toml"];
-/** Valores de `model` y `effort` que el workflow_dispatch acepta: vacío si no declara el input. Fijar otro hace fallar el dispatch. */
-export interface ReviewTuning { model: GhaReviewModel[]; effort: GhaReviewEffort[] }
+/** Valores de `model` y `effort` que el workflow_dispatch acepta: vacío si no declara el input. Fijar otro hace fallar el dispatch.
+ * `required`: los que exige sin default. El wizard puede dejarlos sin fijar, así que ese workflow no se propone. */
+export interface ReviewTuning { model: GhaReviewModel[]; effort: GhaReviewEffort[]; required?: ReviewInput[] }
+type ReviewInput = "model" | "effort";
 type DetectedWorkflow = { file: string; dispatch: boolean; release: boolean } & ({ contract: null } | { contract: typeof REVIEW_CONTRACT; tuning: ReviewTuning });
 export interface LifecycleDetection {
  /** `contract`: el workflow declara los marcadores de omi-review-v1. Es una propuesta: el runtime valida run y artefacto. */
@@ -36,6 +38,10 @@ function reviewContract(text: string): typeof REVIEW_CONTRACT | null {
  const ok = declaresDispatchInput(text, "expected_head_sha") && declaresDispatchInput(text, "correlation_id") && correlated && REVIEW_ARTIFACT.test(text) && text.includes(REVIEW_ARTIFACT_FILE);
  return ok ? REVIEW_CONTRACT : null;
 }
+function reviewTuning(text: string): ReviewTuning {
+ const required = (["model", "effort"] as const).filter(name => dispatchInputRequired(text, name));
+ return { model: dispatchInputValues(text, "model", GhaReviewModelSchema.enum), effort: dispatchInputValues(text, "effort", GhaReviewEffortSchema.enum), ...(required.length ? { required } : {}) };
+}
 async function workflows(root: string, skipped: string[], signal: AbortSignal): Promise<LifecycleDetection["workflows"]> {
  const dir = join(root, ".github/workflows");
  try { const entry = await lstat(dir); if (!entry.isDirectory() || entry.isSymbolicLink()) { skipped.push(".github/workflows"); return []; } } catch (e) { if (missing(e)) return []; throw e; }
@@ -43,7 +49,7 @@ async function workflows(root: string, skipped: string[], signal: AbortSignal): 
  for (const file of names) {
   const text = await readBounded(root, `.github/workflows/${file}`, skipped, signal); if (text === null) continue;
   const base = { file, dispatch: /\bworkflow_dispatch\b/.test(text), release: /\btags\s*:|\brelease\b/i.test(text) };
-  found.push(reviewContract(text) ? { ...base, contract: REVIEW_CONTRACT, tuning: { model: dispatchInputValues(text, "model", GhaReviewModelSchema.enum), effort: dispatchInputValues(text, "effort", GhaReviewEffortSchema.enum) } } : { ...base, contract: null });
+  found.push(reviewContract(text) ? { ...base, contract: REVIEW_CONTRACT, tuning: reviewTuning(text) } : { ...base, contract: null });
  }
  return found;
 }

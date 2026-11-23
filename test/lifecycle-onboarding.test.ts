@@ -217,6 +217,26 @@ test("detector: model y effort cuentan sólo si el workflow_dispatch los declara
  assert.deepEqual(await tuning("fuera de inputs", elsewhere), { model: [], effort: [] }, "un model: de un step no es un input de dispatch");
 });
 
+// GitHub rechaza un dispatch sin un input requerido que no tiene default, y «Default del workflow» no lo fija.
+test("detector: un model o effort requerido sin default no se propone para Review; con default, sí", async t => {
+ const required: [string, string, string[]][] = [
+  ["model", withInputs("      model:\n        required: true\n        type: choice\n        options:\n          - claude-opus-5-5\n          - claude-sonnet-5-5\n"), ["model"]],
+  ["effort", withInputs("      effort:\n        required: true # sin default\n"), ["effort"]],
+  ["en flujo", withInputs("      model: { type: string, required: true }\n"), ["model"]],
+ ];
+ for (const [name, workflow, inputs] of required) {
+  const f = await reviewRepo(t, workflow), found = f.detection.workflows.find(w => w.file === "claude-review.yml");
+  assert.ok(found?.contract === "omi-review-v1", `${name}: cumple el contrato`); assert.deepEqual(found.tuning.required, inputs, name);
+  assert.deepEqual((await f.status()).recommendations.map(r => r.kind), ["continuity"], `${name}: no recomienda un workflow que el default no puede disparar`);
+  const run = script([["Este repo no necesita Ship"], "esc"]); await runLifecycleOnboarding(f.deps(run.ask));
+  assert.ok(!run.seen.some(b => b.title === "Review del PR"), `${name}: el wizard no lo ofrece`);
+ }
+ const g = await reviewRepo(t, withInputs("      model:\n        required: true\n        default: claude-opus-5-5\n        type: choice\n        options: [claude-opus-5-5, claude-sonnet-5-5]\n"));
+ const kept = g.detection.workflows.find(w => w.file === "claude-review.yml");
+ assert.ok(kept?.contract === "omi-review-v1"); assert.deepEqual(kept.tuning, { model: ["claude-opus-5-5", "claude-sonnet-5-5"], effort: [] }, "con default, el workflow no exige fijarlo");
+ assert.deepEqual((await g.status()).recommendations.map(r => r.kind), ["continuity", "review-gha"]);
+});
+
 test("Review: con omi-review-v1 detectado y sin config recomienda GHA y guarda la identidad del esquema; Ship no lo ofrece", async t => {
  const f = await reviewRepo(t);
  const run = script([["Configurar ahora"], ["Manual (sin destino verificable)"], ["Recibo del proveedor"], ["Detener (stop)"], ["Preguntar antes (ask)"], [REVIEW], ["Default del workflow"], ["Mantener continuidad actual"], ["Guardar y aceptar"]]);
