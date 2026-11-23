@@ -84,3 +84,25 @@ test("un no a la entrada queda como motivo de la entrada; adoptar a mano lo deja
  assert.doesNotMatch(f.messages.at(-1) ?? "", /Dijiste que no/);
  assert.deepEqual(gh.mutations, []);
 });
+
+// El próximo paso de la pausa de Ship sin configurar tiene que funcionar: /omi-setup y después /omi-work ship.
+test("Ship sin configurar: después de configurarlo, /omi-work ship toma la configuración vigente", async t => {
+ const { f, gh, kb, head } = await continuityFixture(t, { historical: true, change: block => {
+  block.continuity = { ...autoContinuity, entry: "manual" }; block.review.mode = "auto"; block.land.mode = "auto"; block.ship = { status: "unconfigured", targets: [] };
+ } });
+ gh.reviews.push({ id: 601, login: "ada", state: "APPROVED", commit_id: head, body: "" });
+ await f.command("adopt");
+ assert.equal(gh.pull.merged, true, "la cadena llegó a Ship");
+ assert.equal(pauseOf(await f.state())?.reason, "ship-unconfigured");
+ assert.ok(f.messages.some(m => m.includes("Ship no está configurado: configuralo con /omi-setup y después corré /omi-work ship")));
+ // Lo que guarda /omi-setup: otra revisión aceptada, ahora con Ship manual.
+ await reacceptLifecycleConfig(kb, f.home, f.checkout.root, lifecycleConfig("acme/app", block => {
+  block.continuity = { ...autoContinuity, entry: "manual" }; block.review.mode = "auto"; block.land.mode = "auto"; block.ship = { status: "manual", targets: [] };
+ }));
+ await f.command("ship");
+ assert.ok(f.prompts.includes("Declarar la entrega manual"), "Ship usa la configuración aceptada vigente");
+ const state = await f.state();
+ assert.ok(state.version === 2 && state.lifecycle.status === "enabled");
+ assert.equal(state.lifecycle.completion?.outcome, "manual-attested");
+ assert.equal(gh.mutations.filter(args => args.includes("PUT")).length, 1, "no repite el merge");
+});
