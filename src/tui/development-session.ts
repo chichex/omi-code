@@ -270,7 +270,7 @@ export class DevelopmentSession {
 		await this.apply({ type: "approved", ...(auto ? { by: "foundations" as const, ...(foundations.hash ? { foundations: foundations.hash } : {}) } : {}) }, ctx);
 		// También con receta: auto la sección del issue muestra la receta aprobada.
 		await updateIssueSection(this, ctx);
-		if (auto) ctx.ui.notify("Foundations · receta auto: la receta se aprobó sin revisión humana. Sus comandos siguen Foundations: sin v2 aceptada corren sin preguntar; con v2, patrones coincidentes o sintaxis no soportada piden sí, salvo grant humano exacto vigente.", "info");
+		if (auto) ctx.ui.notify("Foundations · receta auto: la receta se aprobó sin revisión humana. Sus comandos siguen Foundations: sin configurar corren sin preguntar; configurado, las reglas que coinciden y los comandos compuestos piden sí, salvo grant humano exacto vigente.", "info");
 		return true;
 	}
 	// Volver a explorar descarta receta, aprobación y pruebas; también las lecturas y comandos autorizados.

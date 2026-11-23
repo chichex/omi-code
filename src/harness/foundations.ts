@@ -22,7 +22,7 @@ export type PolicyPoint = keyof FoundationsPolicy;
 export type ParsedFoundations =
 	| { status: "valid"; block: FoundationsBlock; hash: string; span: [number, number] }
 	| { status: "missing" }
-	| { status: "invalid"; reason: string };
+	| { status: "invalid"; reason: string; legacy?: true };
 export const FOUNDATIONS_INFO = "omi-foundations";
 /** Sin Foundations v2 aceptada: nada pregunta. Cada punto se pone en ask desde Foundations. */
 export const DEFAULT_POLICY: FoundationsPolicy = Object.freeze({ arranque: "auto", receta: "auto", push_pr: "auto" });
@@ -40,7 +40,6 @@ export const EMPTY_RULES_WARNING = "Lista vacía: todo comando SIMPLE quedará s
 const obsolete = (value: unknown): boolean => !!value && typeof value === "object" && "version" in value && value.version === 1;
 /** Devuelve el valor validado; jamás convierte comandos antiguos en patrones ni agrega defaults. */
 export function checkBlock(value: unknown): { block: FoundationsBlock } | { reason: string } {
-	if (obsolete(value)) return { reason: "Foundations v1 obsoleto: hay que volver a configurar y guardar el modelo v2; no se trasladan autorizaciones" };
 	if (!Value.Check(BlockSchema, value)) return { reason: "no cumple el esquema (version 2, repo owner/name en minúsculas, confirmar y tres políticas ask|auto, sin otros campos)" };
 	if (value.confirmar.length > MAX_RULES) return { reason: `se admiten hasta ${MAX_RULES} reglas` };
 	const seen = new Set<string>();
@@ -72,6 +71,9 @@ function locate(body: string, repo: string): Located {
 export function parseFoundations(body: string, repo: string): ParsedFoundations {
 	const located = locate(body, repo);
 	if (located.status !== "found") return located;
+	// Un bloque del formato anterior no vale ni se migra. Sigue siendo inválido para las guardas del guardado,
+	// marcado para que la UI lo muestre como sin configurar: Guardar lo reemplaza.
+	if (obsolete(located.value)) return { status: "invalid", reason: "bloque con un formato anterior; Guardar lo reemplaza sin heredar permisos", legacy: true };
 	const checked = checkBlock(located.value);
 	if ("reason" in checked) return { status: "invalid", reason: checked.reason };
 	return { status: "valid", block: checked.block, hash: foundationsHash(checked.block), span: [located.fence.start, located.fence.end] };

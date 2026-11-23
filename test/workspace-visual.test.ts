@@ -729,7 +729,7 @@ test("workspace_OMI muestra Foundations vigente con su procedencia; f y la palet
 	try {
 		await plain.command("omi-platform");
 		const empty = plain.frame().lines.map((line) => stripTerminalSequences(sliceByColumn(line, 0, 91))).join("\n");
-		assert.match(empty, /FOUNDATIONS/); assert.match(empty, /Foundations: se lee de la KB/, "sin pin todavía, lo dice");
+		assert.match(empty, /FOUNDATIONS/); assert.match(empty, /Todavía no se leyó de la KB/, "sin pin todavía, lo dice");
 		assert.match(empty, /f Foundations/, "la tecla está en la ayuda de la vista");
 	} finally { await plain.stop(); }
 	// El pin vive en el harness, otra extensión: se fija con su propia API, como lo haría una sesión.
@@ -742,8 +742,9 @@ test("workspace_OMI muestra Foundations vigente con su procedencia; f y la palet
 	const ui = await visualHarness(home, { sessionFile, paletteAction: "Foundations" }); t.after(ui.stop);
 	await ui.command("omi-platform");
 	const screen = ui.frame().lines.map((line) => stripTerminalSequences(sliceByColumn(line, 0, 91))).join("\n");
-	assert.match(screen, new RegExp(`Foundations: KB · revisión ${foundationsHash(block).slice(0, 8)} · perillas abcdef01 · ana@example\\.test`));
-	assert.match(screen, /push \+ PR draft: auto/); assert.match(screen, /Patrones que requieren confirmación:\s+npm test/);
+	assert.match(screen, new RegExp(`KB · revisión ${foundationsHash(block).slice(0, 8)} · perillas abcdef01 · ana@example\\.test`));
+	assert.match(screen, /Arranque ask · Receta ask · Push \+ PR draft auto/); assert.match(screen, /Reglas de comandos: npm test/);
+	assert.doesNotMatch(screen, /Patrones que requieren|Editar: \/omi-foundations/, "la pantalla OMI muestra el resumen corto");
 	ui.input("f");
 	assert.deepEqual(ui.dispatched.at(-1), { text: "/omi-foundations", options: { expandPromptTemplates: true } });
 	await ui.command("omi");

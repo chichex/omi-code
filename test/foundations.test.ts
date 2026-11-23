@@ -162,13 +162,11 @@ for (const [name, body] of invalid) test(`foundations v2: inválido · ${name}`,
 	assert.ok(parsed.reason.length > 0);
 });
 
-test("foundations v2: v1 es obsoleto, nunca una revisión válida ni una lista vacía aceptada", () => {
+test("foundations v2: un bloque v1 nunca es una revisión válida ni una lista vacía aceptada; se marca legacy, sin hablar de versiones", () => {
 	for (const value of [legacy(), { ...legacy(), comandos: [] }]) {
-		assert.match(reason(value), /obsolet|configur.*nuevo|volver a configurar/i);
+		assert.ok(reason(value).length > 0); assert.doesNotMatch(reason(value), /\bv1\b|obsolet/i);
 		const parsed = parseFoundations(doc(fenced(value)), REPO);
-		assert.equal(parsed.status, "invalid");
-		assert.ok(parsed.status === "invalid");
-		assert.match(parsed.reason, /obsolet|configur.*nuevo|volver a configurar/i);
+		assert.ok(parsed.status === "invalid" && parsed.legacy === true); assert.doesNotMatch(parsed.reason, /\bv1\b|obsolet/i);
 		const read = readFoundationsText(JSON.stringify(value), REPO);
 		assert.ok("reason" in read && !("block" in read));
 	}

@@ -24,7 +24,7 @@ import { readBranchPullRequest, type BranchPullRequest } from "./pull-request.ts
 import { restoreIssueTriage, type IssueTriageState } from "./issue-triage.ts";
 import { discoverLegacyPreparations, loadIssuePreparations, rememberIssueSession, type IssuePreparationEntry } from "./issue-registry.ts";
 import { developmentOffline, holdSessionSwitch, requestDevelopmentBegin, sessionSwitchOwner } from "../development-tickets.ts";
-import { foundationsLines, sessionFoundationsPin } from "../development-foundations.ts";
+import { foundationsSummary, sessionFoundationsPin } from "../development-foundations.ts";
 import { preparePrincipalSession, PrincipalSessionBusyError } from "./main-workspace.ts";
 
 type View = WorkspaceView;
@@ -346,7 +346,7 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 			} finally { mainSessionTask = undefined; mainBusy = false; release(); changed(); }
 		}
 		pi.registerCommand("omi-main", { description: "Volver del worktree al repo principal y retomar su sesión, sin cambiar ramas", handler: returnToPrincipal });
-		const foundations = (): string[] => { const file = ctx.sessionManager.getSessionFile(); return foundationsLines(file ? sessionFoundationsPin(file) : undefined); };
+		const foundations = (): string[] => { const file = ctx.sessionManager.getSessionFile(); return foundationsSummary(file ? sessionFoundationsPin(file) : undefined); };
 		const omiPane = new ReadView((width) => omiViewLines(theme(), { project, services, environments, error: envError, at: envAt, now: Date.now(), foundations: foundations() }, width), (data) => {
 			if (matchesKey(data, "escape")) { switchView("chat"); return true; }
 			if (data === "r") { void refreshRemote(); return true; }
