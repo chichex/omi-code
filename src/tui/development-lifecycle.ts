@@ -60,7 +60,7 @@ export function currentSubject(s: EnabledLifecycle) {
 	const subject = s.subjects.find(x => x.id === s.currentSubject); if (!subject) throw new Error("Falta el sujeto adoptado del PR"); return subject;
 }
 /** La configuración aceptada vigente (KB + aceptación local). Pendiente, ausente o caída nunca inicia efectos. */
-async function acceptedPin(session: DevelopmentSession, state: WorkflowV2): Promise<LifecyclePin> {
+export async function acceptedPin(session: DevelopmentSession, state: WorkflowV2): Promise<LifecyclePin> {
 	const repo = lifecycleRepo(state);
 	const key: LifecycleKey = { kbUrl: session.kb?.url ?? HARNESS_KB_URL, product: repo.split("/")[1] ?? "", repo };
 	const reading = await readLifecycle(session.kb, key, state.checkout.root, session.lifecycle.signal);
@@ -69,10 +69,12 @@ async function acceptedPin(session: DevelopmentSession, state: WorkflowV2): Prom
 	return { key, accepted: evaluation.observationPin };
 }
 /** Fija la revisión aceptada vigente antes de un efecto; cambiar de KB/repo no se acepta. */
-async function freshPin(session: DevelopmentSession, ctx: ExtensionContext): Promise<void> {
+export async function freshPin(session: DevelopmentSession, ctx: ExtensionContext): Promise<void> {
+	const validate = session.continuationGuard(ctx);
 	const { state, s } = enabledWork(session, ctx); const pin = await acceptedPin(session, state);
+	validate();
 	if (pin.accepted.blockHash === s.pinHash) return;
-	await session.update(ctx, saved => ({ ...saved, lifecycle: applyLifecyclePin(saved.lifecycle, pin) }));
+	await session.update(ctx, saved => { validate(); return { ...saved, lifecycle: applyLifecyclePin(saved.lifecycle, pin) }; });
 	ctx.ui.notify("Lifecycle: se fijó la revisión aceptada vigente de la configuración.", "info");
 }
 /** Retry sólo de un efecto confirmado como fallido; pendiente o incierto lo rechaza la reserva (reconciliar). */
@@ -99,33 +101,39 @@ export async function decide(session: DevelopmentSession, ctx: ExtensionContext,
 /** Actividad → decisión → reserva → una invocación → recibo, por el coordinador raíz. El estado vuelve siempre a la sesión. */
 export async function operate(session: DevelopmentSession, ctx: ExtensionContext, intent: LifecycleIntent,
 	authorize: (activity: LifecycleActivityControls) => Promise<LifecycleDecision>, execute: (reserved: WorkflowV2) => Promise<unknown>): Promise<void> {
-	const state = session.current(ctx);
+	const state = session.current(ctx), validate = session.continuationGuard(ctx);
 	try {
-		await performLifecycleOperation({ checkout: state.checkout, issue: state.source.number, owner: session.owner, now: session.now, monotonic: session.lifecyclePorts.monotonic ?? (() => performance.now()), signal: session.lifecycle.signal,
-			authorize: (_state, _intent, activity) => authorize(activity), execute: (reserved) => execute(reserved) }, intent);
+		validate();
+		await performLifecycleOperation({ checkout: state.checkout, issue: state.source.number, owner: session.owner, now: session.now, monotonic: session.lifecyclePorts.monotonic ?? (() => performance.now()), signal: AbortSignal.any([session.lifecycle.signal, ...(ctx.signal ? [ctx.signal] : [])]),
+			authorize: async (_state, _intent, activity) => { validate(); const decision = await authorize(activity); validate(); return decision; }, execute: (reserved) => { validate(); return execute(reserved); } }, intent);
 	} finally { await session.reload(ctx); }
 }
 export const receipt = (intent: LifecycleIntent, externalId: string, at: string, outcome: "succeeded" | "failed" = "succeeded") =>
 	({ operationId: intent.id, correlationId: intent.correlationId, subjectId: intent.subjectId, targetId: intent.targetId, externalId: externalId.slice(0, 256), outcome, verifiedSubjectId: intent.subjectId, at });
 
-export async function adoptLifecycle(session: DevelopmentSession, ctx: ExtensionContext): Promise<void> {
+export async function adoptLifecycle(session: DevelopmentSession, ctx: ExtensionContext, publication?: { head: string; number: number; revision: number; pinHash: string }): Promise<boolean> {
 	const state = session.current(ctx); const signal = session.lifecycle.signal;
+	const origin = session.observationOrigin();
 	if (state.version !== 2) throw new Error("Estado del harness sin migrar; retomalo con /omi-work resume.");
-	if (state.lifecycle.status === "enabled") { ctx.ui.notify(session.status(), "info"); return; }
+	if (state.lifecycle.status === "enabled") { ctx.ui.notify(session.status(), "info"); return false; }
 	if (state.phase !== "done" || state.publication.status !== "opened" || state.pullRequest?.ownership !== "unadopted") throw new Error("Adoptar requiere el PR draft que abrió este trabajo (etapa «PR draft abierto»).");
 	if (state.publication.stack) throw new Error("Un stack de PRs todavía no se puede adoptar para Review, Land y Ship.");
 	if (session.offline) throw new Error("Adoptar necesita leer el PR en GitHub; quitá --offline.");
 	const pin = await acceptedPin(session, state), client = githubClient(session, state), pr = state.pullRequest;
+	if (publication && publication.pinHash !== pin.accepted.blockHash) throw new Error("La configuración de entrada cambió; hay que revisar su continuidad antes de adoptar.");
 	const pull = await readPull(client, pr.number, signal), snapshot = await inspectCheckout(state.checkout, session.runner, signal);
 	if (pull.state !== "open" || pull.merged || pull.number !== pr.number || pull.head.sha !== pr.head || pull.head.ref !== state.checkout.branch || pull.base.ref !== pr.base || pull.base.repo.full_name.toLowerCase() !== client.repo || pull.head.repo?.full_name.toLowerCase() !== client.repo)
 		throw new Error(`El PR #${pr.number} cambió (HEAD, rama, base o estado) desde que se abrió; no se adopta.`);
 	if (!snapshot.clean || snapshot.head !== pull.head.sha) throw new Error("El checkout no está limpio o no coincide con el HEAD del PR; no se adopta.");
+	signal.throwIfAborted(); ctx.signal?.throwIfAborted();
+	if (session.observationOrigin()?.epoch !== origin?.epoch) throw new Error("La sesión cambió mientras se comprobaba el draft; no se adopta.");
 	const subject = { id: `pr:${pr.number}:${pull.head.sha}`, repo: client.repo, number: pr.number, branch: pull.head.ref, base: pull.base.ref, headSha: pull.head.sha, baseSha: pull.base.sha, contentHash: snapshot.fingerprint, mergedSha: null };
 	const description = [`PR #${pr.number} · ${subject.branch} → ${subject.base} · HEAD ${subject.headSha.slice(0, 12)}`, "", "Configuración aceptada:", lifecycleDiff(undefined, pin.accepted.block, pin.key), "",
 		"Habilitar no ejecuta nada ahora. Review, correcciones, push, merge y Ship piden su propio permiso según esta configuración (ask pregunta antes). En chichex/omi-code merge y dispatch son siempre humanos."].join("\n");
-	if (!(await session.confirm(ctx, `Habilitar Review, Land y Ship en el PR #${pr.number}`, description))) { ctx.ui.notify("No se habilitó nada.", "info"); return; }
-	await session.update(ctx, saved => adoptPostPrWorkflow(saved, pin, subject, { id: `adopt:${randomUUID()}`, source: "person", at: session.now() }));
+	if (!publication && !(await session.confirm(ctx, `Habilitar Review, Land y Ship en el PR #${pr.number}`, description))) { ctx.ui.notify("No se habilitó nada.", "info"); return false; }
+	await session.update(ctx, saved => adoptPostPrWorkflow(saved, pin, subject, { id: `adopt:${randomUUID()}`, source: publication ? "publication" : "person", at: session.now() }, publication));
 	ctx.ui.notify(`${session.status()}\nSeguí con /omi-work review.`, "info");
+	return true;
 }
 
 async function reviewFacts(session: DevelopmentSession, ctx: ExtensionContext, reserved: WorkflowV2, intent: Pick<LifecycleIntent, "id">): Promise<{ externalId: string; facts: Omit<ReviewFacts, "operationId" | "at"> }> {
@@ -157,7 +165,8 @@ async function reviewFacts(session: DevelopmentSession, ctx: ExtensionContext, r
 	return { externalId: `run:${gha.runId}:${gha.runAttempt}`, facts: { provider: "gha", checks: [], findings: gha.findings.map(f => ({ externalId: f.id, text: f.message, severity: f.severity, resolved: false, outdated: false })),
 		approval: { reviewer: request.workflow.path, state: gha.verdict === "pass" ? "approved" : "changes-requested", externalId: `run:${gha.runId}:${gha.runAttempt}` } } };
 }
-export async function reviewLifecycle(session: DevelopmentSession, ctx: ExtensionContext): Promise<void> {
+export interface ObservedLifecycleReview { operationId: string; subjectId: string }
+export async function reviewLifecycle(session: DevelopmentSession, ctx: ExtensionContext): Promise<ObservedLifecycleReview> {
 	await freshPin(session, ctx);
 	const { s } = enabledWork(session, ctx); const config = currentLifecyclePin(s).accepted.block, subject = currentSubject(s), provider = config.review.provider;
 	if (s.stage !== "review") throw new Error(`Review corre en la etapa Review; ahora: ${s.stage}.`);
@@ -167,7 +176,7 @@ export async function reviewLifecycle(session: DevelopmentSession, ctx: Extensio
 		const { state } = enabledWork(session, ctx);
 		const { facts } = await reviewFacts(session, ctx, state, done);
 		await session.update(ctx, saved => ({ ...saved, lifecycle: recordLifecycleReview(saved.lifecycle, { ...facts, operationId: done.id, at: session.now() }) }));
-		ctx.ui.notify(`Relectura de GitHub del mismo HEAD: sin otro intento.\n${session.status()}`, "info"); return;
+		ctx.ui.notify(`Relectura de GitHub del mismo HEAD: sin otro intento.\n${session.status()}`, "info"); return { operationId: done.id, subjectId: subject.id };
 	}
 	const intent = newIntent(s, "review"); let observed: Omit<ReviewFacts, "operationId" | "at"> | undefined;
 	const dispatch = provider.kind === "gha";
@@ -180,9 +189,10 @@ export async function reviewLifecycle(session: DevelopmentSession, ctx: Extensio
 	const next = await session.update(ctx, saved => ({ ...saved, lifecycle: recordLifecycleReview(saved.lifecycle, { ...facts, operationId: intent.id, at: session.now() }) }));
 	const blocks = lifecycleBlocks(next);
 	ctx.ui.notify(`${session.status()}\n${blocks.length ? "Con hallazgos pendientes: /omi-work fix." : "Sin hallazgos pendientes: /omi-work land cuando checks y reviews estén listos."}`, blocks.length ? "warning" : "info");
+	return { operationId: intent.id, subjectId: subject.id };
 }
 
-export async function landLifecycle(session: DevelopmentSession, ctx: ExtensionContext): Promise<void> {
+export async function landLifecycle(session: DevelopmentSession, ctx: ExtensionContext): Promise<boolean> {
 	await freshPin(session, ctx);
 	let { state, s } = enabledWork(session, ctx); const config = currentLifecyclePin(s).accepted.block, signal = session.lifecycle.signal, client = githubClient(session, state);
 	if (!["review", "ready", "land"].includes(s.stage)) throw new Error(s.merges?.length ? "El merge ya se observó: seguí con /omi-work ship." : `Land no corresponde en la etapa ${s.stage}.`);
@@ -190,7 +200,7 @@ export async function landLifecycle(session: DevelopmentSession, ctx: ExtensionC
 	const pull = await readPull(client, subject.number, signal);
 	if (pull.merged) {
 		await session.update(ctx, saved => acceptObservedMerge(saved, pull, { source: "external", at: session.now() }));
-		ctx.ui.notify(`Merge externo observado: Land hecho, la entrega todavía no está verificada. /omi-work ship.\n${session.status()}`, "info"); return;
+		ctx.ui.notify(`Merge externo observado: Land hecho, la entrega todavía no está verificada. /omi-work ship.\n${session.status()}`, "info"); return true;
 	}
 	const blocks = lifecycleBlocks(state);
 	if (blocks.length) throw new Error(`Land bloqueado por hallazgos u operaciones pendientes: ${blocks.join("; ")}. Usá /omi-work fix o /omi-work review.`);
@@ -222,7 +232,8 @@ export async function landLifecycle(session: DevelopmentSession, ctx: ExtensionC
 				if (result.status !== "merged") throw new Error(result.reason);
 				merged = result.pull; return receipt(intent, `merge:${subject.number}:${subject.headSha}`, session.now());
 			});
-	} catch (error) { if (error instanceof LifecycleDeclined) { ctx.ui.notify(`${error.message} El PR quedó listo para merge (no es permiso).`, "info"); return; } throw error; }
+	} catch (error) { if (error instanceof LifecycleDeclined) { ctx.ui.notify(`${error.message} El PR quedó listo para merge (no es permiso).`, "info"); return false; } throw error; }
 	await session.update(ctx, saved => acceptObservedMerge(saved, merged, { source: "operation", operationId: intent.id, at: session.now() }));
 	ctx.ui.notify(`Merge confirmado por lectura del PR/SHA. Integrado, todavía no entregado: /omi-work ship.\n${session.status()}`, "info");
+	return true;
 }

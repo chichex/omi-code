@@ -31,6 +31,7 @@ import { foundationsDir } from "../harness/foundations-trust.ts";
 import { showCommandChoices } from "./development-command-dialog.ts";
 import { lifecycleLines } from "../harness/lifecycle-progress.ts";
 import type { LifecyclePorts } from "./development-lifecycle.ts";
+import { LifecycleContinuityHost } from "./development-lifecycle-continuity.ts";
 
 export const DEVELOPMENT_ANCHOR = "omi-development-workflow";
 const AnchorSchema = Type.Object({ id: Type.String(), root: Type.String(), issue: Type.Integer({ minimum: 1 }), revision: Type.Integer({ minimum: 0 }), disabled: Type.Optional(Type.Boolean()) });
@@ -49,6 +50,7 @@ export class DevelopmentSession {
 	/** Espera con Esc para cancelar: clasificar un pedido o leer la KB. */
 	readonly loader: WaitLoader;
 	readonly lifecycle = new AbortController();
+	readonly continuity = new LifecycleContinuityHost(this);
 	private context: ExtensionContext | undefined;
 	// Último vínculo válido de la conversación: permite salir aunque el estado no se pueda leer.
 	private lastAnchor: { id: string; root: string; issue: number; revision: number } | undefined;
@@ -213,12 +215,29 @@ export class DevelopmentSession {
 		await this.apply({ type: "source_changed", source }, ctx); this.reads.clear();
 		ctx.ui.notify("El pedido cambió. Receta, aprobaciones y verificaciones se invalidaron; vuelve a Explorar.", "warning"); return false;
 	}
+	/** Una acción pendiente pertenece a la sesión que la inició, no sólo a la revisión durable. */
+	continuationGuard(ctx: ExtensionContext): () => void {
+		const origin = this.observationOrigin(), signal = this.lifecycle.signal;
+		return () => {
+			signal.throwIfAborted(); ctx.signal?.throwIfAborted();
+			const current = this.observationOrigin();
+			if (!origin || current?.epoch !== origin.epoch || current.id !== origin.id) throw new Error("La sesión cambió; se descartó la acción pendiente.");
+			this.checkContext(ctx);
+		};
+	}
 	async confirm(ctx: ExtensionContext, title: string, description: string): Promise<boolean> {
 		this.checkContext(ctx);
 		if (!ctx.hasUI) throw new Error(`${title}: requiere confirmación humana interactiva`);
 		this.emit(`Esperando confirmación · ${title}`, true);
-		try { return await ctx.ui.confirm(title, description, { signal: this.lifecycle.signal }); }
-		finally { this.emit(); }
+		const epoch = this.epoch;
+		const signal = AbortSignal.any([this.lifecycle.signal, ...(ctx.signal ? [ctx.signal] : [])]);
+		try {
+			const approved = await ctx.ui.confirm(title, description, { signal });
+			signal.throwIfAborted();
+			if (this.epoch !== epoch) throw new Error("La sesión cambió durante la confirmación; no se ejecutó la acción pendiente.");
+			this.checkContext(ctx);
+			return approved;
+		} finally { this.emit(); }
 	}
 	/** Un selector no autoriza nada por sí mismo; cada caller interpreta sólo sus opciones explícitas. */
 	async select(ctx: ExtensionContext, title: string, options: string[], signal: AbortSignal): Promise<string | undefined> {
@@ -306,6 +325,7 @@ export class DevelopmentSession {
 		await this.apply({ type: "published", ...receipt }, ctx);
 		ctx.ui.notify(publishedNotice(receipt), "info");
 		await updateIssueSection(this, ctx);
+		await this.continuity.publication(ctx);
 	}
 	// Revisión íntegra de un documento: navegable en la TUI, el texto entero en RPC. Volver, cerrar o cancelar no aprueban.
 	private async reviewed(ctx: ExtensionContext, document: ApprovalDocument, cancellation: AbortSignal): Promise<boolean> {

@@ -51,6 +51,11 @@ function findingStatus(s: EnabledLifecycle): "clear" | "fix" | "human" {
  }
  return pending ? "fix" : "clear";
 }
+/** El ejecutor puede pedir confirmación humana de hallazgos ya corregidos sin reservar ronda. */
+function canConfirmCorrected(s: EnabledLifecycle): boolean {
+ return s.evidence.some(e => e.subjectId === s.currentSubject && e.kind === "verification" && e.outcome === "pass")
+  && s.ledger.some(f => f.observations.at(-1)?.subjectId === s.currentSubject && f.dispositions.some(d => d.status === "corrected"));
+}
 function reviewOrFix(input: ContinuityInput, s: EnabledLifecycle, config: LifecycleConfig): ContinuitySelection {
  const op = s.operations.findLast(o => o.kind === "review" && o.subjectId === s.currentSubject);
  if (!op) return offer(config, "review", "review");
@@ -58,7 +63,7 @@ function reviewOrFix(input: ContinuityInput, s: EnabledLifecycle, config: Lifecy
  const findings = findingStatus(s);
  if (findings === "human") return pause("human-required");
  if (findings === "fix") {
-  if (s.budget.roundsUsed >= config.corrections.maxRounds) return pause("rounds-exhausted");
+  if (s.budget.roundsUsed >= config.corrections.maxRounds && !canConfirmCorrected(s)) return pause("rounds-exhausted");
   return offer(config, "fix", "fix");
  }
  return offer(config, "land", "land");
@@ -105,8 +110,11 @@ export function selectLifecycleContinuation(input: ContinuityInput): ContinuityS
  const latest = s.operations.at(-1);
  if (latest?.status === "confirmed" && latest.receipt.outcome === "failed") return pause("operation-failed");
  if (s.segments.some(segment => segment.mode !== "closed")) return pause("activity-unsettled");
- if (s.budget.attemptsUsed >= config.budget.maxAttempts || s.budget.activeMilliseconds >= config.budget.activeSeconds * 1000) return pause("budget-exhausted");
+ if (s.budget.activeMilliseconds >= config.budget.activeSeconds * 1000) return pause("budget-exhausted");
  const activeCorrection = correction(input, s, config);
+ // Ceder al modelo termina el intento ya reservado; push sigue necesitando otra reserva.
+ if (activeCorrection?.kind === "yield") return activeCorrection;
+ if (s.budget.attemptsUsed >= config.budget.maxAttempts) return pause("budget-exhausted");
  if (activeCorrection) return activeCorrection;
  switch (s.stage) {
   case "review": return reviewOrFix(input, s, config);

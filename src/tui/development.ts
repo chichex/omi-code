@@ -136,13 +136,20 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 					if ((LIFECYCLE_COMMANDS as readonly string[]).includes(command)) {
 						let continueWork = false;
 						try {
-							if (command === "adopt") await adoptLifecycle(session, ctx);
-							else if (command === "review") await reviewLifecycle(session, ctx);
-							else if (command === "fix") continueWork = await fixLifecycle(session, ctx);
-							else if (command === "land") await landLifecycle(session, ctx);
-							else await shipLifecycle(session, ctx);
+							if (command === "adopt") {
+								if (await adoptLifecycle(session, ctx)) await session.continuity.advance(ctx);
+							} else if (command === "review") {
+								const observed = await reviewLifecycle(session, ctx);
+								await session.continuity.advance(ctx, observed);
+							} else if (command === "fix") {
+								continueWork = await fixLifecycle(session, ctx);
+								if (!continueWork) await session.continuity.advance(ctx);
+							}
+							else if (command === "land") {
+								if (await landLifecycle(session, ctx)) await session.continuity.advance(ctx);
+							} else { await shipLifecycle(session, ctx); await session.continuity.advance(ctx); }
 						} catch (error) { if (!(error instanceof LifecycleDeclined)) throw error; ctx.ui.notify(error.message, "info"); }
-						loadout(); if (continueWork) proceed(ctx); return;
+						loadout(); if (continueWork || session.state?.phase === "implement") proceed(ctx); return;
 					}
 					if (["resume", "approve", "pr", "stack"].includes(command)) await session.foundations.pin(ctx);
 					if (command === "resume") {
@@ -157,7 +164,7 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 					else if (command === "stop") await session.stop(ctx);
 					else throw new Error(USAGE);
 					loadout();
-					if (["resume", "approve", "refresh"].includes(command)) proceed(ctx);
+					if (["resume", "approve", "refresh"].includes(command) || command === "pr" && session.state?.phase === "implement") proceed(ctx);
 					else ctx.ui.notify(session.status(), "info");
 				} catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "No se pudo ejecutar el harness", busy(error) ? "warning" : "error"); }
 			},

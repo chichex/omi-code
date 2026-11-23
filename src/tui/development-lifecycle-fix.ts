@@ -1,8 +1,12 @@
 // /omi-work fix: correcciones post-PR en el mismo PR. La persona valida el grupo de hallazgos; el agente corrige
 // con TDD y todos los D; el push al mismo PR pide su propio sí. Nunca otro PR, force ni push a la base.
+import { createHash } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { WorkflowV2 } from "../harness/model.ts";
 import { recipeApprovalHash } from "../harness/state.ts";
+import { fixedReviewMaterial } from "../harness/review-material.ts";
+import { createLocalReviewCall } from "./development-local-review.ts";
+import { assessCorrectionScope, correctionScopeMatches, type CorrectionScopeAssessment } from "./development-correction-scope.ts";
 import { inspectCheckout } from "../harness/git.ts";
 import { currentCorrection } from "../harness/execution-scope.ts";
 import { disposeLifecycleFinding, reserveLifecycleOperation, type EnabledLifecycle } from "../harness/lifecycle-state.ts";
@@ -36,20 +40,39 @@ async function confirmCorrected(session: DevelopmentSession, ctx: ExtensionConte
 	return true;
 }
 /** Agrupa los hallazgos del HEAD actual, reserva una ronda y abre un paso C nuevo para el agente. */
-async function startRound(session: DevelopmentSession, ctx: ExtensionContext, state: WorkflowV2, s: EnabledLifecycle, found: EnabledLifecycle["ledger"]): Promise<void> {
+async function startRound(session: DevelopmentSession, ctx: ExtensionContext, state: WorkflowV2, s: EnabledLifecycle, found: EnabledLifecycle["ledger"], source: "manual" | "chain"): Promise<void> {
+	const origin = session.observationOrigin();
+	const assertCurrent = () => {
+		session.lifecycle.signal.throwIfAborted(); ctx.signal?.throwIfAborted();
+		const now = session.observationOrigin();
+		if (!origin || now?.epoch !== origin.epoch || now.id !== origin.id) throw new Error("La sesión cambió durante la evaluación; no se habilitó código.");
+	};
 	const current = found.filter(f => f.observations.at(-1)?.subjectId === s.currentSubject);
 	if (current.length !== found.length) throw new Error("Hay hallazgos de un HEAD anterior: corré /omi-work review sobre el HEAD actual antes de corregir.");
 	const config = currentLifecyclePin(s).accepted.block, subject = currentSubject(s);
 	if (s.budget.roundsUsed >= config.corrections.maxRounds) throw new Error(`Se agotaron las rondas de corrección (${s.budget.roundsUsed}/${config.corrections.maxRounds}): decide una persona.`);
 	const intent = newIntent(s, "correction");
 	const list = current.map(f => `· ${f.id} (${f.observations.at(-1)?.severity}): ${f.observations.at(-1)?.text.slice(0, 300) ?? ""}`).join("\n");
-	// Validar el alcance es siempre humano (correcciones auto no lo reemplaza): el sí cubre el grupo y la ronda.
-	const decision = await decide(session, ctx, intent, s, `Corregir ${current.length} hallazgo(s) en el PR #${subject.number}`, `${list}\n\nDentro del alcance aprobado y de riesgo ${state.recipe?.classification.risk ?? "?"}. Ronda ${s.budget.roundsUsed + 1}/${config.corrections.maxRounds} · intentos ${s.budget.attemptsUsed + 1}/${config.budget.maxAttempts}. El agente corrige con rojo, verde, commit y todos los D; el push al mismo PR pide otro sí.`, { mode: "ask" });
+	const automatic = source === "chain" && !!config.continuity && config.corrections.mode === "auto";
+	let assessment: CorrectionScopeAssessment | undefined;
+	if (automatic) {
+		assessment = await assessLifecycleCorrectionScope(session, ctx);
+		assertCurrent();
+		if (assessment.status !== "safe") throw new Error(assessment.reason);
+		await session.assertUnchanged(state, ctx);
+	}
+	const authorization = await decide(session, ctx, intent, s, `Corregir ${current.length} hallazgo(s) en el PR #${subject.number}`, `${list}\n\nRonda ${s.budget.roundsUsed + 1}/${config.corrections.maxRounds} · intentos ${s.budget.attemptsUsed + 1}/${config.budget.maxAttempts}. El agente corrige con rojo, verde, commit y todos los D; el push conserva su permiso independiente.`, { mode: automatic ? "auto" : "ask" });
+	const decision = assessment?.status === "safe" ? { ...authorization, authorityHash: assessment.authorityHash } : authorization;
+	assertCurrent();
 	await session.update(ctx, saved => {
+		assertCurrent();
 		if (saved.lifecycle.status !== "enabled") throw new Error("lifecycle deshabilitado");
+		if (automatic && (!assessment || !correctionScopeMatches(saved, assessment))) throw new Error("Cambió receta/pin/sujeto/grupo después de evaluar el alcance; requiere nueva evaluación explícita.");
 		let lifecycle = saved.lifecycle; const at = session.now();
-		for (const f of current) lifecycle = disposeLifecycleFinding(lifecycle, { findingId: f.id, subjectId: subject.id, observationHash: f.observations.at(-1)!.hash, status: "accepted", evidenceIds: [], reason: "Validado por la persona para corregir en el mismo PR", at });
-		let next = preparePostPrCorrection({ ...saved, lifecycle }, { operationId: intent.id, findingIds: current.map(f => f.id), scope: { source: "person", scopeHash: recipeApprovalHash(saved), withinScope: true, risk: saved.recipe?.classification.risk ?? "unknown" }, at });
+		for (const f of current) lifecycle = disposeLifecycleFinding(lifecycle, { findingId: f.id, subjectId: subject.id, observationHash: f.observations.at(-1)!.hash, status: "accepted", evidenceIds: [], reason: automatic ? "Evaluador aislado acreditó alcance aprobado y riesgo bajo del grupo actual" : "Validado por la persona para corregir en el mismo PR", at });
+		const scope = assessment?.status === "safe" ? { source: "policy", scopeHash: assessment.scopeHash, authorityHash: assessment.authorityHash, withinScope: true, risk: "low" }
+			: { source: "person", scopeHash: recipeApprovalHash(saved), withinScope: true, risk: saved.recipe?.classification.risk ?? "unknown" };
+		let next = preparePostPrCorrection({ ...saved, lifecycle }, { operationId: intent.id, findingIds: current.map(f => f.id), scope, at });
 		if (next.lifecycle.status !== "enabled") throw new Error("lifecycle deshabilitado");
 		next = { ...next, lifecycle: reserveLifecycleOperation(next.lifecycle, intent, decision, session.owner, at) };
 		return activatePostPrCorrection(next, intent.id, at);
@@ -59,7 +82,14 @@ async function push(session: DevelopmentSession, ctx: ExtensionContext): Promise
 	const { state, s } = enabledWork(session, ctx), subject = currentSubject(s), client = githubClient(session, state), signal = session.lifecycle.signal;
 	const round = s.corrections?.findLast(r => r.status === "verified"); if (!round || round.status !== "verified") throw new Error("No hay una corrección verificada para publicar");
 	const intent = newIntent(s, "push");
-	const decision = await decide(session, ctx, intent, s, `Push de la corrección al PR #${subject.number}`, `${subject.branch}: ${round.startHead.slice(0, 12)} → ${subject.headSha.slice(0, 12)} · push normal al mismo PR, sin force ni PR nuevo. Después hace falta otra Review del HEAD nuevo.`, { mode: "ask" });
+	// Continuidad no concede push. Consultar Foundations por separado y ligar la decisión a su autoridad.
+	// Sin opt-in se conserva el permiso humano del flujo previo.
+	const foundations = await session.foundations.policy(ctx, state);
+	const mode = currentLifecyclePin(s).accepted.block.continuity ? foundations.politica.push_pr : "ask";
+	const authorization = await decide(session, ctx, intent, s, `Push de la corrección al PR #${subject.number}`, `${subject.branch}: ${round.startHead.slice(0, 12)} → ${subject.headSha.slice(0, 12)} · push normal al mismo PR, sin force ni PR nuevo. Después hace falta otra Review del HEAD nuevo.`, { mode });
+	const decision = authorization.source === "policy" ? { ...authorization,
+		authorityHash: foundations.hash ?? createHash("sha256").update(JSON.stringify({ authority: "foundations-default", repo: s.root.repo, policy: foundations.politica })).digest("hex"),
+	} : authorization;
 	const reserved = await session.update(ctx, saved => {
 		if (saved.lifecycle.status !== "enabled") throw new Error("lifecycle deshabilitado");
 		return { ...saved, lifecycle: reserveLifecycleOperation(saved.lifecycle, intent, decision, session.owner, session.now()) };
@@ -74,8 +104,21 @@ async function push(session: DevelopmentSession, ctx: ExtensionContext): Promise
 	await session.update(ctx, saved => acceptCorrectionPush(saved, intent.id, observed, session.now()));
 	ctx.ui.notify(`Push al mismo PR confirmado. Corré /omi-work review sobre el HEAD nuevo.\n${session.status()}`, "info");
 }
+/** Usa sólo el modelo seleccionado y un diff fijo; sin tools/settings/conversación del implementador. */
+export async function assessLifecycleCorrectionScope(session: DevelopmentSession, ctx: ExtensionContext): Promise<CorrectionScopeAssessment> {
+	const { state, s } = enabledWork(session, ctx), subject = currentSubject(s), model = ctx.model;
+	if (!model) return { status: "paused", reason: "Alcance automático: falta modelo seleccionado compatible; requiere persona." };
+	try {
+		return await assessCorrectionScope(state, { model: { provider: model.provider, id: model.id, contextWindow: model.contextWindow },
+			signal: AbortSignal.any([session.lifecycle.signal, ...(ctx.signal ? [ctx.signal] : [])]), timeoutSeconds: currentLifecyclePin(s).accepted.block.review.timeoutSeconds,
+			snapshot: async signal => { const snap = await inspectCheckout(state.checkout, session.runner, signal); return { head: snap.head, fingerprint: snap.fingerprint, clean: snap.clean }; },
+			material: signal => fixedReviewMaterial(state.checkout.root, { repo: subject.repo, pr: subject.number, headSha: subject.headSha, baseSha: subject.baseSha, correlationId: `scope:${s.pinHash}` }, signal),
+			call: createLocalReviewCall(ctx.modelRegistry, model),
+		});
+	} catch { return { status: "paused", reason: "Evaluación aislada de alcance falló/cancelada; requiere persona. No se habilitó código." }; }
+}
 /** true si quedó una ronda activa para el agente (el host la continúa con el turno). */
-export async function fixLifecycle(session: DevelopmentSession, ctx: ExtensionContext): Promise<boolean> {
+export async function fixLifecycle(session: DevelopmentSession, ctx: ExtensionContext, options: { source: "manual" | "chain" } = { source: "manual" }): Promise<boolean> {
 	const { state, s } = enabledWork(session, ctx); const round = currentCorrection(state);
 	if (round?.status === "coding") {
 		if (state.phase !== "pr") throw new Error("La corrección sigue en curso: el agente termina el paso con rojo, verde, commit y verified; después /omi-work fix verifica y pide el push.");
@@ -90,11 +133,13 @@ export async function fixLifecycle(session: DevelopmentSession, ctx: ExtensionCo
 	if (s.stage !== "review") throw new Error(`Las correcciones parten de Review; ahora: ${s.stage}.`);
 	const found = pending(s);
 	if (!found.length) { ctx.ui.notify("No hay hallazgos pendientes para corregir.", "info"); return false; }
-	if (await confirmCorrected(session, ctx, s, found)) {
+	// Auto no transforma hallazgos repetidos en un permiso humano implícito ni abre un diálogo de disposición.
+	const automatic = options.source === "chain" && !!currentLifecyclePin(s).accepted.block.continuity && currentLifecyclePin(s).accepted.block.corrections.mode === "auto";
+	if (!automatic && await confirmCorrected(session, ctx, s, found)) {
 		const after = enabledWork(session, ctx).s, left = pending(after);
 		ctx.ui.notify(left.length ? `Quedan ${left.length} hallazgo(s): /omi-work fix para corregirlos.` : `Sin hallazgos pendientes.\n${session.status()}`, "info"); return false;
 	}
-	await startRound(session, ctx, state, s, found);
+	await startRound(session, ctx, state, s, found, options.source);
 	ctx.ui.notify(`Ronda de corrección autorizada: el agente sigue con el paso nuevo.\n${session.status()}`, "info");
 	return true;
 }
