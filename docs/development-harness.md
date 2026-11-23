@@ -659,12 +659,13 @@ Nada para configurar desde acá.
 
 El diagnóstico es puro (`src/harness/config-doctor.ts`): usa la lectura de Foundations que la sesión ya hizo, sin otra llamada a la KB. `/omi-setup` relee la KB y, al publicar, el lifecycle se relee para no ofrecer sobre una lectura vieja. Un lifecycle aceptado con Ship sin configurar no es «sin lifecycle»: Review y Land corren, y el ítem dice «Lifecycle aceptado sin Ship: Review y Land corren, pero la entrega no se verifica».
 
-En la TUI, lo que falta se resuelve con `/omi-setup`, no con un comando de terminal. Lo dicen publicar sin lifecycle, `/omi-work adopt` con la configuración ausente o pendiente, `/omi-work ship` sin Ship, la línea de Ship de `/omi-work status` y las pausas de la continuidad `config-required` y `ship-unconfigured`. Con la KB caída, el texto manda a `/mcp` o la red; con un bloque inválido, a revisar la KB o a `omi init --development` en una terminal, porque el setup no lo corre. Por ejemplo:
+En la TUI, lo que falta se resuelve con `/omi-setup`, no con un comando de terminal. Lo dicen publicar sin lifecycle, `/omi-work adopt` con la configuración ausente o pendiente, `/omi-work ship` sin Ship, la línea de Ship de `/omi-work status` y las pausas de la continuidad `config-required` y `ship-unconfigured`. La pausa `ship-manual` no manda a `/omi-setup`: con Ship manual, la entrega se declara con `/omi-work ship`. Con la KB caída, el texto manda a `/mcp` o la red; con un bloque inválido, a revisar la KB o a `omi init --development` en una terminal, porque el setup no lo corre. Por ejemplo:
 
 ```text
 Lifecycle sin configurar para acme/app: configuralo con /omi-setup. No se inició ningún efecto.
 Lifecycle con cambios sin aceptar para acme/app: aceptalo con /omi-setup. No se inició ningún efecto.
-Continuidad en pausa · Ship no está configurado o es manual: configuralo con /omi-setup o declaralo con /omi-work ship
+Continuidad en pausa · Ship no está configurado: configuralo con /omi-setup y después corré /omi-work ship
+Continuidad en pausa · Ship es manual y OMI no verifica la entrega: declarala con /omi-work ship
 ```
 
 El agente ve lo mismo en su contexto, mientras falte algo que el setup corre, también lo postergado: «Falta configurar en este repo: Sin lifecycle: el trabajo termina en el PR draft, sin Review, Land ni Ship. Lo configura la persona con /omi-setup…». Sale del diagnóstico que ya tiene la pestaña OMI, sin leer la KB en el turno; sin la TUI interactiva no hay diagnóstico y la línea no está. El proyecto OMI sin vincular, la KB caída y un bloque inválido no aparecen.

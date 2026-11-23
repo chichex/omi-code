@@ -132,7 +132,8 @@ export function selectLifecycleContinuation(input: ContinuityInput): ContinuityS
    if (findingStatus(s) !== "clear") return reviewOrFix(input, s, config);
    return offer(config, "land", "land");
   case "ship":
-   if (["unconfigured", "manual"].includes(config.ship.status)) return pause("ship-unconfigured");
+   if (config.ship.status === "unconfigured") return pause("ship-unconfigured");
+   if (config.ship.status === "manual") return pause("ship-manual"); // La entrega la declara una persona.
    return offer(config, "ship", "ship");
  }
 }

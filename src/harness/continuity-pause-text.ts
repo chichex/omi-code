@@ -45,7 +45,9 @@ export function continuityPauseGuide(reason: ContinuityPause, stage?: Stage, sta
   case "rounds-exhausted": return { message: "Se agotaron las rondas de corrección", next: "revisá los hallazgos que quedan en /omi-progress y decidí cómo seguir" };
   case "correction-failed": return { message: "La última corrección falló", next: "no se reintenta sola; mirá el motivo en /omi-progress y corré /omi-work fix" };
   case "correction-facts-required": return { message: "Faltan los hechos de la corrección en curso", next: "revisá /omi-work status y seguí con /omi-work fix" };
-  case "ship-unconfigured": return { message: "Ship no está configurado o es manual", next: "configuralo con /omi-setup o declaralo con /omi-work ship" };
+  // Sigue valiendo después de configurar Ship: el pin nuevo se toma al correr /omi-work ship.
+  case "ship-unconfigured": return { message: "Ship no está configurado", next: "configuralo con /omi-setup y después corré /omi-work ship" };
+  case "ship-manual": return { message: "Ship es manual y OMI no verifica la entrega", next: "declarala con /omi-work ship" };
   case "activity-unsettled": return { message: "Hay una actividad del lifecycle sin cerrar", next: "reconciliala antes de otro efecto; está en /omi-progress" };
   case "stack-unsupported": return stackUnsupportedGuide(stackPulls);
   case "declined": return { message: `Dijiste que no a seguir con ${name}`, next: `cuando quieras, ${command}` };

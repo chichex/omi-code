@@ -265,3 +265,9 @@ test("a Review not observed in this session names the next step from the finding
  const ready = reviewed(); enabled(ready).stage = "ready";
  assert.deepEqual(select({ ...ready, reviewObserved: null }), { kind: "pause", reason: "review-facts-required", stage: "land" });
 });
+
+test("Ship sin configurar y Ship manual pausan con motivos distintos: uno se configura, el otro se declara", () => {
+ const i = input(), s = enabled(i);
+ s.stage = "ship"; pause(i, "ship-unconfigured");
+ s.pins[0]!.accepted.block.ship = { status: "manual", targets: [] }; pause(i, "ship-manual");
+});

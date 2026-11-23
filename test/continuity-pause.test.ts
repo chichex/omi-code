@@ -93,3 +93,10 @@ test("review-facts-required: el próximo paso sale de los hallazgos ya registrad
  assert.equal(line("review-facts-required", "fix"), "La Review del HEAD actual no se observó en esta sesión: corré /omi-work fix; usa los hallazgos ya registrados");
  assert.match(line("review-facts-required"), /\/omi-work review/, "sin etapa, el comando de siempre");
 });
+
+// Ship manual no se configura con /omi-setup: se declara. Sin configurar, el texto sigue valiendo después de configurarlo.
+test("ship: sin configurar manda a /omi-setup y después a /omi-work ship; manual manda a declararla", () => {
+ assert.equal(line("ship-unconfigured"), "Ship no está configurado: configuralo con /omi-setup y después corré /omi-work ship");
+ assert.equal(line("ship-manual" as ContinuityPause), "Ship es manual y OMI no verifica la entrega: declarala con /omi-work ship");
+ assert.doesNotMatch(line("ship-manual" as ContinuityPause), /\/omi-setup/, "en manual, /omi-setup no hace nada");
+});

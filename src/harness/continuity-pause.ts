@@ -8,7 +8,7 @@ import type { Workflow, WorkflowV2 } from "./model.ts";
 export const SELECTED_PAUSES = ["workflow-paused", "workflow-waiting", "workflow-blocked", "publication-required", "entry-trigger-required",
  "manual", "config-required", "subject-required", "lifecycle-paused", "operation-unsettled", "operation-failed", "budget-exhausted",
  "review-facts-required", "human-required", "rounds-exhausted", "correction-failed", "correction-facts-required", "ship-unconfigured",
- "activity-unsettled", "stack-unsupported"] as const;
+ "ship-manual", "activity-unsettled", "stack-unsupported"] as const;
 /** Los decide el host al ejecutar: un no, un error (su texto va como detalle) o la continuidad quitada a mitad de cadena. */
 export const HOST_PAUSES = ["declined", "not-adopted", "no-progress", "continuity-disabled", "error"] as const;
 export const CONTINUITY_PAUSES = [...SELECTED_PAUSES, ...HOST_PAUSES] as const;
