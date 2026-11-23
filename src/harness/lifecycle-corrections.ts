@@ -31,6 +31,8 @@ export function adoptPostPrWorkflow(original: unknown, pin: unknown, input: unkn
  lifecycleAssert(!input.mergedSha && input.number === state.pullRequest.number && input.headSha === state.pullRequest.head && input.branch === state.checkout.branch && input.base === state.pullRequest.base && lifecycleRef(input.branch), "ownership/HEAD/PR/base ajenos o ya mergeados");
  const lifecycle = state.lifecycle.status === "enabled" ? state.lifecycle : initializeLifecycle({ workflowId: state.id, issue: state.source.number, repo: input.repo }, pin);
  state.lifecycle = bindLifecycleSubject(lifecycle, input, observedAdoption); state.pullRequest = { ...state.pullRequest, ownership: "adopted" };
+ // Adoptar deja atrás el motivo de una pausa de entrada: lo que sigue es otra etapa.
+ delete state.continuityPause;
  state.phase = "review"; state.status = "active"; state.blockedReason = ""; return finish(state, "PR adoptado explícitamente para lifecycle", observedAdoption.at);
 }
 function current(original: unknown) {

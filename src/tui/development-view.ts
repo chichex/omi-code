@@ -7,7 +7,7 @@ import { workflowStages } from "../harness/progress.ts";
 import { executionEvidence } from "../harness/execution-scope.ts";
 import { lensWarningLine, lensWarnings } from "../harness/lenses.ts";
 import { stackLines } from "../harness/stack.ts";
-import { lifecycleLines, lifecycleSummary } from "../harness/lifecycle-progress.ts";
+import { lifecycleLines, lifecyclePause, lifecyclePauseLine, lifecycleSummary } from "../harness/lifecycle-progress.ts";
 export { PHASE_LABELS } from "../harness/phases.ts";
 const ROUTES = { direct: "Directa", diagnostic: "Diagnóstico", spec: "Con spec" };
 export function developmentProgress(state: Workflow, activity = state.activity, foundations: string[] = []): WorkflowProgress {
@@ -18,7 +18,7 @@ export function developmentProgress(state: Workflow, activity = state.activity, 
 		return latest && latest.command === c.command && latest.fingerprint === fingerprint && latest.outcome === "passed" && latest.exitCode === 0;
 	}).map((c) => c.id));
 	const route = state.recipe ? ROUTES[state.recipe.route] : "Sin receta";
-	const stack = stackLines(state); const lifecycle = lifecycleLines(state); const summary = lifecycleSummary(state);
+	const stack = stackLines(state); const lifecycle = lifecycleLines(state); const summary = lifecycleSummary(state); const pause = lifecyclePause(state);
 	return {
 		id: state.id, issueNumber: state.source.number, worktree: state.checkout.root, branch: state.checkout.branch,
 		phaseLabel: PHASE_LABELS[state.phase], routeLabel: state.diagnosis && state.recipe?.route !== "diagnostic" ? `Diagnóstico → ${route}` : route,
@@ -26,7 +26,7 @@ export function developmentProgress(state: Workflow, activity = state.activity, 
 		activity, status: state.status, completedSteps: state.steps.filter((s) => s.status === "done").length, totalSteps: state.steps.length,
 		passedChecks: state.recipe?.cases.filter((c) => passed.has(c.id)).length ?? 0, totalChecks: state.recipe?.cases.length ?? 0,
 		blockedReason: state.blockedReason, warnings: lensWarnings(state).map(lensWarningLine), ...(stack.length ? { stack } : {}),
-		...(lifecycle.length ? { lifecycle } : {}), ...(summary ? { lifecycleSummary: summary } : {}),
+		...(lifecycle.length ? { lifecycle } : {}), ...(summary ? { lifecycleSummary: summary } : {}), ...(pause ? { lifecyclePause: pause } : {}),
 		details: [
 			`Issue #${state.source.number} · ${state.source.title}`, `Etapa: ${PHASE_LABELS[state.phase]} · ${state.status}`, `Ruta: ${route}`, ...foundations, `Actividad: ${activity}`,
 			...state.steps.map((s) => `${s.id} · ${s.status} · ${s.title}`), ...state.inferences.filter((i) => i.resolution === "pending").map((i) => `${i.id} · pregunta: ${i.question}`),
@@ -59,11 +59,13 @@ const GUIDE: Record<Phase, string> = {
 	closed: "Salida sin cambio. Mostrá el motivo; no cierres el issue remoto sin una acción humana explícita.",
 };
 export function developmentInstructions(state: Workflow, confirmar: readonly string[] = [], accepted = false): string {
+	const pause = lifecyclePauseLine(state);
 	return [
 		"Harness de Desarrollo OMI activo. Las reglas del proyecto prevalecen; este flujo no es un sandbox.",
 		`Etapa ${state.phase} (${PHASE_LABELS[state.phase]}), estado ${state.status}, revisión ${state.revision}.`,
 		state.blockedReason ? `Bloqueo: ${state.blockedReason}. No continuar por otra tool para eludirlo.` : "",
 		GUIDE[state.phase],
+		pause ? `${pause}\nLos comandos /omi-work los corre la persona: pasale el próximo paso tal cual, sin reemplazarlo por comandos de terminal.` : "",
 		state.version === 2 && state.pullRequest?.ownership === "adopted" ? "PR adoptado por el lifecycle: Review, push de correcciones, merge y Ship los ejecuta la persona con /omi-work review | fix | land | ship, cada uno con su permiso. No uses publish ni stack. Al terminar una corrección con verified, pedile a la persona /omi-work fix para el push al mismo PR." : "",
 		SETUP,
 		"Toda transición se registra con omi_workflow. No uses marcadores de texto para declarar pasos terminados. No tomes éxitos de Actions como aprobación humana. No mergear, publicar releases/tags, disparar workflows ni desplegar.",

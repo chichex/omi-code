@@ -64,13 +64,18 @@ test("legacy stops at draft; opt-in entry needs a newly confirmed publication tr
  const i = input(); i.workflow = workflow();
  pause({ ...i, config: legacy(), trigger: "publication-confirmed" }, "manual");
  action({ ...i, trigger: "publication-confirmed" }, "adopt", "auto", "entry");
- for (const trigger of ["advance", "restore"] as const) pause({ ...i, trigger }, "entry-trigger-required");
+ pause({ ...i, trigger: "advance" }, "entry-trigger-required");
  i.config = { ...config(), continuity: { ...allAuto, entry: "ask" } };
  action({ ...i, trigger: "publication-confirmed" }, "adopt", "ask", "entry");
  i.workflow.publication = { status: "none" }; pause({ ...i, trigger: "publication-confirmed" }, "publication-required");
 });
 
-test("restore never starts effects, including an enabled lifecycle", () => { pause({ ...input(), trigger: "restore" }, "restore"); });
+// Restaurar no es un disparador: el host no llama al selector al cargar (lo cubren los tests de integración con
+// session_tree). El tipo no ofrece otro trigger; agregar uno rompe el typecheck de este registro exhaustivo.
+test("only a confirmed publication or an explicit advance can trigger continuity", () => {
+ const triggers = { "publication-confirmed": true, advance: true } satisfies Record<ContinuityInput["trigger"], true>;
+ assert.deepEqual(Object.keys(triggers).sort(), ["advance", "publication-confirmed"]);
+});
 
 test("review continuation selects modes without granting effect authorization", () => {
  const i = input(); action(i, "review");

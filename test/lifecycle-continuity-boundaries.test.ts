@@ -29,7 +29,9 @@ test("a fresh-entry yes cannot authorize a replacement reviewer pin", async t =>
  const state = await f.state();
  assert.equal(state.phase, "done");
  assert.equal(state.version === 2 && state.lifecycle.status, "disabled");
- assert.match(state.activity ?? "", /pausa/i);
+ const pause = state.version === 2 ? state.continuityPause : undefined;
+ assert.equal(pause?.reason, "error", "un error de texto libre usa el código genérico");
+ assert.match(pause?.detail ?? "", /\S/, "y su texto queda como detalle");
  assert.deepEqual(gh.reads, [], "the mismatched pin is rejected before any lifecycle GitHub reads");
  assert.deepEqual(gh.mutations, []);
 });

@@ -560,7 +560,17 @@ Con `continuity.fix:auto` y `corrections.mode:auto`, los hallazgos actuales pasa
 
 Una ronda autorizada cede al agente para completar rojo→verde, commit y todos los D. Tras `verified`, el host verifica el nuevo HEAD, pide o aplica **por separado** `push_pr` de Foundations y vuelve a Review del SHA nuevo en el mismo PR. `corrections.mode:auto` nunca concede permiso de push. Los presupuestos son los existentes: por defecto 2 rondas, 12 intentos y 7200 segundos activos; agotarlos no crea otro presupuesto ni permite reintentos inciertos. El trabajo de código de una ronda ya reservada puede terminar sin reservar otro intento; publicar sigue necesitando su propia reserva.
 
-La continuidad se detiene por manual, rechazo/cancelación, bloqueo, presupuesto, falta de hechos vigentes, fallo confirmado o resultado incierto. El progreso y `/omi-work status` muestran política efectiva y motivo de pausa; para retomar se usa el comando explícito después de resolver la causa. No se vuelve a preguntar automáticamente al restaurar. Deshabilitar la continuidad o cambiar sus modos sólo controla acciones futuras: no revierte pushes, merges ni entregas remotas ya observadas. Las capacidades desconectadas siguen desconectadas.
+La continuidad se detiene por manual, rechazo/cancelación, bloqueo, presupuesto, falta de hechos vigentes, fallo confirmado o resultado incierto. Para retomar se usa el comando explícito después de resolver la causa. No se vuelve a preguntar automáticamente al restaurar.
+
+El motivo de la pausa se guarda en el estado del trabajo como un código cerrado, con la etapa y el sujeto (el HEAD) en que se tomó. Otras transiciones del trabajo no lo pisan. Se muestra en español, con el próximo paso: en el panel de progreso como aviso, una sola vez en `/omi-work status` y en el contexto del agente. Por ejemplo:
+
+```text
+Continuidad en pausa · Review está en manual: corré /omi-work review
+Continuidad en pausa · Hay una operación con resultado incierto: no se repite sola; revisá en GitHub
+Continuidad en pausa · La configuración vigente ya no tiene continuidad: seguí a mano con /omi-work land
+```
+
+Un rechazo o un error del efecto lleva un código genérico y su texto como detalle. Si el pin fresco quita la continuidad a mitad de cadena, el motivo lo dice, en vez de «manual». El motivo deja de mostrarse si cambió el sujeto o empezó otra operación después de la pausa. Se borra al empezar una corrida nueva de la cadena, al correr un comando `/omi-work adopt | review | fix | land | ship` y al adoptar el PR. Deshabilitar la continuidad o cambiar sus modos sólo controla acciones futuras: no revierte pushes, merges ni entregas remotas ya observadas. Las capacidades desconectadas siguen desconectadas.
 
 ## Onboarding del lifecycle
 

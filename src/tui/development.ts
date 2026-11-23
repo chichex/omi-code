@@ -136,6 +136,8 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 					if ((LIFECYCLE_COMMANDS as readonly string[]).includes(command)) {
 						let continueWork = false;
 						try {
+							// El comando ya es el próximo paso: mientras corre, la pausa anterior no se muestra como vigente.
+							await session.continuity.clearPause(ctx);
 							if (command === "adopt") {
 								if (await adoptLifecycle(session, ctx)) await session.continuity.advance(ctx);
 							} else if (command === "review") {

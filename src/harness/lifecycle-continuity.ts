@@ -2,30 +2,26 @@
 import type { Workflow } from "./model.ts";
 import type { LifecycleConfig, LifecycleContinuity, ContinuityMode } from "./lifecycle-schema.ts";
 import type { EnabledLifecycle, LifecycleState } from "./lifecycle-state-schema.ts";
+import type { SelectedPause } from "./continuity-pause.ts";
 
 export type ContinuityStage = keyof LifecycleContinuity;
 export type ContinuityAction = "adopt" | "review" | "fix" | "land" | "ship";
-export type ContinuityPause = "restore" | "workflow-paused" | "workflow-waiting" | "workflow-blocked"
- | "publication-required" | "entry-trigger-required" | "manual" | "config-required" | "subject-required"
- | "lifecycle-paused" | "operation-unsettled" | "operation-failed" | "budget-exhausted"
- | "review-facts-required" | "human-required" | "rounds-exhausted" | "correction-failed"
- | "correction-facts-required" | "ship-unconfigured" | "stage-mismatch" | "activity-unsettled";
 export type ContinuitySelection =
  | { kind: "action"; action: ContinuityAction; stage: ContinuityStage; mode: Exclude<ContinuityMode, "manual"> }
- | { kind: "pause"; reason: ContinuityPause; stage?: ContinuityStage }
+ | { kind: "pause"; reason: SelectedPause; stage?: ContinuityStage }
  | { kind: "yield"; reason: "correction-model" }
  | { kind: "complete" };
 export interface ContinuityInput {
  workflow: Pick<Workflow, "phase" | "status" | "blockedReason" | "publication"> & { lifecycle?: LifecycleState };
  /** Config aceptada para entrada. Con lifecycle habilitado manda su pin vigente, no esta copia. */
  config: LifecycleConfig | null;
- /** Sólo el host que acaba de confirmar publicación puede emitir publication-confirmed. */
- trigger: "publication-confirmed" | "advance" | "restore";
+ /** Sólo el host que acaba de confirmar publicación puede emitir publication-confirmed. Restaurar no llama al selector. */
+ trigger: "publication-confirmed" | "advance";
  /** Hechos ya ingeridos por el host, incluso Review vacía. Un recibo solo no acredita la ingesta.
   * Efímero: restaurar una sesión no recrea esta señal. No es aprobación de Land. */
  reviewObserved: { operationId: string; subjectId: string } | null;
 }
-const pause = (reason: ContinuityPause): ContinuitySelection => ({ kind: "pause", reason });
+const pause = (reason: SelectedPause): ContinuitySelection => ({ kind: "pause", reason });
 /** No materializa ni muta la configuración legacy. */
 export function effectiveLifecycleContinuity(config: LifecycleConfig): LifecycleContinuity {
  return config.continuity ? { ...config.continuity } : { entry: "manual", review: "manual", fix: "manual", land: "manual", ship: "manual" };
@@ -85,7 +81,6 @@ function correction(input: ContinuityInput, s: EnabledLifecycle, config: Lifecyc
  */
 export function selectLifecycleContinuation(input: ContinuityInput): ContinuitySelection {
  const w = input.workflow;
- if (input.trigger === "restore" && w.lifecycle?.status === "enabled") return pause("restore");
  if (w.status === "paused") return pause("workflow-paused");
  if (w.status === "waiting") return pause("workflow-waiting");
  if (w.blockedReason) return pause("workflow-blocked");
