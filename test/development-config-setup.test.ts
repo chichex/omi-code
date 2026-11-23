@@ -68,6 +68,18 @@ test("config_setup: /omi-setup sin nada para correr muestra el diagnóstico; la 
 	assert.equal(offline.asked.length, 0); assert.match(offline.messages.at(-1) ?? "", /Sin red/);
 });
 
+// .omi/project.json es contenido del repo, que puede venir de un PR o de otra rama: el aviso no le pasa secuencias al terminal.
+test("config_setup: /omi-setup sin nada para correr no muestra crudos los controles de .omi/project.json", async (t) => {
+	const f = await fixture(t, { available: "la KB no conectó a tiempo" });
+	await mkdir(join(f.checkout.root, ".omi"), { recursive: true });
+	await writeFile(join(f.checkout.root, ".omi/project.json"), JSON.stringify({ version: 1, organizationSlug: "acme\u001b]52;c;QUJD\u0007", projectSlug: "p\u001b[2J", services: [{ name: "api", path: ".", port: 8080, dockerfile: "Dockerfile" }] }));
+	await f.run("omi-setup");
+	const shown = f.messages.at(-1) ?? "";
+	assert.match(shown, /Proyecto OMI · ok/);
+	assert.doesNotMatch(shown, /[\u001b\u0007\u009b]/, "OSC 52 no escribe el portapapeles ni CSI 2J borra la pantalla");
+	assert.ok(shown.includes("acme\\u001b]52;c;QUJD\\u0007/p\\u001b[2J"), "se ve lo que es, escapado");
+});
+
 test("config_setup: una sesión interactiva nueva lo ofrece sola; resume, reload, fork y una sesión con mensajes, no", async (t) => {
 	const f = await fixture(t); f.uiControl.questions = () => [KEYS.esc];
 	await f.attach(); await f.emit("session_start", { reason: "startup" }); await f.settled();

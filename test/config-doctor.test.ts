@@ -133,6 +133,18 @@ test("config_doctor: las líneas muestran área, estado y cómo resolver, sin re
 	assert.ok(lines.every((line) => line.length > 0));
 });
 
+// Los slugs de .omi/project.json vienen del repo y los motivos, de la KB: datos externos que nunca llegan crudos al terminal.
+test("config_doctor: las líneas escapan los controles de terminal de .omi/project.json y de la KB", () => {
+	const omi = { organization: "acme\u001b]52;c;QUJD\u0007", project: "p\u001b[2J", services: ["api"] };
+	const down = (reason: string) => ({ state: { status: "unavailable" as const, revision: null, reason, recommendations: [] }, local: { kind: "missing" as const } });
+	const lines = configLines(diagnoseConfig(input({ kind: "unavailable", key, reason: "KB \u009b2J caída" }, { omi, lifecycle: down("lectura‮cortada") })));
+	assert.deepEqual(lines.filter((line) => /[\p{Cc}\p{Cf}]/u.test(line)), [], "ni ESC, ni C1, ni bidi");
+	const text = lines.join("\n");
+	assert.ok(text.includes("Proyecto OMI acme\\u001b]52;c;QUJD\\u0007/p\\u001b[2J · api."), "se ve lo que es, escapado");
+	assert.ok(text.includes("No se pudo leer Foundations: KB \\u009b2J caída."), "el motivo de la KB también");
+	assert.ok(text.includes("No se pudo leer el lifecycle: lectura\\u202ecortada."));
+});
+
 test("config_doctor: al publicar el draft sólo cuenta un lifecycle que falta, está pendiente o no tiene continuidad", () => {
 	const reading: FoundationsReading = { kind: "valid", key, block, hash: foundationsHash(block), perillas };
 	const at = (state: LifecycleOnboardingState, local: LifecycleTrustReading = { kind: "missing" }) => stopsAtDraft(diagnoseConfig(input(reading, { lifecycle: { state, local } })));

@@ -4,7 +4,7 @@
 import { createHash } from "node:crypto";
 import type { FoundationsReading } from "../tui/development-foundations.ts";
 import { fences } from "./fences.ts";
-import { FOUNDATIONS_INFO } from "./foundations.ts";
+import { FOUNDATIONS_INFO, visibleText } from "./foundations.ts";
 import type { TrustInspection } from "./foundations-trust.ts";
 import type { LifecycleDetection } from "./lifecycle-detect.ts";
 import { lifecycleMissing, shouldOfferLifecycleOnboarding, type LifecycleOnboardingState } from "./lifecycle-onboarding.ts";
@@ -113,9 +113,10 @@ export function stopsAtDraft(diagnosis: ConfigDiagnosis): boolean {
 const AREAS: Record<ConfigArea, string> = { foundations: "Foundations", lifecycle: "Lifecycle", "omi-project": "Proyecto OMI" };
 const LABELS: Record<ConfigStatus, string> = { ok: "ok", falta: "falta", "formato-anterior": "formato anterior", pendiente: "pendiente", invalido: "inválido", "no-disponible": "no disponible", postergado: "postergado", "no-aplica": "no aplica" };
 const MARKS: Record<ConfigStatus, string> = { ok: "✓", falta: "✗", "formato-anterior": "✗", pendiente: "△", invalido: "✗", "no-disponible": "?", postergado: "…", "no-aplica": "·" };
-/** Un ítem: marca, área, estado y mensaje; debajo, cómo resolverlo si hace falta. También lo usa la pantalla OMI. */
+/** Un ítem: marca, área, estado y mensaje; debajo, cómo resolverlo si hace falta. También lo usa la pantalla OMI.
+ * Los slugs de .omi/project.json y los motivos de la KB son datos externos: sus controles se ven escapados, nunca llegan crudos al terminal. */
 export function configItemLines(i: ConfigItem): [string, ...string[]] {
-	return [`${MARKS[i.status]} ${AREAS[i.area]} · ${LABELS[i.status]}: ${i.message}`, ...(i.status !== "ok" && i.resolve ? [`  ${i.resolve}`] : [])];
+	return [visibleText(`${MARKS[i.status]} ${AREAS[i.area]} · ${LABELS[i.status]}: ${i.message}`), ...(i.status !== "ok" && i.resolve ? [visibleText(`  ${i.resolve}`)] : [])];
 }
 /** Vertical, una línea por ítem y su cómo resolver debajo: para /omi-setup cuando no hay nada que correr. */
 export function configLines(diagnosis: ConfigDiagnosis): string[] {
