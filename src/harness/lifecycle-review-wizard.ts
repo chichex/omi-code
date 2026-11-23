@@ -21,15 +21,17 @@ function providerName(provider: LifecycleReviewProvider): string {
   default: { const unknown: never = provider; return unknown; }
  }
 }
-/** Una línea para el resumen: proveedor, workflow@ref y modelo efectivo (ausente, decide el workflow). */
-export function reviewProviderSummary(provider: LifecycleReviewProvider): string {
+/** Quién revisa: proveedor, workflow@ref y modelo efectivo (ausente, decide el workflow). También lo usa la pantalla OMI. */
+export function reviewProviderText(provider: LifecycleReviewProvider): string {
  switch (provider.kind) {
-  case "local": return "Review: revisor local aislado sobre el diff fijo";
-  case "github": return `Review: reviews de GitHub · ${provider.reviewers.join(", ")}`;
-  case "gha": return `Review: GitHub Actions · ${provider.workflow}@${provider.ref} · modelo: ${provider.model ?? "default del workflow"}${provider.effort ? ` · effort: ${provider.effort}` : ""}`;
+  case "local": return "revisor local aislado sobre el diff fijo";
+  case "github": return `reviews de GitHub · ${provider.reviewers.join(", ")}`;
+  case "gha": return `GitHub Actions · ${provider.workflow}@${provider.ref} · modelo: ${provider.model ?? "default del workflow"}${provider.effort ? ` · effort: ${provider.effort}` : ""}`;
   default: { const unknown: never = provider; return unknown; }
  }
 }
+/** Una línea para el resumen del wizard. */
+export const reviewProviderSummary = (provider: LifecycleReviewProvider): string => `Review: ${reviewProviderText(provider)}`;
 /** GHA detectado va primero (recomendado) si hoy revisa el local o no hay config; si no, mantener va primero. */
 function reviewOptions(current: LifecycleReviewProvider | null, workflows: string[]): ReviewOption[] {
  const gha = workflows.map((workflow): ReviewOption => ({ label: `GitHub Actions · ${workflow} (${REVIEW_CONTRACT})`, description: `Dispara el workflow por PR y valida su recibo ${REVIEW_CONTRACT}; sin fallback local`, choice: { kind: "gha", workflow } }));

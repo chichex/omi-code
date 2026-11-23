@@ -104,7 +104,11 @@ export function stopsAtDraft(diagnosis: ConfigDiagnosis): boolean {
 const AREAS: Record<ConfigArea, string> = { foundations: "Foundations", lifecycle: "Lifecycle", "omi-project": "Proyecto OMI" };
 const LABELS: Record<ConfigStatus, string> = { ok: "ok", falta: "falta", "formato-anterior": "formato anterior", pendiente: "pendiente", invalido: "inválido", "no-disponible": "no disponible", postergado: "postergado", "no-aplica": "no aplica" };
 const MARKS: Record<ConfigStatus, string> = { ok: "✓", falta: "✗", "formato-anterior": "✗", pendiente: "△", invalido: "✗", "no-disponible": "?", postergado: "…", "no-aplica": "·" };
+/** Un ítem: marca, área, estado y mensaje; debajo, cómo resolverlo si hace falta. También lo usa la pantalla OMI. */
+export function configItemLines(i: ConfigItem): [string, ...string[]] {
+	return [`${MARKS[i.status]} ${AREAS[i.area]} · ${LABELS[i.status]}: ${i.message}`, ...(i.status !== "ok" && i.resolve ? [`  ${i.resolve}`] : [])];
+}
 /** Vertical, una línea por ítem y su cómo resolver debajo: para /omi-setup cuando no hay nada que correr. */
 export function configLines(diagnosis: ConfigDiagnosis): string[] {
-	return ["Configuración de OMI:", ...diagnosis.items.flatMap((i) => [`${MARKS[i.status]} ${AREAS[i.area]} · ${LABELS[i.status]}: ${i.message}`, ...(i.status !== "ok" && i.resolve ? [`  ${i.resolve}`] : [])])];
+	return ["Configuración de OMI:", ...diagnosis.items.flatMap(configItemLines)];
 }

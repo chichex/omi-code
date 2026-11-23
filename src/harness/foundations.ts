@@ -29,6 +29,12 @@ export const DEFAULT_POLICY: FoundationsPolicy = Object.freeze({ arranque: "auto
 /** Todo pregunta. */
 export const STRICT_POLICY: FoundationsPolicy = Object.freeze({ arranque: "ask", receta: "ask", push_pr: "ask" });
 export const POLICY_LABELS: Record<PolicyPoint, string> = { arranque: "arranque", receta: "receta", push_pr: "push + PR draft" };
+/** Qué hace cada punto en ask: lo muestran el panel y la pantalla OMI. */
+export const ASK_HELP: Record<PolicyPoint, string> = {
+	arranque: "te pide el sí antes de crear el issue, el worktree y la sesión",
+	receta: "te muestra la receta para que la apruebes antes de implementar",
+	push_pr: "te pide el sí antes del push de la rama y del PR draft",
+};
 export const AUTO_WARNINGS: Record<PolicyPoint, string> = {
 	arranque: "crea el issue, el worktree y la sesión sin preguntar, con el texto del agente",
 	receta: "el agente aprueba su propia receta; nunca dispensa la confirmación de comandos por patrones o sintaxis",
