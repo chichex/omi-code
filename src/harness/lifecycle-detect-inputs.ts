@@ -24,8 +24,10 @@ function entry(lines: string[], range: Range, key: string): { value: string; bod
 /** Las opciones de un choice, en bloque o en flujo; null si no se pueden leer. */
 function options(lines: string[], found: { value: string; body: Range }): string[] | null {
  if (found.value) { const flow = /^\[(.*)\]$/.exec(found.value)?.[1]; return flow === undefined ? null : flow.split(",").map(scalar).filter(Boolean); }
- const items = lines.slice(found.body.from, found.body.to).filter(meaningful).map((line) => /^\s*-\s+(.*)$/.exec(line)?.[1]);
- return items.length && items.every((item) => item !== undefined) ? items.map((item) => scalar(item!)) : null;
+ const lineItems = lines.slice(found.body.from, found.body.to).filter(meaningful);
+ // Toda línea del bloque tiene que ser un ítem: si alguna no lo es, la lista no se entiende.
+ const items = lineItems.flatMap((line) => { const item = /^\s*-\s+(.*)$/.exec(line)?.[1]; return item === undefined ? [] : [scalar(item)]; });
+ return items.length && items.length === lineItems.length ? items : null;
 }
 /** El input `name` bajo `on.workflow_dispatch.inputs`; null si no está ahí (un comentario o la clave de un step no cuentan). */
 function dispatchInput(lines: string[], name: string): { value: string; body: Range } | null {

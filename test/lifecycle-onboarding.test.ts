@@ -213,6 +213,7 @@ test("detector: model y effort cuentan sólo si el workflow_dispatch los declara
  assert.deepEqual(await tuning("misma sangría", withInputs("      effort:\n        type: choice\n        options:\n        - low\n        - max\n")), { model: [], effort: ["low", "max"] }, "la lista puede ir a la altura de options");
  assert.deepEqual(await tuning("boolean", withInputs("      model:\n        type: boolean\n")), { model: [], effort: [] }, "otro tipo no acepta un modelo");
  assert.deepEqual(await tuning("choice sin options", withInputs("      model:\n        type: choice\n")), { model: [], effort: [] }, "un choice que no se puede leer no se ofrece");
+ assert.deepEqual(await tuning("lista rota", withInputs("      effort:\n        type: choice\n        options:\n          - low\n          max\n")), { model: [], effort: [] }, "una línea que no es ítem invalida toda la lista");
  const elsewhere = REVIEW_WORKFLOW.replace("          path: out/review.json\n", "          path: out/review.json\n      - uses: anthropics/claude-code-action@v1\n        with:\n          model: claude-sonnet-5-5\n          effort: high\n");
  assert.deepEqual(await tuning("fuera de inputs", elsewhere), { model: [], effort: [] }, "un model: de un step no es un input de dispatch");
 });
