@@ -4,6 +4,14 @@ import { Type, type Static } from "typebox";
 const closed = { additionalProperties: false } as const;
 const text = (maxLength = 256) => Type.String({ minLength: 1, maxLength, pattern: "\\S" });
 const Mode = Type.Union([Type.Literal("ask"), Type.Literal("auto")]);
+// Continuidad decide cuándo ofrecer la siguiente etapa, nunca autoriza sus efectos.
+export const ContinuityModeSchema = Type.Enum(["auto", "ask", "manual"]);
+export const LifecycleContinuitySchema = Type.Object({
+ entry: ContinuityModeSchema, review: ContinuityModeSchema, fix: ContinuityModeSchema,
+ land: ContinuityModeSchema, ship: ContinuityModeSchema,
+}, closed);
+export type LifecycleContinuity = Static<typeof LifecycleContinuitySchema>;
+export type ContinuityMode = Static<typeof ContinuityModeSchema>;
 const Timeout = Type.Integer({ minimum: 60, maximum: 7200 });
 const Count = Type.Integer({ minimum: 0, maximum: 10 });
 const Ref = text();
@@ -58,6 +66,8 @@ const Ship = Type.Union([
 ]);
 export const LifecycleConfigSchema = Type.Object({
  version: Type.Literal(1), repo: Type.String({ maxLength: 200, pattern: "^[a-z0-9_.-]+/[a-z0-9_.-]+$" }),
+ // Ausencia legacy se conserva: no materializar defaults ni cambiar su hash.
+ continuity: Type.Optional(LifecycleContinuitySchema),
  review: Type.Object({ mode: Mode, provider: ReviewProvider, timeoutSeconds: Timeout }, closed),
  corrections: Type.Object({ mode: Mode, maxRounds: Count }, closed),
  land: Type.Object({
