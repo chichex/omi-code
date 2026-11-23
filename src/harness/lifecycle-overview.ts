@@ -1,7 +1,7 @@
 // Qué dice la configuración del lifecycle, en líneas para la pantalla OMI: estado, Review, correcciones, Land, Ship,
 // presupuesto y continuidad. Puro: no lee la KB, no acepta nada ni decide permisos.
 import type { LifecycleReading } from "./lifecycle-kb.ts";
-import type { LifecycleOnboardingState } from "./lifecycle-onboarding.ts";
+import { lifecycleMissing, type LifecycleOnboardingState } from "./lifecycle-onboarding.ts";
 import { reviewProviderText } from "./lifecycle-review-wizard.ts";
 import type { ContinuityMode, LifecycleConfig, LifecycleContinuity, LifecycleTarget } from "./lifecycle-schema.ts";
 import type { LifecycleTrustReading } from "./lifecycle-trust.ts";
@@ -33,7 +33,8 @@ function statusLine({ state, reading, local }: LifecycleOverview, view: Shown | 
 	const revision = view?.source === "kb" ? ` · revisión ${view.hash.slice(0, 8)}` : "";
 	let detail: string;
 	switch (state.status) {
-		case "unconfigured": detail = " · el trabajo termina en el PR draft, sin Review, Land ni Ship"; break;
+		// Sin bloque, termina en el draft; un bloque aceptado sin Ship corre Review y Land.
+		case "unconfigured": detail = lifecycleMissing(state) ? " · el trabajo termina en el PR draft, sin Review, Land ni Ship" : `${revision} · aceptada en esta máquina · Ship sin configurar`; break;
 		case "pending": detail = `${revision} · la KB tiene una revisión sin aceptar en esta máquina`; break;
 		case "configured": case "manual": case "not-applicable": detail = `${revision} · aceptada en esta máquina`; break;
 		// El estado resume «requiere revisión humana»; el bloque inválido de la KB dice qué le falta.
@@ -42,7 +43,8 @@ function statusLine({ state, reading, local }: LifecycleOverview, view: Shown | 
 		default: { const unknown: never = state.status; throw new Error(`Estado lifecycle desconocido: ${String(unknown)}`); }
 	}
 	const deferred = local.kind === "valid" && state.revision !== null && local.record.deferred?.revision === state.revision;
-	return `Estado: ${STATUS[state.status]}${detail}${deferred ? " · postergado (Más adelante)" : ""}`;
+	const label = state.status === "unconfigured" && !lifecycleMissing(state) ? STATUS.configured : STATUS[state.status];
+	return `Estado: ${label}${detail}${deferred ? " · postergado (Más adelante)" : ""}`;
 }
 function targetText(target: LifecycleTarget): string {
 	const provider = target.provider;

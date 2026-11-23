@@ -130,3 +130,16 @@ test("config_doctor: al publicar el draft sólo cuenta un lifecycle que falta, e
 	assert.equal(at(lifecycle("not-applicable", [CONTINUITY]), lifecycleDeferred("lifecycle:abc")), false, "postergado no insiste al publicar");
 	assert.equal(at({ status: "unavailable", revision: null, reason: "KB caída", recommendations: [] }), false);
 });
+
+// Un lifecycle aceptado con Ship sin configurar sí corre Review y Land: no es «sin lifecycle».
+test("config_doctor: un lifecycle aceptado sin Ship no se diagnostica como ausente; la continuidad que falta se ve aparte", () => {
+	const reading: FoundationsReading = { kind: "valid", key, block, hash: foundationsHash(block), perillas };
+	const diagnosis = diagnoseConfig(input(reading, { lifecycle: { state: lifecycle("unconfigured", [CONTINUITY], "lifecycle:abc"), local: { kind: "missing" } } }));
+	const found = item(diagnosis, "lifecycle");
+	assert.equal(found.status, "falta"); assert.doesNotMatch(found.message, /Sin lifecycle/);
+	assert.equal(found.message, "Lifecycle aceptado sin Ship: Review y Land corren, pero la entrega no se verifica.");
+	assert.match(found.resolve, /\/omi-setup/);
+	assert.equal(item(diagnosis, "lifecycle-continuity").status, "falta", "con lifecycle, la continuidad que falta es su propio ítem");
+	assert.deepEqual(diagnosis.lifecycle, { kind: "run", revision: "lifecycle:abc" });
+	assert.equal(stopsAtDraft(diagnosis), true);
+});

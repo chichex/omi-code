@@ -107,6 +107,16 @@ test("omi_view: sin continuidad el trabajo para en el PR draft; Review local y d
 	assert.match(other, /Review: auto · revisor local aislado sobre el diff fijo/); assert.match(other, /Ship: no aplica/);
 });
 
+// Un lifecycle aceptado con Ship sin configurar corre Review y Land: el estado no dice que termina en el PR draft.
+test("omi_view: un lifecycle aceptado sin Ship se ve configurado, con Ship sin configurar y sin «sin lifecycle»", () => {
+	const lines = render(view({ lifecycle: fullConfig((block) => { block.ship = { status: "unconfigured", targets: [] }; }) }));
+	const lifecycle = prose(section(lines, "LIFECYCLE"));
+	assert.match(lifecycle, /^Estado: configurado · revisión [0-9a-f]{8} · aceptada en esta máquina · Ship sin configurar/);
+	assert.match(lifecycle, /Ship: sin configurar/);
+	assert.doesNotMatch(lines.join("\n"), /el trabajo termina en el PR draft|Sin lifecycle/);
+	assert.match(lines.join("\n"), /Lifecycle aceptado sin Ship: Review y Land corren, pero la entrega no se verifica\./);
+});
+
 test("omi_view: el estado del lifecycle distingue sin configurar, pendiente, postergado, no disponible con su motivo e inválido", () => {
 	const missing = render(view({ lifecycle: null }));
 	assert.match(prose(section(missing, "LIFECYCLE")), /^Estado: sin configurar · el trabajo termina en el PR draft, sin Review, Land ni Ship$/);

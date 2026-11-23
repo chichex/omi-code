@@ -13,11 +13,14 @@ import { configureLifecycleReview, reviewProviderSummary } from "./lifecycle-rev
 
 export interface LifecycleOnboardingState { status: "unconfigured" | "pending" | "configured" | "manual" | "not-applicable" | "invalid" | "unavailable"; revision: string | null; reason: string; recommendations: LifecycleRecommendation[] }
 /** Sin config, configurado, no-aplica y no se pudo consultar son estados distintos: KB caída nunca es ausencia ni recomienda. */
+const MISSING = "missing:";
+/** «unconfigured» sale de dos lecturas: sin bloque lifecycle, o un bloque aceptado con Ship sin configurar (Review y Land corren). */
+export const lifecycleMissing = (state: LifecycleOnboardingState): boolean => state.status === "unconfigured" && state.revision?.startsWith(MISSING) === true;
 export function lifecycleOnboardingStatus(reading: LifecycleReading, local: LifecycleTrustReading, detection: LifecycleDetection | undefined): LifecycleOnboardingState {
  const evaluation = evaluateLifecycle(reading, local);
  if (reading.kind === "unavailable") return { status: "unavailable", revision: null, reason: reading.reason, recommendations: [] };
  if (evaluation.status === "invalid") return { status: "invalid", revision: null, reason: "Configuración lifecycle o aceptación local inválida; requiere revisión humana", recommendations: [] };
- if (reading.kind === "missing") return { status: "unconfigured", revision: `missing:${reading.perillas?.id ?? "none"}`, reason: "Sin configuración lifecycle para el repo", recommendations: lifecycleRecommendations(null, detection) };
+ if (reading.kind === "missing") return { status: "unconfigured", revision: `${MISSING}${reading.perillas?.id ?? "none"}`, reason: "Sin configuración lifecycle para el repo", recommendations: lifecycleRecommendations(null, detection) };
  if (reading.kind === "invalid") return { status: "invalid", revision: null, reason: reading.reason, recommendations: [] };
  const recommendations = lifecycleRecommendations(reading.block, detection);
  if (evaluation.status === "pending") return { status: "pending", revision: `lifecycle:${reading.hash}`, reason: "Revisión lifecycle sin aceptar localmente", recommendations };

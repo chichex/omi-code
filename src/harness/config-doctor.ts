@@ -4,7 +4,7 @@
 import type { FoundationsReading } from "../tui/development-foundations.ts";
 import type { TrustInspection } from "./foundations-trust.ts";
 import type { LifecycleDetection } from "./lifecycle-detect.ts";
-import { shouldOfferLifecycleOnboarding, type LifecycleOnboardingState } from "./lifecycle-onboarding.ts";
+import { lifecycleMissing, shouldOfferLifecycleOnboarding, type LifecycleOnboardingState } from "./lifecycle-onboarding.ts";
 import type { LifecycleTrustReading } from "./lifecycle-trust.ts";
 
 export type ConfigStatus = "ok" | "falta" | "formato-anterior" | "pendiente" | "invalido" | "no-disponible" | "postergado" | "no-aplica";
@@ -56,7 +56,7 @@ function lifecycleItems(state: LifecycleOnboardingState): ConfigItem[] {
 	switch (state.status) {
 		case "unavailable": return [item("no-disponible", `No se pudo leer el lifecycle: ${state.reason}.`, "Revisá el login de la KB en /mcp o la red.")];
 		case "invalid": return [item("invalido", `${state.reason}.`, "Revisá el bloque lifecycle de las perillas en la KB o corré omi init --development en una terminal.")];
-		case "unconfigured": return [item("falta", "Sin lifecycle: el trabajo termina en el PR draft, sin Review, Land ni Ship.", LIFECYCLE_RESOLVE)];
+		case "unconfigured": return [item("falta", lifecycleMissing(state) ? "Sin lifecycle: el trabajo termina en el PR draft, sin Review, Land ni Ship." : "Lifecycle aceptado sin Ship: Review y Land corren, pero la entrega no se verifica.", LIFECYCLE_RESOLVE)];
 		case "pending": return [item("pendiente", "La KB tiene una revisión del lifecycle sin aceptar en esta máquina.", "/omi-setup muestra el resumen y pide el sí.")];
 		case "configured": case "manual": case "not-applicable": return [item("ok", `Lifecycle aceptado · Ship ${state.status}.`, `Para cambiarlo: ${LIFECYCLE_RESOLVE}`)];
 		default: { const unknown: never = state.status; throw new Error(`Estado lifecycle desconocido: ${String(unknown)}`); }
@@ -66,7 +66,7 @@ function recommendationItems(state: LifecycleOnboardingState): ConfigItem[] {
 	return state.recommendations.flatMap((recommendation): ConfigItem[] => {
 		switch (recommendation.kind) {
 			// Sin lifecycle, la continuidad es parte del mismo «falta».
-			case "continuity": return state.status === "unconfigured" ? [] : [{ id: "lifecycle-continuity", area: "lifecycle", status: "falta", message: `${recommendation.message}.`, resolve: "/omi-setup configura la entrada y cada etapa de la continuidad." }];
+			case "continuity": return lifecycleMissing(state) ? [] : [{ id: "lifecycle-continuity", area: "lifecycle", status: "falta", message: `${recommendation.message}.`, resolve: "/omi-setup configura la entrada y cada etapa de la continuidad." }];
 			case "review-gha": return [{ id: "lifecycle-review", area: "lifecycle", status: "pendiente", message: `${recommendation.message}.`, resolve: "/omi-setup propone pasar la Review a GitHub Actions." }];
 			default: { const unknown: never = recommendation; throw new Error(`Recomendación desconocida: ${JSON.stringify(unknown)}`); }
 		}
