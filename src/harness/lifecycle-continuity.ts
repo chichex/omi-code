@@ -67,8 +67,11 @@ function reviewOrFix(input: ContinuityInput, s: EnabledLifecycle, config: Lifecy
  const findings = findingStatus(s);
  if (findings === "human") return pause("human-required");
  if (findings === "fix") {
-  if (s.budget.roundsUsed >= config.corrections.maxRounds && !canConfirmCorrected(s)) return pause("rounds-exhausted");
-  return offer(config, "fix", "fix");
+  const fix = offer(config, "fix", "fix");
+  // En la cadena, corrections auto no abre «Ya corregidos» (fixLifecycle): sin rondas no queda acción. A mano sí los confirma.
+  const confirmable = !(fix.kind === "action" && config.corrections.mode === "auto") && canConfirmCorrected(s);
+  if (s.budget.roundsUsed >= config.corrections.maxRounds && !confirmable) return pause("rounds-exhausted");
+  return fix;
  }
  return offer(config, "land", "land");
 }

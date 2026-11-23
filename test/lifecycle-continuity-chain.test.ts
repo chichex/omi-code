@@ -64,6 +64,32 @@ for (const maxRounds of [2, 1] as const) {
  });
 }
 
+test("cadena con corrections auto y rondas agotadas: no pide «Corregir» ni lo intenta, pausa por rondas", async t => {
+ const fixture = await firstRound(block => { block.continuity = { ...autoContinuity, land: "manual", fix: "ask" }; block.corrections = { mode: "auto", maxRounds: 1 }; }, t);
+ const { f, gh } = fixture;
+ // El evaluador aislado de alcance acredita la ronda 1 automática.
+ Reflect.set(f.context, "model", { provider: "mock", id: "mock", contextWindow: 200000 });
+ Reflect.set(f.context.modelRegistry, "streamSimple", (_model: unknown, context: { messages: { content: { text: string }[] }[] }) => ({ result: async () => {
+  const prompt = JSON.parse(context.messages[0]!.content[0]!.text) as { findings: { id: string }[] };
+  return { role: "assistant", provider: "mock", model: "mock", stopReason: "stop", usage: { input: 10, output: 10, totalTokens: 20, cacheRead: 0, cacheWrite: 0 },
+   content: [{ type: "text", text: JSON.stringify({ verdict: "pass", findings: prompt.findings.map(finding => ({ id: finding.id, withinScope: true, risk: "low", humanRequired: false, reason: "Cubrir el valor dentro de la receta aprobada" })) }) }] };
+ } }));
+ await f.command("adopt");
+ assert.equal((await f.state()).phase, "implement", "la cadena abrió la ronda 1");
+ const newHead = await correct(fixture);
+ // La Review del HEAD nuevo vuelve a ver el ya corregido y suma uno nuevo.
+ gh.inline.push({ id: 502, body: "Falta el caso del valor 4", commit_id: newHead, path: "test.cjs", line: 1 });
+ await f.action({ action: "verified" });
+ const state = await f.state(), s = enabled(state);
+ assert.equal(f.remote.pushed.get(f.checkout.branch), newHead, "verified publicó la corrección");
+ assert.equal(reviews(state), 2, "la cadena revisó el HEAD nuevo");
+ assert.equal(s.budget.roundsUsed, 1);
+ assert.equal(f.prompts.filter(p => /^Continuidad · Corregir /.test(p)).length, 1, "sólo la ronda 1 pidió continuar con la corrección");
+ assert.equal(asked(f, 0, /^Ya corregidos/), 0, "en auto no abre el diálogo de disposición");
+ assert.equal(pauseOf(state)?.reason, "rounds-exhausted", "el motivo es el presupuesto de rondas, no un error");
+ assert.deepEqual(gh.mutations, [], "ni ready ni merge");
+});
+
 for (const restored of [false, true] as const) {
  test(`/omi-work fix: «Ya corregidos» total ${restored ? "después de reabrir la sesión pausa con Land como próximo paso" : "con la Review observada en la sesión sigue con Land"}`, async t => {
   const fixture = await firstRound(block => { block.continuity = { ...autoContinuity, fix: "manual" }; block.land.mode = "auto"; }, t);

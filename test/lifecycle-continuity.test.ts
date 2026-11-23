@@ -193,6 +193,22 @@ test("reobserved corrected findings can reach human confirmation without another
  s.evidence = []; pause(i, "rounds-exhausted");
 });
 
+test("rounds exhausted with corrections auto: the chain does not confirm already corrected findings, so it pauses for rounds", () => {
+ const i = reviewed(); finding(i); const s = enabled(i), f = s.ledger[0]!, block = s.pins[0]!.accepted.block;
+ s.evidence.push({ id: "verified1", subjectId: "head1", operationId: "review1", kind: "verification", outcome: "pass", at });
+ f.dispositions.push({ findingId: f.id, subjectId: "old-head", observationHash: f.observations[0]!.hash, observationSequence: 1, reason: "fixed before review", at, status: "corrected", evidenceIds: ["verified1"] });
+ s.budget.roundsUsed = block.corrections.maxRounds;
+ block.corrections.mode = "auto";
+ // En la cadena, corrections auto no abre «Ya corregidos»: sin rondas no hay acción, ni con fix auto ni con ask.
+ for (const fix of ["auto", "ask"] as const) {
+  block.continuity = { ...allAuto, fix };
+  assert.deepEqual(select(i), { kind: "pause", reason: "rounds-exhausted" }, `fix ${fix}`);
+ }
+ // Con fix manual lo corre la persona con /omi-work fix, que sí confirma los ya corregidos.
+ block.continuity = { ...allAuto, fix: "manual" };
+ assert.deepEqual(select(i), { kind: "pause", reason: "manual", stage: "fix" });
+});
+
 test("the reserved coding correction yields without replay; PR continues fix, unknown never does", () => {
  const i = reviewed(), s = enabled(i), r = round(), op = s.operations[0]!;
  s.corrections = [{ ...r, status: "coding" }]; s.stage = "corrections";
