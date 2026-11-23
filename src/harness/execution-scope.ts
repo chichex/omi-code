@@ -1,5 +1,5 @@
 // Ámbito de evidencia actual: conserva historia sin usarla para acreditar una ronda post-PR nueva.
-import type { Workflow } from "./model.ts";
+import type { Phase, Workflow } from "./model.ts";
 import { currentRecoveryWorkspace } from "./workflow-context.ts";
 export function currentCorrection(state: Workflow) {
  return state.version === 2 && state.lifecycle.status === "enabled" ? state.lifecycle.corrections?.findLast(r => r.status !== "pushed" && r.status !== "failed") : undefined;
@@ -28,4 +28,17 @@ export function assertCorrectionHead(state: Workflow, head: string): void {
  const step = state.steps.find(s => s.id === round.stepId), subject = state.lifecycle.subjects.find(s => s.id === round.subjectId);
  const expected = step?.status === "done" ? step.commit : round.startHead ?? subject?.headSha;
  if (!expected || head !== expected) throw new Error("HEAD ajeno a la corrección activa; pausar sin reset/rebase ni sobrescribir humano");
+}
+/** Etapas que sólo existen después del PR draft. */
+const AFTER_DRAFT: ReadonlySet<Phase> = new Set(["done", "review", "land", "ship", "delivered"]);
+/** Una corrección en curso: la ronda en coding o planned, o el fix-forward en su checkout. Una ronda verificada ya no lo es. */
+export function correctionInProgress(state: Workflow): boolean {
+ const round = currentCorrection(state);
+ return round?.status === "coding" || round?.status === "planned" || currentRecoveryWorkspace(state)?.status === "coding";
+}
+/** Después del draft (una etapa posterior o el PR adoptado), los comandos del agente sólo corren durante una corrección en
+ * curso. Si no, un setup sería un camino para disparar workflows por fuera del lifecycle y de sus permisos. */
+export function afterDraft(state: Workflow): boolean {
+ if (correctionInProgress(state)) return false;
+ return AFTER_DRAFT.has(state.phase) || state.version === 2 && state.pullRequest?.ownership === "adopted";
 }
