@@ -52,6 +52,23 @@ for (const failure of ["cancel", "error", "length", "incomplete", "aborted-sessi
 	assert.equal(f.git("branch", "--list"), "* main");
 });
 
+test("development_begin el loader dice qué modelo clasifica", async (t) => {
+	const f = await beginFixture(t); f.remote.requestClassify = JSON.stringify(simple);
+	await f.ask(request);
+	assert.deepEqual(f.remote.loaderTitles, ["Clasificando el pedido con mock"]);
+});
+
+test("development_begin una clasificación sin respuesta corta a tiempo con un aviso en castellano y no crea nada", async (t) => {
+	const f = await beginFixture(t, { classifyTimeoutMs: 30 });
+	f.remote.onClassify = (signal) => new Promise<void>((_resolve, reject) => { signal!.addEventListener("abort", () => reject(signal!.reason), { once: true }); });
+	await f.ask(request);
+	assert.deepEqual(f.remote.created, []); assert.deepEqual(f.prompts, []); assert.deepEqual(f.switches, []); assert.deepEqual(f.continuations, []);
+	const notice = f.current().notices.at(-1) ?? "";
+	assert.match(notice, /mock no respondió la clasificación en 1 s/); assert.match(notice, /\/omi-model/);
+	assert.doesNotMatch(notice, /timed out/i);
+	assert.equal(f.current().levels.at(-1), "error");
+});
+
 test("development_begin cancelar una clasificación iniciada ignora una respuesta válida tardía", async (t) => {
 	const f = await beginFixture(t); let entered!: () => void; let release!: () => void;
 	f.remote.classifyStarted = new Promise<void>((resolve) => { entered = resolve; });

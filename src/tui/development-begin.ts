@@ -20,6 +20,7 @@ import { assertIssueIdentity, discoverLegacyPreparations, readIssuePreparation, 
 import { PHASE_LABELS } from "./development-view.ts";
 import { checkIssueWorktree, mainBaseCommit } from "./workspace/issue-worktree.ts";
 import { carryFoundationsPin } from "./development-foundations.ts";
+import { WaitingLoader } from "./development-loader.ts";
 
 /** Muestra un trabajo largo con opción de cancelar; undefined si la persona canceló. */
 export type BeginLoader = <T>(ctx: ExtensionContext, title: string, work: (signal: AbortSignal) => Promise<T>) => Promise<T | undefined>;
@@ -29,8 +30,11 @@ export interface BeginOptions {
 	triagePolicy: (ctx: ExtensionContext) => Promise<TriagePolicyPin>;
 	/** El sí ya se dio: empezar o retomar el trabajo en la sesión actual. */
 	startHere: () => Promise<void>;
+	/** Sólo tests: el tope de una clasificación. */
+	classifyTimeoutMs?: number;
 }
-const CLASSIFY_TIMEOUT_MS = 90_000;
+// Una clasificación corre sin razonamiento: si no volvió en un minuto, esperar más no ayuda.
+const CLASSIFY_TIMEOUT_MS = 60_000;
 // El número más largo que puede citar el artefacto: el pedido tiene que entrar también con él.
 const MAX_ISSUE = 999_999_999;
 // Formato invisible (bidi, ancho cero, tags) y selectores de variación suplementarios: lo publicado
@@ -39,6 +43,16 @@ const INVISIBLE = /[\p{Cf}\u{E0100}-\u{E01EF}]/u;
 const TAIL = "No se escribe código hasta aprobar la receta. Qué pide tu sí (receta, comandos, push y PR) lo decide Foundations. Termina en un PR draft, sin merge ni deploy.";
 const FRESH = "Se clasifica, se trae main de origin (sólo fast-forward) y se prepara un worktree nuevo desde main, en una sesión nueva, y se explora el código.";
 const shown = (value: string) => value.split("\n").map(safeText).join("\n");
+const modelName = (ctx: ExtensionContext): string => safeText(ctx.model?.name || ctx.model?.id || "el modelo");
+/** Muestra qué modelo clasifica; si se agota el tope, lo dice en castellano en lugar del error del runtime. */
+async function classifying<T>(ctx: ExtensionContext, options: BeginOptions, what: string, work: (signal: AbortSignal) => Promise<T>): Promise<T | undefined> {
+	const limit = options.classifyTimeoutMs ?? CLASSIFY_TIMEOUT_MS; const timeout = AbortSignal.timeout(limit); const model = modelName(ctx);
+	try { return await options.loader(ctx, `${what} con ${model}`, (signal) => work(AbortSignal.any([signal, options.signal, timeout]))); }
+	catch (error) {
+		if (!timeout.aborted || options.signal.aborted) throw error;
+		throw new Error(`${model} no respondió la clasificación en ${Math.max(1, Math.round(limit / 1000))} s. Reintentá, o elegí otro modelo con /omi-model.`, { cause: error });
+	}
+}
 
 /** Sin efectos: lo que el agente o el panel no pueden pedir. Lo usa la tool antes de terminar el turno. */
 export function assertBeginRequest(request: BeginRequest): void {
@@ -136,7 +150,7 @@ export async function beginDevelopment(ctx: ExtensionCommandContext, ticket: Beg
 		await mainBaseCommit(git, options.signal); current();
 		const pin = await options.triagePolicy(ctx); current();
 		if (pin.notice) ctx.ui.notify(shown(pin.notice), "info");
-		const classification = await options.loader(ctx, "Clasificando el pedido antes de crear el issue", (signal) => classifyDevelopmentRequest(ctx, { title, body }, AbortSignal.any([signal, options.signal, AbortSignal.timeout(CLASSIFY_TIMEOUT_MS)])));
+		const classification = await classifying(ctx, options, "Clasificando el pedido", (signal) => classifyDevelopmentRequest(ctx, { title, body }, signal));
 		current();
 		if (!classification) { ctx.ui.notify("Clasificación cancelada: no se creó issue, rama, worktree ni sesión. El chat sigue igual.", "info"); return; }
 		const decision = decideDevelopmentRequest(classification, pin.policy);
@@ -180,7 +194,7 @@ async function prepareAndSwitch(ctx: ExtensionCommandContext, git: GitSnapshot, 
 			if (prior) return prior;
 			// Las etiquetas sólo sirven para un triage nuevo (clasificar y guardarlo): al retomar no se piden.
 			item.labels = await readLabels(git, issueNumber, options);
-			const result = await options.loader(ctx, `Clasificando el issue #${issueNumber}`, (signal) => classifyIssue(ctx, item, issueSource.body, AbortSignal.any([signal, options.signal, AbortSignal.timeout(CLASSIFY_TIMEOUT_MS)])));
+			const result = await classifying(ctx, options, `Clasificando el issue #${issueNumber}`, (signal) => classifyIssue(ctx, item, issueSource.body, signal));
 			return result && { ...result, body: issueSource.body };
 		},
 	});
@@ -199,10 +213,9 @@ async function prepareAndSwitch(ctx: ExtensionCommandContext, git: GitSnapshot, 
 }
 
 export const borderedLoader: BeginLoader = async <T>(ctx: ExtensionContext, title: string, work: (signal: AbortSignal) => Promise<T>): Promise<T | undefined> => {
-	const { BorderedLoader } = await import("@earendil-works/pi-coding-agent");
 	let failure: unknown; let value: T | undefined;
 	await ctx.ui.custom<void>((tui, theme, _keys, done) => {
-		const loader = new BorderedLoader(tui, theme, `${title} · Esc cancelar`);
+		const loader = new WaitingLoader(tui, theme, title);
 		let finished = false; const finish = () => { if (!finished) { finished = true; done(); } };
 		loader.onAbort = finish;
 		work(loader.signal).then((result) => { if (!loader.signal.aborted) value = result; finish(); }, (error) => { if (!loader.signal.aborted) failure = error; finish(); });

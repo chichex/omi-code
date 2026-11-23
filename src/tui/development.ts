@@ -97,6 +97,7 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 				outcome = await beginDevelopment(ctx, { origin: ticket.origin, request: ticket.request }, {
 					runner: session.runner, offline: session.offline, signal: session.lifecycle.signal, now: session.now, loader: deps.loader ?? borderedLoader,
 					sessionDir: cli.sessionDir, startHere: () => startHere(ctx), triagePolicy: (context) => session.foundations.triage(context),
+					...(deps.classifyTimeoutMs === undefined ? {} : { classifyTimeoutMs: deps.classifyTimeoutMs }),
 					// Foundations se decide recién acá: después de las guardas sin efectos y antes del sí del arranque.
 					confirm: async (context, title, description) => {
 						if ((await session.foundations.policy(context)).politica.arranque !== "auto") return session.confirm(context, title, description);
