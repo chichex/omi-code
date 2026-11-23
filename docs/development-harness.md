@@ -676,7 +676,7 @@ El agente ve lo mismo en su contexto, mientras falte algo que el setup corre, ta
 
 Al abrir la sesión, un detector lee en segundo plano los workflows, scripts, manifiestos y el vínculo `.omi/project.json` del checkout. Sólo lee: no ejecuta scripts ni copia comandos, URLs o secretos.
 
-El detector marca un workflow como Review `omi-review-v1` sólo si tiene todos los marcadores que exige el runtime: `workflow_dispatch`, los inputs `expected_head_sha` y `correlation_id`, un `run-name` con `omi-review-v1 PR #`, `inputs.pr` e `inputs.correlation_id`, y el artefacto `omi-review-v1-${{ inputs.correlation_id }}-${{ github.run_id }}-${{ github.run_attempt }}` con `review.json`. En este repo lo cumple `claude-review.yml`. Es una propuesta: el runtime igual valida run, artefacto y SHA. Un workflow de Review nunca se propone como destino de Ship.
+El detector marca un workflow como Review `omi-review-v1` sólo si tiene todos los marcadores que exige el runtime: los inputs `expected_head_sha` y `correlation_id` bajo `on.workflow_dispatch.inputs` (un `workflow_dispatch` comentado o una clave con ese nombre en un step no cuentan), un `run-name` con `omi-review-v1 PR #`, `inputs.pr` e `inputs.correlation_id`, y el artefacto `omi-review-v1-${{ inputs.correlation_id }}-${{ github.run_id }}-${{ github.run_attempt }}` con `review.json`. En este repo lo cumple `claude-review.yml`. Es una propuesta: el runtime igual valida run, artefacto y SHA. Un workflow de Review nunca se propone como destino de Ship.
 
 El [setup](#setup-de-lo-que-falta) ofrece el mismo wizard que `omi init --development` si el repo no tiene lifecycle en la KB, si tiene Ship sin configurar, si la revisión está pendiente de aceptar o si hay **recomendaciones**:
 

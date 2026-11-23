@@ -189,6 +189,10 @@ test("detector reconoce omi-review-v1 sólo con todos los marcadores del runtime
   ["sin-attempt.yml", REVIEW_WORKFLOW.replace("-${{ github.run_attempt }}", "")],
   ["sin-recibo.yml", REVIEW_WORKFLOW.replace("review.json", "salida.json")],
   ["sin-dispatch.yml", REVIEW_WORKFLOW.replace("workflow_dispatch", "pull_request")],
+  // `gh workflow run` no puede disparar un workflow_dispatch comentado.
+  ["dispatch-comentado.yml", REVIEW_WORKFLOW.replace("on:\n  workflow_dispatch:\n", "on:\n  pull_request:\n  # workflow_dispatch:\n")],
+  // Una clave con el nombre del input en un step no es un input del dispatch.
+  ["head-fuera-de-inputs.yml", REVIEW_WORKFLOW.replace(/      expected_head_sha:\n        required: false\n/, "").replace("          path: out/review.json\n", "          path: out/review.json\n          expected_head_sha: x\n")],
  ];
  for (const [file, text] of partial) assert.notEqual(text, REVIEW_WORKFLOW, file);
  const g = await fixture(t, Object.fromEntries(partial.map(([file, text]) => [`.github/workflows/${file}`, text])));

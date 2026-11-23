@@ -27,11 +27,17 @@ function options(lines: string[], found: { value: string; body: Range }): string
  const items = lines.slice(found.body.from, found.body.to).filter(meaningful).map((line) => /^\s*-\s+(.*)$/.exec(line)?.[1]);
  return items.length && items.every((item) => item !== undefined) ? items.map((item) => scalar(item!)) : null;
 }
+/** El input `name` bajo `on.workflow_dispatch.inputs`; null si no está ahí (un comentario o la clave de un step no cuentan). */
+function dispatchInput(lines: string[], name: string): { value: string; body: Range } | null {
+ const on = entry(lines, { from: 0, to: lines.length }, "on"), dispatch = on && entry(lines, on.body, "workflow_dispatch");
+ const inputs = dispatch && entry(lines, dispatch.body, "inputs");
+ return inputs && entry(lines, inputs.body, name);
+}
+/** El workflow se puede disparar con `gh workflow run` y declara el input `name`. */
+export const declaresDispatchInput = (text: string, name: string): boolean => dispatchInput(text.split(/\r?\n/), name) !== null;
 /** De `allowed`, los valores que el input `name` de workflow_dispatch acepta. Sin el input, ninguno; un string, todos. */
 export function dispatchInputValues<T extends string>(text: string, name: string, allowed: readonly T[]): T[] {
- const lines = text.split(/\r?\n/);
- const on = entry(lines, { from: 0, to: lines.length }, "on"), dispatch = on && entry(lines, on.body, "workflow_dispatch");
- const inputs = dispatch && entry(lines, dispatch.body, "inputs"), input = inputs && entry(lines, inputs.body, name);
+ const lines = text.split(/\r?\n/), input = dispatchInput(lines, name);
  if (!input || input.value) return [];
  const type = entry(lines, input.body, "type")?.value ?? "string";
  if (type === "string") return [...allowed];

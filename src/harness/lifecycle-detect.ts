@@ -5,7 +5,7 @@ import { lstat, open, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { parseProjectLink } from "../project/link.ts";
 import { REVIEW_ARTIFACT_FILE, REVIEW_CONTRACT, REVIEW_RUN_PREFIX } from "./gha-review-contract.ts";
-import { dispatchInputValues } from "./lifecycle-detect-inputs.ts";
+import { declaresDispatchInput, dispatchInputValues } from "./lifecycle-detect-inputs.ts";
 import { GhaReviewEffortSchema, GhaReviewModelSchema, type GhaReviewEffort, type GhaReviewModel } from "./lifecycle-schema.ts";
 const MAX_BYTES = 256 * 1024, MAX_WORKFLOWS = 50, MAX_SCRIPTS = 100;
 const MANIFESTS = ["Cargo.toml", "Dockerfile", "Makefile", "go.mod", "package.json", "pyproject.toml"];
@@ -28,13 +28,12 @@ async function readBounded(root: string, path: string, skipped: string[], signal
 }
 const literal = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const expression = (name: string) => `\\$\\{\\{\\s*${literal(name)}\\s*\\}\\}`;
-// Lo que el host exige: inputs fuertes, run-name correlacionado y artefacto `review.json` por run y attempt.
+// Lo que el host exige: inputs fuertes bajo `on.workflow_dispatch`, run-name correlacionado y artefacto `review.json` por run y attempt.
 const REVIEW_ARTIFACT = new RegExp(`${literal(REVIEW_CONTRACT)}-${expression("inputs.correlation_id")}-${expression("github.run_id")}-${expression("github.run_attempt")}`);
 function reviewContract(text: string): typeof REVIEW_CONTRACT | null {
- const input = (name: string) => new RegExp(`^[ \\t]+${name}[ \\t]*:`, "m").test(text);
  const runName = /^run-name[ \t]*:(.*)$/m.exec(text)?.[1] ?? "";
  const correlated = runName.includes(REVIEW_RUN_PREFIX) && /\binputs\.pr\b/.test(runName) && /\binputs\.correlation_id\b/.test(runName);
- const ok = /\bworkflow_dispatch\b/.test(text) && input("expected_head_sha") && input("correlation_id") && correlated && REVIEW_ARTIFACT.test(text) && text.includes(REVIEW_ARTIFACT_FILE);
+ const ok = declaresDispatchInput(text, "expected_head_sha") && declaresDispatchInput(text, "correlation_id") && correlated && REVIEW_ARTIFACT.test(text) && text.includes(REVIEW_ARTIFACT_FILE);
  return ok ? REVIEW_CONTRACT : null;
 }
 async function workflows(root: string, skipped: string[], signal: AbortSignal): Promise<LifecycleDetection["workflows"]> {
