@@ -22,12 +22,13 @@ const git = (root: string, ...args: string[]) => execFileSync("git", args, { cwd
 /** La rama base que el wizard del lifecycle lee de origin/HEAD. */
 const originHead = (root: string) => git(root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
 
-async function fixture(t: TestContext, options: { body?: string | null; available?: string; args?: readonly string[] } = {}) {
+/** `head: false`: origin sin origin/HEAD, como un `git remote add` sin set-head. */
+async function fixture(t: TestContext, options: { body?: string | null; available?: string; args?: readonly string[]; head?: boolean } = {}) {
 	const kb = memoryKb({ products: ["repo"] }); if (options.body) kb.perillas("repo", options.body);
 	if (options.available) kb.available = options.available;
 	const background: Promise<void>[] = [];
 	const f = await developmentFixture(t, { kb, ...(options.args ? { args: options.args } : {}), deps: { background: (work) => { background.push(work); } } });
-	originHead(f.checkout.root);
+	if (options.head !== false) originHead(f.checkout.root);
 	/** Una sesión interactiva nueva del mismo checkout: otra instancia de la extensión, sin mensajes. */
 	const session = async (reason: string) => {
 		Reflect.set(f.context, "sessionManager", SessionManager.create(f.checkout.root, join(f.home, `sessions-${reason}-${background.length}-${f.asked.length}`)));
@@ -110,6 +111,20 @@ test("config_setup: «Más adelante» de Foundations no se repite en esa revisi�
 	assert.deepEqual(titles(f).slice(2), ["Ship de"], "la revisión postergada de Foundations no vuelve a salir sola");
 	await f.run("omi-setup");
 	assert.equal(titles(f)[3], "Foundations de", "el comando sí ofrece lo postergado");
+	assert.equal(saves(f.kb), 0);
+});
+
+test("config_setup: sin origin/HEAD el setup automático omite el lifecycle sin avisar en cada sesión; /omi-setup dice cómo resolverlo", async (t) => {
+	const f = await fixture(t, { head: false });
+	f.uiControl.questions = (screen) => /Foundations de/.test(screen) ? ["2"] : [KEYS.esc];
+	const warnings = () => f.messages.filter((message) => /falta la rama base de origin/.test(message)).length;
+	await f.session("startup");
+	assert.deepEqual(titles(f), ["Foundations de"], "Foundations se ofrece igual"); assert.equal(warnings(), 0, "el arranque no avisa");
+	await f.session("new");
+	assert.deepEqual(titles(f), ["Foundations de"], "Foundations quedó postergado y el lifecycle no se puede configurar"); assert.equal(warnings(), 0, "otra sesión nueva tampoco");
+	await f.run("omi-setup");
+	assert.equal(warnings(), 1, "a pedido sí dice qué falta");
+	assert.match(f.messages.find((message) => /falta la rama base de origin/.test(message)) ?? "", /git remote set-head origin --auto/);
 	assert.equal(saves(f.kb), 0);
 });
 

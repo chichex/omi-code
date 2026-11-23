@@ -73,6 +73,8 @@ export class ConfigSetup {
 				foundations: trigger !== "publication" && fresh("foundations", diagnosis.foundations) ? diagnosis.foundations : { kind: "none" },
 				lifecycle: (trigger !== "publication" || stopsAtDraft(diagnosis)) && fresh("lifecycle", diagnosis.lifecycle) ? diagnosis.lifecycle : { kind: "none" },
 			};
+			// Sin rama base el wizard no puede correr: el aviso es de /omi-setup, no de cada sesión.
+			if (parts.lifecycle.kind !== "none" && !await this.base(ctx)) parts.lifecycle = { kind: "none" };
 			if (parts.foundations.kind === "none" && parts.lifecycle.kind === "none") return;
 			// Al abrir una sesión, no interrumpe un turno que ya empezó ni una sesión que cambió mientras leía.
 			if (trigger === "session" && (session.state || !ctx.isIdle() || ctx.hasPendingMessages())) return;
@@ -135,9 +137,7 @@ export class ConfigSetup {
 	}
 	/** true si guardó en la KB. */
 	private async lifecycle(ctx: ExtensionContext, key: TrustKey, detection: LifecycleDetection | undefined, trigger: SetupTrigger): Promise<boolean> {
-		const session = this.session, signal = session.lifecycle.signal;
-		const head = await session.runner.run("git", ["-c", "core.fsmonitor=false", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], { cwd: ctx.cwd, signal });
-		const base = head.code === 0 ? head.stdout.trim().replace(/^origin\//, "") : "";
+		const session = this.session, signal = session.lifecycle.signal, base = await this.base(ctx);
 		if (!base) { ctx.ui.notify("Para configurar el lifecycle falta la rama base de origin: corré git remote set-head origin --auto y volvé con /omi-setup. No se guardó nada.", "warning"); return false; }
 		const outcome = await runLifecycleOnboarding({ kb: session.kb, key, cwd: ctx.cwd, base, trustDir: lifecycleTrustDir(session.io.homeDir), detection: detection ?? await detectLifecycle(ctx.cwd, signal),
 			ask: (batch) => askQuestions(ctx, batch, { signal }), now: session.now, signal });
@@ -145,6 +145,11 @@ export class ConfigSetup {
 		ctx.ui.notify(LIFECYCLE[outcome.kind], "info");
 		if (outcome.kind === "saved" && trigger === "publication") this.adoptHint(ctx, outcome.pin.block);
 		return outcome.kind === "saved";
+	}
+	/** La rama de origin/HEAD, o "" si el remoto no la tiene. */
+	private async base(ctx: ExtensionContext): Promise<string> {
+		const head = await this.session.runner.run("git", ["-c", "core.fsmonitor=false", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], { cwd: ctx.cwd, signal: this.session.lifecycle.signal });
+		return head.code === 0 ? head.stdout.trim().replace(/^origin\//, "") : "";
 	}
 	/** Guardar no adopta el draft ya publicado: se dice cómo seguir, sin inventar efectos. */
 	private adoptHint(ctx: ExtensionContext, block: LifecycleConfig): void {
