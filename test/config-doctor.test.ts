@@ -1,7 +1,7 @@
 // Diagnóstico puro de lo que falta configurar: sin I/O, sólo lecturas que ya hizo la sesión.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { configLines, diagnoseConfig, FORMATO_ANTERIOR, stopsAtDraft, type ConfigDoctorInput } from "../src/harness/config-doctor.ts";
+import { configItemLines, configLines, diagnoseConfig, FORMATO_ANTERIOR, stopsAtDraft, type ConfigDoctorInput } from "../src/harness/config-doctor.ts";
 import { foundationsHash, type FoundationsBlock } from "../src/harness/foundations.ts";
 import type { TrustInspection, TrustRecord } from "../src/harness/foundations-trust.ts";
 import type { LifecycleOnboardingState } from "../src/harness/lifecycle-onboarding.ts";
@@ -103,7 +103,9 @@ test("config_doctor: lifecycle sin configurar, pendiente, sin continuidad o con 
 	const legacy = run(lifecycle("not-applicable", [CONTINUITY, REVIEW]));
 	assert.equal(item(legacy, "lifecycle").status, "ok"); assert.equal(item(legacy, "lifecycle-continuity").status, "falta");
 	assert.match(item(legacy, "lifecycle-continuity").message, /Continuidad sin configurar/);
-	assert.equal(item(legacy, "lifecycle-review").status, "pendiente"); assert.match(item(legacy, "lifecycle-review").message, /claude-review\.yml/);
+	assert.equal(item(legacy, "lifecycle-review").status, "recomendado"); assert.match(item(legacy, "lifecycle-review").message, /claude-review\.yml/);
+	assert.match(configItemLines(item(legacy, "lifecycle-review"))[0], /^△ Lifecycle · recomendado: /, "una recomendación no se rotula como pendiente de aceptar");
+	assert.deepEqual(run(lifecycle("configured", [REVIEW])).lifecycle, { kind: "run", revision: "lifecycle:abc" }, "la Review GHA recomendada sola también corre el wizard");
 	assert.deepEqual(legacy.lifecycle, { kind: "run", revision: "lifecycle:abc" });
 	const done = run(lifecycle("configured"));
 	assert.equal(item(done, "lifecycle").status, "ok"); assert.deepEqual(done.lifecycle, { kind: "none" });
@@ -116,7 +118,7 @@ test("config_doctor: lifecycle sin configurar, pendiente, sin continuidad o con 
 test("config_doctor: proyecto OMI sin vincular es sólo informativo y nunca una parte del setup", () => {
 	const reading: FoundationsReading = { kind: "valid", key, block, hash: foundationsHash(block), perillas };
 	const unlinked = diagnoseConfig(input(reading, { omi: null }));
-	assert.equal(item(unlinked, "omi-project").status, "falta"); assert.match(item(unlinked, "omi-project").resolve, /omi init/);
+	assert.equal(item(unlinked, "omi-project").status, "opcional"); assert.match(configItemLines(item(unlinked, "omi-project"))[0], /^· Proyecto OMI · opcional: /); assert.match(item(unlinked, "omi-project").resolve, /omi init/);
 	assert.match(item(unlinked, "omi-project").resolve, /no se corre solo/);
 	assert.deepEqual([unlinked.foundations, unlinked.lifecycle], [{ kind: "none" }, { kind: "none" }]);
 	assert.equal(item(diagnoseConfig(input(reading, { omi: "invalid" })), "omi-project").status, "invalido");
@@ -128,7 +130,7 @@ test("config_doctor: las líneas muestran área, estado y cómo resolver, sin re
 	const lines = configLines(diagnoseConfig(input({ kind: "missing", key, perillas }, { omi: null, lifecycle: { state: lifecycle("unconfigured", [CONTINUITY], "missing:doc-7"), local: { kind: "missing" } } })));
 	const text = lines.join("\n");
 	assert.match(text, /Foundations · falta: Sin Foundations para acme\/app/);
-	assert.match(text, /Lifecycle · falta:/); assert.match(text, /Proyecto OMI · falta:/);
+	assert.match(text, /Lifecycle · falta:/); assert.match(text, /Proyecto OMI · opcional:/);
 	assert.match(text, /\/omi-setup/); assert.doesNotMatch(text, /\|/);
 	assert.ok(lines.every((line) => line.length > 0));
 });

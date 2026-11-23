@@ -648,7 +648,7 @@ El wizard del lifecycle necesita la rama base de `origin/HEAD`. Sin ella, el dis
 
 Cada parte tiene **Más adelante**, que se guarda por revisión: Foundations en su registro local y el lifecycle en su aceptación. No se vuelve a ofrecer solo hasta que esa revisión cambie; `/omi-setup` corre también lo postergado. Un bloque de Foundations inválido es otra revisión si cambia su texto, aunque el motivo sea el mismo; editar otra parte de las perillas no la cambia. **Esc** corta el setup: no guarda nada de lo que faltaba. Guardar escribe sólo la KB y la aceptación local: no ejecuta comandos, workflows, merge ni deploy.
 
-Cada ítem tiene un estado: `ok`, `falta`, `formato anterior`, `pendiente`, `inválido`, `no disponible`, `postergado` o `no aplica`. Sin nada para correr, `/omi-setup` muestra el diagnóstico. Ejemplo, sin login en la KB:
+Cada ítem tiene un estado: `ok`, `falta`, `formato anterior`, `pendiente` (una revisión sin aceptar), `recomendado` (△, por ejemplo una Review por GitHub Actions disponible: el setup la propone), `opcional` (·, sólo informa: el proyecto OMI sin vincular), `inválido`, `no disponible`, `postergado` o `no aplica`. Sin nada para correr, `/omi-setup` muestra el diagnóstico. Ejemplo, sin login en la KB:
 
 ```text
 Configuración de OMI:
@@ -656,7 +656,7 @@ Configuración de OMI:
   Revisá el login de la KB en /mcp o la red, y volvé con /omi-setup.
 ? Lifecycle · no disponible: No se pudo leer el lifecycle: la KB no conectó a tiempo (sin login en /mcp, sin red o lenta).
   Revisá el login de la KB en /mcp o la red.
-✗ Proyecto OMI · falta: Sin proyecto OMI vinculado: Ship no propone destinos OMI.
+· Proyecto OMI · opcional: Sin proyecto OMI vinculado: Ship no propone destinos OMI.
   omi init en una terminal lo vincula y crea recursos en OMI: no se corre solo.
 Nada para configurar desde acá.
 ```

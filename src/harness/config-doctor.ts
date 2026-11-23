@@ -10,7 +10,7 @@ import type { LifecycleDetection } from "./lifecycle-detect.ts";
 import { lifecycleMissing, shouldOfferLifecycleOnboarding, type LifecycleOnboardingState } from "./lifecycle-onboarding.ts";
 import type { LifecycleTrustReading } from "./lifecycle-trust.ts";
 
-export type ConfigStatus = "ok" | "falta" | "formato-anterior" | "pendiente" | "invalido" | "no-disponible" | "postergado" | "no-aplica";
+export type ConfigStatus = "ok" | "falta" | "formato-anterior" | "pendiente" | "recomendado" | "opcional" | "invalido" | "no-disponible" | "postergado" | "no-aplica";
 export type ConfigArea = "foundations" | "lifecycle" | "omi-project";
 export interface ConfigItem { id: "foundations" | "lifecycle" | "lifecycle-continuity" | "lifecycle-review" | "omi-project"; area: ConfigArea; status: ConfigStatus; message: string; resolve: string }
 /** `run`: el setup la ofrece solo. `deferred`: la persona dijo «Más adelante» a esa revisión; sólo /omi-setup la corre. */
@@ -27,7 +27,7 @@ export const FORMATO_ANTERIOR = "Tu configuración de Foundations es de un forma
 const NONE: SetupPart = { kind: "none" };
 const LATER = " Postergado para esta revisión.";
 // Estados que el setup resuelve corriendo su parte; el resto informa.
-const RESOLVABLE: readonly ConfigStatus[] = ["falta", "formato-anterior", "pendiente", "invalido"];
+const RESOLVABLE: readonly ConfigStatus[] = ["falta", "formato-anterior", "pendiente", "recomendado", "invalido"];
 
 type FoundationsItem = Omit<ConfigItem, "id" | "area">;
 /** Un bloque inválido se identifica por el texto de sus bloques omi-foundations: el motivo se repite entre bloques
@@ -76,7 +76,7 @@ function recommendationItems(state: LifecycleOnboardingState): ConfigItem[] {
 		switch (recommendation.kind) {
 			// Sin lifecycle, la continuidad es parte del mismo «falta».
 			case "continuity": return lifecycleMissing(state) ? [] : [{ id: "lifecycle-continuity", area: "lifecycle", status: "falta", message: `${recommendation.message}.`, resolve: "/omi-setup configura la entrada y cada etapa de la continuidad." }];
-			case "review-gha": return [{ id: "lifecycle-review", area: "lifecycle", status: "pendiente", message: `${recommendation.message}.`, resolve: "/omi-setup propone pasar la Review a GitHub Actions." }];
+			case "review-gha": return [{ id: "lifecycle-review", area: "lifecycle", status: "recomendado", message: `${recommendation.message}.`, resolve: "/omi-setup propone pasar la Review a GitHub Actions." }];
 			default: { const unknown: never = recommendation; throw new Error(`Recomendación desconocida: ${JSON.stringify(unknown)}`); }
 		}
 	});
@@ -95,7 +95,7 @@ function omiItem(omi: ConfigDoctorInput["omi"]): ConfigItem {
 	const item = (status: ConfigStatus, message: string, resolve: string): ConfigItem => ({ id: "omi-project", area: "omi-project", status, message, resolve });
 	if (omi === undefined) return item("no-disponible", "No se pudo leer .omi/project.json.", "Se vuelve a leer al abrir la sesión.");
 	// Vincular crea recursos en omi-api: sólo se informa, nunca se corre solo.
-	if (omi === null) return item("falta", "Sin proyecto OMI vinculado: Ship no propone destinos OMI.", "omi init en una terminal lo vincula y crea recursos en OMI: no se corre solo.");
+	if (omi === null) return item("opcional", "Sin proyecto OMI vinculado: Ship no propone destinos OMI.", "omi init en una terminal lo vincula y crea recursos en OMI: no se corre solo.");
 	if (omi === "invalid") return item("invalido", ".omi/project.json no es válido: Ship no propone destinos OMI.", "Revisalo o volvé a correr omi init en una terminal.");
 	return item("ok", `Proyecto OMI ${omi.organization}/${omi.project} · ${omi.services.join(", ") || "sin servicios"}.`, "");
 }
@@ -111,8 +111,8 @@ export function stopsAtDraft(diagnosis: ConfigDiagnosis): boolean {
 }
 
 const AREAS: Record<ConfigArea, string> = { foundations: "Foundations", lifecycle: "Lifecycle", "omi-project": "Proyecto OMI" };
-const LABELS: Record<ConfigStatus, string> = { ok: "ok", falta: "falta", "formato-anterior": "formato anterior", pendiente: "pendiente", invalido: "inválido", "no-disponible": "no disponible", postergado: "postergado", "no-aplica": "no aplica" };
-const MARKS: Record<ConfigStatus, string> = { ok: "✓", falta: "✗", "formato-anterior": "✗", pendiente: "△", invalido: "✗", "no-disponible": "?", postergado: "…", "no-aplica": "·" };
+const LABELS: Record<ConfigStatus, string> = { ok: "ok", falta: "falta", "formato-anterior": "formato anterior", pendiente: "pendiente", recomendado: "recomendado", opcional: "opcional", invalido: "inválido", "no-disponible": "no disponible", postergado: "postergado", "no-aplica": "no aplica" };
+const MARKS: Record<ConfigStatus, string> = { ok: "✓", falta: "✗", "formato-anterior": "✗", pendiente: "△", recomendado: "△", opcional: "·", invalido: "✗", "no-disponible": "?", postergado: "…", "no-aplica": "·" };
 /** Un ítem: marca, área, estado y mensaje; debajo, cómo resolverlo si hace falta. También lo usa la pantalla OMI.
  * Los slugs de .omi/project.json y los motivos de la KB son datos externos: sus controles se ven escapados, nunca llegan crudos al terminal. */
 export function configItemLines(i: ConfigItem): [string, ...string[]] {

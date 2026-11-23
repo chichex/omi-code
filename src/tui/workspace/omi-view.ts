@@ -18,7 +18,7 @@ export interface OmiSnapshot {
 }
 type Tone = Parameters<Theme["fg"]>[0];
 const HELP = "r actualizar · s configurar lo que falta · f editar Foundations · Esc chat";
-const TONES: Record<ConfigStatus, Tone> = { ok: "success", falta: "warning", "formato-anterior": "warning", pendiente: "warning", invalido: "error", "no-disponible": "muted", postergado: "muted", "no-aplica": "dim" };
+const TONES: Record<ConfigStatus, Tone> = { ok: "success", falta: "warning", "formato-anterior": "warning", pendiente: "warning", recomendado: "accent", opcional: "dim", invalido: "error", "no-disponible": "muted", postergado: "muted", "no-aplica": "dim" };
 
 /** Parte cada línea al ancho sin cortar nada: lo partido sigue dos columnas más adentro que su sangría. */
 function wrapped(lines: readonly string[], width: number): string[] {

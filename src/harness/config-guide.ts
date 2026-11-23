@@ -3,7 +3,7 @@
 import type { ConfigDiagnosis, ConfigItem } from "./config-doctor.ts";
 
 // Lo que /omi-setup resuelve, también lo postergado: el proyecto OMI y lo no disponible no son del setup.
-const MISSING: readonly ConfigItem["status"][] = ["falta", "formato-anterior", "pendiente", "invalido", "postergado"];
+const MISSING: readonly ConfigItem["status"][] = ["falta", "formato-anterior", "pendiente", "recomendado", "invalido", "postergado"];
 const SETUP = "Lo configura la persona con /omi-setup (Foundations y lifecycle). Si pide algo que lo necesita, por ejemplo seguir con Review, Land o Ship después del PR draft, pasale ese comando tal cual. No lo configures vos: no edites la KB ni las perillas.";
 
 /** Vacío sin diagnóstico o si el setup no tiene nada que correr. */

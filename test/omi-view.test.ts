@@ -165,7 +165,7 @@ test("omi_view: FALTA CONFIGURAR lista el diagnóstico con cómo resolverlo; con
 	assert.ok(missing.includes(" ✗ Foundations · falta: Sin Foundations para test/repo: rige el default, nada pregunta."));
 	assert.ok(missing.includes("   Con /omi-setup armás las reglas y políticas; sólo Guardar escribe."));
 	assert.ok(missing.some((line) => line.startsWith(" ✗ Lifecycle · falta: Sin lifecycle")));
-	assert.ok(missing.some((line) => line.startsWith(" ✗ Proyecto OMI · falta")));
+	assert.ok(missing.some((line) => line.startsWith(" · Proyecto OMI · opcional")));
 	assert.ok(!missing.some((line) => line.includes("✓")), "lo que está bien no se lista como faltante");
 	assert.deepEqual(section(render(view()), "FALTA CONFIGURAR"), [" Todo configurado.", ""]);
 });

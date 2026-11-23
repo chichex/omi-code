@@ -62,7 +62,7 @@ test("config_setup: /omi-setup sin nada para correr muestra el diagnóstico; la 
 	assert.equal(f.asked.length, 0); assert.equal(f.foundationsScreens.length, 0);
 	const shown = f.messages.at(-1) ?? "";
 	assert.match(shown, /Foundations · no disponible: No se pudo leer Foundations: la KB no conectó a tiempo/);
-	assert.match(shown, /Lifecycle · no disponible/); assert.match(shown, /Proyecto OMI · falta: Sin proyecto OMI vinculado/);
+	assert.match(shown, /Lifecycle · no disponible/); assert.match(shown, /Proyecto OMI · opcional: Sin proyecto OMI vinculado/);
 	assert.doesNotMatch(shown, /Foundations · falta/);
 	const offline = await fixture(t, { args: ["--offline"] }); await offline.run("omi-setup");
 	assert.equal(offline.asked.length, 0); assert.match(offline.messages.at(-1) ?? "", /Sin red/);
