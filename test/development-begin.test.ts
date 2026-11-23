@@ -60,7 +60,12 @@ test("development_begin el loader dice qué modelo clasifica", async (t) => {
 
 test("development_begin una clasificación sin respuesta corta a tiempo con un aviso en castellano y no crea nada", async (t) => {
 	const f = await beginFixture(t, { classifyTimeoutMs: 30 });
-	f.remote.onClassify = (signal) => new Promise<void>((_resolve, reject) => { signal!.addEventListener("abort", () => reject(signal!.reason), { once: true }); });
+	// Como una petición HTTP real, la espera mantiene vivo el proceso: el timer de AbortSignal.timeout no lo hace,
+	// y sin esto Node 22 termina el test antes de que el tope corte.
+	f.remote.onClassify = (signal) => new Promise<void>((_resolve, reject) => {
+		const alive = setInterval(() => {}, 1000);
+		signal!.addEventListener("abort", () => { clearInterval(alive); reject(signal!.reason); }, { once: true });
+	});
 	await f.ask(request);
 	assert.deepEqual(f.remote.created, []); assert.deepEqual(f.prompts, []); assert.deepEqual(f.switches, []); assert.deepEqual(f.continuations, []);
 	const notice = f.current().notices.at(-1) ?? "";
