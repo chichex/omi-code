@@ -8,7 +8,7 @@ import { readLifecycleTrust, writeLifecycleTrust, type LifecycleAcceptance, type
 import type { LifecycleDetection } from "./lifecycle-detect.ts";
 import { configureLifecycleContinuity, CONTINUITY_NOTICE } from "./lifecycle-wizard.ts";
 import { REVIEW_CONTRACT } from "./gha-review-contract.ts";
-import { lifecycleRecommendations, reviewWorkflows, type LifecycleRecommendation } from "./lifecycle-recommendations.ts";
+import { lifecycleRecommendations, reviewCandidates, type LifecycleRecommendation } from "./lifecycle-recommendations.ts";
 import { configureLifecycleReview, reviewProviderSummary } from "./lifecycle-review-wizard.ts";
 
 export interface LifecycleOnboardingState { status: "unconfigured" | "pending" | "configured" | "manual" | "not-applicable" | "invalid" | "unavailable"; revision: string | null; reason: string; recommendations: LifecycleRecommendation[] }
@@ -105,7 +105,7 @@ export async function runLifecycleOnboarding(deps: LifecycleOnboardingDeps): Pro
   if (answers.status === "cancelled") return { kind: "cancelled" };
   block = withShip(current, shipTarget(answers.answers, options, current.land.base));
  } else throw new Error("Respuesta de onboarding inválida; no se guardó nada");
- const reviewed = await configureLifecycleReview(block, existing?.review.provider ?? null, reviewWorkflows(deps.detection), deps.ask);
+ const reviewed = await configureLifecycleReview(block, existing?.review.provider ?? null, reviewCandidates(deps.detection), deps.ask);
  if (!reviewed) return { kind: "cancelled" };
  const configured = await configureLifecycleContinuity(reviewed, deps.ask);
  if (!configured) return { kind: "cancelled" };

@@ -64,6 +64,12 @@ jobs:
           name: omi-review-v1-\${{ inputs.correlation_id }}-\${{ github.run_id }}-\${{ github.run_attempt }}
           path: out/review.json
 `;
+const CORRELATION_INPUT = "      correlation_id:\n        required: false\n";
+const MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1", "claude-haiku-4-5"], EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+/** El mismo workflow con inputs de dispatch extra después de correlation_id, con la sangría de `inputs`. */
+const withInputs = (inputs: string) => REVIEW_WORKFLOW.replace(CORRELATION_INPUT, `${CORRELATION_INPUT}${inputs}`);
+// Como el claude-review.yml real: model y effort como choice con los valores del esquema.
+const TUNABLE_REVIEW_WORKFLOW = withInputs(`      model:\n        type: choice\n        options:\n${MODELS.map(m => `          - ${m}\n`).join("")}      effort:\n        type: choice\n        options:\n${EFFORTS.map(e => `          - ${e}\n`).join("")}`);
 async function fixture(t: TestContext, files: Record<string, string> = {}) {
  const root = await repo(t); for (const [path, text] of Object.entries(files)) await writeFile(join(root, path), text);
  const home = await realpath(await mkdtemp(join(tmpdir(), "omi-onboarding-home-"))); t.after(() => rm(home, { recursive: true, force: true }));
@@ -170,12 +176,12 @@ test("KB caída o sin acceso no es ausencia: no pregunta, no posterga ni sobresc
 });
 
 const REVIEW = "GitHub Actions · claude-review.yml (omi-review-v1)";
-const reviewRepo = (t: TestContext) => fixture(t, { ".github/workflows/claude-review.yml": REVIEW_WORKFLOW });
+const reviewRepo = (t: TestContext, workflow = TUNABLE_REVIEW_WORKFLOW) => fixture(t, { ".github/workflows/claude-review.yml": workflow });
 const legacyBlock = (change: (block: LifecycleConfig) => void = () => {}) => { const block = defaultLifecycleConfig(key.repo, "main"); block.ship = { status: "not-applicable", targets: [] }; change(block); return block; };
 
 test("detector reconoce omi-review-v1 sólo con todos los marcadores del runtime, también en el claude-review.yml real", async t => {
- const f = await reviewRepo(t);
- assert.deepEqual(f.detection.workflows.find(w => w.file === "claude-review.yml"), { file: "claude-review.yml", dispatch: true, release: false, contract: "omi-review-v1" });
+ const f = await reviewRepo(t, REVIEW_WORKFLOW);
+ assert.deepEqual(f.detection.workflows.find(w => w.file === "claude-review.yml"), { file: "claude-review.yml", dispatch: true, release: false, contract: "omi-review-v1", tuning: { model: [], effort: [] } }, "sin inputs model ni effort no hay qué fijar");
  const partial: [string, string][] = [
   ["sin-run-name.yml", REVIEW_WORKFLOW.replace(/^run-name:.*\n/m, "")],
   ["sin-head.yml", REVIEW_WORKFLOW.replace(/      expected_head_sha:\n        required: false\n/, "")],
@@ -190,6 +196,21 @@ test("detector reconoce omi-review-v1 sólo con todos los marcadores del runtime
  const own = await detectLifecycle(fileURLToPath(new URL("..", import.meta.url)), signal());
  assert.equal(own.workflows.find(w => w.file === "claude-review.yml")?.contract, "omi-review-v1");
  assert.deepEqual(own.workflows.filter(w => w.contract !== null).map(w => w.file), ["claude-review.yml"], "release, CI y bump no son review");
+});
+
+// Un input que el workflow no declara hace fallar el dispatch (`Unexpected inputs`) y la Review termina en unknown.
+test("detector: model y effort cuentan sólo si el workflow_dispatch los declara; un choice acota los valores", async t => {
+ const tuning = async (file: string, text: string) => { const f = await reviewRepo(t, text); const found = f.detection.workflows.find(w => w.file === "claude-review.yml"); assert.ok(found?.contract === "omi-review-v1", file); return found.tuning; };
+ assert.deepEqual(await tuning("real", await readFile(new URL("../.github/workflows/claude-review.yml", import.meta.url), "utf8")), { model: MODELS, effort: EFFORTS }, "el claude-review.yml del repo");
+ assert.deepEqual(await tuning("tunable", TUNABLE_REVIEW_WORKFLOW), { model: MODELS, effort: EFFORTS });
+ assert.deepEqual(await tuning("string", withInputs("      model:\n        type: string\n      effort:\n        required: false\n")), { model: MODELS, effort: EFFORTS }, "un string (o sin type) acepta cualquier valor");
+ assert.deepEqual(await tuning("sin sonnet", withInputs("      model:\n        type: choice\n        options:\n          - claude-opus-5-5\n          - claude-haiku-4-5\n          - gpt-5\n")), { model: ["claude-opus-5-5", "claude-haiku-4-5"], effort: [] }, "sólo los valores del choice que el esquema conoce");
+ assert.deepEqual(await tuning("flujo", withInputs("      effort:\n        type: choice # profundidad\n        options: [low, \"high\"]\n")), { model: [], effort: ["low", "high"] }, "options en flujo, con comillas y comentarios");
+ assert.deepEqual(await tuning("misma sangría", withInputs("      effort:\n        type: choice\n        options:\n        - low\n        - max\n")), { model: [], effort: ["low", "max"] }, "la lista puede ir a la altura de options");
+ assert.deepEqual(await tuning("boolean", withInputs("      model:\n        type: boolean\n")), { model: [], effort: [] }, "otro tipo no acepta un modelo");
+ assert.deepEqual(await tuning("choice sin options", withInputs("      model:\n        type: choice\n")), { model: [], effort: [] }, "un choice que no se puede leer no se ofrece");
+ const elsewhere = REVIEW_WORKFLOW.replace("          path: out/review.json\n", "          path: out/review.json\n      - uses: anthropics/claude-code-action@v1\n        with:\n          model: claude-sonnet-5-5\n          effort: high\n");
+ assert.deepEqual(await tuning("fuera de inputs", elsewhere), { model: [], effort: [] }, "un model: de un step no es un input de dispatch");
 });
 
 test("Review: con omi-review-v1 detectado y sin config recomienda GHA y guarda la identidad del esquema; Ship no lo ofrece", async t => {
@@ -225,6 +246,23 @@ test("Review: elegir Sonnet fija model en el provider, lo muestra en el resumen 
  f.kb.perillas("app", renderLifecycleBlock(legacyBlock(b => { b.review.provider = { kind: "gha", workflow: "claude-review.yml", ref: "main", contract: "omi-review-v1", model: "claude-sonnet-5-5", effort: "high" }; })));
  const reset = await runLifecycleOnboarding(f.deps(script([["Mantener Ship actual"], [REVIEW], ["Default del workflow"], ["Mantener continuidad actual"], ["Guardar y aceptar"]]).ask));
  assert.ok(reset.kind === "saved"); assert.deepEqual(reset.pin.block.review.provider, { kind: "gha", workflow: "claude-review.yml", ref: "main", contract: "omi-review-v1", effort: "high" }, "el default quita model y conserva el effort que el wizard no pregunta");
+});
+
+test("Review: si el workflow no declara model (o no acepta Sonnet) no pregunta el modelo; effort se conserva sólo si lo declara", async t => {
+ const current = legacyBlock(b => { b.review.provider = { kind: "gha", workflow: "claude-review.yml", ref: "main", contract: "omi-review-v1", model: "claude-sonnet-5-5", effort: "high" }; });
+ const workflows: [string, string, object][] = [
+  ["sin inputs", REVIEW_WORKFLOW, {}],
+  ["sin sonnet", withInputs("      model:\n        type: choice\n        options:\n          - claude-opus-5-5\n      effort:\n        type: choice\n        options: [high]\n"), { effort: "high" }],
+  ["effort sin high", withInputs("      model:\n        type: string\n      effort:\n        type: choice\n        options: [low]\n"), {}],
+ ];
+ for (const [name, workflow, kept] of workflows) {
+  const f = await reviewRepo(t, workflow); f.kb.perillas("app", renderLifecycleBlock(current));
+  const sonnet = name === "effort sin high";
+  const run = script([["Mantener Ship actual"], [REVIEW], ...(sonnet ? [["Default del workflow"]] : []), ["Mantener continuidad actual"], ["Guardar y aceptar"]]);
+  const saved = await runLifecycleOnboarding(f.deps(run.ask)); assert.ok(saved.kind === "saved", name);
+  assert.equal(run.seen.some(b => b.title === "Modelo de la Review"), sonnet, `${name}: el modelo se pregunta sólo si se puede fijar`);
+  assert.deepEqual(saved.pin.block.review.provider, { kind: "gha", workflow: "claude-review.yml", ref: "main", contract: "omi-review-v1", ...kept }, `${name}: sin inputs que el workflow rechace`);
+ }
 });
 
 test("Mantener Ship actual conserva destinos personalizados sin reingresarlos; sin GHA detectado no pregunta Review", async t => {

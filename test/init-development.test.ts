@@ -132,7 +132,7 @@ test("--check informa recomendaciones de una config aceptada y el wizard CLI pas
  const check = testIo({ homeDir: f.home, cwd: f.repo }); assert.equal(await developmentInit(["--development", "--check", "--json"], check, { host: f.host.factory }), 0, check.errors());
  const report = JSON.parse(check.output()); assert.equal(report.status, "not-applicable"); assert.equal(report.canStartEffects, true);
  assert.deepEqual(report.recommendations.map((r: { kind: string }) => r.kind), ["continuity", "review-gha"]); assert.deepEqual(report.recommendations[1].workflows, ["claude-review.yml"]);
- assert.deepEqual(report.detection.workflows.find((w: { file: string }) => w.file === "claude-review.yml"), { file: "claude-review.yml", dispatch: true, release: false, contract: "omi-review-v1" });
+ assert.deepEqual(report.detection.workflows.find((w: { file: string }) => w.file === "claude-review.yml"), { file: "claude-review.yml", dispatch: true, release: false, contract: "omi-review-v1", tuning: { model: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1", "claude-haiku-4-5"], effort: ["low", "medium", "high", "xhigh", "max"] } });
  const text = testIo({ homeDir: f.home, cwd: f.repo }); assert.equal(await developmentInit(["--development", "--check"], text, { host: f.host.factory }), 0);
  assert.match(text.output(), /Recomendación: Continuidad sin configurar: el trabajo para en el PR draft/); assert.match(text.output(), /Recomendación: .*claude-review\.yml/);
  assert.equal(await f.run(["--development"]), 0, f.io.errors());

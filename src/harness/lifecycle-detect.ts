@@ -5,11 +5,16 @@ import { lstat, open, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { parseProjectLink } from "../project/link.ts";
 import { REVIEW_ARTIFACT_FILE, REVIEW_CONTRACT, REVIEW_RUN_PREFIX } from "./gha-review-contract.ts";
+import { dispatchInputValues } from "./lifecycle-detect-inputs.ts";
+import { GhaReviewEffortSchema, GhaReviewModelSchema, type GhaReviewEffort, type GhaReviewModel } from "./lifecycle-schema.ts";
 const MAX_BYTES = 256 * 1024, MAX_WORKFLOWS = 50, MAX_SCRIPTS = 100;
 const MANIFESTS = ["Cargo.toml", "Dockerfile", "Makefile", "go.mod", "package.json", "pyproject.toml"];
+/** Valores de `model` y `effort` que el workflow_dispatch acepta: vacío si no declara el input. Fijar otro hace fallar el dispatch. */
+export interface ReviewTuning { model: GhaReviewModel[]; effort: GhaReviewEffort[] }
+type DetectedWorkflow = { file: string; dispatch: boolean; release: boolean } & ({ contract: null } | { contract: typeof REVIEW_CONTRACT; tuning: ReviewTuning });
 export interface LifecycleDetection {
  /** `contract`: el workflow declara los marcadores de omi-review-v1. Es una propuesta: el runtime valida run y artefacto. */
- workflows: { file: string; dispatch: boolean; release: boolean; contract: typeof REVIEW_CONTRACT | null }[]; scripts: string[]; manifests: string[];
+ workflows: DetectedWorkflow[]; scripts: string[]; manifests: string[];
  omi: { organization: string; project: string; services: string[] } | "invalid" | null; skipped: string[];
 }
 const missing = (e: unknown) => e instanceof Error && "code" in e && (e.code === "ENOENT" || e.code === "ENOTDIR");
@@ -38,7 +43,8 @@ async function workflows(root: string, skipped: string[], signal: AbortSignal): 
  const names = (await readdir(dir)).filter(n => /^[A-Za-z0-9_][A-Za-z0-9_.-]*\.ya?ml$/.test(n)).sort().slice(0, MAX_WORKFLOWS), found: LifecycleDetection["workflows"] = [];
  for (const file of names) {
   const text = await readBounded(root, `.github/workflows/${file}`, skipped, signal); if (text === null) continue;
-  found.push({ file, dispatch: /\bworkflow_dispatch\b/.test(text), release: /\btags\s*:|\brelease\b/i.test(text), contract: reviewContract(text) });
+  const base = { file, dispatch: /\bworkflow_dispatch\b/.test(text), release: /\btags\s*:|\brelease\b/i.test(text) };
+  found.push(reviewContract(text) ? { ...base, contract: REVIEW_CONTRACT, tuning: { model: dispatchInputValues(text, "model", GhaReviewModelSchema.enum), effort: dispatchInputValues(text, "effort", GhaReviewEffortSchema.enum) } } : { ...base, contract: null });
  }
  return found;
 }

@@ -21,6 +21,7 @@ const WorkflowIdentity = { workflow: WorkflowFile, ref: Ref };
 export const GhaReviewModelSchema = Type.Enum(["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1", "claude-haiku-4-5"]);
 export const GhaReviewEffortSchema = Type.Enum(["low", "medium", "high", "xhigh", "max"]);
 export type GhaReviewModel = Static<typeof GhaReviewModelSchema>;
+export type GhaReviewEffort = Static<typeof GhaReviewEffortSchema>;
 const ReviewProvider = Type.Union([
  Type.Object({ kind: Type.Literal("local") }, closed),
  Type.Object({ kind: Type.Literal("github"), reviewers: Type.Array(Type.String({ maxLength: 100, pattern: "^[A-Za-z0-9][A-Za-z0-9-]*(?:\\[bot\\])?$" }), { minItems: 1, maxItems: 1000, uniqueItems: true }) }, closed),

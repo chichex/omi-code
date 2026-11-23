@@ -3,11 +3,13 @@
 import type { AskResult, QuestionAnswer, QuestionBatch } from "../tui/questions/batch.ts";
 import { REVIEW_CONTRACT } from "./gha-review-contract.ts";
 import type { LifecycleConfig } from "./lifecycle-config.ts";
+import type { ReviewTuning } from "./lifecycle-detect.ts";
+import type { ReviewCandidate } from "./lifecycle-recommendations.ts";
 import type { GhaReviewModel, LifecycleReviewProvider } from "./lifecycle-schema.ts";
 import { question } from "./lifecycle-wizard.ts";
 
 type Ask = (batch: QuestionBatch) => Promise<AskResult>;
-type Choice = { kind: "keep" } | { kind: "local" } | { kind: "gha"; workflow: string };
+type Choice = { kind: "keep" } | { kind: "local" } | { kind: "gha"; workflow: string; tuning: ReviewTuning };
 interface ReviewOption { label: string; description: string; choice: Choice }
 const LOCAL = "Revisor local", DEFAULT_MODEL = "Default del workflow";
 const SONNET_MODEL: GhaReviewModel = "claude-sonnet-5-5", SONNET = `Sonnet (${SONNET_MODEL})`;
@@ -33,13 +35,15 @@ export function reviewProviderText(provider: LifecycleReviewProvider): string {
 /** Una línea para el resumen del wizard. */
 export const reviewProviderSummary = (provider: LifecycleReviewProvider): string => `Review: ${reviewProviderText(provider)}`;
 /** GHA detectado va primero (recomendado) si hoy revisa el local o no hay config; si no, mantener va primero. */
-function reviewOptions(current: LifecycleReviewProvider | null, workflows: string[]): ReviewOption[] {
- const gha = workflows.map((workflow): ReviewOption => ({ label: `GitHub Actions · ${workflow} (${REVIEW_CONTRACT})`, description: `Dispara el workflow por PR y valida su recibo ${REVIEW_CONTRACT}; sin fallback local`, choice: { kind: "gha", workflow } }));
+function reviewOptions(current: LifecycleReviewProvider | null, workflows: ReviewCandidate[]): ReviewOption[] {
+ const gha = workflows.map(({ file: workflow, tuning }): ReviewOption => ({ label: `GitHub Actions · ${workflow} (${REVIEW_CONTRACT})`, description: `Dispara el workflow por PR y valida su recibo ${REVIEW_CONTRACT}; sin fallback local`, choice: { kind: "gha", workflow, tuning } }));
  const keep: ReviewOption[] = current ? [{ label: `Mantener ${providerName(current)}`, description: reviewProviderSummary(current), choice: { kind: "keep" } }] : [];
  const local: ReviewOption[] = current?.kind === "local" ? [] : [{ label: LOCAL, description: "Revisor aislado sobre el diff fijo, sin workflow", choice: { kind: "local" } }];
  return gha.length && (!current || current.kind === "local") ? [...gha, ...keep, ...local] : [...keep, ...gha, ...local];
 }
-async function askModel(workflow: string, ask: Ask): Promise<{ model: GhaReviewModel | undefined } | null> {
+/** Sólo si el workflow acepta Sonnet como input `model`: fijar un input que no declara hace fallar el dispatch. */
+async function askModel(workflow: string, tuning: ReviewTuning, ask: Ask): Promise<{ model: GhaReviewModel | undefined } | null> {
+ if (!tuning.model.includes(SONNET_MODEL)) return { model: undefined };
  const answer = await ask({ title: "Modelo de la Review", questions: [question("model", "Modelo", `¿Con qué modelo revisa ${workflow}?`, [
   [DEFAULT_MODEL, "No fija model: el workflow usa su default"],
   [SONNET, `Fija model=${SONNET_MODEL}; effort sigue el default del workflow`],
@@ -52,7 +56,7 @@ async function askModel(workflow: string, ask: Ask): Promise<{ model: GhaReviewM
 }
 const withProvider = (block: LifecycleConfig, provider: LifecycleReviewProvider): LifecycleConfig => ({ ...block, review: { ...block.review, provider } });
 /** `current` null es sin config previa. Sin alternativa real no pregunta. Esc devuelve null y no se guarda nada. */
-export async function configureLifecycleReview(block: LifecycleConfig, current: LifecycleReviewProvider | null, workflows: string[], ask: Ask): Promise<LifecycleConfig | null> {
+export async function configureLifecycleReview(block: LifecycleConfig, current: LifecycleReviewProvider | null, workflows: ReviewCandidate[], ask: Ask): Promise<LifecycleConfig | null> {
  const options = reviewOptions(current, workflows);
  if (options.length < 2) return block;
  const answer = await ask({ title: "Review del PR", questions: [question("review", "Review", "¿Quién revisa el PR antes de Land?", options.map(o => [o.label, o.description]))] });
@@ -63,9 +67,10 @@ export async function configureLifecycleReview(block: LifecycleConfig, current: 
   case "keep": return block;
   case "local": return withProvider(block, { kind: "local" });
   case "gha": {
-   const tuning = await askModel(picked.workflow, ask); if (!tuning) return null;
-   // El wizard no pregunta effort: si ya estaba fijado para ese workflow, se conserva.
-   const effort = current?.kind === "gha" && current.workflow === picked.workflow ? current.effort : undefined;
+   const tuning = await askModel(picked.workflow, picked.tuning, ask); if (!tuning) return null;
+   // El wizard no pregunta effort: si ya estaba fijado para ese workflow y el workflow lo acepta, se conserva.
+   const kept = current?.kind === "gha" && current.workflow === picked.workflow ? current.effort : undefined;
+   const effort = kept && picked.tuning.effort.includes(kept) ? kept : undefined;
    return withProvider(block, { kind: "gha", workflow: picked.workflow, ref: block.land.base, contract: REVIEW_CONTRACT, ...(tuning.model ? { model: tuning.model } : {}), ...(effort ? { effort } : {}) });
   }
   default: { const unknown: never = picked; return unknown; }
