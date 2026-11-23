@@ -1,23 +1,35 @@
-// Panel vertical de Foundations. Sólo devuelve un borrador revisado; no persiste ni concede permisos.
+// Panel de Foundations: cuándo pide confirmación el agente. Abre en las políticas; las reglas de comandos se
+// editan aparte, con ejemplos. Sólo devuelve un borrador revisado; no persiste ni concede permisos.
 import type { ExtensionContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type Focusable, type TUI } from "@earendil-works/pi-tui";
 import {
-	AUTO_WARNINGS, checkBlock, EMPTY_RULES_WARNING, foundationsDiff, MAX_RULES, POLICY_LABELS, ruleProblem, DEFAULT_POLICY, visibleText,
+	AUTO_WARNINGS, checkBlock, EMPTY_RULES_WARNING, foundationsDiff, MAX_RULES, ruleProblem, DEFAULT_POLICY, visibleText,
 	type FoundationsBlock, type FoundationsPolicy, type PolicyPoint,
 } from "../harness/foundations.ts";
 import { FoundationsRulesEditor } from "./development-foundations-editor.ts";
 import { commandDisplayLines } from "./development-approval.ts";
 
 const POINTS: readonly PolicyPoint[] = ["arranque", "receta", "push_pr"];
+const LABELS: Record<PolicyPoint, string> = { arranque: "Arranque", receta: "Receta", push_pr: "Push + PR draft" };
 const ASK_HELP: Record<PolicyPoint, string> = {
-	arranque: "confirmar issue, worktree y sesión",
-	receta: "revisar antes de implementar",
-	push_pr: "confirmar push de rama y PR draft",
+	arranque: "te pide el sí antes de crear el issue, el worktree y la sesión",
+	receta: "te muestra la receta para que la apruebes antes de implementar",
+	push_pr: "te pide el sí antes del push de la rama y del PR draft",
 };
+const RULES_ROW = 3; const SAVE = 4; const CANCEL = 5; const ROWS = 6; const PREVIEW = 3; const LABEL_WIDTH = 20;
+const ROW_HELP: Record<number, string> = {
+	[RULES_ROW]: "Comandos que piden tu sí antes de correr, por ejemplo git push *. Enter para editarlos.",
+	[SAVE]: "Muestra el cambio para revisarlo; recién ahí se guarda en la KB.",
+	[CANCEL]: "Sale sin guardar nada.",
+};
+const RULES_ABOUT = "Un comando que coincide con una regla te pide el sí antes de correr. Los compuestos (&&, |, comillas, redirecciones) siempre lo piden.";
+const EMPTY_RULES = "Vacía: ningún comando simple pide confirmación.";
+const EXAMPLES = "Ejemplos: git push *  ·  gh pr merge *  ·  rm -rf *  ·  npm publish*";
+const SYNTAX = "* cualquier texto · ? un carácter · \\* \\? \\\\ literales · distingue mayúsculas";
 const RESTRICTIONS = "No es sandbox. Otras restricciones y confirmaciones de OMI siguen vigentes.";
-const EMPTY_EDIT_WARNING = "Lista vacía: todo comando SIMPLE quedará sin confirmación por ESTA política.";
+const PASTE_START = "\x1b[200~";
 
-type View = { kind: "edit" } | { kind: "review"; block: FoundationsBlock; returnFocus: number };
+type View = { kind: "list" } | { kind: "rules" } | { kind: "review"; block: FoundationsBlock; back: "list" | "rules"; returnFocus: number };
 export interface FoundationsPanelInput {
 	repo: string;
 	initial?: unknown;
@@ -39,11 +51,10 @@ const copy = (block: FoundationsBlock): FoundationsBlock => ({ ...block, confirm
 export class FoundationsPanel implements Component, Focusable {
 	private readonly options: FoundationsPanelOptions;
 	private readonly previous: FoundationsBlock | undefined;
-	private readonly hasInitial: boolean;
 	private readonly editor: FoundationsRulesEditor;
 	private readonly policy: FoundationsPolicy;
-	private view: View = { kind: "edit" };
-	private focus = 3;
+	private view: View = { kind: "list" };
+	private focus = 0;
 	private hasFocus = false;
 	private closed = false;
 	private error = "";
@@ -58,7 +69,6 @@ export class FoundationsPanel implements Component, Focusable {
 		const initial = "block" in checked && checked.block.repo === options.repo.toLowerCase() ? copy(checked.block) : undefined;
 		const accepted = checkBlock(options.previousAccepted);
 		this.previous = "block" in accepted && accepted.block.repo === options.repo.toLowerCase() ? copy(accepted.block) : undefined;
-		this.hasInitial = initial !== undefined;
 		this.policy = { ...(initial?.politica ?? DEFAULT_POLICY) };
 		this.editor = new FoundationsRulesEditor({
 			tui: options.tui, theme: options.theme, initial: initial?.confirmar.join("\n") ?? "",
@@ -69,7 +79,7 @@ export class FoundationsPanel implements Component, Focusable {
 	get focused(): boolean { return this.hasFocus; }
 	set focused(value: boolean) { this.hasFocus = value; this.syncFocus(); }
 	get capturesViewportInput(): boolean { return true; }
-	private syncFocus(): void { this.editor.focused = this.hasFocus && !this.closed && this.view.kind === "edit" && this.focus === 3; }
+	private syncFocus(): void { this.editor.focused = this.hasFocus && !this.closed && this.view.kind === "rules"; }
 	invalidate(): void { this.editor.invalidate(); }
 	dispose(): void { this.finish(undefined); }
 	private finish(block: FoundationsBlock | undefined): void {
@@ -77,43 +87,49 @@ export class FoundationsPanel implements Component, Focusable {
 		this.closed = true; this.editor.dispose();
 		this.options.done(block);
 	}
+	private openRules(): void { this.view = { kind: "rules" }; this.focus = RULES_ROW; }
 
 	handleInput(data: string): void {
 		if (this.closed) return;
-		const editable = this.view.kind === "edit" && this.focus === 3;
-		if (!this.editor.consumePaste(data, editable, (key) => this.handleKey(key))) this.handleKey(data);
+		// Pegar desde la lista es querer cargar reglas: se abre su editor y el texto entra tal cual.
+		if (this.view.kind === "list" && data.includes(PASTE_START)) this.openRules();
+		if (!this.editor.consumePaste(data, this.view.kind === "rules", (key) => this.handleKey(key))) this.handleKey(data);
 		this.syncFocus(); this.options.tui.requestRender();
 	}
 	private handleKey(data: string): void {
 		if (this.closed) return;
 		if (matchesKey(data, "ctrl+c")) { this.finish(undefined); return; }
+		if (matchesKey(data, "ctrl+s")) { this.save(); return; }
+		const view = this.view;
 		if (matchesKey(data, "escape")) {
-			if (this.view.kind === "review") { this.focus = this.view.returnFocus; this.view = { kind: "edit" }; }
+			if (view.kind === "review") { this.view = { kind: view.back }; this.focus = view.returnFocus; }
+			else if (view.kind === "rules") this.view = { kind: "list" };
 			else this.finish(undefined);
 			return;
 		}
-		if (matchesKey(data, "ctrl+s")) { this.save(); return; }
-		if (matchesKey(data, "tab") || matchesKey(data, "shift+tab")) {
-			const direction = matchesKey(data, "shift+tab") ? -1 : 1;
-			this.focus = this.view.kind === "review" ? this.focus === 4 ? 5 : 4 : (this.focus + direction + 6) % 6;
+		if (view.kind === "review") { this.reviewKey(data); return; }
+		if (view.kind === "rules") {
+			if (matchesKey(data, "tab") || matchesKey(data, "shift+tab")) this.view = { kind: "list" };
+			else this.editor.handleInput(data);
 			return;
 		}
-		if (this.view.kind === "review") { this.reviewKey(data); return; }
-		if (this.focus === 3) { this.editor.handleInput(data); return; }
-		if (matchesKey(data, "enter") || matchesKey(data, "space")) {
-			const point = POINTS[this.focus];
-			if (point) this.policy[point] = this.policy[point] === "ask" ? "auto" : "ask";
-			else if (this.focus === 4) this.save();
-			else if (this.focus === 5) this.finish(undefined);
-		} else if (this.selectKey(data, "up")) this.focus = (this.focus + 5) % 6;
-		else if (this.selectKey(data, "down")) this.focus = (this.focus + 1) % 6;
+		if (matchesKey(data, "tab") || this.selectKey(data, "down")) { this.focus = (this.focus + 1) % ROWS; return; }
+		if (matchesKey(data, "shift+tab") || this.selectKey(data, "up")) { this.focus = (this.focus + ROWS - 1) % ROWS; return; }
+		const point = POINTS[this.focus];
+		if (point && (matchesKey(data, "left") || matchesKey(data, "right"))) { this.policy[point] = matchesKey(data, "left") ? "ask" : "auto"; return; }
+		if (!matchesKey(data, "enter") && !matchesKey(data, "space")) return;
+		if (point) this.policy[point] = this.policy[point] === "ask" ? "auto" : "ask";
+		else if (this.focus === RULES_ROW) this.openRules();
+		else if (this.focus === SAVE) this.save();
+		else this.finish(undefined);
 	}
 	private selectKey(data: string, action: "up" | "down" | "pageUp" | "pageDown"): boolean {
 		return this.options.keybindings?.matches(data, `tui.select.${action}`) ?? matchesKey(data, action);
 	}
 	private reviewKey(data: string): void {
+		if (matchesKey(data, "tab") || matchesKey(data, "shift+tab")) { this.focus = this.focus === SAVE ? CANCEL : SAVE; return; }
 		if (matchesKey(data, "enter") || matchesKey(data, "space")) {
-			if (this.focus === 4) this.save(); else this.finish(undefined);
+			if (this.focus === SAVE) this.save(); else this.finish(undefined);
 		} else if (this.selectKey(data, "up")) this.reviewOffset--;
 		else if (this.selectKey(data, "down")) this.reviewOffset++;
 		else if (this.selectKey(data, "pageUp")) this.reviewOffset -= this.reviewPage;
@@ -123,13 +139,14 @@ export class FoundationsPanel implements Component, Focusable {
 		this.reviewOffset = Math.max(0, Math.min(this.reviewOffset, this.reviewLength - this.reviewPage));
 	}
 
+	private rules(): string[] { return this.editor.text.split("\n").filter((line) => line !== ""); }
 	private draft(): FoundationsBlock | undefined {
 		const rules: string[] = []; const seen = new Set<string>();
 		for (const [index, line] of this.editor.text.split("\n").entries()) {
 			if (line === "") continue;
 			const problem = ruleProblem(line) ?? (seen.has(line) ? "hay reglas repetidas exactas" : undefined)
 				?? (rules.length >= MAX_RULES ? `se admiten hasta ${MAX_RULES} reglas` : undefined);
-			if (problem) { this.error = `Línea ${index + 1}: ${problem}`; this.focus = 3; return undefined; }
+			if (problem) { this.error = `Línea ${index + 1}: ${problem}`; this.openRules(); return undefined; }
 			seen.add(line); rules.push(line);
 		}
 		const checked = checkBlock({ version: 2, repo: this.options.repo.toLowerCase(), confirmar: rules, politica: { ...this.policy } });
@@ -139,15 +156,16 @@ export class FoundationsPanel implements Component, Focusable {
 	private save(): void {
 		if (!this.fits(Math.min(this.lastWidth, this.options.tui.terminal.columns))) return;
 		if (this.view.kind === "review") { this.finish(copy(this.view.block)); return; }
+		const back = this.view.kind; const returnFocus = this.focus;
 		const block = this.draft();
 		if (!block) return;
 		this.error = "";
-		this.view = { kind: "review", block, returnFocus: this.focus };
-		this.focus = 4; this.reviewOffset = 0;
+		this.view = { kind: "review", block, back: this.view.kind === "rules" ? "rules" : back, returnFocus };
+		this.focus = SAVE; this.reviewOffset = 0;
 	}
 
 	private fits(width: number): boolean {
-		// Seis filas arriba, editor completo, ayuda y cuatro filas fijas abajo, más el marco.
+		// Encabezado, editor completo, ejemplos y pie fijo, más el marco.
 		return width >= 40 && this.options.rows() - 2 >= Math.max(5, Math.floor(this.options.rows() * 0.3)) + 15;
 	}
 	render(width: number): string[] {
@@ -162,7 +180,8 @@ export class FoundationsPanel implements Component, Focusable {
 		].slice(0, available).map((line) => truncateToWidth(line, width));
 		const title = truncateToWidth(theme.fg("accent", theme.bold(visibleText(`Foundations · ${this.options.repo}`))), width - 5);
 		const top = theme.fg("border", "┌─ ") + title + theme.fg("border", ` ${"─".repeat(Math.max(0, width - visibleWidth(title) - 5))}┐`);
-		const content = this.view.kind === "edit" ? this.renderEdit(inner, available - 2) : this.renderReview(inner, available - 2, this.view.block);
+		const height = available - 2;
+		const content = this.view.kind === "review" ? this.renderReview(inner, height, this.view.block) : this.view.kind === "rules" ? this.renderRules(inner, height) : this.renderList(inner, height);
 		const border = theme.fg("border", "│");
 		return [top, ...content.map((line) => `${border} ${truncateToWidth(line, inner, "", true)} ${border}`), theme.fg("border", `└${"─".repeat(Math.max(0, width - 2))}┘`)]
 			.map((line) => truncateToWidth(line, width, ""));
@@ -170,38 +189,59 @@ export class FoundationsPanel implements Component, Focusable {
 	private meta(): string {
 		let location = this.options.kbUrl;
 		try { location = new URL(location).host; } catch { /* La presentación no valida ni conecta la KB. */ }
-		return visibleText(`KB · ${this.options.product} · ${location} · sólo harness`);
+		return visibleText(`Se guarda en la KB (${this.options.product} · ${location}) · vale sólo en el harness`);
 	}
 	private actions(review: boolean): string {
 		const theme = this.options.theme();
 		const button = (label: string, index: number) => this.focus === index
 			? theme.style(`[ ${label} ]`, { fg: "accent", bg: "selectedBg", bold: true }) : theme.fg("muted", `[ ${label} ]`);
-		return `${button(review ? "Guardar" : "Guardar → revisar", 4)}   ${button("Cancelar", 5)}`;
+		return `${button(review ? "Guardar" : "Guardar → revisar", SAVE)}   ${button("Cancelar", CANCEL)}`;
 	}
-	private renderEdit(width: number, height: number): string[] {
-		const theme = this.options.theme();
-		const policies = POINTS.map((point, index) => {
-			const mode = this.policy[point]; const focused = this.focus === index;
-			const row = `${focused ? "›" : " "} ${POLICY_LABELS[point]}: ${mode} · ${mode === "auto" ? AUTO_WARNINGS[point] : ASK_HELP[point]}`;
-			return theme.fg(focused ? "accent" : mode === "auto" ? "warning" : "text", visibleText(row));
-		});
+	private status(width: number, idle: string[]): string[] {
+		const theme = this.options.theme(); const message = this.error || this.options.notice || "";
+		const lines = message ? wrapTextWithAnsi(visibleText(message), width).slice(0, 2).map((line) => theme.fg(this.error ? "error" : "warning", line)) : idle;
+		while (lines.length < 2) lines.push("");
+		return lines;
+	}
+	private policyRow(point: PolicyPoint, index: number): string {
+		const theme = this.options.theme(); const mode = this.policy[point]; const focused = this.focus === index;
+		const option = (value: "ask" | "auto") => mode === value ? theme.fg(value === "auto" ? "warning" : "accent", theme.bold(`[${value}]`)) : theme.fg("dim", ` ${value} `);
+		return `${theme.fg(focused ? "accent" : "text", `${focused ? "›" : " "} ${LABELS[point].padEnd(LABEL_WIDTH)}`)}${option("ask")} ${option("auto")}`;
+	}
+	private explanation(): { text: string; color: "warning" | "muted" } {
+		const point = POINTS[this.focus];
+		if (!point) return { text: ROW_HELP[this.focus] ?? "", color: "muted" };
+		return this.policy[point] === "auto" ? { text: `Auto: ${AUTO_WARNINGS[point]}.`, color: "warning" } : { text: `Ask: ${ASK_HELP[point]}.`, color: "muted" };
+	}
+	private renderList(width: number, height: number): string[] {
+		const theme = this.options.theme(); const rules = this.rules(); const focused = this.focus === RULES_ROW;
+		const header = [theme.fg("accent", theme.bold("¿Cuándo te pide confirmación el agente?")), theme.fg("dim", this.meta()), ""];
+		const count = rules.length ? `${rules.length} ${rules.length === 1 ? "regla" : "reglas"} · Enter editar` : "ninguna · Enter agregar";
+		const rulesRow = `${theme.fg(focused ? "accent" : "text", `${focused ? "›" : " "} ${"Reglas de comandos".padEnd(LABEL_WIDTH)}`)}${theme.fg("muted", count)}`;
+		const preview = rules.slice(0, PREVIEW).map((rule) => theme.fg("muted", `      ${visibleText(rule)}`));
+		if (rules.length > PREVIEW) preview.push(theme.fg("dim", `      … y ${rules.length - PREVIEW} más`));
+		const { text, color } = this.explanation();
+		const explanation = wrapTextWithAnsi(visibleText(text), width).slice(0, 3).map((line) => theme.fg(color, line));
+		const footer = [...this.status(width, []), this.actions(false), theme.fg("dim", "↑↓ mover · Espacio cambiar · Enter abrir · Ctrl+S revisar · Esc salir")];
+		// Si falta alto, se resume la vista previa antes que la explicación de la fila enfocada.
+		while (preview.length && header.length + 4 + preview.length + 1 + explanation.length + footer.length > height) preview.pop();
+		const lines = [...header, ...POINTS.map((point, index) => this.policyRow(point, index)), rulesRow, ...preview, "", ...explanation];
+		while (lines.length + footer.length < height) lines.push("");
+		return [...lines.slice(0, Math.max(0, height - footer.length)), ...footer];
+	}
+	private renderRules(width: number, height: number): string[] {
+		const theme = this.options.theme(); const count = this.rules().length;
+		const header = [theme.fg("accent", `REGLAS DE COMANDOS · ${count}/${MAX_RULES} · una por línea`),
+			...wrapTextWithAnsi(RULES_ABOUT, width).slice(0, 3).map((line) => theme.fg("muted", line))];
 		const editor = this.editor.render(width);
 		const editorHeight = Math.max(5, Math.floor(this.options.rows() * 0.3)) + 2;
 		// El editor mantiene un área amplia aun con una lista vacía; no recortar sus filas reales.
 		while (editor.length < editorHeight) editor.splice(editor.length - 1, 0, "");
-		const count = this.editor.text.split("\n").filter((line) => line !== "").length;
-		const header = [theme.fg("muted", this.meta()), theme.fg("accent", "POLÍTICAS · Espacio/Enter alterna"), ...policies,
-			theme.fg(this.focus === 3 ? "accent" : "muted", `REGLAS PARA CONFIRMAR · ${count}/${MAX_RULES} · una por línea`)];
-		const empty = count === 0;
-		const message = this.error || this.options.notice || (!this.hasInitial ? "Sin revisión v2 válida: configurá y guardá de nuevo. No se hereda v1." : !this.previous ? "Borrador v2: abrir no acepta ni cambia permisos. Guardar confirma la revisión." : "");
-		const status = message ? wrapTextWithAnsi(visibleText(message), width).slice(0, 2).map((line) => theme.fg(this.error ? "error" : "warning", line))
-			: [theme.fg(empty ? "warning" : "muted", empty ? EMPTY_EDIT_WARNING : "Sólo líneas simples no coincidentes corren sin preguntar por esta política."), theme.fg("dim", RESTRICTIONS)];
-		while (status.length < 2) status.push("");
-		const footer = [...status, this.actions(false), theme.fg("dim", "Tab foco · Enter nueva línea · Ctrl+S revisar · Esc cancelar")];
-		const help = theme.fg("dim", "* texto · ? un carácter · \\* \\? \\\\ literales · sin recortar espacios");
-		const lines = [...header, ...editor, help];
+		const tips = [theme.fg("dim", EXAMPLES), theme.fg("dim", SYNTAX)];
+		const footer = [...this.status(width, [count ? "" : theme.fg("warning", EMPTY_RULES)]), theme.fg("dim", "Esc volver · Enter nueva línea · Ctrl+S revisar")];
+		const lines = [...header, ...editor, ...tips];
 		while (lines.length + footer.length < height) lines.push("");
-		return [...lines, ...footer];
+		return [...lines.slice(0, Math.max(0, height - footer.length)), ...footer];
 	}
 	private renderReview(width: number, height: number, block: FoundationsBlock): string[] {
 		const theme = this.options.theme();

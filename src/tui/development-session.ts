@@ -20,7 +20,7 @@ import { updateIssueSection } from "./development-issue.ts";
 import { restoreIssueTriage } from "./workspace/issue-triage.ts";
 import { readGit } from "./workspace/data.ts";
 import { developmentProgress, PHASE_LABELS } from "./development-view.ts";
-import type { BeginLoader } from "./development-begin.ts";
+import { borderedLoader, type WaitLoader } from "./development-loader.ts";
 import { developmentOffline } from "./development-tickets.ts";
 import { approvalDocument, approvalText, type ApprovalDocument } from "./development-approval.ts";
 import { PUBLICATION_TITLE, publicationDocument, publicationSummary } from "./development-publication.ts";
@@ -34,7 +34,7 @@ import type { LifecyclePorts } from "./development-lifecycle.ts";
 
 export const DEVELOPMENT_ANCHOR = "omi-development-workflow";
 const AnchorSchema = Type.Object({ id: Type.String(), root: Type.String(), issue: Type.Integer({ minimum: 1 }), revision: Type.Integer({ minimum: 0 }), disabled: Type.Optional(Type.Boolean()) });
-export interface DevelopmentDeps { runner?: Runner; now?: () => string; loader?: BeginLoader; kb?: KbClient; lifecycle?: LifecyclePorts; classifyTimeoutMs?: number }
+export interface DevelopmentDeps { runner?: Runner; now?: () => string; loader?: WaitLoader; kb?: KbClient; lifecycle?: LifecyclePorts; classifyTimeoutMs?: number }
 // El preflight y el documento íntegro se comparten con la revisión TUI y RPC.
 export function approvalPreview(state: Workflow): string { return approvalText(approvalDocument(state)); }
 export class DevelopmentSession {
@@ -46,6 +46,8 @@ export class DevelopmentSession {
 	readonly reads = new Map<string, ReadReceipt>();
 	readonly runner: Runner;
 	readonly now: () => string;
+	/** Espera con Esc para cancelar: clasificar un pedido o leer la KB. */
+	readonly loader: WaitLoader;
 	readonly lifecycle = new AbortController();
 	private context: ExtensionContext | undefined;
 	// Último vínculo válido de la conversación: permite salir aunque el estado no se pueda leer.
@@ -90,7 +92,7 @@ export class DevelopmentSession {
 	readonly owner = randomUUID();
 	constructor(pi: ExtensionAPI, io: Io, args: readonly string[], deps: DevelopmentDeps = {}) {
 		this.pi = pi; this.io = io;
-		this.runner = deps.runner ?? processRunner; this.now = deps.now ?? (() => new Date().toISOString());
+		this.runner = deps.runner ?? processRunner; this.now = deps.now ?? (() => new Date().toISOString()); this.loader = deps.loader ?? borderedLoader;
 		this.offline = developmentOffline(args, io.env);
 		this.kb = deps.kb; this.githubRunner = deps.runner; this.lifecyclePorts = deps.lifecycle ?? {};
 		this.foundations = new FoundationsGate({ kb: deps.kb, runner: this.runner, trustDir: foundationsDir(io.homeDir), now: this.now });
@@ -270,7 +272,7 @@ export class DevelopmentSession {
 		await this.apply({ type: "approved", ...(auto ? { by: "foundations" as const, ...(foundations.hash ? { foundations: foundations.hash } : {}) } : {}) }, ctx);
 		// También con receta: auto la sección del issue muestra la receta aprobada.
 		await updateIssueSection(this, ctx);
-		if (auto) ctx.ui.notify("Foundations · receta auto: la receta se aprobó sin revisión humana. Sus comandos siguen Foundations: sin v2 aceptada corren sin preguntar; con v2, patrones coincidentes o sintaxis no soportada piden sí, salvo grant humano exacto vigente.", "info");
+		if (auto) ctx.ui.notify("Foundations · receta auto: la receta se aprobó sin revisión humana. Sus comandos siguen Foundations: sin configurar corren sin preguntar; configurado, las reglas que coinciden y los comandos compuestos piden sí, salvo grant humano exacto vigente.", "info");
 		return true;
 	}
 	// Volver a explorar descarta receta, aprobación y pruebas; también las lecturas y comandos autorizados.

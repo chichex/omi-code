@@ -11,7 +11,9 @@ import { FoundationsGate, effectivePolicy } from "../src/tui/development-foundat
 import { ASK_ALL } from "./helpers/foundations.ts";
 import { COMMAND, HUMAN, KNOWN, REPO, accepted, authorizations, block, choose, commandFixture, key, noPermissionAdded, saves, type CommandFixture } from "./helpers/command-permissions.ts";
 
-const draftKeys = (text: string): readonly string[] => ["\x15", `\x1b[200~${text}\x1b[201~`, "\x13", "\x13"];
+/** El panel abre en la primera política: tres filas abajo está Reglas de comandos y Enter abre su editor. */
+const TO_RULES = ["\x1b[B", "\x1b[B", "\x1b[B", "\r"];
+const draftKeys = (text: string): readonly string[] => [...TO_RULES, "\x15", `\x1b[200~${text}\x1b[201~`, "\x13", "\x13"];
 function edit(f: CommandFixture, text = "npm publish *"): void {
 	choose(f, "edit"); f.uiControl.foundations = () => draftKeys(text);
 }
@@ -29,7 +31,7 @@ test("command_catalog: Editar reglas precarga v2 y cancelar no escribe ni ejecut
 	const f = await commandFixture(t); choose(f, "edit"); const previous = await accepted(f);
 	await assert.rejects(f.check(), /reintent|no se ejecut/i);
 	assert.equal(f.foundationsScreens.length, 1); assert.match(f.foundationsScreens[0]![0]!, /git push \*/);
-	assert.match(f.foundationsScreens[0]![0]!, /arranque: ask/);
+	assert.match(f.foundationsScreens[0]![0]!, /Arranque\s+\[ask\]\s+auto/);
 	assert.equal(saves(f).length, 0); await noPermissionAdded(f); assert.deepEqual(await accepted(f), previous);
 	choose(f, "no"); await assert.rejects(f.check(), /no autorizado/i);
 	assert.equal(authorizations(f).length, 2, "cancelar la edición no ocultó un grant");
@@ -55,7 +57,7 @@ test("command_catalog: lista vacía exige revisión explícita y no autoejecuta 
 
 test("command_catalog: volver de revisión conserva draft y cancelar no persiste", async (t) => {
 	const f = await commandFixture(t); choose(f, "edit"); const previous = await accepted(f);
-	f.uiControl.foundations = () => ["\x15", "\x1b[200~npm publish *\x1b[201~", "\x13", "\x1b", "\x1b"];
+	f.uiControl.foundations = () => [...TO_RULES, "\x15", "\x1b[200~npm publish *\x1b[201~", "\x13", "\x1b", "\x1b", "\x1b"]; // revisión → reglas → lista → cancelar
 	await assert.rejects(f.check(), /reintent|no se ejecut/i);
 	const screens = f.foundationsScreens[0]!;
 	assert.ok(screens.some((screen) => /REVISAR/.test(screen))); assert.match(screens.at(-2)!, /npm publish \*/);

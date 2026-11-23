@@ -12,7 +12,7 @@ import { observeDevelopment } from "./development-observation.ts";
 import { DevelopmentSession, type DevelopmentDeps } from "./development-session.ts";
 import { registerDevelopmentTools } from "./development-tools.ts";
 import { trackExtensionMessages } from "./development-agreement.ts";
-import { beginDevelopment, borderedLoader, registerBeginTool, type BeginChatResult } from "./development-begin.ts";
+import { beginDevelopment, registerBeginTool, type BeginChatResult } from "./development-begin.ts";
 import { beginCommand, BEGIN_SUBCOMMAND, holdSessionSwitch, revokeDevelopmentTicket, sessionSwitchOwner, takeDevelopmentTicket } from "./development-tickets.ts";
 import { restoreIssueTriage } from "./workspace/issue-triage.ts";
 import { IssuePreparationBusyError } from "./workspace/issue-registry.ts";
@@ -95,7 +95,7 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 			let outcome: BeginChatResult | undefined;
 			try {
 				outcome = await beginDevelopment(ctx, { origin: ticket.origin, request: ticket.request }, {
-					runner: session.runner, offline: session.offline, signal: session.lifecycle.signal, now: session.now, loader: deps.loader ?? borderedLoader,
+					runner: session.runner, offline: session.offline, signal: session.lifecycle.signal, now: session.now, loader: session.loader,
 					sessionDir: cli.sessionDir, startHere: () => startHere(ctx), triagePolicy: (context) => session.foundations.triage(context),
 					...(deps.classifyTimeoutMs === undefined ? {} : { classifyTimeoutMs: deps.classifyTimeoutMs }),
 					// Foundations se decide recién acá: después de las guardas sin efectos y antes del sí del arranque.

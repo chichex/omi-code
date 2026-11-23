@@ -68,8 +68,8 @@ export function omiViewLines(t: Theme, snapshot: OmiSnapshot, width: number): st
 		}
 	} else if (!error) lines.push(at ? " Sin proyecto OMI vinculado. Usá omi init para vincularlo." : " Consultando vínculo y ambientes OMI…");
 	// Se parte en líneas: un catálogo largo se ve entero, desplazando la vista.
-	lines.push("", t.fg("accent", " FOUNDATIONS · autonomía del harness"), ...foundations.flatMap((line) => wrapTextWithAnsi(text(line), Math.max(1, width - 2)).map((part) => ` ${part}`)),
-		t.fg("dim", " f editar reglas y políticas · Guardar escribe en la KB y vale ya en esta sesión"));
+	lines.push("", t.fg("accent", " FOUNDATIONS · cuándo te pide confirmación el agente"), ...foundations.flatMap((line) => wrapTextWithAnsi(text(line), Math.max(1, width - 2)).map((part) => ` ${part}`)),
+		t.fg("dim", " f editar"));
 	lines.push("", t.fg("accent", " OPERACIONES OMI"), " Estado, variables, recursos, jobs, versiones, logs y deploys:", " pedilos en Chat. Se conservan las herramientas y confirmaciones.", "", t.fg("dim", " Vista de sólo lectura. Un estado running no es un health check."));
 	return lines.map((line) => surface(t, line, width));
 }

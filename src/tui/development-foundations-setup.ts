@@ -1,5 +1,5 @@
 // Configurar Foundations es una acción humana: abrir no acepta, guarda ni concede un grant. El harness ya no
-// lo ofrece solo al arrancar: sin Foundations v2 nada pregunta. Se abre con /omi-foundations o f en la vista OMI.
+// lo ofrece solo al arrancar: sin Foundations nada pregunta. Se abre con /omi-foundations o f en la vista OMI.
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { checkBlock, type FoundationsBlock } from "../harness/foundations.ts";
 import { foundationsDir, readTrust, type TrustKey } from "../harness/foundations-trust.ts";
@@ -29,16 +29,20 @@ export async function editFoundations(ctx: ExtensionContext, session: Developmen
 		if (state) await session.assertUnchanged(state, ctx);
 	};
 	await assertCurrent();
-	const reading = await session.foundations.read(ctx, ioSignal()); editable(reading);
+	// Leer la KB puede tardar: sin espera visible, f en la pantalla OMI parecía no hacer nada.
+	const reading = await session.loader(ctx, "Leyendo Foundations de la KB", (cancel) => session.foundations.read(ctx, AbortSignal.any([ioSignal(), cancel])));
+	if (!reading) { ctx.ui.notify("Lectura de Foundations cancelada: no se abrió el panel ni se cambió nada.", "info"); return false; }
+	editable(reading);
 	if (state && issueRepo(state.source.url) !== reading.key.repo) throw new Error("El repo de origin no coincide con el issue; no se cambió Foundations.");
 	const key = reading.key; const trustDir = foundationsDir(session.io.homeDir);
 	const record = await readTrust(trustDir, key);
-	const notice = reading.kind === "invalid" ? `Configuración inválida u obsoleta: ${reading.reason}. Borrador nuevo, sin heredar permisos.` : "Abrir no acepta ni escribe. Sólo Guardar explícitamente aplica esta revisión.";
+	// Abrir nunca acepta ni escribe: sólo se avisa lo que la persona tiene que saber para decidir.
+	const notice = reading.kind === "invalid" && !reading.legacy ? `La configuración de la KB es inválida (${reading.reason}): empezás de cero, sin heredar permisos.` : undefined;
 	session.emit("Editando Foundations", true);
 	let block: FoundationsBlock | undefined;
 	try {
 		block = await showFoundationsPanel(ctx, { repo: key.repo, product: key.product, kbUrl: key.kbUrl,
-			...(reading.kind === "valid" ? { initial: reading.block } : {}), ...(record?.accepted ? { previousAccepted: record.accepted.block } : {}), notice }, signal);
+			...(reading.kind === "valid" ? { initial: reading.block } : {}), ...(record?.accepted ? { previousAccepted: record.accepted.block } : {}), ...(notice ? { notice } : {}) }, signal);
 	} finally { session.emit(); }
 	if (!block) return false;
 	await assertCurrent();
@@ -54,6 +58,6 @@ export async function editFoundations(ctx: ExtensionContext, session: Developmen
 	session.foundations.supersede(ctx);
 	await commitFoundationsSave(kb, key, block, prepared, { trustDir, now: session.now, signal: ioSignal(),
 		beforeAccept: assertCurrent, onAccepted: (pin) => { session.foundations.replace(ctx, pin); session.emit(); } });
-	ctx.ui.notify("Foundations v2 guardado en la KB y aceptado localmente. No se ejecutó ningún comando ni se concedió un grant; reintentá cualquier comando pendiente.", "info");
+	ctx.ui.notify("Foundations guardado en la KB y aceptado localmente. No se ejecutó ningún comando ni se concedió un grant; reintentá cualquier comando pendiente.", "info");
 	return true;
 }
