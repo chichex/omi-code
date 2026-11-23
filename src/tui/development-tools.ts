@@ -16,7 +16,7 @@ import { registerAgreement } from "./development-agreement.ts";
 import { syncWorkStack } from "./development-stack.ts";
 
 const ActionSchema = Type.Object({
-	action: Type.Union([Type.Literal("status"), Type.Literal("explored"), Type.Literal("inferences"), Type.Literal("ask"), Type.Literal("planned"), Type.Literal("diagnosed"), Type.Literal("specified"), Type.Literal("approve"), Type.Literal("step"), Type.Literal("verified"), Type.Literal("retry"), Type.Literal("pause"), Type.Literal("refresh"), Type.Literal("publish"), Type.Literal("stack"), Type.Literal("agreed")]),
+	action: Type.Union([Type.Literal("status"), Type.Literal("explored"), Type.Literal("inferences"), Type.Literal("ask"), Type.Literal("planned"), Type.Literal("diagnosed"), Type.Literal("specified"), Type.Literal("approve"), Type.Literal("step"), Type.Literal("verified"), Type.Literal("retry"), Type.Literal("amend"), Type.Literal("pause"), Type.Literal("refresh"), Type.Literal("publish"), Type.Literal("stack"), Type.Literal("agreed")]),
 	exploration: Type.Optional(ExplorationSchema), inferences: Type.Optional(Type.Array(InferenceInputSchema, { maxItems: 100 })), plan: Type.Optional(PlanSchema), spec: Type.Optional(SpecSchema),
 	id: Type.Optional(text(100)), cause: Type.Optional(text()), reproduction: Type.Optional(text(100)), size: Type.Optional(Type.Union([Type.Literal("small"), Type.Literal("large")])), reason: Type.Optional(text()),
 	quote: Type.Optional(text(2000)), agreement: Type.Optional(text(2000)), replan: Type.Optional(Type.Boolean()),
@@ -52,7 +52,7 @@ async function currentExploration(session: DevelopmentSession, ctx: ExtensionCon
 export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentSession): void {
 	pi.registerTool({
 		name: "omi_workflow", label: "Desarrollo: flujo", defaultActive: false, exposure: "model-only", executionMode: "sequential", parameters: ActionSchema,
-		description: "Avanza el harness de desarrollo activo. Explorar, resolver inferencias, receta, diagnóstico/spec, aprobación (humana o de Foundations), pasos, verificar y PR draft. No acepta evidencia ni aprobaciones declaradas por el modelo. status consulta; pause bloquea. stack actualiza un stack de PRs publicado (merge y push normal; pide el sí sólo con push_pr: ask). agreed registra un acuerdo de alcance dicho por la persona en el chat, con la cita textual de su mensaje (OMI la verifica). start/resume son comandos humanos /omi-work.",
+		description: "Avanza el harness de desarrollo activo. Explorar, resolver inferencias, receta, diagnóstico/spec, aprobación (humana o de Foundations), pasos, verificar y PR draft. retry gasta una vuelta y es para un D, un gate o security fallados; amend corrige un hallazgo de un lente que sólo avisa sin gastar vuelta. No acepta evidencia ni aprobaciones declaradas por el modelo. status consulta; pause bloquea. stack actualiza un stack de PRs publicado (merge y push normal; pide el sí sólo con push_pr: ask). agreed registra un acuerdo de alcance dicho por la persona en el chat, con la cita textual de su mensaje (OMI la verifica). start/resume son comandos humanos /omi-work.",
 		promptSnippet: "Registrar el trabajo de desarrollo y su receta; pedir decisiones y permisos humanos",
 		async execute(_id, input, signal, _onUpdate, ctx) {
 			if (input.action === "status") return result(session);
@@ -92,6 +92,11 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 					await session.apply({ type: "verified", fingerprint: snapshot.fingerprint }, ctx); break;
 				}
 				case "retry": await session.apply({ type: "retry", reason: checked(text(), input.reason) }, ctx); break;
+				case "amend": {
+					const snapshot = await inspectCheckout(session.current(ctx).checkout, session.runner, signal);
+					if (!snapshot.clean) throw new Error("La corrección liviana parte del cambio commiteado y limpio");
+					await session.apply({ type: "amend", reason: checked(text(), input.reason), fingerprint: snapshot.fingerprint }, ctx); break;
+				}
 				case "pause": await session.apply({ type: "pause", reason: checked(text(), input.reason) }, ctx); terminate = true; break;
 				case "refresh": {
 					// Descarta aprobación y evidencia: el modelo lo propone; con receta: ask, la persona lo confirma.
@@ -134,7 +139,7 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 		async execute(_id, { lens }, signal, _update, ctx) {
 			const result = await runLens(session, lens, ctx, AbortSignal.any([signal ?? new AbortController().signal, session.lifecycle.signal]));
 			const blocking = result.review.lens === "security" && result.review.verdict === "fail";
-			const notice = result.review.verdict === "pass" ? undefined : blocking ? "El fail de seguridad bloquea Verificar: corregí el cambio con retry." : "Aviso: queda visible en el progreso y en el PR draft y no bloquea Verificar. No repitas el lente para borrarlo.";
+			const notice = result.review.verdict === "pass" ? undefined : blocking ? "El fail de seguridad bloquea Verificar: corregí el cambio con retry." : "Aviso: queda visible en el progreso y en el PR draft y no bloquea Verificar. No repitas el lente para borrarlo ni uses retry. Si vale la pena corregirlo, usá omi_workflow action:amend con el motivo: no gasta vuelta.";
 			return { content: [{ type: "text", text: JSON.stringify({ ...result.review, ...(notice ? { notice } : {}), ...(result.error ? { error: result.error } : {}) }) }], details: result.review, usage: result.usage, isError: !!result.error || blocking };
 		},
 	});

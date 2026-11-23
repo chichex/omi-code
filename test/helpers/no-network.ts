@@ -49,6 +49,9 @@ Object.assign(net.Socket.prototype, {
 });
 
 if (!process.env.NODE_OPTIONS?.includes(import.meta.url)) process.env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ""} --import=${import.meta.url}`.trim();
+// git no es Node y no pasa por el connect de arriba: sólo transportes locales (rutas y file://). Un fetch o un push
+// a GitHub de un test falla al instante, como una red caída.
+process.env.GIT_ALLOW_PROTOCOL = "file";
 
 // Cada archivo de test anota aparte: así la falla cae en el archivo que lanzó el proceso.
 if (process.argv[1]?.endsWith(".test.ts")) {

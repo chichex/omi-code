@@ -8,7 +8,7 @@ import { validateLifecycleState } from "./lifecycle-invariants.ts";
 import { validateCorrectionWorkflow } from "./correction-invariants.ts";
 
 // Topes compartidos por el esquema y el reducer: el reducer los respeta antes de validar.
-export const MAX_HISTORY = 1000; export const MAX_STEPS = 50; export const MAX_STACK = 10; export const MAX_ATTEMPTS = 100; export const MAX_EVIDENCE = 1000; export const MAX_REVIEWS = 100; export const MAX_AGREEMENTS = 50; export const MAX_GRANTS = 200;
+export const MAX_HISTORY = 1000; export const MAX_STEPS = 50; export const MAX_STACK = 10; export const MAX_ATTEMPTS = 100; export const MAX_EVIDENCE = 1000; export const MAX_REVIEWS = 100; export const MAX_AGREEMENTS = 50; export const MAX_GRANTS = 200; export const MAX_AMENDS = 2;
 export const text = (maxLength = 4000) => Type.String({ minLength: 1, maxLength, pattern: "\\S" });
 const list = () => Type.Array(text(), { maxItems: 100 });
 const nullableText = () => Type.Union([text(8192), Type.Null()]);
@@ -115,6 +115,8 @@ export const WorkflowV2Schema = Type.Object({
  // Disabled no significa omitido/no-aplica ni permiso: habilitar/adoptar es una operación host explícita.
  lifecycle: LifecycleStateSchema,
  pullRequest: PullRequestSchema,
+ // Correcciones livianas de la vuelta actual: el contenido del que partió cada una. Opcional para estados previos.
+ amends: Type.Optional(Type.Array(Type.Object({ from: text(128), reason: text(), at: text(100) }, { additionalProperties: false }), { maxItems: MAX_AMENDS })),
  // El renderer v1 permanece ligado al pending legacy y no se cambia al migrar/reanudar.
  publicationFormat: Type.Literal(1),
  agreements: Type.Optional(Type.Array(AgreementSchema, { maxItems: MAX_AGREEMENTS })),

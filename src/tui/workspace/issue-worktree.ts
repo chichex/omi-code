@@ -1,4 +1,5 @@
-// Mutaciones Git sólo tras el sí humano al empezar un trabajo (development-begin). Nunca checkout/stash/fetch en el origen.
+// Mutaciones Git sólo tras el sí humano al empezar un trabajo (development-begin). En el origen, sólo un pull fast-forward
+// de main (refreshMain); nunca checkout, stash, merge, rebase ni reset.
 import { execFile } from "node:child_process";
 import { lstat, mkdir, realpath } from "node:fs/promises";
 import { devNull } from "node:os";
@@ -36,12 +37,33 @@ async function available(path: string): Promise<void> {
 	catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
 	throw new Error(`Ya existe ${path}. Abrí ese worktree o su sesión con /resume; no se sobrescribió nada.`);
 }
+/** Tras el sí, antes de planear el worktree: trae main de origin y la avanza sólo si es fast-forward, como un
+ * `git pull --ff-only`. Si main tiene commits propios, cambios que chocan o no hay red, no se toca: el worktree sale
+ * de main local y el aviso dice por qué. Sin origin no hay nada que traer. */
+export async function refreshMain(git: Pick<GitSnapshot, "root">, signal?: AbortSignal, run: WorktreeCommand = gitCommand): Promise<string> {
+	// Un timeout o un error del proceso es un fetch fallido, no un arranque fallido.
+	const attempt = (args: string[], cwd = git.root) => run(args, cwd, signal).catch((error: unknown) => { signal?.throwIfAborted(); return { code: -1, stdout: "", stderr: error instanceof Error ? error.message : "" }; });
+	const why = (result: { stderr: string }) => { const detail = safeText(result.stderr).trim().slice(0, 500); return detail ? ` ${detail}` : ""; };
+	if ((await attempt(["remote", "get-url", "origin"])).code !== 0) return "";
+	const fetched = await attempt(["fetch", "--quiet", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"]);
+	if (fetched.code !== 0) return `No se pudo traer main de origin: el worktree sale de main local.${why(fetched)}`;
+	const tip = async (ref: string) => (await attempt(["rev-parse", "--verify", `${ref}^{commit}`])).stdout.trim();
+	const local = await tip("refs/heads/main"); const remote = await tip("refs/remotes/origin/main");
+	if (!local || !remote || local === remote) return "";
+	if ((await attempt(["merge-base", "--is-ancestor", local, remote])).code !== 0) return "main local tiene commits que no están en origin: no se actualizó y el worktree sale de main local.";
+	const checkedOut = (await registeredIssueWorktrees(git, signal, run)).find((tree) => tree.branch === "refs/heads/main");
+	// Con main en un checkout, el merge fast-forward actualiza sus archivos y frena si choca con cambios sin commitear.
+	const updated = checkedOut
+		? await attempt(["merge", "--ff-only", "--no-autostash", "--quiet", remote], checkedOut.worktree)
+		: await attempt(["update-ref", "refs/heads/main", remote, local]);
+	return updated.code === 0 ? "" : `No se pudo actualizar main${checkedOut ? ` en ${checkedOut.worktree}` : ""}: el worktree sale de main local.${why(updated)}`;
+}
 /** Sólo lectura: la base de todo worktree de issue es el commit de main local. */
 export async function mainBaseCommit(git: Pick<GitSnapshot, "root">, signal?: AbortSignal, run: WorktreeCommand = gitCommand): Promise<string> {
 	signal?.throwIfAborted();
 	const base = await run(["rev-parse", "--verify", "refs/heads/main^{commit}"], git.root, signal);
 	const baseCommit = base.stdout.trim();
-	if (base.code !== 0 || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(baseCommit)) throw new Error("No hay una main local con commits. Prepará main antes de iniciar el issue; OMI no hace fetch ni usa otra rama como base.");
+	if (base.code !== 0 || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(baseCommit)) throw new Error("No hay una main local con commits. Prepará main antes de iniciar el issue; OMI no usa otra rama como base.");
 	return baseCommit;
 }
 export async function checkIssueWorktree(git: Pick<GitSnapshot, "root" | "mainRoot">, number: number, signal?: AbortSignal, run: WorktreeCommand = gitCommand): Promise<{ worktree: string; baseCommit: string }> {

@@ -4,7 +4,7 @@ import type { Evidence, Workflow } from "./model.ts";
 import { PHASE_LABELS } from "./phases.ts";
 import { lensStatuses } from "./lenses.ts";
 import { fences } from "./fences.ts";
-import { agreementLine, caseLines, cell, code, evidenceResult, LENSES, list, recipeApproval, revising, ROUTES, text, TYPES, VERDICTS } from "./markdown.ts";
+import { agreementLine, CARRIED, caseLines, cell, code, evidenceResult, LENSES, list, recipeApproval, revising, ROUTES, text, TYPES, VERDICTS } from "./markdown.ts";
 import { STACK_STATUS, stackRows } from "./stack.ts";
 export const SECTION_START = "<!-- omi:harness:start -->";
 export const SECTION_END = "<!-- omi:harness:end -->";
@@ -108,7 +108,7 @@ function lenses(w: Workflow, detail: Detail | "verdicts"): string[] {
 	const findings = (all: string[]) => detail === "verdicts" ? [] : detail === "full" || all.length <= 1 ? all.map((f) => `  - ${text(f)}`)
 		: [`  - ${text(all[0]!)}`, `  - _y ${all.length - 1} hallazgos más en OMI_`];
 	return ["", "### Avisos de los lentes", "Los lentes asesoran: unknown y fail quedan como aviso y no bloquean Verificar ni el PR draft. Sólo un fail de seguridad bloquea.",
-		...statuses.flatMap((st) => [`- **${LENSES[st.lens]}:** ${VERDICTS[st.verdict]}${st.blocking ? " · bloquea" : ""}`, ...findings(st.findings)])];
+		...statuses.flatMap((st) => [`- **${LENSES[st.lens]}:** ${VERDICTS[st.verdict]}${st.blocking ? " · bloquea" : ""}${st.carried ? CARRIED : ""}`, ...findings(st.findings)])];
 }
 const FOOTER = "<sub>Sección administrada por OMI: se reescribe entera y lo que se edite acá se pierde. El pedido es el texto de arriba.</sub>";
 const DETAIL = "El detalle completo está en OMI (`/omi-progress`) y en el PR draft.";

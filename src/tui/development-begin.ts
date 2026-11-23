@@ -37,7 +37,7 @@ const MAX_ISSUE = 999_999_999;
 // se leería distinto de lo que se mostró, y el texto vuelve como contexto de un modelo.
 const INVISIBLE = /[\p{Cf}\u{E0100}-\u{E01EF}]/u;
 const TAIL = "No se escribe código hasta aprobar la receta. Qué pide tu sí (receta, comandos, push y PR) lo decide Foundations. Termina en un PR draft, sin merge ni deploy.";
-const FRESH = "Se clasifica y se prepara un worktree nuevo desde main local, en una sesión nueva, y se explora el código.";
+const FRESH = "Se clasifica, se trae main de origin (sólo fast-forward) y se prepara un worktree nuevo desde main, en una sesión nueva, y se explora el código.";
 const shown = (value: string) => value.split("\n").map(safeText).join("\n");
 
 /** Sin efectos: lo que el agente o el panel no pueden pedir. Lo usa la tool antes de terminar el turno. */
@@ -142,7 +142,7 @@ export async function beginDevelopment(ctx: ExtensionCommandContext, ticket: Beg
 		const decision = decideDevelopmentRequest(classification, pin.policy);
 		if (decision.kind !== "harness") return { classification, decision };
 		prior = { ...classification, title, body };
-		if (!(await options.confirm(ctx, "Crear issue y empezar el trabajo", dialog(`Clasificación previa: ${shown(decision.reason)} Se crea un issue en ${repo} con el pedido de abajo. Se prepara un worktree desde main local y una sesión nueva para explorar el código, sin volver a clasificar.`, ticket, `${shown(title)}\n\n${shown(body)}`)))) {
+		if (!(await options.confirm(ctx, "Crear issue y empezar el trabajo", dialog(`Clasificación previa: ${shown(decision.reason)} Se crea un issue en ${repo} con el pedido de abajo. Se trae main de origin (sólo fast-forward) y se prepara un worktree desde main y una sesión nueva para explorar el código, sin volver a clasificar.`, ticket, `${shown(title)}\n\n${shown(body)}`)))) {
 			ctx.ui.notify("No se creó nada: el chat sigue igual.", "info"); return;
 		}
 		current();
@@ -222,7 +222,7 @@ export interface BeginToolHost { offline: boolean; busy: () => boolean; onReques
 export function registerBeginTool(pi: ExtensionAPI, host: BeginToolHost): void {
 	pi.registerTool({
 		name: "omi_work_begin", label: "Desarrollo: empezar trabajo", executionMode: "sequential", parameters: BeginToolSchema,
-		description: "Evalúa un pedido de código que vale la pena seguir. Con title y body, OMI clasifica antes de crear issue o recursos: un cambio simple sigue en el chat original; si falta información, vuelve con preguntas sin crear nada. Si requiere harness, crea el issue con el texto del pedido sin preguntar, salvo que Foundations diga arranque: ask (entonces pide el sí), y reutiliza el triage para preparar worktree desde main local y sesión nueva en Explorar. Con issue existente siempre usa harness y ese mismo número; retoma sin reclasificar. La tool termina el turno y bloquea otras tools hasta resolver la clasificación/confirmación; no crea nada por sí misma. No autoriza comandos o acciones sensibles. La sesión nueva no hereda el chat: body debe traer pedido, contexto y criterios completos.",
+		description: "Evalúa un pedido de código que vale la pena seguir. Con title y body, OMI clasifica antes de crear issue o recursos: un cambio simple sigue en el chat original; si falta información, vuelve con preguntas sin crear nada. Si requiere harness, crea el issue con el texto del pedido sin preguntar, salvo que Foundations diga arranque: ask (entonces pide el sí), y reutiliza el triage para preparar worktree desde main (antes la trae de origin, sólo fast-forward) y sesión nueva en Explorar. Con issue existente siempre usa harness y ese mismo número; retoma sin reclasificar. La tool termina el turno y bloquea otras tools hasta resolver la clasificación/confirmación; no crea nada por sí misma. No autoriza comandos o acciones sensibles. La sesión nueva no hereda el chat: body debe traer pedido, contexto y criterios completos.",
 		promptSnippet: "Clasificar un pedido antes de crear issue o empezar el harness; los cambios simples vuelven al chat",
 		promptGuidelines: [
 			"Cuando la persona pide un cambio de código que vale la pena seguir, llamá a omi_work_begin en lugar de editar directo. Si nombra un issue (#N), pasá issue (siempre harness); si no, title y body para clasificar ANTES de crear un issue. OMI puede devolver un cambio simple o preguntas al chat: no repitas el mismo pedido sin información nueva. Clasificar no autoriza acciones ni sustituye las reglas y permisos del proyecto.",
