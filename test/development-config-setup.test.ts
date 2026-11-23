@@ -106,6 +106,22 @@ test("config_setup: una sesión nueva no abre el setup si la persona ya está es
 	await prompted.session("new"); assert.deepEqual(titles(prompted), ["Foundations de"], "/new no trae el prompt del arranque");
 });
 
+// La lectura de la KB puede tardar hasta 30 s: si la charla ya empezó cuando termina, la sesión ya no es nueva.
+test("config_setup: una lectura lenta no abre el setup en medio de una charla que ya empezó mientras leía", async (t) => {
+	const f = await fixture(t); f.uiControl.questions = () => [KEYS.esc];
+	const ready = f.kb.ready; let release = () => {};
+	const gate = new Promise<void>((resolve) => { release = resolve; });
+	f.kb.ready = async (...args) => { await gate; return ready(...args); };
+	const manager = SessionManager.create(f.checkout.root, join(f.home, "sessions-slow"));
+	Reflect.set(f.context, "sessionManager", manager);
+	await f.attach(); await f.emit("session_start", { reason: "startup" });
+	// La persona pregunta y el turno termina antes que la lectura: idle, sin pendientes y con el editor vacío.
+	manager.appendMessage({ role: "user", content: "¿Qué hace este repo?", timestamp: Date.now() });
+	release(); await f.settled();
+	assert.equal(f.asked.length, 0, "no aparece un modal entre dos turnos de una charla ya empezada");
+	assert.equal(await readTrust(foundationsDir(f.home), trustKey(f.kb)), undefined, "no se postergó nada");
+});
+
 // Un setup a la vez: el modal de uno reemplazaría al del otro y la persona vería un «cancelado» que no eligió.
 test("config_setup: la oferta de una sesión nueva y /omi-setup no abren dos setups a la vez", async (t) => {
 	const cancelled = (messages: string[]) => messages.filter((message) => /Configuración cancelada/.test(message)).length;
