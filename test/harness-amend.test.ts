@@ -119,3 +119,14 @@ test("harness_amend refresh y un replan del chat descartan las correcciones livi
 	const replanned = send(s, { type: "agreed", quote: "cambiemos el alcance", summary: "otro alcance", replan: true });
 	assert.equal(replanned.version === 2 ? replanned.amends : "v1", undefined);
 });
+
+test("harness_amend un lente sin resultado no es un hallazgo: no justifica amend", () => {
+	let s = verify(verifying(), "tree");
+	const noResult: Review = { ...review("quality", "tree", "unknown", ["Sin resultado del lente: conexión (2 intentos)."]), noResult: true };
+	for (const r of [noResult, review("compliance", "tree"), review("security", "tree")]) s = lens(s, r);
+	assert.throws(() => amend(s), /ningún hallazgo/);
+	// Un unknown juzgado por el lente, con su hallazgo, sí lo justifica.
+	let judged = verify(verifying(), "tree");
+	for (const r of [review("quality", "tree", "unknown", ["src/a.ts:1 · no se puede juzgar el caso borde"]), review("compliance", "tree"), review("security", "tree")]) judged = lens(judged, r);
+	assert.equal(amend(judged).phase, "implement");
+});

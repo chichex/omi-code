@@ -281,7 +281,7 @@ function amend(state: WorkflowV2, reason: string, fingerprint: string, at: strin
  requireCondition(nonempty(fingerprint), "falta el contenido que se corrige");
  requireCondition(state.status === "active" && !decisionBlock(state) && state.recipe, "hay un bloqueo pendiente");
  requireCondition(!blockingFailure(state, fingerprint), "falló un D, un gate o security sobre este contenido: eso pide retry, no amend");
- requireCondition(executionReviews(state).some(r => r.fingerprint === fingerprint && r.lens !== "security" && (r.verdict === "fail" || r.findings.length > 0)), "amend corrige un hallazgo de un lente sobre este contenido y no hay ningún hallazgo");
+ requireCondition(executionReviews(state).some(r => r.fingerprint === fingerprint && r.lens !== "security" && !r.noResult && (r.verdict === "fail" || r.findings.length > 0)), "amend corrige un hallazgo de un lente sobre este contenido y no hay ningún hallazgo");
  const amends = state.amends ?? [];
  requireCondition(amends.length < MAX_AMENDS, `ya se usaron las ${MAX_AMENDS} correcciones livianas de esta vuelta: lo que queda va como aviso en el PR`);
  requireCondition(state.steps.length < MAX_STEPS, "no quedan pasos para otra corrección; dividí la tarea");
