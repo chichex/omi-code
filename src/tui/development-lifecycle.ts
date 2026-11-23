@@ -25,11 +25,13 @@ import { startGhaReview } from "../harness/lifecycle-gha-review.ts";
 import { landReadiness, prepareLand, landPullRequest, acceptObservedMerge } from "../harness/lifecycle-land.ts";
 import { markDraftReady } from "../harness/draft-ready.ts";
 import { lifecycleBlocks } from "../harness/lifecycle-progress.ts";
+import { stackUnsupportedText } from "../harness/continuity-pause-text.ts";
 import type { GhaShipDeps } from "../harness/ship-context.ts";
 import type { ToolRuntime } from "../tools/types.ts";
 import { createLocalReviewCall } from "./development-local-review.ts";
 import { HARNESS_KB_URL } from "./defaults.ts";
 import type { DevelopmentSession } from "./development-session.ts";
+import type { ChainConsent } from "./development-lifecycle-chain.ts";
 
 /** Puertos de prueba. Sin ellos se usan los transportes acotados de src/harness. */
 export interface LifecyclePorts {
@@ -86,16 +88,22 @@ function retryOf(s: EnabledLifecycle, kind: OperationKind, targetId: string | nu
 export function newIntent(s: EnabledLifecycle, kind: OperationKind, targetId: string | null = null): LifecycleIntent {
 	const id = randomUUID(); return { id: `${kind}:${id}`, key: `${kind}:${id}`, kind, subjectId: currentSubject(s).id, targetId, correlationId: id, retryOf: retryOf(s, kind, targetId) };
 }
-export interface DecideOptions { mode: "ask" | "auto" | undefined; human?: boolean; effectHash?: string; activity?: LifecycleActivityControls }
+/** `chain`: el sí de continuidad ask pendiente de la etapa. Lo resuelve este diálogo si pregunta; si no, se pregunta aparte. */
+export interface DecideOptions { mode: "ask" | "auto" | undefined; human?: boolean; effectHash?: string; activity?: LifecycleActivityControls; chain?: ChainConsent | undefined }
 /** ask (o un efecto que siempre es humano) pregunta; auto sólo avisa. Esperar a la persona no gasta tiempo activo. */
 export async function decide(session: DevelopmentSession, ctx: ExtensionContext, intent: LifecycleIntent, s: EnabledLifecycle, title: string, description: string, options: DecideOptions): Promise<LifecycleDecision> {
-	const human = options.human === true || options.mode !== "auto";
-	if (human) {
+	const human = options.human === true || options.mode !== "auto", chain = options.chain;
+	if (human || chain?.pending) {
 		await options.activity?.setMode("human-wait");
-		let approved: boolean;
-		try { approved = await session.confirm(ctx, title, description); } finally { await options.activity?.setMode("active"); }
+		let approved = true;
+		try {
+			if (human) approved = chain ? await chain.confirmEffect(title, description) : await session.confirm(ctx, title, description);
+			// El efecto no pregunta: la continuidad pendiente se pide sola y no se vuelve permiso del efecto.
+			else await chain?.ensure();
+		} finally { await options.activity?.setMode("active"); }
 		if (!approved) throw new LifecycleDeclined(`${title}: no. No se ejecutó nada.`);
-	} else ctx.ui.notify(`Lifecycle · ${intent.kind} auto: ${title}, sin preguntar.`, "info");
+	}
+	if (!human) ctx.ui.notify(`Lifecycle · ${intent.kind} auto: ${title}, sin preguntar.`, "info");
 	return { id: `decision:${randomUUID()}`, kind: intent.kind, subjectId: intent.subjectId, targetId: intent.targetId, configHash: s.pinHash, source: human ? "person" : "policy", ...(options.effectHash ? { effectHash: options.effectHash } : {}), at: session.now() };
 }
 /** Actividad → decisión → reserva → una invocación → recibo, por el coordinador raíz. El estado vuelve siempre a la sesión. */
@@ -111,16 +119,27 @@ export async function operate(session: DevelopmentSession, ctx: ExtensionContext
 export const receipt = (intent: LifecycleIntent, externalId: string, at: string, outcome: "succeeded" | "failed" = "succeeded") =>
 	({ operationId: intent.id, correlationId: intent.correlationId, subjectId: intent.subjectId, targetId: intent.targetId, externalId: externalId.slice(0, 256), outcome, verifiedSubjectId: intent.subjectId, at });
 
-export async function adoptLifecycle(session: DevelopmentSession, ctx: ExtensionContext, publication?: { head: string; number: number; revision: number; pinHash: string }): Promise<boolean> {
+/** `consent`: entrada ask. Su único sí es el de la adopción, con lo que se fija, y va antes de leer GitHub. */
+export async function adoptLifecycle(session: DevelopmentSession, ctx: ExtensionContext, publication?: { head: string; number: number; revision: number; pinHash: string }, consent?: ChainConsent): Promise<boolean> {
 	const state = session.current(ctx); const signal = session.lifecycle.signal;
 	const origin = session.observationOrigin();
 	if (state.version !== 2) throw new Error("Estado del harness sin migrar; retomalo con /omi-work resume.");
 	if (state.lifecycle.status === "enabled") { ctx.ui.notify(session.status(), "info"); return false; }
 	if (state.phase !== "done" || state.publication.status !== "opened" || state.pullRequest?.ownership !== "unadopted") throw new Error("Adoptar requiere el PR draft que abrió este trabajo (etapa «PR draft abierto»).");
-	if (state.publication.stack) throw new Error("Un stack de PRs todavía no se puede adoptar para Review, Land y Ship.");
+	if (state.publication.stack) throw new Error(stackUnsupportedText(state.publication.stack.length));
 	if (session.offline) throw new Error("Adoptar necesita leer el PR en GitHub; quitá --offline.");
 	const pin = await acceptedPin(session, state), client = githubClient(session, state), pr = state.pullRequest;
 	if (publication && publication.pinHash !== pin.accepted.blockHash) throw new Error("La configuración de entrada cambió; hay que revisar su continuidad antes de adoptar.");
+	// PR, rama, base y HEAD del trabajo: la lectura de GitHub de abajo exige los mismos antes de adoptar.
+	const title = `Habilitar Review, Land y Ship en el PR #${pr.number}`;
+	const description = [`PR #${pr.number} · ${state.checkout.branch} → ${pr.base} · HEAD ${pr.head.slice(0, 12)}`, "", "Configuración aceptada:", lifecycleDiff(undefined, pin.accepted.block, pin.key), "",
+		`${consent ? "" : "Habilitar no ejecuta nada ahora. "}Review, correcciones, push, merge y Ship piden su propio permiso según esta configuración (ask pregunta antes). En chichex/omi-code merge y dispatch son siempre humanos.`].join("\n");
+	if (consent?.pending) {
+		if (!(await consent.confirmEffect(title, description))) throw new LifecycleDeclined(`${title}: no. No se habilitó nada.`);
+		// El sí vale para la configuración mostrada: si cambió mientras esperaba, no se adopta con otra.
+		if ((await acceptedPin(session, state)).accepted.blockHash !== pin.accepted.blockHash) throw new Error("La configuración de entrada cambió mientras esperaba el sí; no se adopta.");
+		await session.assertUnchanged(state, ctx);
+	}
 	const pull = await readPull(client, pr.number, signal), snapshot = await inspectCheckout(state.checkout, session.runner, signal);
 	if (pull.state !== "open" || pull.merged || pull.number !== pr.number || pull.head.sha !== pr.head || pull.head.ref !== state.checkout.branch || pull.base.ref !== pr.base || pull.base.repo.full_name.toLowerCase() !== client.repo || pull.head.repo?.full_name.toLowerCase() !== client.repo)
 		throw new Error(`El PR #${pr.number} cambió (HEAD, rama, base o estado) desde que se abrió; no se adopta.`);
@@ -128,9 +147,7 @@ export async function adoptLifecycle(session: DevelopmentSession, ctx: Extension
 	signal.throwIfAborted(); ctx.signal?.throwIfAborted();
 	if (session.observationOrigin()?.epoch !== origin?.epoch) throw new Error("La sesión cambió mientras se comprobaba el draft; no se adopta.");
 	const subject = { id: `pr:${pr.number}:${pull.head.sha}`, repo: client.repo, number: pr.number, branch: pull.head.ref, base: pull.base.ref, headSha: pull.head.sha, baseSha: pull.base.sha, contentHash: snapshot.fingerprint, mergedSha: null };
-	const description = [`PR #${pr.number} · ${subject.branch} → ${subject.base} · HEAD ${subject.headSha.slice(0, 12)}`, "", "Configuración aceptada:", lifecycleDiff(undefined, pin.accepted.block, pin.key), "",
-		"Habilitar no ejecuta nada ahora. Review, correcciones, push, merge y Ship piden su propio permiso según esta configuración (ask pregunta antes). En chichex/omi-code merge y dispatch son siempre humanos."].join("\n");
-	if (!publication && !(await session.confirm(ctx, `Habilitar Review, Land y Ship en el PR #${pr.number}`, description))) { ctx.ui.notify("No se habilitó nada.", "info"); return false; }
+	if (!publication && !(await session.confirm(ctx, title, description))) { ctx.ui.notify("No se habilitó nada.", "info"); return false; }
 	await session.update(ctx, saved => adoptPostPrWorkflow(saved, pin, subject, { id: `adopt:${randomUUID()}`, source: publication ? "publication" : "person", at: session.now() }, publication));
 	ctx.ui.notify(`${session.status()}\nSeguí con /omi-work review.`, "info");
 	return true;
@@ -166,13 +183,14 @@ async function reviewFacts(session: DevelopmentSession, ctx: ExtensionContext, r
 		approval: { reviewer: request.workflow.path, state: gha.verdict === "pass" ? "approved" : "changes-requested", externalId: `run:${gha.runId}:${gha.runAttempt}` } } };
 }
 export interface ObservedLifecycleReview { operationId: string; subjectId: string }
-export async function reviewLifecycle(session: DevelopmentSession, ctx: ExtensionContext): Promise<ObservedLifecycleReview> {
+export async function reviewLifecycle(session: DevelopmentSession, ctx: ExtensionContext, chain?: ChainConsent): Promise<ObservedLifecycleReview> {
 	await freshPin(session, ctx);
 	const { s } = enabledWork(session, ctx); const config = currentLifecyclePin(s).accepted.block, subject = currentSubject(s), provider = config.review.provider;
 	if (s.stage !== "review") throw new Error(`Review corre en la etapa Review; ahora: ${s.stage}.`);
 	// GitHub sólo se lee: con una Review ya confirmada de este HEAD, releer comentarios y checks no es otro efecto.
 	const done = s.operations.findLast(o => o.kind === "review" && o.subjectId === subject.id && o.status === "confirmed" && o.receipt.outcome === "succeeded");
 	if (provider.kind === "github" && done && done.status === "confirmed") {
+		await chain?.ensure(); // Releer no pregunta: si la cadena llegó con ask pendiente, se pide antes de avanzar.
 		const { state } = enabledWork(session, ctx);
 		const { facts } = await reviewFacts(session, ctx, state, done);
 		await session.update(ctx, saved => ({ ...saved, lifecycle: recordLifecycleReview(saved.lifecycle, { ...facts, operationId: done.id, at: session.now() }) }));
@@ -182,7 +200,7 @@ export async function reviewLifecycle(session: DevelopmentSession, ctx: Extensio
 	const dispatch = provider.kind === "gha";
 	await operate(session, ctx, intent,
 		activity => decide(session, ctx, intent, s, `Review del PR #${subject.number}`, `${provider.kind === "github" ? `Lee reviews, comentarios y checks de GitHub (${provider.reviewers.join(", ")})` : provider.kind === "local" ? `Revisor aislado con ${ctx.model?.provider ?? "?"}/${ctx.model?.id ?? "?"} sobre el diff fijo` : `Dispara ${provider.workflow}@${provider.ref} (workflow_dispatch) y espera su recibo`} para HEAD ${subject.headSha.slice(0, 12)}. Consume 1 intento del presupuesto.`,
-			{ mode: config.review.mode, human: dispatch && s.root.repo === OWN_REPO, activity }),
+			{ mode: config.review.mode, human: dispatch && s.root.repo === OWN_REPO, activity, chain }),
 		async reserved => { const result = await reviewFacts(session, ctx, reserved, intent); observed = result.facts; return receipt(intent, result.externalId, session.now()); });
 	if (!observed) throw new Error("Review sin hechos observados");
 	const facts = observed;
@@ -192,13 +210,14 @@ export async function reviewLifecycle(session: DevelopmentSession, ctx: Extensio
 	return { operationId: intent.id, subjectId: subject.id };
 }
 
-export async function landLifecycle(session: DevelopmentSession, ctx: ExtensionContext): Promise<boolean> {
+export async function landLifecycle(session: DevelopmentSession, ctx: ExtensionContext, chain?: ChainConsent): Promise<boolean> {
 	await freshPin(session, ctx);
 	let { state, s } = enabledWork(session, ctx); const config = currentLifecyclePin(s).accepted.block, signal = session.lifecycle.signal, client = githubClient(session, state);
 	if (!["review", "ready", "land"].includes(s.stage)) throw new Error(s.merges?.length ? "El merge ya se observó: seguí con /omi-work ship." : `Land no corresponde en la etapa ${s.stage}.`);
 	const subject = currentSubject(s);
 	const pull = await readPull(client, subject.number, signal);
 	if (pull.merged) {
+		await chain?.ensure(); // Registrar un merge externo no pregunta, pero la cadena no pasa de Land sin el sí de continuidad.
 		await session.update(ctx, saved => acceptObservedMerge(saved, pull, { source: "external", at: session.now() }));
 		ctx.ui.notify(`Merge externo observado: Land hecho, la entrega todavía no está verificada. /omi-work ship.\n${session.status()}`, "info"); return true;
 	}
@@ -206,7 +225,7 @@ export async function landLifecycle(session: DevelopmentSession, ctx: ExtensionC
 	if (blocks.length) throw new Error(`Land bloqueado por hallazgos u operaciones pendientes: ${blocks.join("; ")}. Usá /omi-work fix o /omi-work review.`);
 	if (pull.draft) {
 		const intent = newIntent(s, "ready");
-		await operate(session, ctx, intent, activity => decide(session, ctx, intent, s, `Marcar el PR #${subject.number} listo para review`, "Sale de draft. No mergea ni autoriza el merge.", { mode: config.land.mode, activity }),
+		await operate(session, ctx, intent, activity => decide(session, ctx, intent, s, `Marcar el PR #${subject.number} listo para review`, "Sale de draft. No mergea ni autoriza el merge.", { mode: config.land.mode, activity, chain }),
 			async reserved => {
 				const result = await markDraftReady(reserved, intent.id, { ...(session.githubRunner ? { runner: session.githubRunner } : {}), signal, beforeReady: async () => {}, readPull: abort => client.json(`repos/${client.repo}/pulls/${subject.number}`, abort), workflowStore: { checkout: reserved.checkout, issue: reserved.source.number, operationId: intent.id } });
 				if (result.status !== "ready") throw new Error(result.reason);
@@ -224,7 +243,7 @@ export async function landLifecycle(session: DevelopmentSession, ctx: ExtensionC
 	const intent = newIntent(s, "land"); let merged: unknown;
 	const description = [`${client.repo} PR #${subject.number} · ${config.land.method} · HEAD ${subject.headSha.slice(0, 12)} → ${subject.base}`, `Checks: ${observed.facts.checks.map(c => `${c.context} ${c.state}`).join(", ") || "ninguno"}`, `Reviews: ${observed.facts.reviews.map(r => `${r.user?.login ?? "?"} ${r.state}`).join(", ") || "ninguna"}`, "", "Mergear integra el cambio; no lo entrega. Ship se verifica después."].join("\n");
 	try {
-		await operate(session, ctx, intent, activity => decide(session, ctx, intent, s, `Mergear el PR #${subject.number}`, description, { mode: config.land.mode, human: !readiness.auto || s.root.repo === OWN_REPO, effectHash: readiness.hash, activity }),
+		await operate(session, ctx, intent, activity => decide(session, ctx, intent, s, `Mergear el PR #${subject.number}`, description, { mode: config.land.mode, human: !readiness.auto || s.root.repo === OWN_REPO, effectHash: readiness.hash, activity, chain }),
 			async reserved => {
 				const result = await landPullRequest(reserved, intent.id, { ...(session.githubRunner ? { runner: session.githubRunner } : {}), signal, beforeLand: async () => {},
 					readFacts: async () => { const again = await readGitHubLand(client, reserved, { signal, ...(session.githubRunner ? { runner: session.githubRunner } : {}) }); return again.status === "observed" ? again.facts : undefined; },

@@ -115,7 +115,7 @@ En RPC, donde Pi no ofrece componentes TUI, se conserva una confirmación humana
   - **Corridas.** Un lente que falló no se repite sobre el mismo contenido, salvo que un `refuter` posterior apruebe: así un aviso no se borra repitiendo el lente y el fail de Seguridad no se esquiva. Por contenido, cada lente admite tres veredictos y diez corridas: cancelar o un error del proveedor no gasta veredictos.
 - **PR:** sólo con cambio limpio y verificado y un SHA autorizado; con `push_pr: ask`, además, confirmación humana remota. Termina en un draft, o en uno por grupo con un stack; no mergea ni cierra el issue.
 
-Dependencia bloqueante, información insuficiente, inferencia nueva o imposibilidad de verificar deben quedar como espera/pausa. Una base que se arma con un comando no es una espera: el agente la prepara con `setup`, en cualquier etapa activa. Ejemplo: un worktree nuevo sin `node_modules` corre `npm ci` en Explorar (sin preguntar sólo si lo permite v2 aceptada o su grant exacto vigente), vuelve a reproducir y registra `explored` de nuevo, sin `refresh`. Sólo queda como base faltante lo que un comando no resuelve, por ejemplo una credencial o un servicio externo.
+Dependencia bloqueante, información insuficiente, inferencia nueva o imposibilidad de verificar deben quedar como espera/pausa. Una base que se arma con un comando no es una espera: el agente la prepara con `setup`, en cualquier etapa activa hasta el PR draft. Ejemplo: un worktree nuevo sin `node_modules` corre `npm ci` en Explorar (sin preguntar sólo si lo permite v2 aceptada o su grant exacto vigente), vuelve a reproducir y registra `explored` de nuevo, sin `refresh`. Sólo queda como base faltante lo que un comando no resuelve, por ejemplo una credencial o un servicio externo.
 
 ## Evidencia y permisos
 
@@ -129,7 +129,8 @@ Dependencia bloqueante, información insuficiente, inferencia nueva o imposibili
   - **No**, Esc, cerrar, respuesta desconocida o error no ejecutan ni conceden grants. Un guardado parcial informa si la KB pudo guardar o si también quedó aceptado localmente, sin ejecutar ni inventar éxito. No se reintenta un envío después de cancelar.
   - Se revalida el trabajo durable antes de guardar/aceptar o ejecutar: una decisión vieja tras pausa o cambio de otra ventana no vale.
   Ejemplo: con `git push *`, ser D5 no autoriza `npm run typecheck && git push origin main`; `npm run typecheck` solo corre sin preguntar, o reutiliza su grant humano exacto.
-- Setup corre en cualquier etapa activa, también antes de aprobar la receta, con la misma autorización. Nunca acredita una prueba y sus errores se muestran.
+- Setup corre en cualquier etapa activa hasta el PR draft, también antes de aprobar la receta, con la misma autorización. Nunca acredita una prueba y sus errores se muestran.
+- Después del PR draft (PR draft abierto, Review, Land, Ship, o con el PR adoptado), `omi_workflow_check` sólo corre durante una corrección en curso: una ronda de `/omi-work fix` o un fix-forward en su checkout. Así un setup no es un camino para disparar workflows por fuera del lifecycle. Ejemplo: con el PR adoptado en Review, `setup` con `gh workflow run claude-review.yml -f pr=8` se rechaza sin ejecutar y guía a `/omi-work review`. Con la corrección ya verificada y el push todavía sin hacer, tampoco corre.
 - Fuera de Implementar, un setup prepara lo que Git ignora (por ejemplo, `node_modules`). Si cambia archivos versionados, no ignorados o HEAD, devuelve un error. No se revierte solo; el cambio queda a la vista en `git status`. Es una detección con el fingerprint, no un sandbox: un comando autorizado que le esconde cambios a Git (por ejemplo, con `git update-index --assume-unchanged`) no se detecta.
 - La reproducción corre en Explorar, Resolver inferencias (donde se puede volver a registrar `explored`) y Diagnóstico.
 - El runner registra salida acotada a 12.000 caracteres, exit code, interrupción, HEAD, fingerprint y tiempos. No imprime el entorno ni mensajes internos potencialmente sensibles del backend. La salida del propio programa puede contener datos sensibles: no autorizar comandos que revelen secretos.
@@ -321,6 +322,8 @@ Un trabajo grande puede terminar en varios PRs encadenados (un **stack**) en vez
 
 Lo decide el agente al escribir la spec (ruta Con spec) y lo aprueba la persona con la receta. Conviene cuando el cambio no se revisa bien en un solo PR. Ejemplos: más de unas 400 líneas de diff, o partes que se revisan y mergean por separado (modelo, lógica, UI). Cada PR tiene que pasar sus tests solo. Sin stack, el trabajo va en un solo PR, como siempre. Directa tiene un solo paso: siempre un PR.
 
+Con un [lifecycle](#review-land-y-ship) aceptado que encadena la entrada (`continuity.entry` en `auto` o `ask`), el trabajo va en un solo PR: la cadena adopta un PR y no adopta stacks. La guía de la receta y de la spec se lo dice al agente, y `specified` con `stack` falla sin registrar nada ni tocar GitHub. El error le pide mandar `specified` otra vez sin `stack`, con los mismos pasos C. Si la configuración no se puede leer (KB caída, cambios sin aceptar, sin configurar u `--offline`), vale lo de siempre: el stack se permite. Con `entry: manual` o sin `continuity`, también.
+
 ### Cómo se declara
 
 En `specified`, junto a los pasos, `stack` agrupa los pasos C en PRs:
@@ -399,6 +402,7 @@ Frena y pide una persona si:
 - El merge con base fija necesita Git 2.40 o superior.
 - No hay lock con GitHub: otro puede escribir entre la lectura y el push. El push normal lo rechaza y se vuelve a correr.
 - La línea «sobre #N» del cuerpo queda como al abrir el PR. La base vigente la muestran GitHub y la sección del issue.
+- El lifecycle no adopta un stack. Si igual se publica uno con la entrada encadenada (por ejemplo, la configuración se aceptó después de la spec), la cadena pausa sin preguntar ni leer GitHub: «Continuidad en pausa · Este trabajo se publicó como stack de 2 PRs y el lifecycle no adopta stacks: mergealos en orden con su sí, o publicá un solo PR». `/omi-work adopt` falla con el mismo motivo.
 
 ## Si el modelo corta solo
 
@@ -513,6 +517,17 @@ No hay garantía de atomicidad entre cambios humanos del issue y todas las accio
 
 El PR draft es el final por defecto. Para seguir el mismo trabajo se puede habilitar continuidad explícita en la configuración aceptada, o usar los comandos manuales. La continuidad la ejecuta el host: el agente no tiene tools para estos efectos; ni `bash` ni `omi_workflow` reservan, mergean, despachan ni despliegan.
 
+Después del draft, el agente no corre Review, Land ni Ship: se los pasa a la persona como comandos `/omi-work`, nunca como comandos de terminal ni disparando workflows. Su contexto, el motivo de una tool bloqueada y el error de `omi_workflow_check` dicen quién corre cada efecto y el **próximo paso** del estado. El próximo paso es el de la pausa de la continuidad, si hay una vigente. Si no, sale del estado guardado como lo elegiría la cadena, sin repetir una Review ya registrada. Ejemplos:
+
+```text
+PR draft abierto, sin adoptar  → corré /omi-work adopt y después /omi-work review; si la continuidad está configurada, adopt ya sigue con la Review
+PR adoptado, sin Review        → corré /omi-work review
+Review registrada, 1 hallazgo  → corré /omi-work fix; usa los hallazgos ya registrados
+Pausa por un no a la Review    → cuando quieras, /omi-work review
+```
+
+Caso real: la persona pidió «corré las reviews con GHA» y el agente le pasó un `gh workflow run`. Ahora la respuesta es `/omi-work adopt` y `/omi-work review`: con Review `gha`, OMI dispara el workflow configurado con su permiso (en `chichex/omi-code`, siempre con el sí de la persona). Con el PR adoptado y `continuity.fix` en `auto` o `ask`, el agente no pide `/omi-work fix` para el push: la cadena lo hace al marcar `verified`, con el permiso `push_pr` de Foundations. Con `fix: manual` o sin continuidad, sí lo pide.
+
 | Comando | Qué hace | Permiso |
 |---|---|---|
 | `/omi-work adopt` | Habilita el lifecycle sobre el PR draft abierto: relee el PR en GitHub y el checkout, fija la configuración aceptada | Siempre un sí |
@@ -535,9 +550,9 @@ Ejemplo, con Review por GitHub y Ship por una release:
 /omi-work ship     → sí · release v0.2.0 verificada · Entrega verificada
 ```
 
-Un comentario ya corregido que la Review vuelve a ver en el HEAD nuevo se confirma con `/omi-work fix` («Ya corregidos»), sin gastar otra ronda. Land no avanza con hallazgos pendientes ni operaciones inciertas. Un merge no es una entrega: Ship la verifica después. Ship `not-applicable` termina sin entrega y `manual` queda como entrega declarada, nunca como Entrega verificada.
+Un comentario ya corregido que la Review vuelve a ver en el HEAD nuevo se confirma con `/omi-work fix` («Ya corregidos»), sin gastar otra ronda. Con continuidad, confirmarlos es progreso. Si quedan hallazgos nuevos, la cadena sigue con una ronda sólo para ellos, con su propio sí «Corregir N hallazgo(s)»; sin rondas, pausa por rondas. Si `/omi-work fix` los confirma todos y esta sesión ya observó la Review de ese HEAD, la cadena sigue con Land sin repetirla. Land no avanza con hallazgos pendientes ni operaciones inciertas. Un merge no es una entrega: Ship la verifica después. Ship `not-applicable` termina sin entrega y `manual` queda como entrega declarada, nunca como Entrega verificada.
 
-Límites de este corte: no se adopta un stack de PRs; un comentario de GitHub sin texto no cuenta como hallazgo; Ship OMI sólo observa (`observe`): publicar o desplegar desde acá no está conectado; los probes health/version de un destino GHA no tienen verificador conectado y quedan como desconocidos; la recuperación (stop, rollback, fix-forward) la decide una persona fuera de estos comandos. Una actividad que quedó abierta en otro proceso bloquea efectos nuevos hasta reconciliarla.
+Límites de este corte: no se adopta un stack de PRs (con la entrada encadenada el trabajo va en un solo PR; ver [Stack de PRs](#stack-de-prs)); un comentario de GitHub sin texto no cuenta como hallazgo; Ship OMI sólo observa (`observe`): publicar o desplegar desde acá no está conectado; los probes health/version de un destino GHA no tienen verificador conectado y quedan como desconocidos; la recuperación (stop, rollback, fix-forward) la decide una persona fuera de estos comandos. Una actividad que quedó abierta en otro proceso bloquea efectos nuevos hasta reconciliarla.
 
 ### Continuidad opt-in: entrada y avance por etapa
 
@@ -553,15 +568,42 @@ El bloque opcional `continuity` del lifecycle configura **cuándo continuar**, n
 }
 ```
 
-- `entry` controla la adopción del draft recién publicado y confirmado por este trabajo. No adopta drafts históricos al cargar. `/omi-work adopt` sigue disponible y exige confirmación humana.
+- `entry` controla la adopción del draft recién publicado y confirmado por este trabajo. No adopta drafts históricos al cargar. `/omi-work adopt` sigue disponible y exige confirmación humana. Con `entry: ask` hay un único sí: el de la adopción, «Habilitar Review, Land y Ship en el PR #8». Muestra el PR, la rama, el HEAD y la configuración que se fija (Review, Land, presupuesto y continuidad), y va antes de leer GitHub. Si la configuración cambia mientras espera, no se adopta.
 - `review`, `fix`, `land` y `ship` controlan el siguiente paso de la cadena. `auto` lo intenta si los guardrails permiten; `ask` pide continuar; `manual` espera el comando correspondiente. El sí para continuar no reemplaza el permiso del efecto: por ejemplo, `continuity.review:auto` con `review.mode:ask` sigue preguntando antes de Review.
 - La cadena sólo parte de publicación confirmada, comandos lifecycle explícitos o la verificación de una corrección. No hay timers ni efectos por restore, reload o cambio de sesión. Una confirmación o evaluación tardía del contexto anterior se descarta. Un cambio del pin de entrada no hereda el sí dado a otra configuración.
+
+Con `ask` hay un solo sí de continuidad por etapa. Si el primer efecto de la etapa ya pide un sí humano, ese diálogo lo lleva: agrega «Continuidad en ask: al aceptar, la cadena sigue con …» y el mismo sí autoriza ese efecto y la continuidad. Si el primer efecto corre solo, porque su permiso está en `auto`, la continuidad se pregunta aparte y antes, por ejemplo «Continuidad · Review del PR #8». Nunca se saltea el sí de un efecto: los siguientes de la etapa piden el suyo, como el merge después de «listo para review». `auto` sigue sin conceder permisos. Si la predicción falla (por ejemplo, el pin fresco de la etapa dejó el efecto en `auto`), la continuidad se pregunta antes de ese efecto. Un no a cualquiera de esos diálogos pausa la cadena como rechazo y no ejecuta nada.
+
+Ejemplo en `chichex/omi-code`, con todo en `ask`, Review por GitHub, el PR en draft y Ship que no aplica:
+
+```text
+/omi-work adopt → sí · Habilitar Review, Land y Ship en el PR #8
+Review          → sí · Review del PR #8 (también sigue la cadena)
+Land            → sí · Marcar el PR #8 listo para review (también sigue la cadena)
+                → sí · Mergear el PR #8
+Ship            → sí · Continuidad · Ship del PR #8
+```
+
+El push de una corrección verificada no es otra ronda y el diálogo lo dice. Con `push_pr: auto` de Foundations se pregunta «Continuidad · Publicar la corrección (push) en el PR #8». Con `push_pr: ask`, el diálogo «Push de la corrección al PR #8» lleva la continuidad.
 
 Con `continuity.fix:auto` y `corrections.mode:auto`, los hallazgos actuales pasan por un evaluador aislado, sin tools ni conversación del implementador. Contrasta cada hallazgo con la receta aprobada y el diff íntegro; sólo habilita código si acredita alcance y riesgo bajo del grupo actual. Un texto remoto, la severidad o el riesgo declarado en la receta no bastan. Ambigüedad, fuera de alcance, human-required, respuesta inválida/error/cancelación o contexto insuficiente pausan sin abrir una ronda. La evaluación queda ligada a receta, pin, sujeto, grupo y material observado; no concede push, merge ni entrega.
 
 Una ronda autorizada cede al agente para completar rojo→verde, commit y todos los D. Tras `verified`, el host verifica el nuevo HEAD, pide o aplica **por separado** `push_pr` de Foundations y vuelve a Review del SHA nuevo en el mismo PR. `corrections.mode:auto` nunca concede permiso de push. Los presupuestos son los existentes: por defecto 2 rondas, 12 intentos y 7200 segundos activos; agotarlos no crea otro presupuesto ni permite reintentos inciertos. El trabajo de código de una ronda ya reservada puede terminar sin reservar otro intento; publicar sigue necesitando su propia reserva.
 
-La continuidad se detiene por manual, rechazo/cancelación, bloqueo, presupuesto, falta de hechos vigentes, fallo confirmado o resultado incierto. El progreso y `/omi-work status` muestran política efectiva y motivo de pausa; para retomar se usa el comando explícito después de resolver la causa. No se vuelve a preguntar automáticamente al restaurar. Deshabilitar la continuidad o cambiar sus modos sólo controla acciones futuras: no revierte pushes, merges ni entregas remotas ya observadas. Las capacidades desconectadas siguen desconectadas.
+La continuidad se detiene por manual, rechazo/cancelación, bloqueo, presupuesto, falta de hechos vigentes, fallo confirmado o resultado incierto. Para retomar se usa el comando explícito después de resolver la causa. No se vuelve a preguntar automáticamente al restaurar.
+
+El motivo de la pausa se guarda en el estado del trabajo como un código cerrado, con la etapa y el sujeto (el HEAD) en que se tomó. Otras transiciones del trabajo no lo pisan. Se muestra en español, con el próximo paso: en el panel de progreso como aviso, una sola vez en `/omi-work status` y en el contexto del agente. Por ejemplo:
+
+```text
+Continuidad en pausa · Review está en manual: corré /omi-work review
+Continuidad en pausa · Hay una operación con resultado incierto: no se repite sola; revisá en GitHub
+Continuidad en pausa · La configuración vigente ya no tiene continuidad: seguí a mano con /omi-work land
+Continuidad en pausa · La Review del HEAD actual no se observó en esta sesión: corré /omi-work land; relee GitHub y no repite la Review
+```
+
+La Review observada vive en la sesión que la ingirió. Restaurar, recargar o reabrir la sesión no la recrea: la cadena no encadena Land con una Review que no vio. El próximo paso sale de los hallazgos ya registrados y no gasta otro intento ni otro dispatch: sin pendientes, `/omi-work land`, que relee GitHub y exige la Review confirmada del HEAD; con pendientes, `/omi-work fix`; con uno que necesita una persona, la pausa lo dice.
+
+Un rechazo o un error del efecto lleva un código genérico y su texto como detalle. Si el pin fresco quita la continuidad a mitad de cadena, el motivo lo dice, en vez de «manual». El motivo deja de mostrarse si cambió el sujeto o empezó otra operación después de la pausa. Se borra al empezar una corrida nueva de la cadena, al correr un comando `/omi-work adopt | review | fix | land | ship` y al adoptar el PR. Deshabilitar la continuidad o cambiar sus modos sólo controla acciones futuras: no revierte pushes, merges ni entregas remotas ya observadas. Las capacidades desconectadas siguen desconectadas.
 
 ## Setup de lo que falta
 

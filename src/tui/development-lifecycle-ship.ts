@@ -2,7 +2,7 @@
 // Fallo, ausencia o desconocido nunca son éxito; la recuperación (stop/rollback/fix-forward) la decide una persona.
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { WorkflowV2 } from "../harness/model.ts";
-import { reserveLifecycleOperation, type EnabledLifecycle } from "../harness/lifecycle-state.ts";
+import { reserveLifecycleOperation } from "../harness/lifecycle-state.ts";
 import { currentLifecyclePin } from "../harness/lifecycle-budget.ts";
 import { recordShipVerification, completeShip } from "../harness/ship-state.ts";
 import type { ShipVerification } from "../harness/ship-schema.ts";
@@ -11,14 +11,13 @@ import { createGhaShipPorts } from "../harness/gha-ship-io.ts";
 import { verifyGhaRelease, observeGhaShipReceipt, dispatchGhaShip } from "../harness/lifecycle-gha-ship.ts";
 import { verifyOmiShip } from "../harness/lifecycle-omi-ship.ts";
 import { tuiGuard } from "../guardrails/surfaces.ts";
+import { pendingShipTargets } from "../harness/lifecycle-continuity-gates.ts";
 import type { DevelopmentSession } from "./development-session.ts";
 import { currentSubject, decide, enabledWork, githubClient, newIntent, OWN_REPO } from "./development-lifecycle.ts";
+import type { ChainConsent } from "./development-lifecycle-chain.ts";
 
 const SHIP_TIMEOUT_SECONDS = 1800;
 const OUTCOMES = { verified: "Entrega verificada en todos los destinos aplicables.", "externally-attested": "Entrega atestiguada por una persona; el origen no quedó demostrado.", "not-applicable": "Ship no aplica: el lifecycle terminó sin entrega que verificar.", "manual-attested": "Entrega declarada a mano por una persona; OMI no la verificó." } as const;
-function pendingTargets(s: EnabledLifecycle, targets: LifecycleTarget[]): LifecycleTarget[] {
-	return targets.filter(t => !s.deliveries?.some(d => d.targetId === t.id && d.subjectId === s.currentSubject && d.configHash === s.pinHash && ["verified", "not-applicable"].includes(d.result.state)));
-}
 function describe(target: LifecycleTarget): string {
 	const p = target.provider;
 	return p.kind === "gha" ? `${p.mode === "dispatch" ? "Dispara" : "Observa"} ${p.workflow}@${p.ref} · evidencia ${target.evidence.kind}` : `OMI ${p.service}/${p.environment} · ${p.mode} · health/version y origen del commit`;
@@ -37,22 +36,22 @@ async function verify(session: DevelopmentSession, ctx: ExtensionContext, reserv
 	return verifyOmiShip(reserved, operationId, { runtime, version, signal, timeoutSeconds: target.timeoutSeconds, now: () => performance.now(), ...(omi?.fetch ? { fetch: omi.fetch } : {}),
 		beforeMutation: async () => { throw new Error("Ship observe no muta OMI"); }, workflowStore: store });
 }
-export async function shipLifecycle(session: DevelopmentSession, ctx: ExtensionContext): Promise<void> {
+export async function shipLifecycle(session: DevelopmentSession, ctx: ExtensionContext, chain?: ChainConsent): Promise<void> {
 	const { s } = enabledWork(session, ctx); const config = currentLifecyclePin(s).accepted.block, subject = currentSubject(s);
 	if (s.stage !== "ship" || !subject.mergedSha) throw new Error(s.completion ? `Ship ya terminó: ${OUTCOMES[s.completion.outcome]}` : "Ship espera el merge observado: /omi-work land.");
 	const ship = config.ship;
 	if (ship.status === "unconfigured") throw new Error("Ship sin configurar: el merge está hecho pero la entrega no se verifica. Configuralo con omi init --development.");
 	if (ship.status === "manual") {
 		const description = `Merge ${subject.mergedSha.slice(0, 12)} del PR #${subject.number}. Declarás que el cambio está entregado; OMI no lo verifica y queda como entrega manual.`;
-		if (!(await session.confirm(ctx, "Declarar la entrega manual", description))) { ctx.ui.notify("No se declaró nada.", "info"); return; }
+		if (!(await (chain ? chain.confirmEffect("Declarar la entrega manual", description) : session.confirm(ctx, "Declarar la entrega manual", description)))) { ctx.ui.notify("No se declaró nada.", "info"); return; }
 		await session.update(ctx, saved => completeShip(saved, session.now(), { source: "person", subjectId: subject.id, integratedSha: subject.mergedSha, configHash: s.pinHash, reason: "Declarada por la persona con /omi-work ship", at: session.now() }));
 	} else if (ship.status === "configured") {
-		for (const target of pendingTargets(s, ship.targets)) {
+		for (const target of pendingShipTargets(s, ship.targets)) {
 			const provider = target.provider;
 			if (provider.kind === "omi" && provider.mode !== "observe") throw new Error(`Ship OMI ${provider.mode} (publicar/desplegar) no está conectado: desplegá con omi y verificá con un destino observe.`);
 			const now = enabledWork(session, ctx).s, intent = newIntent(now, "ship", target.id);
 			const human = provider.kind === "gha" && provider.mode === "dispatch" && now.root.repo === OWN_REPO;
-			const decision = await decide(session, ctx, intent, now, `Ship ${target.id}`, `${describe(target)}\nMerge ${subject.mergedSha.slice(0, 12)} · intento ${now.budget.attemptsUsed + 1}/${config.budget.maxAttempts}. Sin recibo y provenance no hay entrega.`, { mode: target.mode, human });
+			const decision = await decide(session, ctx, intent, now, `Ship ${target.id}`, `${describe(target)}\nMerge ${subject.mergedSha.slice(0, 12)} · intento ${now.budget.attemptsUsed + 1}/${config.budget.maxAttempts}. Sin recibo y provenance no hay entrega.`, { mode: target.mode, human, chain });
 			const reserved = await session.update(ctx, saved => {
 				if (saved.lifecycle.status !== "enabled") throw new Error("lifecycle deshabilitado");
 				return { ...saved, lifecycle: reserveLifecycleOperation(saved.lifecycle, intent, decision, session.owner, session.now()) };
@@ -66,8 +65,9 @@ export async function shipLifecycle(session: DevelopmentSession, ctx: ExtensionC
 				ctx.ui.notify(`Ship ${target.id}: ${result.state}. ${result.reason}\nEl merge sigue hecho y la entrega no está verificada. Stop, rollback o fix-forward los decide una persona; no se repite solo.\n${session.status()}`, "warning"); return;
 			}
 		}
+		await chain?.ensure(); // Sin destinos pendientes sólo se completa: la cadena no pasa sin el sí de continuidad.
 		await session.update(ctx, saved => completeShip(saved, session.now()));
-	} else await session.update(ctx, saved => completeShip(saved, session.now()));
+	} else { await chain?.ensure(); await session.update(ctx, saved => completeShip(saved, session.now())); }
 	const done = enabledWork(session, ctx).s;
 	ctx.ui.notify(`${done.completion ? OUTCOMES[done.completion.outcome] : "Ship sin resultado"}\n${session.status()}`, "info");
 }

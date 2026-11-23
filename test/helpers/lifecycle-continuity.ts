@@ -10,7 +10,10 @@ import { DEVELOPMENT_ANCHOR } from "../../src/tui/development-session.ts";
 import { developmentFixture } from "./development.ts";
 import { memoryKb } from "./mock-kb.ts";
 import { AT, acceptLifecycleConfig, fakeGitHub, lifecycleConfig, type FakeGitHub } from "./lifecycle.ts";
-import type { LifecycleConfig } from "../../src/harness/lifecycle-config.ts";
+import { renderLifecycleBlock, type LifecycleConfig } from "../../src/harness/lifecycle-config.ts";
+import { acceptLifecycle } from "../../src/harness/lifecycle-kb.ts";
+import { lifecycleTrustDir, readLifecycleTrust } from "../../src/harness/lifecycle-trust.ts";
+import type { MemoryKb } from "./mock-kb.ts";
 
 export const autoContinuity = { entry: "auto", review: "auto", fix: "auto", land: "auto", ship: "auto" } as const;
 export async function continuityFixture(t: TestContext, options: {
@@ -47,4 +50,12 @@ export async function continuityFixture(t: TestContext, options: {
  await acceptLifecycleConfig(kb, f.home, f.checkout.root, config);
  await f.attach();
  return { f, gh, kb, head: snap.head, number };
+}
+/** Reacepta otra revisión sobre la aceptación vigente, como lo haría una persona con el wizard. */
+export async function reacceptLifecycleConfig(kb: MemoryKb, home: string, cwd: string, block: LifecycleConfig): Promise<void> {
+ const key = { kbUrl: kb.url, product: block.repo.split("/")[1] ?? "", repo: block.repo }, trustDir = lifecycleTrustDir(home);
+ const trust = await readLifecycleTrust(trustDir, key);
+ if (trust.kind !== "valid") throw new Error("Falta una aceptación vigente que reemplazar");
+ kb.perillas(key.product, `# Perillas de ${key.product}\n\n${renderLifecycleBlock(block)}\n`);
+ if (!(await acceptLifecycle(kb, key, cwd, { trustDir, expectedRevision: trust.record.revision, now: () => AT, signal: AbortSignal.timeout(5000), confirm: async () => true }))) throw new Error("No se reaceptó el lifecycle");
 }

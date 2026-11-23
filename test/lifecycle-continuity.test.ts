@@ -64,13 +64,18 @@ test("legacy stops at draft; opt-in entry needs a newly confirmed publication tr
  const i = input(); i.workflow = workflow();
  pause({ ...i, config: legacy(), trigger: "publication-confirmed" }, "manual");
  action({ ...i, trigger: "publication-confirmed" }, "adopt", "auto", "entry");
- for (const trigger of ["advance", "restore"] as const) pause({ ...i, trigger }, "entry-trigger-required");
+ pause({ ...i, trigger: "advance" }, "entry-trigger-required");
  i.config = { ...config(), continuity: { ...allAuto, entry: "ask" } };
  action({ ...i, trigger: "publication-confirmed" }, "adopt", "ask", "entry");
  i.workflow.publication = { status: "none" }; pause({ ...i, trigger: "publication-confirmed" }, "publication-required");
 });
 
-test("restore never starts effects, including an enabled lifecycle", () => { pause({ ...input(), trigger: "restore" }, "restore"); });
+// Restaurar no es un disparador: el host no llama al selector al cargar (lo cubren los tests de integración con
+// session_tree). El tipo no ofrece otro trigger; agregar uno rompe el typecheck de este registro exhaustivo.
+test("only a confirmed publication or an explicit advance can trigger continuity", () => {
+ const triggers = { "publication-confirmed": true, advance: true } satisfies Record<ContinuityInput["trigger"], true>;
+ assert.deepEqual(Object.keys(triggers).sort(), ["advance", "publication-confirmed"]);
+});
 
 test("review continuation selects modes without granting effect authorization", () => {
  const i = input(); action(i, "review");
@@ -123,9 +128,12 @@ test("active correction yields model implement/verify; correction PR follows fix
  for (const phase of ["implement", "verify"] as const) {
   i.workflow.phase = phase; assert.deepEqual(select(i), { kind: "yield", reason: "correction-model" });
  }
- i.workflow.phase = "pr"; action(i, "fix");
- s.budget.roundsUsed = 2; action(i, "fix");
- s.corrections = [{ ...r, status: "verified", newSubjectId: "head2", head: "e".repeat(40), fingerprint: "f".repeat(64) }]; action(i, "fix");
+ // Publicar la corrección es push, no otra ronda: el selector lo distingue para el diálogo de continuidad.
+ i.workflow.phase = "pr"; action(i, "push", "auto", "fix");
+ s.budget.roundsUsed = 2; action(i, "push", "auto", "fix");
+ s.corrections = [{ ...r, status: "verified", newSubjectId: "head2", head: "e".repeat(40), fingerprint: "f".repeat(64) }]; action(i, "push", "auto", "fix");
+ enabled(i).pins[0]!.accepted.block.continuity!.fix = "ask"; action(i, "push", "ask", "fix");
+ enabled(i).pins[0]!.accepted.block.continuity!.fix = "manual"; pause(i, "manual");
  s.corrections = [{ ...r, status: "failed", failedHead: r.startHead, failedFingerprint: r.startFingerprint, reason: "verification failed" }]; pause(i, "correction-failed");
 });
 
@@ -193,7 +201,51 @@ test("the reserved coding correction yields without replay; PR continues fix, un
  assert.deepEqual(select(i), { kind: "yield", reason: "correction-model" });
  i.workflow.phase = "verify";
  assert.deepEqual(select(i), { kind: "yield", reason: "correction-model" });
- i.workflow.phase = "pr"; action(i, "fix");
+ i.workflow.phase = "pr"; action(i, "push", "auto", "fix");
  s.operations[1] = { ...op, id: r.operationId, kind: "correction", status: "unknown", reason: "uncertain" };
  pause(i, "operation-unsettled");
+});
+
+// S2.3 · Un stack publicado no entra a la cadena.
+const stackPull = (index: number, base: string) => ({ title: `Parte ${index}`, steps: [`C${index}`], branch: `feat/work-${index}`, base, head: String(index).repeat(40),
+ number: 80 + index, url: `https://github.com/${repo}/pull/${80 + index}`, status: "draft" as const });
+test("a published stack pauses entry as stack-unsupported without offering adopt, whatever entry asks", () => {
+ const i = input(), published = workflow(); i.workflow = published;
+ const single = published.publication;
+ i.workflow.publication = { ...single, stack: [stackPull(1, "main"), stackPull(2, "feat/work-1")] };
+ for (const entry of ["auto", "ask"] as const) {
+  const selected = select({ ...i, config: { ...config(), continuity: { ...allAuto, entry } }, trigger: "publication-confirmed" });
+  assert.deepEqual(selected, { kind: "pause", reason: "stack-unsupported", stage: "entry" }, `entry ${entry}`);
+ }
+ // Sin stack, la misma publicación sigue ofreciendo la adopción.
+ i.workflow.publication = single;
+ action({ ...i, trigger: "publication-confirmed" }, "adopt", "auto", "entry");
+});
+
+// S2.3 · «Ya corregidos» y Review no observada en la cadena.
+test("rounds exhausted: confirming already corrected findings is offered only while some are still pending", () => {
+ const i = reviewed(); finding(i);
+ // Queda otro hallazgo nuevo, sin corregir.
+ i.workflow.lifecycle = ingestLifecycleFinding(enabled(i), { id: "finding2", provider: "local", externalId: "f2", operationId: "review1", subjectId: "head1", text: "Otro error", severity: "medium", resolved: false, outdated: false, at });
+ const s = enabled(i), corrected = s.ledger[0]!;
+ s.evidence.push({ id: "verified1", subjectId: "head1", operationId: "review1", kind: "verification", outcome: "pass", at });
+ corrected.dispositions.push({ findingId: corrected.id, subjectId: "old-head", observationHash: corrected.observations[0]!.hash, observationSequence: 1, reason: "fixed before review", at, status: "corrected", evidenceIds: ["verified1"] });
+ s.budget.roundsUsed = s.pins[0]!.accepted.block.corrections.maxRounds;
+ action(i, "fix"); // Todavía hay uno ya corregido para confirmar, sin otra ronda.
+ // Ya confirmado en el HEAD actual: deja de estar pendiente y no hay ronda para el que queda.
+ corrected.dispositions.push({ findingId: corrected.id, subjectId: "head1", observationHash: corrected.observations[0]!.hash, observationSequence: 1, reason: "confirmado por la persona", at, status: "corrected", evidenceIds: ["verified1"] });
+ pause(i, "rounds-exhausted");
+});
+
+test("a Review not observed in this session names the next step from the findings already recorded", () => {
+ const i = reviewed();
+ assert.deepEqual(select({ ...i, reviewObserved: null }), { kind: "pause", reason: "review-facts-required", stage: "land" }, "sin hallazgos: Land relee GitHub");
+ finding(i);
+ assert.deepEqual(select({ ...i, reviewObserved: null }), { kind: "pause", reason: "review-facts-required", stage: "fix" }, "con hallazgos: fix");
+ const f = enabled(i).ledger[0]!;
+ f.dispositions.push({ findingId: f.id, subjectId: "head1", observationHash: f.observations[0]!.hash, observationSequence: 1, reason: "needs person", at, status: "human-required", evidenceIds: [] });
+ pause({ ...i, reviewObserved: null }, "human-required");
+ // ready/land también: sin la Review observada no se ofrece Land, pero el próximo paso es Land.
+ const ready = reviewed(); enabled(ready).stage = "ready";
+ assert.deepEqual(select({ ...ready, reviewObserved: null }), { kind: "pause", reason: "review-facts-required", stage: "land" });
 });

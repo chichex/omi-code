@@ -29,7 +29,8 @@ import type { KbClient } from "./kb-client.ts";
 import { FoundationsGate, foundationsLines } from "./development-foundations.ts";
 import { foundationsDir } from "../harness/foundations-trust.ts";
 import { showCommandChoices } from "./development-command-dialog.ts";
-import { lifecycleLines } from "../harness/lifecycle-progress.ts";
+import { lifecycleLines, lifecyclePauseLine } from "../harness/lifecycle-progress.ts";
+import { correctionPushGuide } from "../harness/after-draft-guide.ts";
 import type { LifecyclePorts } from "./development-lifecycle.ts";
 import { LifecycleContinuityHost } from "./development-lifecycle-continuity.ts";
 
@@ -302,8 +303,8 @@ export class DevelopmentSession {
 	async publish(ctx: ExtensionContext): Promise<void> {
 		if (!(await this.fresh(ctx))) return;
 		let state = this.current(ctx);
-		// Un PR adoptado por el lifecycle no se republica: la corrección va al mismo PR con /omi-work fix y su propio sí.
-		if (state.version === 2 && state.pullRequest?.ownership === "adopted") throw new Error("El PR ya es del lifecycle: la corrección se publica en el mismo PR con /omi-work fix, con su propio permiso.");
+		// Un PR adoptado por el lifecycle no se republica: la corrección va al mismo PR, por la cadena o /omi-work fix.
+		if (state.version === 2 && state.pullRequest?.ownership === "adopted") throw new Error(`El PR ya es del lifecycle: no uses publish. ${correctionPushGuide(state)}`);
 		if (state.phase !== "pr") throw new Error("Primero completá todos los pasos y la verificación del cambio actual");
 		const snapshot = await inspectCheckout(state.checkout, this.runner, this.lifecycle.signal);
 		if (!snapshot.clean) throw new Error("El worktree cambió después de verificar. Volvé a Implementar/Verificar.");
@@ -371,5 +372,5 @@ export class DevelopmentSession {
 		this.state = undefined; this.lockedReason = ""; this.emit();
 	}
 	shutdown(): void { this.alive = false; this.epoch++; this.lifecycle.abort(); }
-	status(): string { return this.lockedReason || (this.state ? [`${PHASE_LABELS[this.state.phase]} · ${this.state.status}`, this.state.activity, this.state.blockedReason, ...lifecycleLines(this.state), "Detalle: /omi-progress"].filter(Boolean).join("\n") : "Sin harness activo. Pedí un cambio en el chat o elegí un issue en Issues. /omi-work resume | approve | pause | refresh | pr | stop"); }
+	status(): string { return this.lockedReason || (this.state ? [`${PHASE_LABELS[this.state.phase]} · ${this.state.status}`, this.state.activity, this.state.blockedReason, lifecyclePauseLine(this.state), ...lifecycleLines(this.state), "Detalle: /omi-progress"].filter(Boolean).join("\n") : "Sin harness activo. Pedí un cambio en el chat o elegí un issue en Issues. /omi-work resume | approve | pause | refresh | pr | stop"); }
 }

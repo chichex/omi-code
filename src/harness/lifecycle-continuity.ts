@@ -2,30 +2,27 @@
 import type { Workflow } from "./model.ts";
 import type { LifecycleConfig, LifecycleContinuity, ContinuityMode } from "./lifecycle-schema.ts";
 import type { EnabledLifecycle, LifecycleState } from "./lifecycle-state-schema.ts";
+import type { SelectedPause } from "./continuity-pause.ts";
 
 export type ContinuityStage = keyof LifecycleContinuity;
-export type ContinuityAction = "adopt" | "review" | "fix" | "land" | "ship";
-export type ContinuityPause = "restore" | "workflow-paused" | "workflow-waiting" | "workflow-blocked"
- | "publication-required" | "entry-trigger-required" | "manual" | "config-required" | "subject-required"
- | "lifecycle-paused" | "operation-unsettled" | "operation-failed" | "budget-exhausted"
- | "review-facts-required" | "human-required" | "rounds-exhausted" | "correction-failed"
- | "correction-facts-required" | "ship-unconfigured" | "stage-mismatch" | "activity-unsettled";
+/** push publica la corrección ya verificada en el mismo PR; fix abre o confirma una ronda. Ambas son de la etapa fix. */
+export type ContinuityAction = "adopt" | "review" | "fix" | "push" | "land" | "ship";
 export type ContinuitySelection =
  | { kind: "action"; action: ContinuityAction; stage: ContinuityStage; mode: Exclude<ContinuityMode, "manual"> }
- | { kind: "pause"; reason: ContinuityPause; stage?: ContinuityStage }
+ | { kind: "pause"; reason: SelectedPause; stage?: ContinuityStage }
  | { kind: "yield"; reason: "correction-model" }
  | { kind: "complete" };
 export interface ContinuityInput {
  workflow: Pick<Workflow, "phase" | "status" | "blockedReason" | "publication"> & { lifecycle?: LifecycleState };
  /** Config aceptada para entrada. Con lifecycle habilitado manda su pin vigente, no esta copia. */
  config: LifecycleConfig | null;
- /** Sólo el host que acaba de confirmar publicación puede emitir publication-confirmed. */
- trigger: "publication-confirmed" | "advance" | "restore";
+ /** Sólo el host que acaba de confirmar publicación puede emitir publication-confirmed. Restaurar no llama al selector. */
+ trigger: "publication-confirmed" | "advance";
  /** Hechos ya ingeridos por el host, incluso Review vacía. Un recibo solo no acredita la ingesta.
   * Efímero: restaurar una sesión no recrea esta señal. No es aprobación de Land. */
  reviewObserved: { operationId: string; subjectId: string } | null;
 }
-const pause = (reason: ContinuityPause): ContinuitySelection => ({ kind: "pause", reason });
+const pause = (reason: SelectedPause): ContinuitySelection => ({ kind: "pause", reason });
 /** No materializa ni muta la configuración legacy. */
 export function effectiveLifecycleContinuity(config: LifecycleConfig): LifecycleContinuity {
  return config.continuity ? { ...config.continuity } : { entry: "manual", review: "manual", fix: "manual", land: "manual", ship: "manual" };
@@ -40,26 +37,33 @@ function observedReview(s: EnabledLifecycle, observed: ContinuityInput["reviewOb
  return !!op && op.id === observed.operationId && op.status === "confirmed" && op.receipt.outcome === "succeeded"
   && op.receipt.verifiedSubjectId === s.currentSubject;
 }
-function findingStatus(s: EnabledLifecycle): "clear" | "fix" | "human" {
- let pending = false;
- for (const f of s.ledger) {
-  const observation = f.observations.at(-1), disposition = f.dispositions.at(-1);
-  const current = disposition?.subjectId === s.currentSubject && disposition.observationHash === observation?.hash
-   && disposition.observationSequence === f.observations.length;
-  if (current && disposition.status === "human-required") return "human";
-  if (!current || !["corrected", "refuted-with-evidence"].includes(disposition.status)) pending = true;
- }
- return pending ? "fix" : "clear";
+type Finding = EnabledLifecycle["ledger"][number];
+/** La última disposición, sólo si es del HEAD actual y de la última observación del hallazgo. */
+function currentDisposition(s: EnabledLifecycle, f: Finding): Finding["dispositions"][number] | undefined {
+ const observation = f.observations.at(-1), disposition = f.dispositions.at(-1);
+ return disposition?.subjectId === s.currentSubject && disposition.observationHash === observation?.hash
+  && disposition.observationSequence === f.observations.length ? disposition : undefined;
 }
-/** El ejecutor puede pedir confirmación humana de hallazgos ya corregidos sin reservar ronda. */
+const settled = (s: EnabledLifecycle, f: Finding) => ["corrected", "refuted-with-evidence"].includes(currentDisposition(s, f)?.status ?? "");
+function findingStatus(s: EnabledLifecycle): "clear" | "fix" | "human" {
+ if (s.ledger.some(f => currentDisposition(s, f)?.status === "human-required")) return "human";
+ return s.ledger.every(f => settled(s, f)) ? "clear" : "fix";
+}
+/** El ejecutor puede pedir confirmación humana de hallazgos ya corregidos sin reservar ronda: sólo de los que siguen pendientes. */
 function canConfirmCorrected(s: EnabledLifecycle): boolean {
  return s.evidence.some(e => e.subjectId === s.currentSubject && e.kind === "verification" && e.outcome === "pass")
-  && s.ledger.some(f => f.observations.at(-1)?.subjectId === s.currentSubject && f.dispositions.some(d => d.status === "corrected"));
+  && s.ledger.some(f => !settled(s, f) && f.observations.at(-1)?.subjectId === s.currentSubject && f.dispositions.some(d => d.status === "corrected"));
+}
+/** Sin la Review observada en esta sesión no se encadena. El próximo paso sale de los hallazgos ya registrados, sin repetir la Review. */
+function unobservedReview(s: EnabledLifecycle): ContinuitySelection {
+ const findings = findingStatus(s);
+ if (findings === "human") return pause("human-required");
+ return { kind: "pause", reason: "review-facts-required", stage: findings === "clear" ? "land" : "fix" };
 }
 function reviewOrFix(input: ContinuityInput, s: EnabledLifecycle, config: LifecycleConfig): ContinuitySelection {
  const op = s.operations.findLast(o => o.kind === "review" && o.subjectId === s.currentSubject);
  if (!op) return offer(config, "review", "review");
- if (!observedReview(s, input.reviewObserved)) return pause("review-facts-required");
+ if (!observedReview(s, input.reviewObserved)) return unobservedReview(s);
  const findings = findingStatus(s);
  if (findings === "human") return pause("human-required");
  if (findings === "fix") {
@@ -75,8 +79,8 @@ function correction(input: ContinuityInput, s: EnabledLifecycle, config: Lifecyc
  if ((round.status === "coding" || round.status === "planned") && ["implement", "verify"].includes(input.workflow.phase)) {
   return { kind: "yield", reason: "correction-model" };
  }
- // La vuelta ya consumió su ronda: publicar la verificación no reserva una ronda adicional.
- if (input.workflow.phase === "pr" || round.status === "verified") return offer(config, "fix", "fix");
+ // La vuelta ya consumió su ronda: publicar la verificación es un push, no otra ronda.
+ if (input.workflow.phase === "pr" || round.status === "verified") return offer(config, "fix", "push");
  return pause("correction-facts-required");
 }
 /** Selecciona UNA acción, sin efectuar I/O, reservar operaciones ni conceder permisos.
@@ -85,13 +89,14 @@ function correction(input: ContinuityInput, s: EnabledLifecycle, config: Lifecyc
  */
 export function selectLifecycleContinuation(input: ContinuityInput): ContinuitySelection {
  const w = input.workflow;
- if (input.trigger === "restore" && w.lifecycle?.status === "enabled") return pause("restore");
  if (w.status === "paused") return pause("workflow-paused");
  if (w.status === "waiting") return pause("workflow-waiting");
  if (w.blockedReason) return pause("workflow-blocked");
  const s = w.lifecycle;
  if (!s || s.status === "disabled") {
   if (w.publication.status !== "opened") return pause("publication-required");
+  // El lifecycle adopta un solo PR: un stack no se adopta ni se pregunta su entrada.
+  if (w.publication.stack) return { kind: "pause", reason: "stack-unsupported", stage: "entry" };
   if (input.trigger !== "publication-confirmed") return pause("entry-trigger-required");
   return input.config ? offer(input.config, "entry", "adopt") : pause("config-required");
  }
@@ -120,7 +125,7 @@ export function selectLifecycleContinuation(input: ContinuityInput): ContinuityS
   case "review": return reviewOrFix(input, s, config);
   case "corrections": return pause("correction-facts-required");
   case "ready": case "land":
-   if (!observedReview(s, input.reviewObserved)) return pause("review-facts-required");
+   if (!observedReview(s, input.reviewObserved)) return unobservedReview(s);
    if (findingStatus(s) !== "clear") return reviewOrFix(input, s, config);
    return offer(config, "land", "land");
   case "ship":

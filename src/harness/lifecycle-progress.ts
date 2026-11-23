@@ -2,13 +2,21 @@
 // No ejecuta ni acredita nada; un legacy en done sigue siendo «PR draft abierto», nunca una entrega.
 import type { Workflow } from "./model.ts";
 import { lifecycleFindingBlocks } from "./lifecycle-state.ts";
+import { currentContinuityPause } from "./continuity-pause.ts";
+import { continuityPauseLine, continuityPauseText } from "./continuity-pause-text.ts";
 
 const STAGES = { review: "Review", corrections: "Correcciones", ready: "Listo para merge (no es permiso)", land: "Land", ship: "Ship", paused: "Pausado", delivered: "Entregado", complete: "Terminado" } as const;
 const OUTCOMES = { verified: "entrega verificada", "externally-attested": "entrega atestiguada por una persona, sin origen demostrado", "not-applicable": "Ship no aplica (elegido explícitamente)", "manual-attested": "entrega declarada a mano, sin verificar" } as const;
 const minutes = (ms: number) => Math.floor(ms / 60000);
 type Enabled = Extract<Extract<Workflow, { version: 2 }>["lifecycle"], { status: "enabled" }>;
-// El host ya persiste la pausa en activity; proyectarla no introduce otro estado ni dispara continuidad.
-const continuityPause = (state: Workflow): string | undefined => state.activity.startsWith("Continuidad en pausa:") ? state.activity : undefined;
+/** Motivo vigente de la pausa de continuidad con su próximo paso, para el panel. Proyectarlo no reanuda nada. */
+export function lifecyclePause(state: Workflow): string | undefined {
+ const pause = currentContinuityPause(state); return pause && continuityPauseText(pause);
+}
+/** La misma pausa con su título, para /omi-work status y el contexto del agente. */
+export function lifecyclePauseLine(state: Workflow): string | undefined {
+ const pause = currentContinuityPause(state); return pause && continuityPauseLine(pause);
+}
 /** Después del merge, Review/checks/hallazgos se leen del HEAD revisado, no del sujeto integrado. */
 const reviewedSubject = (s: Enabled): string | null => s.merges?.at(-1)?.subjectId ?? s.currentSubject;
 const findingBlocks = (s: Enabled) => lifecycleFindingBlocks({ ...s, currentSubject: reviewedSubject(s) });
@@ -22,7 +30,7 @@ export function lifecycleBlocks(state: Workflow): string[] {
 }
 export function lifecycleLines(state: Workflow): string[] {
  if (state.version !== 2 || state.lifecycle.status !== "enabled") {
-  return state.publication.status === "opened" ? ["Lifecycle no habilitado: el trabajo terminó en PR draft. No hubo Review, Land ni Ship verificados. Para seguir: /omi-work adopt.", ...(continuityPause(state) ? [state.activity] : [])] : [];
+  return state.publication.status === "opened" ? ["Lifecycle no habilitado: el trabajo terminó en PR draft. No hubo Review, Land ni Ship verificados. Para seguir: /omi-work adopt."] : [];
  }
  const s = state.lifecycle, pin = s.pins.find(p => p.accepted.blockHash === s.pinHash)?.accepted.block, subject = s.subjects.find(x => x.id === s.currentSubject);
  if (!pin) return ["Lifecycle sin configuración vigente: no se inician efectos."];
@@ -35,7 +43,6 @@ export function lifecycleLines(state: Workflow): string[] {
  const lines = [
   `Lifecycle · ${STAGES[s.stage]} · PR #${subject?.number ?? state.pullRequest?.number ?? "?"}${subject ? ` · ${subject.headSha.slice(0, 12)}` : ""}`,
   pin.continuity ? `Continuidad: entry=${pin.continuity.entry} · review=${pin.continuity.review} · fix=${pin.continuity.fix} · land=${pin.continuity.land} · ship=${pin.continuity.ship}` : "Continuidad: deshabilitada (legacy: parada en draft; avance por comandos)",
-  ...(continuityPause(state) ? [state.activity] : []),
   `Presupuesto: intentos ${s.budget.attemptsUsed}/${pin.budget.maxAttempts} · rondas ${s.budget.roundsUsed}/${pin.corrections.maxRounds} · activo ${minutes(s.budget.activeMilliseconds)}/${minutes(pin.budget.activeSeconds * 1000)} min · fix-forward ${s.budget.fixForwardPRsUsed}/${pin.budget.maxFixForwardPRs}`,
   `Review ${pin.review.provider.kind}: ${lastReview ? lastReview.status === "confirmed" ? lastReview.receipt.outcome === "succeeded" ? "observada" : "falló" : lastReview.status === "unknown" ? "incierta" : "en curso" : "sin correr"}${approval ? ` · opinión ${approval.state}` : ""}`,
   `Checks del SHA actual: ${checks.length ? `${passed}/${checks.length} OK` : "sin checks observados"}`,
@@ -50,7 +57,6 @@ export function lifecycleLines(state: Workflow): string[] {
 }
 /** Una línea para paneles bajos y angostos: primero lo que bloquea, para no aparentar avance. */
 export function lifecycleSummary(state: Workflow): string | undefined {
- const pause = continuityPause(state); if (pause) return pause.slice(0, 1000);
  if (state.version !== 2 || state.lifecycle.status !== "enabled") return state.publication.status === "opened" ? "Sin Review/Land/Ship" : undefined;
  const s = state.lifecycle, pin = s.pins.find(p => p.accepted.blockHash === s.pinHash)?.accepted.block; if (!pin) return undefined;
  return `Hallazgos ${findingBlocks(s).length} · rondas ${s.budget.roundsUsed}/${pin.corrections.maxRounds} · intentos ${s.budget.attemptsUsed}/${pin.budget.maxAttempts}`;

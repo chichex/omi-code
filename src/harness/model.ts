@@ -6,6 +6,7 @@ import { PHASES, PHASES_V1 } from "./phases.ts";
 import { LifecycleStateSchema } from "./lifecycle-state-schema.ts";
 import { validateLifecycleState } from "./lifecycle-invariants.ts";
 import { validateCorrectionWorkflow } from "./correction-invariants.ts";
+import { ContinuityPauseSchema } from "./continuity-pause.ts";
 
 // Topes compartidos por el esquema y el reducer: el reducer los respeta antes de validar.
 export const MAX_HISTORY = 1000; export const MAX_STEPS = 50; export const MAX_STACK = 10; export const MAX_ATTEMPTS = 100; export const MAX_EVIDENCE = 1000; export const MAX_REVIEWS = 100; export const MAX_AGREEMENTS = 50; export const MAX_GRANTS = 200; export const MAX_AMENDS = 2;
@@ -119,6 +120,8 @@ export const WorkflowV2Schema = Type.Object({
  amends: Type.Optional(Type.Array(Type.Object({ from: text(128), reason: text(), at: text(100) }, { additionalProperties: false }), { maxItems: MAX_AMENDS })),
  // El renderer v1 permanece ligado al pending legacy y no se cambia al migrar/reanudar.
  publicationFormat: Type.Literal(1),
+ // Por qué se detuvo la continuidad. Opcional para estados previos; las transiciones del reducer lo conservan.
+ continuityPause: Type.Optional(ContinuityPauseSchema),
  agreements: Type.Optional(Type.Array(AgreementSchema, { maxItems: MAX_AGREEMENTS })),
  observations: Type.Optional(Type.Array(Type.Object({ phase: PhaseSchema, round: Type.Integer({ minimum: 0, maximum: 10 }), inline: Type.Boolean(), subagent: Type.Boolean(), lens: Type.Boolean() }, { additionalProperties: false }), { maxItems: 121 })),
  history: Type.Array(Type.Object({ at: text(100), phase: PhaseSchema, activity: text() }, { additionalProperties: false }), { maxItems: MAX_HISTORY }),

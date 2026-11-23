@@ -5,6 +5,7 @@ import { stripTerminalSequences, wrapTextWithAnsi } from "@earendil-works/pi-tui
 import type { GitSnapshot } from "./data.ts";
 import { STAGE_STATUSES, OBSERVED_MODES, type StageProgress } from "../../harness/progress.ts";
 import { PHASES, PHASES_V1 } from "../../harness/phases.ts";
+import { CONTINUITY_PAUSE_TITLE } from "../../harness/continuity-pause-text.ts";
 import { field, notice, section, type ModalEntry } from "./modals.ts";
 import { fit, sidebarSection } from "./presentation.ts";
 
@@ -24,6 +25,8 @@ export interface WorkflowProgress {
  lifecycle?: string[];
  /** Una línea para paneles bajos. */
  lifecycleSummary?: string;
+ /** Motivo vigente de la pausa de continuidad, con su próximo paso. Se muestra como aviso. */
+ lifecyclePause?: string;
 }
 const clean = (value: string): string => {
  const plain = stripTerminalSequences(value).replace(/[\x00-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "");
@@ -59,13 +62,14 @@ function parseProgress(value: unknown): WorkflowProgress | undefined {
  const stages = value.stages === undefined ? undefined : parseStages(value.stages);
  if (value.stages !== undefined && !stages) return;
  const lines = (field: unknown) => field === undefined || Array.isArray(field) && field.every((line: unknown) => typeof line === "string");
- if (!lines(value.warnings) || !lines(value.stack) || !lines(value.lifecycle) || value.lifecycleSummary !== undefined && typeof value.lifecycleSummary !== "string") return;
+ if (!lines(value.warnings) || !lines(value.stack) || !lines(value.lifecycle) || value.lifecycleSummary !== undefined && typeof value.lifecycleSummary !== "string" || value.lifecyclePause !== undefined && typeof value.lifecyclePause !== "string") return;
  // Extra fields are ignored; copies contain only the public presentation contract.
  return { id: value.id, issueNumber: value.issueNumber, worktree: value.worktree, branch: value.branch,
   phaseLabel: clean(value.phaseLabel), routeLabel: clean(value.routeLabel), activity: clean(value.activity), status: value.status,
   completedSteps: value.completedSteps, totalSteps: value.totalSteps, passedChecks: value.passedChecks, totalChecks: value.totalChecks,
   blockedReason: clean(value.blockedReason), details: value.details.slice(0, 100).map(clean), ...(stages ? { stages } : {}), ...(Array.isArray(value.warnings) ? { warnings: value.warnings.slice(0, 20).map(clean) } : {}), ...(Array.isArray(value.stack) ? { stack: value.stack.slice(0, 20).map(clean) } : {}),
-  ...(Array.isArray(value.lifecycle) ? { lifecycle: value.lifecycle.slice(0, 40).map(clean) } : {}), ...(typeof value.lifecycleSummary === "string" ? { lifecycleSummary: clean(value.lifecycleSummary) } : {}) };
+  ...(Array.isArray(value.lifecycle) ? { lifecycle: value.lifecycle.slice(0, 40).map(clean) } : {}), ...(typeof value.lifecycleSummary === "string" ? { lifecycleSummary: clean(value.lifecycleSummary) } : {}),
+  ...(typeof value.lifecyclePause === "string" ? { lifecyclePause: clean(value.lifecyclePause) } : {}) };
 }
 export function matchingWorkflow(progress: WorkflowProgress | undefined, cwd: string, git: GitSnapshot | undefined): WorkflowProgress | undefined {
  if (!progress || !git || git.detached || git.branch !== progress.branch || checkoutPath(git.root) !== checkoutPath(progress.worktree)) return;
@@ -106,7 +110,8 @@ export function workflowProgressView(t: Theme, progress: WorkflowProgress | unde
   for (const s of p.stages ?? []) lines.push(t.fg(stageColor(s), ` ${s.current ? ">" : " "} ${symbols[s.status]} ${clean(s.label)} · ${stageLabels[s.status]}`), `    Previsto: ${plannedLabels[s.planned]}`, `    Real: ${modeLabels[s.observed]}`);
   if (p.warnings?.length) lines.push("", t.fg("warning", t.bold(" Avisos de lentes · no bloquean, salvo un fail de seguridad")), ...p.warnings.map(w => t.fg("warning", ` △ ${clean(w)}`)));
   if (p.stack?.length) lines.push("", t.bold(" Stack de PRs"), ...p.stack.map(line => ` ${clean(line)}`));
-  if (p.lifecycle?.length) lines.push("", t.bold(" Review · Land · Ship"), ...p.lifecycle.map(line => t.fg(/^(Bloqueo|Lifecycle no habilitado)/.test(line) ? "warning" : "text", ` ${clean(line)}`)));
+  if (p.lifecycle?.length || p.lifecyclePause) lines.push("", t.bold(" Review · Land · Ship"), ...(p.lifecyclePause ? [t.fg("warning", ` ${symbols.paused} ${CONTINUITY_PAUSE_TITLE} · ${clean(p.lifecyclePause)}`)] : []),
+   ...(p.lifecycle ?? []).map(line => t.fg(/^(Bloqueo|Lifecycle no habilitado)/.test(line) ? "warning" : "text", ` ${clean(line)}`)));
   lines.push("", " ? condicional/sin observar · ○ pendiente · ✓ cumplida · △ con avisos · – no aplica", " Previsto no confirma ejecución. Los lentes son llamadas aisladas.", " Esta vista no ejecuta ni aprueba pasos, checks o publicaciones.");
  }
  return lines.flatMap(line => wrapTextWithAnsi(line, Math.max(1, width))).map(line => fit(line, width));
@@ -123,6 +128,7 @@ export function workflowProgressPanel(theme: Theme, progress: WorkflowProgress, 
   p.blockedReason ? clean(p.activity) || "Sin actividad informada" : shortcut(clean(p.activity) || "Sin actividad informada", width), theme.fg("muted", counts(p)),
   ...(p.blockedReason ? [theme.fg("warning", shortcut(`! ${clean(p.blockedReason)}`, width))] : []),
   ...(p.warnings?.length ? [theme.fg("warning", shortcut(`△ Avisos de lentes: ${p.warnings.length}`, width))] : []),
+  ...(p.lifecyclePause ? [theme.fg("warning", `${symbols.paused} ${clean(p.lifecyclePause)}`)] : []),
   ...(p.lifecycleSummary ? [theme.fg("muted", clean(p.lifecycleSummary))] : []),
   ...(p.stages ?? []).map(s => stageRow(theme, s)),
   theme.fg("dim", "Ctrl6 · /omi-progress · detalle >")];
@@ -141,6 +147,7 @@ export function workflowProgressDetail(progress: WorkflowProgress | undefined): 
   ...(p.stages ?? []).flatMap(s => [notice(`${s.current ? "> " : ""}${clean(s.label)} · ${stageLabels[s.status]}`, "text"), notice(`Previsto: ${plannedLabels[s.planned]} · Real: ${modeLabels[s.observed]}`)]),
   ...(p.warnings?.length ? [section("Avisos de lentes (no bloquean, salvo un fail de seguridad)"), ...p.warnings.map((line) => notice(clean(line), "warning"))] : []),
   ...(p.stack?.length ? [section("Stack de PRs"), ...p.stack.map((line) => notice(clean(line), "text"))] : []),
-  ...(p.lifecycle?.length ? [section("Review · Land · Ship"), ...p.lifecycle.map((line) => notice(clean(line), /^(Bloqueo|Lifecycle no habilitado)/.test(line) ? "warning" : "text"))] : []),
+  ...(p.lifecycle?.length || p.lifecyclePause ? [section("Review · Land · Ship"), ...(p.lifecyclePause ? [notice(`${CONTINUITY_PAUSE_TITLE} · ${clean(p.lifecyclePause)}`, "warning")] : []),
+   ...(p.lifecycle ?? []).map((line) => notice(clean(line), /^(Bloqueo|Lifecycle no habilitado)/.test(line) ? "warning" : "text"))] : []),
   section("Detalle observado"), ...p.details.map((line) => notice(clean(line), "text"))];
 }

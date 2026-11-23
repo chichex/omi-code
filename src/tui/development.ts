@@ -6,8 +6,11 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, InlineExt
 import type { Io } from "../cli/io.ts";
 import { isInside } from "../core/files.ts";
 import { ASK_TOOL, workflowToolAllowed, workflowWritePath, WORKFLOW_TOOLS } from "../harness/permissions.ts";
+import { afterDraft } from "../harness/execution-scope.ts";
+import { afterDraftToolBlock } from "../harness/after-draft-guide.ts";
 import { referenceDigest } from "../harness/references.ts";
 import { developmentInstructions } from "./development-view.ts";
+import { singlePrPlanning } from "./development-single-pr.ts";
 import { observeDevelopment } from "./development-observation.ts";
 import { DevelopmentSession, type DevelopmentDeps } from "./development-session.ts";
 import { registerDevelopmentTools } from "./development-tools.ts";
@@ -140,6 +143,8 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 					if ((LIFECYCLE_COMMANDS as readonly string[]).includes(command)) {
 						let continueWork = false;
 						try {
+							// El comando ya es el próximo paso: mientras corre, la pausa anterior no se muestra como vigente.
+							await session.continuity.clearPause(ctx);
 							if (command === "adopt") {
 								if (await adoptLifecycle(session, ctx)) await session.continuity.advance(ctx);
 							} else if (command === "review") {
@@ -187,14 +192,15 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 		pi.on("session_start", async (event, ctx) => { held.recall(ctx.sessionManager.getBranch(), event.reason === "reload" ? "reload" : "start"); session.foundations.load(ctx); onboarding.detect(ctx.cwd); await session.restore(ctx); loadout(); setup.sessionStarted(event.reason, ctx); config.observe(ctx); });
 		pi.on("session_tree", async (_event, ctx) => { held.recall(ctx.sessionManager.getBranch(), "tree"); await session.restore(ctx); loadout(); });
 		pi.on("session_shutdown", () => { readsInFlight.clear(); config.shutdown(); session.shutdown(); });
-		pi.on("before_agent_start", (event, ctx) => {
+		pi.on("before_agent_start", async (event, ctx) => {
 			if (session.lockedReason) {
 				event.systemPromptOptions.sections ??= {};
 				event.systemPromptOptions.sections.omi_development = `Harness bloqueado: ${session.lockedReason}. No cambiar archivos ni ejecutar comandos. Pedí recuperación humana con /omi-work resume.`;
 			} else if (session.state) {
+				const state = session.state, foundations = effectivePolicy(session.foundations.current(ctx), state);
+				const singlePr = await singlePrPlanning(session, state);
 				event.systemPromptOptions.sections ??= {};
-				const foundations = effectivePolicy(session.foundations.current(ctx), session.state);
-				event.systemPromptOptions.sections.omi_development = developmentInstructions(session.state, foundations.command.block?.confirmar ?? [], foundations.command.accepted);
+				event.systemPromptOptions.sections.omi_development = developmentInstructions(state, foundations.command.block?.confirmar ?? [], foundations.command.accepted, singlePr);
 			}
 		});
 		pi.on("tool_call", async (event, ctx) => {
@@ -202,7 +208,8 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 			if (pendingBegin) return { block: true, reason: "Hay un pedido de desarrollo esperando la confirmación de la persona. Terminá el turno sin otras tools." };
 			if (!session.state && !session.lockedReason) return;
 			if (session.lockedReason && !["read", "grep", "find", "ls", ASK_TOOL, ...WORKFLOW_TOOLS].includes(event.toolName)) return { block: true, reason: session.lockedReason };
-			if (session.state && !workflowToolAllowed(session.state, event.toolName, event.input)) return { block: true, reason: `Harness: ${event.toolName} no está habilitada en esta etapa. Usá omi_workflow y omi_workflow_check; no eludas la receta, evidencia ni permisos.` };
+			// Después del draft, omi_workflow_check tampoco corre: el motivo manda a los comandos /omi-work de la persona.
+			if (session.state && !workflowToolAllowed(session.state, event.toolName, event.input)) return { block: true, reason: afterDraft(session.state) ? afterDraftToolBlock(session.state, event.toolName) : `Harness: ${event.toolName} no está habilitada en esta etapa. Usá omi_workflow y omi_workflow_check; no eludas la receta, evidencia ni permisos.` };
 			if (session.state && event.toolName === "read" && typeof event.input.path === "string") {
 				try {
 					const path = await realpath(resolve(session.state.checkout.root, event.input.path.replace(/^@/, "")));

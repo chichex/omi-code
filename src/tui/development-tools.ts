@@ -14,6 +14,7 @@ import { lensDiffParts, runLens } from "./development-review.ts";
 import { developmentInstructions } from "./development-view.ts";
 import { registerAgreement } from "./development-agreement.ts";
 import { syncWorkStack } from "./development-stack.ts";
+import { SINGLE_PR_REJECTED, singlePrPlanning, singlePrRequired } from "./development-single-pr.ts";
 
 const ActionSchema = Type.Object({
 	action: Type.Union([Type.Literal("status"), Type.Literal("explored"), Type.Literal("inferences"), Type.Literal("ask"), Type.Literal("planned"), Type.Literal("diagnosed"), Type.Literal("specified"), Type.Literal("approve"), Type.Literal("step"), Type.Literal("verified"), Type.Literal("retry"), Type.Literal("amend"), Type.Literal("pause"), Type.Literal("refresh"), Type.Literal("publish"), Type.Literal("stack"), Type.Literal("agreed")]),
@@ -27,7 +28,11 @@ function checked<S extends TSchema>(schema: S, value: unknown): Static<S> {
 	if (!Value.Check(schema, value)) throw new Error("Faltan datos o no tienen el formato de esta acción del harness");
 	return value;
 }
-const result = (session: DevelopmentSession) => ({ content: [{ type: "text" as const, text: session.state && !session.lockedReason ? developmentInstructions(session.state) : session.status() }], details: { workflow: session.state } });
+const result = async (session: DevelopmentSession) => {
+	const state = session.state;
+	const text = state && !session.lockedReason ? developmentInstructions(state, [], false, await singlePrPlanning(session, state)) : session.status();
+	return { content: [{ type: "text" as const, text }], details: { workflow: state } };
+};
 async function observedReferences(session: DevelopmentSession, references: Static<typeof InferenceInputSchema>["references"], ctx: ExtensionContext, allowSaved = false): Promise<void> {
 	const state = session.current(ctx);
 	await validateReferences(state.checkout, references, session.lifecycle.signal);
@@ -82,6 +87,8 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 					await session.apply({ type: "diagnosed", cause: checked(text(), input.cause), reproduction: checked(text(100), input.reproduction), size: checked(Type.Union([Type.Literal("small"), Type.Literal("large")]), input.size) }, ctx); break;
 				case "specified": {
 					const event = { type: "specified" as const, spec: checked(SpecSchema, input.spec) };
+					// La cadena adopta un solo PR: con la entrada encadenada, el stack se rechaza antes de registrar nada.
+					if (event.spec.stack && await singlePrRequired(session, session.current(ctx))) throw new Error(SINGLE_PR_REJECTED);
 					assertApprovable(session, ctx, event); await session.apply(event, ctx); break;
 				}
 				case "approve": await currentExploration(session, ctx); await session.approve(ctx, signal); terminate = session.state?.phase === "approve"; break;
@@ -115,7 +122,7 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 				case "stack": await syncWorkStack(session, ctx); terminate = true; break;
 				case "agreed": note = await registerAgreement(session, { quote: checked(text(2000), input.quote), summary: checked(text(2000), input.agreement), replan: input.replan === true }, ctx); break;
 			}
-			const output = result(session);
+			const output = await result(session);
 			if (note) output.content.push({ type: "text", text: note });
 			if (terminate) session.turnYielded = true;
 			return { ...output, terminate };
@@ -123,7 +130,7 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 	});
 	pi.registerTool({
 		name: "omi_workflow_check", label: "Desarrollo: ejecutar prueba", defaultActive: false, executionMode: "sequential", parameters: CheckSchema,
-		description: "Ejecuta un comando en el checkout del trabajo y registra salida/exit real para reproducción, rojo, verde o casos D. setup prepara el checkout (por ejemplo, instalar dependencias) en cualquier etapa activa y no acredita pruebas. Sin Foundations v2 aceptada, nada pregunta. Con v2, sólo las líneas simples que no coinciden con un patrón corren sin preguntar; patrones y sintaxis no soportada piden sí, salvo un grant humano exacto del trabajo/pedido. Aprobar la receta no dispensa esa confirmación. Salida limitada a 12.000 caracteres. No es sandbox.",
+		description: "Ejecuta un comando en el checkout del trabajo y registra salida/exit real para reproducción, rojo, verde o casos D. setup prepara el checkout (por ejemplo, instalar dependencias) en cualquier etapa activa hasta el PR draft y no acredita pruebas; después del PR, sólo corre durante una corrección en curso. Sin Foundations v2 aceptada, nada pregunta. Con v2, sólo las líneas simples que no coinciden con un patrón corren sin preguntar; patrones y sintaxis no soportada piden sí, salvo un grant humano exacto del trabajo/pedido. Aprobar la receta no dispensa esa confirmación. Salida limitada a 12.000 caracteres. No es sandbox.",
 		async execute(_id, input, signal, _update, ctx) {
 			const observation = await executeCheck(session, input, ctx, AbortSignal.any([signal ?? new AbortController().signal, session.lifecycle.signal]));
 			if ("setup" in observation) return { content: [{ type: "text", text: `Comando auxiliar; no acredita pruebas ni casos.\n${JSON.stringify(observation.setup)}` }], details: { setup: observation.setup }, isError: observation.setup.interrupted || observation.setup.exitCode !== 0 };
