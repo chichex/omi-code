@@ -3,24 +3,21 @@
 // y al publicar el PR draft (sólo el lifecycle). Nunca offline, sin UI, con la KB no disponible, ni al restaurar,
 // recargar, retomar o bifurcar una sesión. Esc corta el setup sin guardar nada; guardar no ejecuta ni adopta nada.
 import type { ExtensionAPI, ExtensionContext, SessionStartEvent } from "@earendil-works/pi-coding-agent";
-import { configLines, diagnoseConfig, stopsAtDraft, type ConfigDiagnosis, type SetupPart } from "../harness/config-doctor.ts";
-import { foundationsDir, inspectTrust, readTrust, writeTrust, type TrustKey } from "../harness/foundations-trust.ts";
+import { configLines, stopsAtDraft, type ConfigDiagnosis, type SetupPart } from "../harness/config-doctor.ts";
+import { foundationsDir, readTrust, writeTrust, type TrustKey } from "../harness/foundations-trust.ts";
 import { detectLifecycle, type LifecycleDetection } from "../harness/lifecycle-detect.ts";
-import { lifecycleFromPerillas, readLifecycle, type LifecycleReading } from "../harness/lifecycle-kb.ts";
-import { lifecycleOnboardingStatus, runLifecycleOnboarding, type LifecycleOnboardingOutcome } from "../harness/lifecycle-onboarding.ts";
+import { runLifecycleOnboarding, type LifecycleOnboardingOutcome } from "../harness/lifecycle-onboarding.ts";
 import type { LifecycleConfig } from "../harness/lifecycle-schema.ts";
-import { lifecycleKeyValid, lifecycleTrustDir, readLifecycleTrust } from "../harness/lifecycle-trust.ts";
+import { lifecycleTrustDir } from "../harness/lifecycle-trust.ts";
 import { askQuestions, canAsk } from "./questions/ask.ts";
-import type { FoundationsReading } from "./development-foundations.ts";
+import type { ConfigState } from "./development-config-state.ts";
+import type { ConfigSnapshot } from "./development-config-view.ts";
 import { editFoundations } from "./development-foundations-setup.ts";
-import { lifecycleRepo } from "./development-lifecycle.ts";
-import type { LifecycleOnboarding } from "./development-lifecycle-onboarding.ts";
 import type { DevelopmentSession } from "./development-session.ts";
 
 export type SetupTrigger = "command" | "harness" | "session" | "publication";
 /** `background`: dónde corre la oferta de una sesión nueva, que espera la lectura de la KB sin frenar el arranque. */
 export interface ConfigSetupDeps { background?: (work: Promise<void>) => void }
-interface Snapshot { diagnosis: ConfigDiagnosis; key: TrustKey | null; detection: LifecycleDetection | undefined }
 type Parts = { foundations: SetupPart; lifecycle: SetupPart };
 
 const READ_TIMEOUT_MS = 30_000;
@@ -37,10 +34,10 @@ const revision = (part: SetupPart) => part.kind === "none" ? null : part.revisio
 export class ConfigSetup {
 	private readonly offered = new Set<string>();
 	private readonly session: DevelopmentSession;
-	private readonly onboarding: LifecycleOnboarding;
+	private readonly config: ConfigState;
 	private readonly background: (work: Promise<void>) => void;
-	constructor(session: DevelopmentSession, onboarding: LifecycleOnboarding, deps: ConfigSetupDeps) {
-		this.session = session; this.onboarding = onboarding;
+	constructor(session: DevelopmentSession, config: ConfigState, deps: ConfigSetupDeps) {
+		this.session = session; this.config = config;
 		this.background = deps.background ?? ((work) => { void work.catch(() => {}); });
 	}
 	/** Sólo una sesión interactiva nueva (arranque o /new, sin mensajes); restore, reload, resume y fork nunca. */
@@ -62,7 +59,8 @@ export class ConfigSetup {
 		try {
 			const reading = await session.foundations.loaded(ctx);
 			if (!reading || session.lifecycle.signal.aborted) return;
-			const snapshot = await this.snapshot(ctx, reading, trigger === "publication");
+			// La pestaña OMI ve lo mismo que decide el setup.
+			const snapshot = await this.config.snapshot(ctx, reading, trigger === "publication"); this.config.show(ctx, snapshot);
 			const { diagnosis } = snapshot;
 			const fresh = (name: string, part: SetupPart) => part.kind === "run" && !this.offered.has(`${name}:${part.revision}`);
 			const parts: Parts = {
@@ -86,34 +84,27 @@ export class ConfigSetup {
 		if (!session.kb) throw new Error("KB no disponible: no se puede leer ni guardar la configuración. No se cambió nada.");
 		const reading = await session.loader(ctx, "Leyendo la configuración de la KB", (cancel) => session.foundations.read(ctx, AbortSignal.any([session.lifecycle.signal, cancel, AbortSignal.timeout(READ_TIMEOUT_MS)])));
 		if (!reading) { ctx.ui.notify("Lectura cancelada: no se abrió nada ni se cambió nada.", "info"); return; }
-		const snapshot = await this.snapshot(ctx, reading, false);
+		const snapshot = await this.config.snapshot(ctx, reading, false); this.config.show(ctx, snapshot);
 		// La persona lo pidió: corre lo que falta y también lo postergado.
 		const parts: Parts = { foundations: snapshot.diagnosis.foundations, lifecycle: snapshot.diagnosis.lifecycle };
 		if (parts.foundations.kind === "none" && parts.lifecycle.kind === "none") { ctx.ui.notify([...configLines(snapshot.diagnosis), "Nada para configurar desde acá."].join("\n"), "info"); return; }
 		await this.run(ctx, snapshot, parts, "command");
 	}
-	/** Sin modales: la aceptación local, el lifecycle de esas perillas (o releído al publicar) y lo detectado. */
-	private async snapshot(ctx: ExtensionContext, reading: FoundationsReading, freshLifecycle: boolean): Promise<Snapshot> {
-		const home = this.session.io.homeDir, signal = this.session.lifecycle.signal, detection = await this.onboarding.detected(ctx.cwd);
-		if (reading.kind === "none") return { diagnosis: diagnoseConfig({ foundations: { reading, local: { kind: "missing" } }, lifecycle: null, omi: detection?.omi }), key: null, detection };
-		const key = reading.key, local = await inspectTrust(foundationsDir(home), key), state = this.session.state;
-		const sameRepo = !state || state.version === 2 && lifecycleRepo(state) === key.repo;
-		let lifecycle: Parameters<typeof diagnoseConfig>[0]["lifecycle"] = null;
-		if (sameRepo && lifecycleKeyValid(key)) {
-			const lifecycleLocal = await readLifecycleTrust(lifecycleTrustDir(home), key);
-			const lifecycleReading: LifecycleReading = reading.kind === "unavailable" ? { kind: "unavailable", key, reason: reading.reason }
-				: freshLifecycle ? await readLifecycle(this.session.kb, key, ctx.cwd, signal) : lifecycleFromPerillas(key, reading.perillas);
-			lifecycle = { state: lifecycleOnboardingStatus(lifecycleReading, lifecycleLocal, detection), local: lifecycleLocal };
-		}
-		return { diagnosis: diagnoseConfig({ foundations: { reading, local }, lifecycle, omi: detection?.omi }), key, detection };
-	}
 	/** En orden: Foundations y después el lifecycle. Esc en cualquiera corta el resto. Lo ofrecido no vuelve solo en esta sesión. */
-	private async run(ctx: ExtensionContext, snapshot: Snapshot, parts: Parts, trigger: SetupTrigger): Promise<void> {
+	private async run(ctx: ExtensionContext, snapshot: ConfigSnapshot, parts: Parts, trigger: SetupTrigger): Promise<void> {
 		const { key } = snapshot;
 		if (!key) return;
 		for (const [name, part] of Object.entries(parts)) { const value = revision(part); if (value) this.offered.add(`${name}:${value}`); }
-		if (parts.foundations.kind !== "none" && await this.foundations(ctx, key, snapshot.diagnosis, parts.foundations.revision) === "cancelled") { ctx.ui.notify(CANCELLED, "info"); return; }
-		if (parts.lifecycle.kind !== "none") await this.lifecycle(ctx, key, snapshot.detection, trigger);
+		let saved = false;
+		try {
+			const foundations = parts.foundations.kind === "none" ? "skipped" : await this.foundations(ctx, key, snapshot.diagnosis, parts.foundations.revision);
+			saved = foundations === "saved";
+			if (foundations === "cancelled") { ctx.ui.notify(CANCELLED, "info"); return; }
+			if (parts.lifecycle.kind !== "none") saved = await this.lifecycle(ctx, key, snapshot.detection, trigger) || saved;
+		} finally {
+			// Lo guardado se relee de la KB; un «Más adelante» sólo cambió la aceptación local.
+			this.config.update(ctx, saved ? { kind: "fresh" } : { kind: "reading", reading: snapshot.reading });
+		}
 	}
 	private async foundations(ctx: ExtensionContext, key: TrustKey, diagnosis: ConfigDiagnosis, deferral: string): Promise<"saved" | "deferred" | "cancelled" | "failed"> {
 		const item = diagnosis.items.find((i) => i.id === "foundations");
@@ -134,16 +125,18 @@ export class ConfigSetup {
 		try { return await editFoundations(ctx, this.session, this.session.kb) ? "saved" : "cancelled"; }
 		catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "No se pudo editar Foundations", "warning"); return "failed"; }
 	}
-	private async lifecycle(ctx: ExtensionContext, key: TrustKey, detection: LifecycleDetection | undefined, trigger: SetupTrigger): Promise<void> {
+	/** true si guardó en la KB. */
+	private async lifecycle(ctx: ExtensionContext, key: TrustKey, detection: LifecycleDetection | undefined, trigger: SetupTrigger): Promise<boolean> {
 		const session = this.session, signal = session.lifecycle.signal;
 		const head = await session.runner.run("git", ["-c", "core.fsmonitor=false", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], { cwd: ctx.cwd, signal });
 		const base = head.code === 0 ? head.stdout.trim().replace(/^origin\//, "") : "";
-		if (!base) { ctx.ui.notify("Para configurar el lifecycle falta la rama base de origin: corré git remote set-head origin --auto y volvé con /omi-setup. No se guardó nada.", "warning"); return; }
+		if (!base) { ctx.ui.notify("Para configurar el lifecycle falta la rama base de origin: corré git remote set-head origin --auto y volvé con /omi-setup. No se guardó nada.", "warning"); return false; }
 		const outcome = await runLifecycleOnboarding({ kb: session.kb, key, cwd: ctx.cwd, base, trustDir: lifecycleTrustDir(session.io.homeDir), detection: detection ?? await detectLifecycle(ctx.cwd, signal),
 			ask: (batch) => askQuestions(ctx, batch, { signal }), now: session.now, signal });
-		if (outcome.kind === "unavailable" || outcome.kind === "invalid") { ctx.ui.notify(`No se pudo configurar el lifecycle: ${outcome.reason}. No se guardó nada.`, "warning"); return; }
+		if (outcome.kind === "unavailable" || outcome.kind === "invalid") { ctx.ui.notify(`No se pudo configurar el lifecycle: ${outcome.reason}. No se guardó nada.`, "warning"); return false; }
 		ctx.ui.notify(LIFECYCLE[outcome.kind], "info");
 		if (outcome.kind === "saved" && trigger === "publication") this.adoptHint(ctx, outcome.pin.block);
+		return outcome.kind === "saved";
 	}
 	/** Guardar no adopta el draft ya publicado: se dice cómo seguir, sin inventar efectos. */
 	private adoptHint(ctx: ExtensionContext, block: LifecycleConfig): void {
@@ -158,8 +151,8 @@ export class ConfigSetup {
 
 const hosts = new WeakMap<DevelopmentSession, ConfigSetup>();
 /** Registra /omi-setup; `after` reacomoda las tools si Guardar cambió Foundations. */
-export function registerConfigSetup(pi: ExtensionAPI, session: DevelopmentSession, onboarding: LifecycleOnboarding, deps: ConfigSetupDeps, after: () => void): ConfigSetup {
-	const setup = new ConfigSetup(session, onboarding, deps);
+export function registerConfigSetup(pi: ExtensionAPI, session: DevelopmentSession, config: ConfigState, deps: ConfigSetupDeps, after: () => void): ConfigSetup {
+	const setup = new ConfigSetup(session, config, deps);
 	hosts.set(session, setup);
 	pi.registerCommand("omi-setup", {
 		description: "Configurar lo que falta: Foundations y el lifecycle del repo (Review, Land, Ship y continuidad)",

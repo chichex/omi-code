@@ -4,7 +4,7 @@ import { readFile, mkdir, writeFile } from "node:fs/promises";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { checkBlock, DEFAULT_POLICY, foundationsHash, renderFoundationsBlock, STRICT_POLICY, type FoundationsBlock } from "../src/harness/foundations.ts";
 import { readTrust, trustPath, writeTrust } from "../src/harness/foundations-trust.ts";
-import { FoundationsGate, decideFoundations, effectivePolicy, foundationsLines, foundationsSummary, readFoundations, type FoundationsPin } from "../src/tui/development-foundations.ts";
+import { FoundationsGate, decideFoundations, effectivePolicy, foundationsDetail, foundationsLines, readFoundations, type FoundationsPin } from "../src/tui/development-foundations.ts";
 import { memoryKb } from "./helpers/mock-kb.ts";
 import { tempDir } from "./helpers/io.ts";
 
@@ -74,14 +74,21 @@ test("foundations_pin: leer para abrir panel no acepta, no escribe KB ni confian
 	assert.equal((await readFoundations(undefined, "/tmp", runner, new AbortController().signal)).kind, "unavailable");
 });
 
-test("foundations_pin: resumen corto para la pantalla OMI: qué pregunta, qué reglas hay y de dónde sale", () => {
-	assert.deepEqual(foundationsSummary(undefined), ["Todavía no se leyó de la KB: se decide al empezar un trabajo."]);
-	const unset = foundationsSummary({ ...pin(), version: 1 } as never).join("\n");
-	assert.match(unset, /^Arranque auto · Receta auto · Push \+ PR draft auto$/m); assert.match(unset, /^Reglas de comandos: ninguna$/m);
-	assert.match(unset, /Sin configurar/); assert.doesNotMatch(unset, /\bv[12]\b|obsolet|Aviso/i);
+// Cambio de requisito del dueño (2026-11-23): la pantalla OMI muestra todo, sin apretar f; ya no es un resumen corto.
+test("foundations_pin: detalle para la pantalla OMI: origen, cada política con su significado, todos los patrones y el aviso", () => {
+	assert.deepEqual(foundationsDetail(undefined), ["Todavía no se leyó de la KB: se lee al abrir la sesión."]);
+	const unset = foundationsDetail({ ...pin(), version: 1 } as never).join("\n");
+	assert.match(unset, /^Origen: por defecto \(sin configurar: nada pregunta\)$/m); assert.match(unset, /^Vigente en esta sesión\.$/m);
+	assert.match(unset, /^Arranque: auto\. Crea el issue, el worktree y la sesión sin preguntar, con el texto del agente\.$/m);
+	assert.match(unset, /^Patrones que requieren confirmación:$/m); assert.match(unset, /^ {2}\(sin configurar: nada pregunta\)$/m);
+	assert.match(unset, /^Aviso: Foundations sin configurar/m, "el aviso se ve también con el default"); assert.doesNotMatch(unset, /\bv[12]\b|obsolet/i);
 	const many = { ...value, confirmar: ["git push *", "npm publish*", "rm -rf *", "gh pr merge *"] }; const hash = foundationsHash(many);
-	const accepted = foundationsSummary({ ...pin(), block: many, hash, reading: { ...reading, block: many, hash } }).join("\n");
-	assert.match(accepted, /^Arranque ask · Receta ask · Push \+ PR draft ask$/m);
-	assert.match(accepted, /^Reglas de comandos: git push \* · npm publish\* · rm -rf \* · y 1 más$/m);
-	assert.match(accepted, new RegExp(`^KB · revisión ${hash.slice(0, 8)} · perillas doc$`, "m")); assert.doesNotMatch(accepted, /Sin configurar/);
+	const accepted = foundationsDetail({ ...pin(), block: many, hash, reading: { ...reading, block: many, hash } });
+	assert.ok(accepted.includes("Arranque: ask. Te pide el sí antes de crear el issue, el worktree y la sesión."));
+	assert.ok(accepted.includes("Receta: ask. Te muestra la receta para que la apruebes antes de implementar."));
+	assert.ok(accepted.includes("Push + PR draft: ask. Te pide el sí antes del push de la rama y del PR draft."));
+	for (const rule of many.confirmar) assert.ok(accepted.includes(`  ${rule}`), rule);
+	assert.ok(accepted.includes(`Origen: KB · revisión ${hash.slice(0, 8)} · perillas doc`)); assert.doesNotMatch(accepted.join("\n"), /y \d+ más|Sin configurar|Aviso/);
+	const empty = foundationsDetail(pin()).join("\n");
+	assert.match(empty, /todo comando SIMPLE sin confirmación por esta política/, "lista vacía aceptada no es el default");
 });

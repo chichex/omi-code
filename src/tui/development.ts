@@ -25,6 +25,7 @@ import { fixLifecycle } from "./development-lifecycle-fix.ts";
 import { shipLifecycle } from "./development-lifecycle-ship.ts";
 import { LifecycleOnboarding } from "./development-lifecycle-onboarding.ts";
 import { registerConfigSetup, type ConfigSetupDeps } from "./development-config-setup.ts";
+import { ConfigState } from "./development-config-state.ts";
 import { continueDevelopment } from "./development-continue.ts";
 
 const KICKOFF = "Continuá el harness de desarrollo activo desde su etapa persistida. Respetá sus bloqueos y pedí los permisos pendientes; no saltees etapas.";
@@ -49,6 +50,8 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 	return { name: "omi-development", factory: async (pi: ExtensionAPI) => {
 		const session = new DevelopmentSession(pi, io, args, deps);
 		const onboarding = new LifecycleOnboarding(session);
+		// La pestaña OMI (otra extensión) muestra lo que este harness lee de la configuración.
+		const config = new ConfigState(pi, session, onboarding, deps.background ?? ((work) => { void work.catch(() => {}); }));
 		// Pi lee sus rutas al importarse: se importa al cargar la extensión, no con el módulo.
 		const cli = (await import("@earendil-works/pi-coding-agent")).parseArgs([...args]);
 		const held = new HeldLoadout(pi, cli);
@@ -61,7 +64,7 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 			pi.setActiveTools([...names].filter((name) => name === "subagent" || WORKFLOW_TOOLS.includes(name) || (session.state ? workflowToolAllowed(session.state, name, {}) : ["read", "grep", "find", "ls", ASK_TOOL].includes(name))));
 		};
 		session.onChange = loadout;
-		const setup = registerConfigSetup(pi, session, onboarding, deps, loadout);
+		const setup = registerConfigSetup(pi, session, config, deps, loadout);
 		registerDevelopmentTools(pi, session);
 		// El arranque del harness también queda guardado como mensaje "user": no es una cita de la persona.
 		trackExtensionMessages(pi, session, [KICKOFF]);
@@ -130,7 +133,7 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 					const command = input.trim() || "status";
 					if (command === "status") { ctx.ui.notify([session.status(), ...foundationsLines(session.foundations.current(ctx))].join("\n"), "info"); return; }
 					if (!ctx.isIdle() || ctx.hasPendingMessages()) throw new Error("Esperá a que termine el turno antes de cambiar el trabajo");
-					if (command === "foundations") { await editFoundations(ctx, session, deps.kb); loadout(); return; }
+					if (command === "foundations") { if (await editFoundations(ctx, session, deps.kb)) config.update(ctx, { kind: "session" }); loadout(); return; }
 					const [verb, ...rest] = command.split(/\s+/);
 					if (verb === BEGIN_SUBCOMMAND) { await begin(rest.join(" "), ctx); return; }
 					// Review, correcciones, Land y Ship: comandos de la persona; cada efecto pide su permiso.
@@ -176,14 +179,14 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 			handler: async (_input, ctx) => {
 				try {
 					if (!ctx.isIdle() || ctx.hasPendingMessages()) throw new Error("Esperá a que termine el turno antes de editar Foundations.");
-					await editFoundations(ctx, session, deps.kb);
+					if (await editFoundations(ctx, session, deps.kb)) config.update(ctx, { kind: "session" });
 				} catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "No se pudo editar Foundations", "warning"); }
 			},
 		});
 		// Pi ya restauró las tools de la rama: con el harness activo, las restringidas.
-		pi.on("session_start", async (event, ctx) => { held.recall(ctx.sessionManager.getBranch(), event.reason === "reload" ? "reload" : "start"); session.foundations.load(ctx); onboarding.detect(ctx.cwd); await session.restore(ctx); loadout(); setup.sessionStarted(event.reason, ctx); });
+		pi.on("session_start", async (event, ctx) => { held.recall(ctx.sessionManager.getBranch(), event.reason === "reload" ? "reload" : "start"); session.foundations.load(ctx); onboarding.detect(ctx.cwd); await session.restore(ctx); loadout(); setup.sessionStarted(event.reason, ctx); config.observe(ctx); });
 		pi.on("session_tree", async (_event, ctx) => { held.recall(ctx.sessionManager.getBranch(), "tree"); await session.restore(ctx); loadout(); });
-		pi.on("session_shutdown", () => { readsInFlight.clear(); session.shutdown(); });
+		pi.on("session_shutdown", () => { readsInFlight.clear(); config.shutdown(); session.shutdown(); });
 		pi.on("before_agent_start", (event, ctx) => {
 			if (session.lockedReason) {
 				event.systemPromptOptions.sections ??= {};

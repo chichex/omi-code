@@ -25,8 +25,10 @@ import { agentDir } from "../src/core/paths.ts";
 import { OmiSidebarSettings } from "../src/tui/workspace/sidebar-settings.ts";
 import { FoundationsGate } from "../src/tui/development-foundations.ts";
 import type { KbDoc } from "../src/tui/kb-client.ts";
-import { omiViewLines } from "../src/tui/workspace/read-views.ts";
+import { omiViewLines } from "../src/tui/workspace/omi-view.ts";
 import { foundationsHash } from "../src/harness/foundations.ts";
+import { lifecycleHash } from "../src/harness/lifecycle-config.ts";
+import { assembleConfigSnapshot, CONFIG_EVENT, CONFIG_REFRESH_EVENT, lifecycleSnapshot, storeConfigView } from "../src/tui/development-config-view.ts";
 
 const theme = { fg: (_role: string, value: string) => value, bold: (value: string) => value, style: (value: string) => value, getColorMode: () => "truecolor" } as unknown as Theme;
 
@@ -680,7 +682,7 @@ test("workspace_paleta: «Configurar lo que falta» despacha /omi-setup al harne
 test("workspace_SUBAGENTS: bus real, render inmediato, sigue al quedar padre idle y finaliza por end", async (t) => {
 	const ui = await visualHarness(await tempDir(t)); t.after(ui.stop);
 	const screen = () => ui.frame(132, 70).lines.map(stripTerminalSequences).join("\n");
-	assert.equal(ui.subscriptions(), 2, "un listener de subagentes y uno del progreso de desarrollo"); assert.match(screen(), /SUBAGENTES/); assert.match(screen(), /Sin subagentes activos/);
+	assert.equal(ui.subscriptions(), 3, "un listener de subagentes, uno del progreso de desarrollo y uno de la configuración"); assert.match(screen(), /SUBAGENTES/); assert.match(screen(), /Sin subagentes activos/);
 	ui.emitSession("tool_execution_start", { toolCallId: "native", toolName: "subagent", args: { agent: "worker", task: "No duplicar" } });
 	await ui.command("omi-subagents"); assert.match(ui.prompts.at(-1)!, /Sin subagentes activos/);
 	ui.events.emit("omi:subagents", { phase: "start", id: "bus-job", args: { tasks: [{ agent: "worker", task: "Implementar monitor" }, { agent: "scout", task: "Inspeccionar código" }] }, details: { results: [{ status: "pending" }, { status: "pending" }] } });
@@ -823,36 +825,61 @@ test("workspace_SUBAGENTS: no instala panel ni listener en classic, RPC, JSON o 
 });
 
 test("workspace_OMI: un catálogo largo de Foundations se parte en líneas, no se corta", () => {
-	const catalog = `Catálogo: ${Array.from({ length: 8 }, (_, i) => `npm run check:${i}`).join(" | ")}`;
-	const lines = omiViewLines(theme, { project: undefined, services: [], environments: [], error: undefined, at: 1, now: 1, foundations: [catalog] }, 40).map(stripTerminalSequences);
+	const block = { version: 2 as const, repo: "test/repo", confirmar: Array.from({ length: 8 }, (_, i) => `npm run check:${i}`), politica: { arranque: "ask" as const, receta: "ask" as const, push_pr: "ask" as const } };
+	const hash = foundationsHash(block); const perillas = { id: "abcdef0123456789", titulo: "Perillas", cuerpo: "", producto: "repo", tipo: "perillas" };
+	const pin = { version: 2 as const, origin: "kb" as const, block, hash, docId: perillas.id, author: "", date: "", notice: "", reading: { kind: "valid" as const, key: { kbUrl: "https://kb.example.test/mcp", product: "repo", repo: "test/repo" }, block, hash, perillas } };
+	const lines = omiViewLines(theme, { project: undefined, services: [], environments: [], error: undefined, at: 1, now: 1, pin, config: undefined, session: true }, 40).map(stripTerminalSequences);
 	assert.ok(lines.every((line) => visibleWidth(line) <= 40));
 	assert.match(lines.join(" ").replace(/\s+/g, " "), /npm run check:7/, "el último comando también se ve");
 });
 
-test("workspace_OMI muestra Foundations vigente con su procedencia; f y la paleta abren el editor del harness", async (t) => {
+// Cambio de requisito del dueño (2026-11-23): «no hagamos que tengas que apretar F para verlo, sino que se muestre todo
+// directamente». La pantalla OMI ya no es un resumen corto: muestra el detalle de Foundations, el lifecycle y lo que falta.
+test("workspace_OMI muestra Foundations completo con su procedencia; f, s y la paleta abren el editor y el setup del harness", async (t) => {
 	const home = await tempDir(t); const sessionFile = join(home, "sesion.jsonl");
 	const plain = await visualHarness(home);
 	try {
 		await plain.command("omi-platform");
 		const empty = plain.frame().lines.map((line) => stripTerminalSequences(sliceByColumn(line, 0, 91))).join("\n");
 		assert.match(empty, /FOUNDATIONS/); assert.match(empty, /Todavía no se leyó de la KB/, "sin pin todavía, lo dice");
-		assert.match(empty, /f Foundations/, "la tecla está en la ayuda de la vista");
+		assert.match(empty, /Sin sesión persistente: la configuración no se lee/, "sin sesión no hay datos de configuración y lo dice");
+		assert.match(empty, /r actualizar · s configurar lo que falta · f editar Foundations · Esc chat/, "las teclas están en la ayuda de la vista");
 	} finally { await plain.stop(); }
 	// El pin vive en el harness, otra extensión: se fija con su propia API, como lo haría una sesión.
 	const gate = new FoundationsGate({ kb: undefined, runner: { run: async () => ({ code: 1, stdout: "", stderr: "" }) }, trustDir: join(home, "trust"), now: () => "" });
 	const session = { cwd: home, hasUI: false, sessionManager: { getSessionFile: () => sessionFile } } as unknown as ExtensionContext;
 	gate.load(session); const base = await gate.pin(session);
-	const block = { version: 2 as const, repo: "test/repo", confirmar: ["npm test"], politica: { arranque: "ask" as const, receta: "ask" as const, push_pr: "auto" as const } };
+	const block = { version: 2 as const, repo: "test/repo", confirmar: ["npm test", "git push *", "npm publish*", "rm -rf *"], politica: { arranque: "ask" as const, receta: "ask" as const, push_pr: "auto" as const } };
 	const hash = foundationsHash(block); const perillas = { id: "abcdef0123456789", titulo: "Perillas", cuerpo: "", producto: "repo", tipo: "perillas" } as unknown as KbDoc;
 	gate.replace(session, { ...base, origin: "kb", block, hash, docId: "abcdef0123456789", author: "ana@example.test", date: "", notice: "", reading: { kind: "valid", key: { kbUrl: "https://kb.example.test/mcp", product: "repo", repo: "test/repo" }, block, hash, perillas } });
 	const ui = await visualHarness(home, { sessionFile, paletteAction: "Foundations" }); t.after(ui.stop);
 	await ui.command("omi-platform");
-	const screen = ui.frame().lines.map((line) => stripTerminalSequences(sliceByColumn(line, 0, 91))).join("\n");
-	assert.match(screen, new RegExp(`KB · revisión ${foundationsHash(block).slice(0, 8)} · perillas abcdef01 · ana@example\\.test`));
-	assert.match(screen, /Arranque ask · Receta ask · Push \+ PR draft auto/); assert.match(screen, /Reglas de comandos: npm test/);
-	assert.doesNotMatch(screen, /Patrones que requieren|Editar: \/omi-foundations/, "la pantalla OMI muestra el resumen corto");
+	const screen = () => ui.frame(132, 70).lines.map((line) => stripTerminalSequences(sliceByColumn(line, 0, 91))).join("\n");
+	assert.match(screen(), new RegExp(`KB · revisión ${foundationsHash(block).slice(0, 8)} · perillas abcdef01 · ana@example\\.test`));
+	assert.match(screen(), /Arranque: ask\. Te pide el sí antes de crear el issue/); assert.match(screen(), /Push \+ PR draft: auto\. Hace push de la rama/);
+	assert.match(screen(), /Patrones que requieren confirmación:/, "la pantalla OMI muestra el detalle, no un resumen");
+	for (const rule of block.confirmar) assert.match(screen(), new RegExp(`^ {3}${rule.replace(/[*+]/g, "\\$&")}\\s*$`, "m"), `cada patrón en su línea: ${rule}`);
+	assert.doesNotMatch(screen(), /y \d+ más/);
+	assert.match(screen(), /Todavía no hay datos: se leen al abrir la sesión/, "sin datos del harness, lo dice");
+	// El harness publica la configuración y avisa por el bus: la pantalla se redibuja sin apretar nada.
+	const config = { version: 1 as const, repo: "test/repo", review: { mode: "ask" as const, provider: { kind: "local" as const }, timeoutSeconds: 1200 }, corrections: { mode: "ask" as const, maxRounds: 2 }, land: { mode: "ask" as const, base: "main", method: "squash" as const, maxRisk: "low" as const, requiredChecks: [] }, ship: { status: "not-applicable" as const, targets: [] }, budget: { maxAttempts: 12, maxFixForwardPRs: 1, activeSeconds: 7200 } };
+	const key = { kbUrl: "https://kb.example.test/mcp", product: "repo", repo: "test/repo" };
+	const lifecycleReading = { kind: "valid" as const, key, perillas, block: config, hash: lifecycleHash(config) };
+	const reading = { kind: "valid" as const, key, block, hash, perillas };
+	storeConfigView(sessionFile, { status: "ready", at: Date.now(), refreshing: false, error: null, snapshot: assembleConfigSnapshot({ reading, local: { kind: "missing" }, detection: undefined,
+		lifecycle: lifecycleSnapshot(lifecycleReading, { kind: "valid", record: { version: 1, ...key, revision: 0, accepted: { docId: perillas.id, blockHash: lifecycleHash(config), block: config, author: "", date: "", acceptedAt: "" }, deferred: null } }, undefined) }) });
+	const before = ui.renders(); ui.events.emit(CONFIG_EVENT, { sessionFile });
+	assert.ok(ui.renders() > before, "el aviso del harness pide render");
+	assert.match(screen(), /Estado: configurado · revisión [0-9a-f]{8} · aceptada en esta máquina/);
+	assert.match(screen(), /Review: ask · revisor local aislado sobre el diff fijo/); assert.match(screen(), /Deshabilitada: el trabajo para en el PR draft/);
+	assert.match(screen(), /✗ Lifecycle · falta: Continuidad sin configurar: el trabajo para en el PR draft\./, "lo que falta se lista con su estado");
+	const refreshes: unknown[] = []; const off = ui.events.on(CONFIG_REFRESH_EVENT, (event: unknown) => refreshes.push(event));
+	ui.input("r"); off();
+	assert.deepEqual(refreshes, [{ sessionFile }], "r también le pide al harness releer la configuración");
 	ui.input("f");
 	assert.deepEqual(ui.dispatched.at(-1), { text: "/omi-foundations", options: { expandPromptTemplates: true } });
+	ui.input("s");
+	assert.deepEqual(ui.dispatched.at(-1), { text: "/omi-setup", options: { expandPromptTemplates: true } }, "s corre el setup de lo que falta");
 	await ui.command("omi");
 	assert.ok(ui.paletteOptions.at(-1)?.includes("Foundations"));
 	assert.equal(ui.dispatched.filter((entry) => entry.text === "/omi-foundations").length, 2, "la paleta lleva al mismo comando");

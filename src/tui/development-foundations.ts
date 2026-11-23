@@ -6,8 +6,8 @@ import { resolve } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Runner } from "../core/exec.ts";
 import type { Workflow } from "../harness/model.ts";
-import { checkBlock, DEFAULT_POLICY, foundationsDiff, foundationsHash, parseFoundations, POLICY_LABELS, visibleText, type FoundationsBlock, type FoundationsPolicy, type PolicyPoint } from "../harness/foundations.ts";
-import { readTrust, writeTrust, type TrustKey, type TrustRecord } from "../harness/foundations-trust.ts";
+import { ASK_HELP, AUTO_WARNINGS, checkBlock, DEFAULT_POLICY, foundationsDiff, foundationsHash, parseFoundations, POLICY_LABELS, visibleText, type FoundationsBlock, type FoundationsPolicy, type PolicyPoint } from "../harness/foundations.ts";
+import { readTrust, writeTrust, type TrustInspection, type TrustKey, type TrustRecord } from "../harness/foundations-trust.ts";
 import type { CommandPolicy } from "../harness/authorization.ts";
 import type { KbClient, KbDoc } from "./kb-client.ts";
 import { HARNESS_KB_URL } from "./defaults.ts";
@@ -116,6 +116,9 @@ export function effectivePolicy(pin: FoundationsPin | undefined, state?: Workflo
 }
 const ORIGINS = { kb: "KB", local: "local (última aceptada)", default: "por defecto (sin configurar: nada pregunta)" };
 const origin = (pin: FoundationsPin): string => `${ORIGINS[pin.origin]}${pin.hash ? ` · revisión ${pin.hash.slice(0, 8)}` : ""}${pin.docId ? ` · perillas ${pin.docId.slice(0, 8)}${pin.author ? ` · ${pin.author}` : ""}` : ""}`;
+const POINTS: readonly PolicyPoint[] = ["arranque", "receta", "push_pr"];
+const rulesLines = (block: FoundationsBlock | null): string[] => ["Patrones que requieren confirmación:",
+	...(block?.confirmar.length ? block.confirmar.map((rule) => visibleText(`  ${rule}`)) : [block ? "  (lista vacía: todo comando SIMPLE sin confirmación por esta política)" : "  (sin configurar: nada pregunta)"])];
 /** Para /omi-work status y el detalle del progreso. Sin I/O. */
 export function foundationsLines(pin: FoundationsPin | undefined): string[] {
 	if (!pin) return ["Foundations: se lee de la KB; se decide en el primer punto del harness."];
@@ -123,24 +126,34 @@ export function foundationsLines(pin: FoundationsPin | undefined): string[] {
 	const block = acceptedBlock(pin); const policy = block?.politica ?? DEFAULT_POLICY;
 	return [
 		visibleText(`Foundations: ${origin(pin)}`),
-		"Políticas:", ...(Object.keys(POLICY_LABELS) as PolicyPoint[]).map((point) => `  ${POLICY_LABELS[point]}: ${policy[point]}`),
-		"Patrones que requieren confirmación:", ...(block?.confirmar.length ? block.confirmar.map((rule) => visibleText(`  ${rule}`)) : [block ? "  (lista vacía: todo comando SIMPLE sin confirmación por esta política)" : "  (sin configurar: nada pregunta)"]),
+		"Políticas:", ...POINTS.map((point) => `  ${POLICY_LABELS[point]}: ${policy[point]}`),
+		...rulesLines(block),
 		...(pin.notice ? [visibleText(`Aviso: ${pin.notice}`)] : []), "Editar: /omi-foundations",
 	];
 }
-const PREVIEW = 3;
-const label = (point: PolicyPoint) => POLICY_LABELS[point].charAt(0).toUpperCase() + POLICY_LABELS[point].slice(1);
-/** Para la pantalla OMI: qué pregunta, qué reglas hay y de dónde sale, en pocas líneas. Sin I/O. */
-export function foundationsSummary(pin: FoundationsPin | undefined): string[] {
-	if (!pin) return ["Todavía no se leyó de la KB: se decide al empezar un trabajo."];
-	pin = safePin(pin);
-	const block = acceptedBlock(pin); const policy = block?.politica ?? DEFAULT_POLICY; const rules = block?.confirmar ?? [];
-	const listed = rules.slice(0, PREVIEW).map((rule) => visibleText(rule)).join(" · ") + (rules.length > PREVIEW ? ` · y ${rules.length - PREVIEW} más` : "");
+/** Lo que la sesión leyó, para mostrar qué va a regir antes de fijar el pin. `motive`: por qué no vale una v2 de la KB. */
+export interface FoundationsPreview { reading: FoundationsReading; local: TrustInspection; motive: string | null }
+/** Como decideFoundations, sin efectos: la v2 de la KB, si no la última aceptada en esta máquina, si no el default. */
+function previewPin({ reading, local }: FoundationsPreview): FoundationsPin {
+	if (reading.kind === "valid") return { version: 2, origin: "kb", block: reading.block, hash: reading.hash, docId: reading.perillas.id, author: reading.perillas.autor ?? "", date: reading.perillas.fecha ?? "", notice: "", reading };
+	const accepted = reading.kind !== "none" && local.kind === "valid" ? local.record.accepted : null;
+	return accepted ? { version: 2, origin: "local", block: accepted.block, hash: accepted.blockHash, docId: accepted.docId, author: accepted.author, date: accepted.date, notice: "", reading } : defaultPin(reading, "");
+}
+const sentence = (value: string) => `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+/** Para la pantalla OMI: origen, cada política con lo que hace, todos los patrones, el aviso y el motivo. Sin I/O. */
+export function foundationsDetail(pin: FoundationsPin | undefined, preview?: FoundationsPreview): string[] {
+	const shown = pin ? safePin(pin) : preview ? previewPin(preview) : undefined;
+	if (!shown) return ["Todavía no se leyó de la KB: se lee al abrir la sesión."];
+	const block = acceptedBlock(shown); const policy = block?.politica ?? DEFAULT_POLICY;
+	// El pin queda fijo en la sesión: una revisión nueva de la KB vale desde la próxima.
+	const latest = pin && preview?.reading.kind === "valid" && preview.reading.hash !== shown.hash ? preview.reading.hash : null;
 	return [
-		(Object.keys(POLICY_LABELS) as PolicyPoint[]).map((point) => `${label(point)} ${policy[point]}`).join(" · "),
-		`Reglas de comandos: ${rules.length ? listed : "ninguna"}`,
-		block ? visibleText(origin(pin)) : "Sin configurar: el agente no te pide confirmación.",
-		...(block && pin.notice ? [visibleText(`Aviso: ${pin.notice}`)] : []),
+		visibleText(`Origen: ${origin(shown)}`), pin ? "Vigente en esta sesión." : "Se fija en esta sesión al empezar un trabajo.",
+		...POINTS.map((point) => `${sentence(POLICY_LABELS[point])}: ${policy[point]}. ${sentence(policy[point] === "auto" ? AUTO_WARNINGS[point] : ASK_HELP[point])}.`),
+		...rulesLines(block),
+		...(shown.notice ? [visibleText(`Aviso: ${shown.notice}`)] : []),
+		...(preview?.motive ? [visibleText(`Motivo: ${preview.motive}`)] : []),
+		...(latest ? [`En la KB hay otra revisión (${latest.slice(0, 8)}): vale desde la próxima sesión.`] : []),
 	];
 }
 interface Entry { reading: Promise<FoundationsReading>; generation?: number; pin?: FoundationsPin | undefined; deciding?: Promise<FoundationsPin> | undefined; triage?: Promise<TriagePolicyPin> }
