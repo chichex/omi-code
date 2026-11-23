@@ -145,6 +145,11 @@ for (const entry of ["auto", "ask"] as const) {
   assert.deepEqual(gh.reads, [], "no lee el PR en GitHub"); assert.deepEqual(gh.mutations, []);
   const text = "Este trabajo se publicó como stack de 2 PRs y el lifecycle no adopta stacks";
   assert.ok(f.messages.some(m => m === `Continuidad en pausa · ${text}: mergealos en orden con su sí`));
+  // /omi-work status (y el panel) dan un solo próximo paso: no mandan a adopt, que rechaza el stack.
+  await f.command("status");
+  const status = f.messages.at(-1) ?? "";
+  assert.ok(status.split("\n").some(line => /^Lifecycle no habilitado: .+ Mergealos en orden con su sí\.$/.test(line) && line.includes(text)), status);
+  assert.doesNotMatch(status, /\/omi-work adopt/, "no manda a adopt un stack");
   await f.command("adopt");
   assert.equal(f.messages.at(-1), `${text}. Mergealos en orden con su sí.`);
   assert.deepEqual(gh.reads, []);

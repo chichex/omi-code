@@ -3,7 +3,7 @@
 import type { Workflow } from "./model.ts";
 import { lifecycleFindingBlocks } from "./lifecycle-state.ts";
 import { currentContinuityPause } from "./continuity-pause.ts";
-import { continuityPauseLine, continuityPauseText } from "./continuity-pause-text.ts";
+import { continuityPauseLine, continuityPauseText, stackUnsupportedText } from "./continuity-pause-text.ts";
 
 const STAGES = { review: "Review", corrections: "Correcciones", ready: "Listo para merge (no es permiso)", land: "Land", ship: "Ship", paused: "Pausado", delivered: "Entregado", complete: "Terminado" } as const;
 const OUTCOMES = { verified: "entrega verificada", "externally-attested": "entrega atestiguada por una persona, sin origen demostrado", "not-applicable": "Ship no aplica (elegido explícitamente)", "manual-attested": "entrega declarada a mano, sin verificar" } as const;
@@ -30,7 +30,10 @@ export function lifecycleBlocks(state: Workflow): string[] {
 }
 export function lifecycleLines(state: Workflow): string[] {
  if (state.version !== 2 || state.lifecycle.status !== "enabled") {
-  return state.publication.status === "opened" ? ["Lifecycle no habilitado: el trabajo terminó en PR draft. No hubo Review, Land ni Ship verificados. Para seguir: /omi-work adopt."] : [];
+  if (state.publication.status !== "opened") return [];
+  // adopt rechaza un stack: el próximo paso es mergearlo en orden, el mismo que da la pausa.
+  const stack = state.publication.stack, next = stack ? stackUnsupportedText(stack.length) : "Para seguir: /omi-work adopt.";
+  return [`Lifecycle no habilitado: el trabajo terminó en ${stack ? "PRs" : "PR"} draft. No hubo Review, Land ni Ship verificados. ${next}`];
  }
  const s = state.lifecycle, pin = s.pins.find(p => p.accepted.blockHash === s.pinHash)?.accepted.block, subject = s.subjects.find(x => x.id === s.currentSubject);
  if (!pin) return ["Lifecycle sin configuración vigente: no se inician efectos."];

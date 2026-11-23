@@ -404,7 +404,7 @@ Frena y pide una persona si:
 - El merge con base fija necesita Git 2.40 o superior.
 - No hay lock con GitHub: otro puede escribir entre la lectura y el push. El push normal lo rechaza y se vuelve a correr.
 - La línea «sobre #N» del cuerpo queda como al abrir el PR. La base vigente la muestran GitHub y la sección del issue.
-- El lifecycle no adopta un stack. Si igual se publica uno con la entrada encadenada (por ejemplo, la configuración se aceptó después de la spec), la cadena pausa sin preguntar ni leer GitHub: «Continuidad en pausa · Este trabajo se publicó como stack de 2 PRs y el lifecycle no adopta stacks: mergealos en orden con su sí». `/omi-work adopt` falla con el mismo motivo.
+- El lifecycle no adopta un stack. Si igual se publica uno con la entrada encadenada (por ejemplo, la configuración se aceptó después de la spec), la cadena pausa sin preguntar ni leer GitHub: «Continuidad en pausa · Este trabajo se publicó como stack de 2 PRs y el lifecycle no adopta stacks: mergealos en orden con su sí». `/omi-work adopt` falla con el mismo motivo. `/omi-work status` y el panel tampoco mandan a adopt: dan el mismo próximo paso.
 
 ## Si el modelo corta solo
 
