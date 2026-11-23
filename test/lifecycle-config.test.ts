@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { readFile } from "node:fs/promises";
 import { checkBlock, composePerillas, foundationsHash, parseFoundations } from "../src/harness/foundations.ts";
 import {
  checkLifecycleConfig, defaultLifecycleConfig, defaultLifecycleTarget, lifecycleHash,
@@ -155,4 +156,26 @@ test("compose preserva byte a byte Foundations/triage/otros repos y no muta sus 
  assert.throws(() => composeLifecyclePerillas(current + "\n" + fence(defaults()), "app", repo, changed));
  assert.throws(() => composeLifecyclePerillas("```md\nsin cierre", "app", repo, changed));
  assert.throws(() => composeLifecyclePerillas(before, "app", "other/app", changed));
+});
+
+test("review gha acepta model y effort opcionales del workflow; ausentes no cambian el hash ni se materializan", async () => {
+ const provider = { kind: "gha", workflow: "claude-review.yml", ref: "main", contract: "omi-review-v1" };
+ const legacy = valid({ ...defaults(), review: { ...defaults().review, provider } });
+ // Hash calculado antes de agregar model/effort al esquema: una config existente no cambia de revisión.
+ assert.equal(lifecycleHash(legacy), "da6334242cb18e44a16fc81a86909a39fc74cabeb1478437f0bf72e034cd3588");
+ assert.equal(lifecycleHash(defaults()), "d53fdbd1625b9dd2e70c5913f4746ae19f5cb1c17a73bde38d618a71a63ccece");
+ const parsed = parseLifecycleConfig(fence(legacy), repo); assert.ok(parsed.status === "valid"); assert.equal(parsed.hash, lifecycleHash(legacy));
+ assert.equal(Object.hasOwn(parsed.block.review.provider, "model"), false); assert.equal(Object.hasOwn(parsed.block.review.provider, "effort"), false);
+ const tuned = valid({ ...defaults(), review: { ...defaults().review, provider: { ...provider, model: "claude-sonnet-5-5", effort: "high" } } });
+ assert.notEqual(lifecycleHash(tuned), lifecycleHash(legacy));
+ for (const model of ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1", "claude-haiku-4-5"]) valid({ ...defaults(), review: { ...defaults().review, provider: { ...provider, model } } });
+ for (const effort of ["low", "medium", "high", "xhigh", "max"]) valid({ ...defaults(), review: { ...defaults().review, provider: { ...provider, effort } } });
+ for (const change of [{ model: "gpt-5" }, { model: "" }, { effort: "extreme" }, { effort: "HIGH" }, { model: "claude-sonnet-5-5", temperature: 1 }]) invalid({ ...defaults(), review: { ...defaults().review, provider: { ...provider, ...change } } });
+ for (const other of [{ kind: "local", model: "claude-sonnet-5-5" }, { kind: "github", reviewers: ["ada"], effort: "high" }]) invalid({ ...defaults(), review: { ...defaults().review, provider: other } });
+ // El esquema y el workflow del repo aceptan los mismos valores: un dispatch con estos inputs no falla en `validate`.
+ const workflow = await readFile(new URL("../.github/workflows/claude-review.yml", import.meta.url), "utf8");
+ for (const [input, values] of [["model", ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1", "claude-haiku-4-5"]], ["effort", ["low", "medium", "high", "xhigh", "max"]]] as const) {
+  const block = new RegExp(`\\n      ${input}:\\n((?:        .*\\n)+)`).exec(workflow)?.[1] ?? "";
+  assert.deepEqual([...block.matchAll(/^          - (\S+)$/gm)].map(m => m[1]), [...values], `opciones de ${input} en claude-review.yml`);
+ }
 });

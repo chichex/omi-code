@@ -39,7 +39,7 @@ async function acceptance(dir: string): Promise<unknown> {
 	const value: unknown = JSON.parse(await readFile(join(dir, name), "utf8")); return value;
 }
 function expectedAcceptance(f: Awaited<ReturnType<typeof fixture>>, pin: FoundationsPin, value = f.block): TrustRecord {
-	return { version: 2, ...f.key, offerDeclined: false, accepted: { docId: pin.docId ?? "", blockHash: hash(value), block: value, author: pin.author ?? "", date: pin.date ?? "", acceptedAt: NOW } };
+	return { version: 2, ...f.key, deferred: null, accepted: { docId: pin.docId ?? "", blockHash: hash(value), block: value, author: pin.author ?? "", date: pin.date ?? "", acceptedAt: NOW } };
 }
 
 for (const initial of [null, HUMAN]) {
@@ -299,7 +299,7 @@ test("foundations_save: revisión remota aparecida dentro de beforeAccept impide
 });
 test("foundations_save: aceptación local cambiada dentro de beforeAccept no se sobrescribe", async (t) => {
 	const f = await fixture(t); const prepared = await prepareFoundationsSave(f.kb, f.key, f.block, f.deps.signal);
-	const newer: TrustRecord = { version: 2, ...f.key, offerDeclined: true, accepted: null };
+	const newer: TrustRecord = { version: 2, ...f.key, deferred: { revision: "missing:none", at: NOW }, accepted: null };
 	await assert.rejects(commitFoundationsSave(f.kb, f.key, f.block, prepared, { ...f.deps,
 		beforeAccept: () => writeTrust(f.trustDir, newer), onAccepted: () => assert.fail("no publicar el pin A"),
 	}), /cambi|nueva|vigente/i);

@@ -9,7 +9,7 @@ import { parseWorkflow, type Workflow } from "./model.ts";
 import { claimReviewRequest } from "./review-claim.ts";
 import { GitHubReadClient, GitHubReadError } from "./lifecycle-github-read.ts";
 import { PullSchema, githubChecked, sha, id, text } from "./lifecycle-github-schema.ts";
-import { GhaRunSchema, checkedGhaRequest, type GhaReviewRequest, type GhaRun } from "./gha-review-contract.ts";
+import { GhaRunSchema, REVIEW_ARTIFACT_FILE, REVIEW_CONTRACT, checkedGhaRequest, type GhaReviewRequest, type GhaRun } from "./gha-review-contract.ts";
 import { readReceiptZip } from "./gha-artifact.ts";
 import type { GhaReviewPorts } from "./lifecycle-gha-review.ts";
 import { lifecycleAssert } from "./lifecycle-invariants.ts";
@@ -30,7 +30,7 @@ export async function resolveGhaReviewRequest(original: unknown, operationId: st
  return checkedGhaRequest({ repo: client.repo, pr: subject.number, headSha: subject.headSha, baseSha: subject.baseSha, correlationId: op.correlationId,
   createdAfter: new Date(created - 300000).toISOString(), workflow });
 }
-export function reviewArtifactName(request: GhaReviewRequest, run: GhaRun): string { return `omi-review-v1-${request.correlationId}-${run.id}-${run.run_attempt}`; }
+export function reviewArtifactName(request: GhaReviewRequest, run: GhaRun): string { return `${REVIEW_CONTRACT}-${request.correlationId}-${run.id}-${run.run_attempt}`; }
 export type ArtifactDownload = (repo: string, artifactId: number, signal: AbortSignal) => Promise<Buffer>;
 const download: ArtifactDownload = (repo, artifactId, signal) => new Promise((done, reject) => {
  execFile("gh", ["api", "--hostname", "github.com", "--method", "GET", `repos/${repo}/actions/artifacts/${artifactId}/zip`], {
@@ -60,7 +60,7 @@ export function createGhaReviewPorts(input: unknown, options: GhaReviewIOOptions
    const matching = artifacts.filter(a => a.name === reviewArtifactName(request, run)); const artifact = matching[0];
    lifecycleAssert(matching.length === 1 && artifact && !artifact.expired && artifact.workflow_run.id === run.id && artifact.workflow_run.head_sha === request.workflow.sha && artifact.size_in_bytes <= 8 * 1024 * 1024, "artefacto ausente/duplicado/expirado o de otro run/attempt");
    const bytes = await (options.downloadArtifact ?? download)(client.repo, artifact.id, signal);
-   return readReceiptZip(bytes, "review.json", artifact.digest, signal);
+   return readReceiptZip(bytes, REVIEW_ARTIFACT_FILE, artifact.digest, signal);
   },
  };
 }

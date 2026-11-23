@@ -43,6 +43,15 @@ test("lens results combine by part: the worst verdict wins and findings are join
 	assert.ok(many.findings.every((f) => f.length <= 4000)); assert.match(many.findings[0]!, /^parte 1\/3 · h0 z+…$/, "un hallazgo que no entra con su prefijo se marca, no se corta en silencio");
 });
 
+test("lens results combine by part: sin resultado sólo si ninguna parte juzgó unknown; un fail juzgado sigue siendo fail", () => {
+	const missing = { verdict: "unknown" as const, findings: ["Sin resultado del lente: conexión (3 intentos)"], noResult: true as const };
+	assert.deepEqual(combineLensResults([missing]), missing, "una parte sin resultado conserva la marca");
+	assert.deepEqual(combineLensResults([{ verdict: "pass", findings: [] }, missing]), { verdict: "unknown", findings: ["parte 2/2 · Sin resultado del lente: conexión (3 intentos)"], noResult: true });
+	assert.deepEqual(combineLensResults([{ verdict: "unknown", findings: ["falta contexto"] }, missing]), { verdict: "unknown", findings: ["parte 1/2 · falta contexto", "parte 2/2 · Sin resultado del lente: conexión (3 intentos)"] }, "un unknown juzgado no se re-tira: no queda como sin resultado");
+	assert.deepEqual(combineLensResults([{ verdict: "fail", findings: ["a.ts:1 · bug"] }, missing]).noResult, undefined);
+	assert.equal(combineLensResults([]).noResult, true, "ninguna parte revisada");
+});
+
 // El escenario medido en la review: 5 pasos con rojo y verde, un caso D y 2 gates × 3 vueltas, todo con
 // salidas de 12.000 caracteres (≈207 KB de evidencia), y un diff de ≈600 KB.
 function heavy(): Workflow {

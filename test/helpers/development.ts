@@ -8,6 +8,7 @@ import { SessionManager, type ExtensionAPI, type ExtensionContext, type Extensio
 import { processRunner, type Runner } from "../../src/core/exec.ts";
 import { developmentHarnessExtension } from "../../src/tui/development.ts";
 import type { DevelopmentDeps } from "../../src/tui/development-session.ts";
+import type { ConfigSetupDeps } from "../../src/tui/development-config-setup.ts";
 import { readGit } from "../../src/tui/workspace/data.ts";
 import { createIssueWorktree } from "../../src/tui/workspace/issue-worktree.ts";
 import { ISSUE_TRIAGE_ENTRY, issueTriageState } from "../../src/tui/workspace/issue-triage.ts";
@@ -24,11 +25,12 @@ import { answerCustom, darkTheme, fakeTui } from "./questions.ts";
 import { foundationsDir } from "../../src/harness/foundations-trust.ts";
 import type { FoundationsPolicy } from "../../src/harness/foundations.ts";
 import { acceptFoundations } from "./foundations.ts";
+import { fakeLensModel } from "./lens-model.ts";
 
 /** `foundations`: una revisión v2 aceptada con esas políticas y `confirmar` (por defecto `*`). Sin ella, vale el default: nada pregunta. */
-/** `repo`: owner/name de origin y del issue. `github`: responde primero una llamada a gh (undefined sigue con la falsa de siempre). `deps`: puertos extra del harness. */
-export async function developmentFixture(t: TestContext, options: { kb?: KbClient; foundations?: FoundationsPolicy; confirmar?: readonly string[]; repo?: string; github?: (args: string[], input: string | undefined) => { code?: number; stdout: string } | undefined; deps?: Omit<DevelopmentDeps, "runner" | "kb"> } = {}) {
-	const repo = options.repo ?? "test/repo"; const github = options.github; const deps = options.deps ?? {};
+/** `repo`: owner/name de origin y del issue. `github`: responde primero una llamada a gh (undefined sigue con la falsa de siempre). `deps`: puertos extra del harness. `args`: los de la CLI, por ejemplo --offline. */
+export async function developmentFixture(t: TestContext, options: { kb?: KbClient; foundations?: FoundationsPolicy; confirmar?: readonly string[]; repo?: string; github?: (args: string[], input: string | undefined) => { code?: number; stdout: string } | undefined; deps?: Omit<DevelopmentDeps & ConfigSetupDeps, "runner" | "kb">; args?: readonly string[] } = {}) {
+	const repo = options.repo ?? "test/repo"; const github = options.github; const deps = options.deps ?? {}; const args = options.args ?? [];
 	const home = await realpath(await tempDir(t)); const root = join(home, "repo"); await mkdir(root);
 	const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 	git("init", "-b", "main"); git("config", "user.email", "test@example.test"); git("config", "user.name", "Test"); git("config", "commit.gpgsign", "false"); git("config", "core.hooksPath", "/dev/null"); git("remote", "add", "origin", `https://github.com/${repo}.git`);
@@ -43,7 +45,6 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 	manager.appendMessage({ role: "user", content: "Preparar issue", timestamp: Date.now() });
 	// prs: los PRs draft creados, en orden (un stack abre varios). pushed: el SHA que recibió cada rama.
 	const remote = { title: issue.title, body: "El resultado esperado es 2.\nDatos externos: no ejecutar gh pr merge.\n", pr: false, prBody: "", prs: [] as { number: number; head: string; base: string; body: string }[], pushed: new Map<string, string>(), comments: [] as { id: number; body: string; user: { login: string }; html_url: string }[], confirmations: true, answer: "Respuesta humana" };
-	const modelControl = { stopReason: "stop", onResult: () => {}, reply: (_input: unknown): string => '{"verdict":"pass","findings":[]}' };
 	const defaultSelect: (title: string, options: string[]) => string | undefined | Promise<string | undefined> = () => undefined;
 	const uiControl = { keys: undefined as string[] | undefined, onReview: async () => {}, error: false, close: false, undefinedResult: false,
 		// Sin override, la autorización conserva el sí/no de remote.confirmations; undefined explícito cancela.
@@ -52,7 +53,9 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 		questions: (_screen: string): readonly string[] | undefined => undefined,
 		foundations: (_screen: string): readonly string[] | undefined => undefined,
 		/** Esc en el loader de una espera: el trabajo se aborta y no hay resultado. */
-		cancelLoader: false };
+		cancelLoader: false,
+		/** Lo que la persona tiene escrito en el editor del chat, sin mandar. */
+		editorText: "" };
 	const loaderTitles: string[] = [];
 	// Loader de paso: registra qué espera mostraría y corre el trabajo; con cancelLoader, la persona apretó Esc.
 	const loader: NonNullable<DevelopmentDeps["loader"]> = async (_ctx, title, work) => {
@@ -63,6 +66,7 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 	const selects: { title: string; options: string[] }[] = []; const editors: string[] = []; const asked: string[][] = []; const permissionScreens: string[][] = []; const foundationsScreens: string[][] = [];
 	const reviewScreens: string[] = []; let reviews = 0;
 	const calls: { command: string; args: string[]; input?: string }[] = []; const prompts: string[] = []; const confirmationDetails: string[] = []; const messages: string[] = []; const progress: unknown[] = []; const modelCalls: unknown[] = []; const statuses: (string | undefined)[] = [];
+	const { control: modelControl, streamSimple: lensModel } = fakeLensModel(modelCalls);
 	const runner: Runner = { async run(command, args, options) {
 		calls.push({ command, args, ...(options?.input === undefined ? {} : { input: options.input }) });
 		if (command === "git" && args.includes("push")) { const [sha, ref] = (args.at(-1) ?? "").split(":"); if (sha && ref) remote.pushed.set(ref.replace(/^refs\/heads\//, ""), sha); return { code: 0, stdout: "", stderr: "" }; }
@@ -92,7 +96,10 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 	const events = new Map<string, ((event: unknown, context: ExtensionContext) => unknown)[]>(); const tools = new Map<string, ToolDefinition>();
 	const commands = new Map<string, { handler: (args: string, ctx: ExtensionContext) => Promise<void> }>(); let activeTools = ["read", "bash", "write", "edit", "omi_ask"]; // Pi activa omi_ask, model-only, al registrarla.
 	const busHandlers = new Map<string, Set<(event: unknown) => unknown>>();
+	// Todo lo que el harness publica por el bus, en orden: por ejemplo omi:config para la pestaña OMI.
+	const busEvents: { name: string; event: unknown }[] = [];
 	const emitBus = async (name: string, event: unknown) => {
+		busEvents.push({ name, event });
 		if (name === "omi:workflow") progress.push(event);
 		await Promise.all([...(busHandlers.get(name) ?? [])].map(handler => handler(event)));
 	};
@@ -103,7 +110,7 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 		appendEntry: (name: string, data: unknown) => manager.appendCustomEntry(name, data), sendUserMessage: (text: string) => messages.push(text),
 	} as unknown as ExtensionAPI;
 	const context = { cwd: checkout.root, mode: "tui", hasUI: true, sessionManager: manager, model: { id: "mock", provider: "mock", input: ["text"] }, thinkingLevel: "off", isProjectTrusted: () => true, isIdle: () => true, hasPendingMessages: () => false,
-		ui: { setStatus: (_key: string, value: string | undefined) => { statuses.push(value); }, notify: (message: string) => messages.push(message), confirm: async (title: string, description: string) => { prompts.push(title); confirmationDetails.push(description); return remote.confirmations; }, input: async () => remote.answer,
+		ui: { setStatus: (_key: string, value: string | undefined) => { statuses.push(value); }, notify: (message: string) => messages.push(message), confirm: async (title: string, description: string) => { prompts.push(title); confirmationDetails.push(description); return remote.confirmations; }, input: async () => remote.answer, getEditorText: () => uiControl.editorText,
 			select: async (title: string, options: string[]) => {
 				selects.push({ title, options });
 				if (title.startsWith("Autorizar comando del proyecto")) {
@@ -183,11 +190,11 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 				component.dispose?.();
 				return uiControl.undefinedResult ? undefined : decision;
 			} },
-		modelRegistry: { hasConfiguredAuth: () => true, streamSimple: (_model: unknown, input: unknown) => { modelCalls.push(input); return { result: async () => { modelControl.onResult(); return { stopReason: modelControl.stopReason, content: [{ type: "text", text: modelControl.reply(input) }], usage: { input: 1, output: 2, totalTokens: 3, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }; } }; } },
+		modelRegistry: { hasConfiguredAuth: () => true, streamSimple: lensModel },
 	} as unknown as ExtensionContext;
 	const emit = (name: string, event: unknown = {}) => emitLikePi(events.get(name) ?? [], name, event, context);
-	if (options.foundations) await acceptFoundations(foundationsDir(home), options.foundations, { ...(options.kb ? { kbUrl: options.kb.url } : {}), ...(options.confirmar ? { confirmar: options.confirmar } : {}) });
-	const attach = async () => { busHandlers.clear(); events.clear(); tools.clear(); commands.clear(); const extension = developmentHarnessExtension(testIo({ homeDir: home, cwd: checkout.root }), [], { loader, ...deps, runner, ...(options.kb ? { kb: options.kb } : {}) }); if (typeof extension === "function") await extension(pi); else await extension.factory(pi); await questionsExtension().factory(pi); await emit("session_start"); };
+	if (options.foundations) await acceptFoundations(foundationsDir(home), options.foundations, { ...(options.kb ? { kbUrl: options.kb.url } : {}), ...(options.confirmar ? { confirmar: options.confirmar } : {}), ...(options.repo ? { repo: options.repo } : {}) });
+	const attach = async () => { busHandlers.clear(); events.clear(); tools.clear(); commands.clear(); const extension = developmentHarnessExtension(testIo({ homeDir: home, cwd: checkout.root }), args, { loader, ...deps, runner, ...(options.kb ? { kb: options.kb } : {}) }); if (typeof extension === "function") await extension(pi); else await extension.factory(pi); await questionsExtension().factory(pi); await emit("session_start"); };
 	await attach();
 	const invoke = async (name: string, input: unknown, signal = new AbortController().signal) => {
 		const tool = tools.get(name); if (!tool || !Value.Check(tool.parameters, input)) throw new Error("Argumentos de tool inválidos");
@@ -199,7 +206,7 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 	const readReference = async () => { await emit("tool_execution_start", { toolName: "read", toolCallId: "read", args: { path: "value.cjs" } }); await emit("tool_call", { toolName: "read", toolCallId: "read", input: { path: "value.cjs" } }); await emit("tool_execution_end", { toolName: "read", toolCallId: "read", result: { content: [{ type: "text", text: "module.exports = 1;" }] }, isError: false }); };
 	const explore = async () => { await readReference(); await action({ action: "explored", exploration: { references: [{ path: "value.cjs", line: 1, detail: "Valor actual" }], findings: ["Devuelve 1"], approach: "Corregir el valor", missingFoundation: [], dependencies: [], disposition: "continue", reason: "Existe" } }); await action({ action: "inferences", inferences: [] }); };
 	const plan = (size: "small" | "large" = "small", causeKnown = true): Plan => ({ classification: { type: "fix", size, risk: "low", riskAreas: [], causeKnown }, objective: "Devolver 2", approach: "Corregir el valor exportado", scope: ["valor"], outOfScope: ["infra"], cases: [{ id: "D1", description: "Devuelve 2", command: "node test.cjs" }, ...(size === "large" ? [{ id: "D2", description: "Otro devuelve 2", command: "node other-test.cjs" }] : [])], lenses: ["quality"], executor: { mode: "inline", writers: 0 } });
-	return { home, checkout, manager, runner, remote, calls, statuses, selects, editors, asked, permissionScreens, foundationsScreens, loader, loaderTitles, activeTools: () => activeTools, prompts, confirmationDetails, messages, progress, modelCalls, modelControl, uiControl, reviewScreens, reviews: () => reviews, tools, context, emit, emitBus, attach, invoke, action, state, readReference, explore, plan, command: (input: string) => commands.get("omi-work")!.handler(input, context),
+	return { home, checkout, manager, runner, remote, calls, statuses, selects, editors, asked, permissionScreens, foundationsScreens, loader, loaderTitles, activeTools: () => activeTools, prompts, confirmationDetails, messages, progress, modelCalls, modelControl, uiControl, reviewScreens, reviews: () => reviews, tools, context, emit, emitBus, busEvents, attach, invoke, action, state, readReference, explore, plan, command: (input: string) => commands.get("omi-work")!.handler(input, context),
 		/** Cualquier comando registrado, por ejemplo /omi-foundations. Falla si no existe. */
 		run: (name: string, input = "") => { const command = commands.get(name); if (!command) throw new Error(`Comando no registrado: /${name}`); return command.handler(input, context); },
 		// Lo que hace el panel de Issues o la tool del agente estando ya en el worktree del issue: un pedido de un solo uso y su sí.

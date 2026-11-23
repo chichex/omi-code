@@ -64,7 +64,8 @@ export function lensRequests(context: Record<string, unknown>, state: Workflow, 
 
 // Los lentes asesoran: su fail/unknown es un aviso visible. Sólo un fail de seguridad bloquea.
 // carried: el lente aprobó limpio el contenido del que partió una corrección liviana y no se repitió.
-export interface LensStatus { lens: Lens; verdict: Review["verdict"] | "not-run"; findings: string[]; blocking: boolean; carried: boolean }
+// noResult: el unknown es falta de resultado (conexión, plazo, formato), no un juicio del lente.
+export interface LensStatus { lens: Lens; verdict: Review["verdict"] | "not-run"; findings: string[]; blocking: boolean; carried: boolean; noResult: boolean }
 /** La revisión que vale para un lente sobre este contenido. Tras una corrección liviana, el pass limpio del contenido
  * de partida sigue valiendo, salvo el de security: lo único que bloquea se revisa siempre sobre el contenido final. */
 export function lensReview(reviews: readonly Review[], lens: Lens, fingerprint: string | undefined, amends: readonly { from: string }[] = []): { review: Review; carried: boolean } | undefined {
@@ -82,13 +83,13 @@ export function lensStatuses(state: Workflow): LensStatus[] {
 	const fingerprint = reviewedFingerprint(state);
 	return (state.recipe?.lenses ?? []).map((lens) => {
 		const found = lensReview(state.reviews, lens, fingerprint, amendsOf(state)); const review = found?.review;
-		return { lens, verdict: review?.verdict ?? "not-run", findings: review?.findings ?? [], blocking: lens === "security" && review?.verdict === "fail", carried: found?.carried ?? false };
+		return { lens, verdict: review?.verdict ?? "not-run", findings: review?.findings ?? [], blocking: lens === "security" && review?.verdict === "fail", carried: found?.carried ?? false, noResult: review?.noResult === true };
 	});
 }
 export const lensWarnings = (state: Workflow): LensStatus[] => lensStatuses(state).filter((s) => s.verdict === "fail" || s.verdict === "unknown");
 export function lensWarningLine(s: LensStatus): string {
 	const more = s.findings.length > 1 ? ` (+${s.findings.length - 1} hallazgos)` : "";
-	return `Lente ${s.lens} · ${s.verdict}${s.blocking ? " · bloquea" : ""}${s.findings[0] ? ` · ${s.findings[0]}` : ""}${more}`;
+	return `Lente ${s.lens} · ${s.verdict}${s.noResult ? " · sin resultado" : ""}${s.blocking ? " · bloquea" : ""}${s.findings[0] ? ` · ${s.findings[0]}` : ""}${more}`;
 }
 
 // Un diff que no entra en una llamada se reparte por archivo en partes de hasta `budget` caracteres, medidos
@@ -135,7 +136,8 @@ export function lensParts(files: string[], budget: number): string[] {
 	return [...parts, current];
 }
 // Se corre el lente por parte y se combina: el peor veredicto gana y se juntan los hallazgos con su parte.
-export interface LensResult { verdict: Review["verdict"]; findings: string[] }
+// Queda sin resultado sólo si ninguna parte juzgó unknown: un unknown del modelo no se re-tira.
+export interface LensResult { verdict: Review["verdict"]; findings: string[]; noResult?: true }
 const SEVERITY: Record<Review["verdict"], number> = { pass: 0, unknown: 1, fail: 2 };
 const MAX_FINDINGS = 100; const MAX_FINDING = 4000;
 const prefixed = (prefix: string, finding: string): string => {
@@ -143,10 +145,11 @@ const prefixed = (prefix: string, finding: string): string => {
 	return value.length <= MAX_FINDING ? value : `${value.slice(0, cut(value, MAX_FINDING - 1))}…`;
 };
 export function combineLensResults(results: LensResult[]): LensResult {
-	if (!results.length) return { verdict: "unknown", findings: ["No se revisó ninguna parte del cambio."] };
+	if (!results.length) return { verdict: "unknown", findings: ["No se revisó ninguna parte del cambio."], noResult: true };
 	const verdict = results.reduce<Review["verdict"]>((worst, r) => SEVERITY[r.verdict] > SEVERITY[worst] ? r.verdict : worst, "pass");
+	const noResult = verdict === "unknown" && results.every((r) => r.verdict !== "unknown" || r.noResult) ? { noResult: true as const } : {};
 	const findings = results.flatMap((r, i) => r.findings.map((f) => results.length === 1 ? f : prefixed(`parte ${i + 1}/${results.length} · `, f)));
-	if (findings.length <= MAX_FINDINGS) return { verdict, findings };
+	if (findings.length <= MAX_FINDINGS) return { verdict, findings, ...noResult };
 	const kept = findings.slice(0, MAX_FINDINGS - 1);
-	return { verdict, findings: [...kept, `… y ${findings.length - kept.length} hallazgos más de las partes no entran en el registro del lente (tope de ${MAX_FINDINGS}); volvé a correr el lente sobre un cambio más chico para verlos.`] };
+	return { verdict, ...noResult, findings: [...kept, `… y ${findings.length - kept.length} hallazgos más de las partes no entran en el registro del lente (tope de ${MAX_FINDINGS}); volvé a correr el lente sobre un cambio más chico para verlos.`] };
 }

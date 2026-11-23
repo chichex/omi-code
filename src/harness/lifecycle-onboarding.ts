@@ -2,32 +2,41 @@
 // Guardar escribe sólo la KB y la aceptación local; nunca ejecuta workflows, deploy ni consulta proveedores.
 import type { AskResult, Question, QuestionAnswer, QuestionBatch } from "../tui/questions/batch.ts";
 import type { KbClient } from "../tui/kb-client.ts";
-import { defaultLifecycleConfig, defaultLifecycleTarget, type LifecycleConfig, type LifecycleTarget } from "./lifecycle-config.ts";
+import { defaultLifecycleConfig, defaultLifecycleTarget, lifecycleHash, type LifecycleConfig, type LifecycleTarget } from "./lifecycle-config.ts";
 import { commitLifecycleSave, evaluateLifecycle, lifecycleDiff, prepareLifecycleSave, readLifecycle, type LifecycleReading } from "./lifecycle-kb.ts";
 import { readLifecycleTrust, writeLifecycleTrust, type LifecycleAcceptance, type LifecycleKey, type LifecycleTrustReading } from "./lifecycle-trust.ts";
 import type { LifecycleDetection } from "./lifecycle-detect.ts";
+import { configureLifecycleContinuity, CONTINUITY_NOTICE } from "./lifecycle-wizard.ts";
+import { REVIEW_CONTRACT } from "./gha-review-contract.ts";
+import { lifecycleRecommendations, reviewCandidates, type LifecycleRecommendation } from "./lifecycle-recommendations.ts";
+import { configureLifecycleReview, reviewProviderSummary } from "./lifecycle-review-wizard.ts";
 
-export interface LifecycleOnboardingState { status: "unconfigured" | "pending" | "configured" | "manual" | "not-applicable" | "invalid" | "unavailable"; revision: string | null; reason: string }
-/** Sin config, configurado, no-aplica y no se pudo consultar son estados distintos: KB caída nunca es ausencia. */
-export function lifecycleOnboardingStatus(reading: LifecycleReading, local: LifecycleTrustReading): LifecycleOnboardingState {
+export interface LifecycleOnboardingState { status: "unconfigured" | "pending" | "configured" | "manual" | "not-applicable" | "invalid" | "unavailable"; revision: string | null; reason: string; recommendations: LifecycleRecommendation[] }
+/** Sin config, configurado, no-aplica y no se pudo consultar son estados distintos: KB caída nunca es ausencia ni recomienda. */
+const MISSING = "missing:";
+/** «unconfigured» sale de dos lecturas: sin bloque lifecycle, o un bloque aceptado con Ship sin configurar (Review y Land corren). */
+export const lifecycleMissing = (state: LifecycleOnboardingState): boolean => state.status === "unconfigured" && state.revision?.startsWith(MISSING) === true;
+export function lifecycleOnboardingStatus(reading: LifecycleReading, local: LifecycleTrustReading, detection: LifecycleDetection | undefined): LifecycleOnboardingState {
  const evaluation = evaluateLifecycle(reading, local);
- if (reading.kind === "unavailable") return { status: "unavailable", revision: null, reason: reading.reason };
- if (evaluation.status === "invalid") return { status: "invalid", revision: null, reason: "Configuración lifecycle o aceptación local inválida; requiere revisión humana" };
- if (reading.kind === "missing") return { status: "unconfigured", revision: `missing:${reading.perillas?.id ?? "none"}`, reason: "Sin configuración lifecycle para el repo" };
- if (reading.kind === "invalid") return { status: "invalid", revision: null, reason: reading.reason };
- if (evaluation.status === "pending") return { status: "pending", revision: `lifecycle:${reading.hash}`, reason: "Revisión lifecycle sin aceptar localmente" };
- return { status: reading.block.ship.status, revision: `lifecycle:${reading.hash}`, reason: `Ship ${reading.block.ship.status}` };
+ if (reading.kind === "unavailable") return { status: "unavailable", revision: null, reason: reading.reason, recommendations: [] };
+ if (evaluation.status === "invalid") return { status: "invalid", revision: null, reason: "Configuración lifecycle o aceptación local inválida; requiere revisión humana", recommendations: [] };
+ if (reading.kind === "missing") return { status: "unconfigured", revision: `${MISSING}${reading.perillas?.id ?? "none"}`, reason: "Sin configuración lifecycle para el repo", recommendations: lifecycleRecommendations(null, detection) };
+ if (reading.kind === "invalid") return { status: "invalid", revision: null, reason: reading.reason, recommendations: [] };
+ const recommendations = lifecycleRecommendations(reading.block, detection);
+ if (evaluation.status === "pending") return { status: "pending", revision: `lifecycle:${reading.hash}`, reason: "Revisión lifecycle sin aceptar localmente", recommendations };
+ return { status: reading.block.ship.status, revision: `lifecycle:${reading.hash}`, reason: `Ship ${reading.block.ship.status}`, recommendations };
 }
-/** Se ofrece al entrar al harness, nunca en consultas simples/needs-info ni otra vez para la misma revisión postergada. */
+/** Sin config, pendiente de aceptar o con recomendaciones; nunca en consultas simples/needs-info ni otra vez para la misma revisión postergada. */
 export function shouldOfferLifecycleOnboarding(intent: "harness" | "simple" | "needs-info", state: LifecycleOnboardingState, local: LifecycleTrustReading): boolean {
- return intent === "harness" && state.status === "unconfigured" && state.revision !== null && !(local.kind === "valid" && local.record.deferred?.revision === state.revision);
+ const deferred = local.kind === "valid" && local.record.deferred?.revision === state.revision;
+ return intent === "harness" && state.revision !== null && !deferred && (state.status === "unconfigured" || state.status === "pending" || state.recommendations.length > 0);
 }
 export interface LifecycleOnboardingDeps {
  kb: KbClient | undefined; key: LifecycleKey; cwd: string; base: string; trustDir: string; detection: LifecycleDetection;
  ask: (batch: QuestionBatch) => Promise<AskResult>; now: () => string; signal: AbortSignal;
 }
 export type LifecycleOnboardingOutcome = { kind: "saved"; pin: LifecycleAcceptance } | { kind: "deferred"; revision: string } | { kind: "cancelled" } | { kind: "declined" } | { kind: "unavailable" | "invalid"; reason: string };
-const CONFIGURE = "Configurar ahora", LATER = "Más adelante", NOT_APPLICABLE = "Este repo no necesita Ship", MANUAL = "Manual (sin destino verificable)", RECEIPT = "Recibo del proveedor", SAVE = "Guardar y aceptar", SKIP = "No guardar";
+const KEEP_SHIP = "Mantener Ship actual", CONFIGURE = "Configurar ahora", LATER = "Más adelante", NOT_APPLICABLE = "Este repo no necesita Ship", MANUAL = "Manual (sin destino verificable)", RECEIPT = "Recibo del proveedor", SAVE = "Guardar y aceptar", SKIP = "No guardar";
 const RECOVERY: Record<string, "stop" | "rollback" | "fix-forward"> = { "Detener (stop)": "stop", Rollback: "rollback", "Fix-forward": "fix-forward" };
 const MODES: Record<string, "ask" | "auto"> = { "Preguntar antes (ask)": "ask", "Automático (auto)": "auto" };
 const WORKFLOW = /^[A-Za-z0-9_][A-Za-z0-9_.-]*\.ya?ml$/, ENDPOINT = /^\/(?!\/)[A-Za-z0-9_./~-]*$/;
@@ -35,7 +44,7 @@ type Mechanism = { kind: "gha"; workflow: string } | { kind: "omi"; service: str
 const closed = (id: string, header: string, question: string, options: [string, string][], recommended = true, extra: Partial<Question> = {}): Question => ({ id, header, question, options: options.map(([label, description]) => ({ label, description })), multiSelect: false, recommended, freeText: false, ...extra });
 function mechanisms(d: LifecycleDetection): Map<string, Mechanism> {
  const options = new Map<string, Mechanism>();
- for (const w of [...d.workflows].sort((a, b) => Number(b.release) - Number(a.release)).slice(0, 8)) options.set(`GitHub Actions · ${w.file}`, { kind: "gha", workflow: w.file });
+ for (const w of [...d.workflows].filter(w => w.contract !== REVIEW_CONTRACT).sort((a, b) => Number(b.release) - Number(a.release)).slice(0, 8)) options.set(`GitHub Actions · ${w.file}`, { kind: "gha", workflow: w.file });
  if (d.omi && d.omi !== "invalid") for (const service of d.omi.services.slice(0, 4)) for (const environment of ["stage", "prod"] as const) options.set(`OMI · ${service} · ${environment}`, { kind: "omi", service, environment });
  return options.set(MANUAL, { kind: "manual" });
 }
@@ -43,6 +52,8 @@ function detected(d: LifecycleDetection): string {
  const omi = d.omi === "invalid" ? "vínculo .omi/project.json inválido" : d.omi ? `OMI ${d.omi.organization}/${d.omi.project}: ${d.omi.services.join(", ")}` : "sin vínculo OMI";
  return [`Workflows: ${d.workflows.map(w => w.file).join(", ") || "ninguno"}`, `Scripts: ${d.scripts.join(", ") || "ninguno"}`, `Manifiestos: ${d.manifests.join(", ") || "ninguno"}`, omi, "Detectado por lectura: nada se ejecutó."].join("\n");
 }
+const listed = (title: string, recommendations: LifecycleRecommendation[]) => recommendations.length ? `\n${title}:\n${recommendations.map(r => `- ${r.message}`).join("\n")}` : "";
+const shipSummary = (ship: LifecycleConfig["ship"]) => ship.status === "configured" ? `Ship configurado: ${ship.targets.map(t => t.id).join(", ")}` : `Ship ${ship.status}`;
 function destinationBatch(options: Map<string, Mechanism>): QuestionBatch {
  return { title: "Destino de Ship", questions: [
   closed("mechanism", "Mecanismo", "¿Qué entrega verifica OMI después del merge?", [...options.keys()].map(label => [label, label === MANUAL ? "Sin destino: Ship queda manual" : "Propuesto por lo detectado; sólo se observa"]), true, { freeText: { multiline: false, validate: text => WORKFLOW.test(text.trim()) ? undefined : "Nombre de workflow .yml de .github/workflows" } }),
@@ -72,9 +83,12 @@ function withShip(current: LifecycleConfig, target: LifecycleTarget | "manual" |
 }
 /** Wizard manual (init) o contextual (TUI): Esc cancela sin escribir; postergar no desactiva; guardar exige resumen y sí explícito. */
 export async function runLifecycleOnboarding(deps: LifecycleOnboardingDeps): Promise<LifecycleOnboardingOutcome> {
- const { key, signal } = deps, reading = await readLifecycle(deps.kb, key, deps.cwd, signal), local = await readLifecycleTrust(deps.trustDir, key), state = lifecycleOnboardingStatus(reading, local);
+ const { key, signal } = deps, reading = await readLifecycle(deps.kb, key, deps.cwd, signal), local = await readLifecycleTrust(deps.trustDir, key), state = lifecycleOnboardingStatus(reading, local, deps.detection);
  if (!deps.kb || state.status === "unavailable" || state.status === "invalid" || reading.kind === "unavailable" || reading.kind === "invalid" || local.kind === "invalid") return { kind: state.status === "invalid" ? "invalid" : "unavailable", reason: state.reason };
- const first = await deps.ask({ title: `Ship de ${key.repo}`, questions: [closed("ship", "Ship", "¿Cómo seguimos con la entrega (Ship) de este repo?", [[CONFIGURE, "Proponer destino, verificación y recuperación"], [LATER, "Recordar esta revisión; no desactiva y vuelve con omi init"], [NOT_APPLICABLE, "Explícito: se guarda como no-aplica tras el resumen"]], true, { detail: detected(deps.detection) })] });
+ const existing = reading.kind === "valid" ? reading.block : undefined;
+ const keepShip: [string, string][] = existing ? [[KEEP_SHIP, `Conserva ${shipSummary(existing.ship)} sin reingresar destinos`]] : [];
+ const shipOptions: [string, string][] = [...keepShip, [CONFIGURE, "Proponer destino, verificación y recuperación"], [LATER, "Recordar esta revisión; no desactiva y vuelve con omi init"], [NOT_APPLICABLE, "Explícito: se guarda como no-aplica tras el resumen"]];
+ const first = await deps.ask({ title: `Ship de ${key.repo}`, questions: [closed("ship", "Ship", "¿Cómo seguimos con la entrega (Ship) de este repo?", shipOptions, true, { detail: `${detected(deps.detection)}${listed("Recomendaciones", state.recommendations)}` })] });
  if (first.status === "cancelled") return { kind: "cancelled" };
  const record = local.kind === "valid" ? local.record : undefined, choice = chosen(first.answers, "ship"); signal.throwIfAborted();
  if (choice === LATER) {
@@ -82,17 +96,26 @@ export async function runLifecycleOnboarding(deps: LifecycleOnboardingDeps): Pro
   await writeLifecycleTrust(deps.trustDir, key, record?.revision, { version: 1, ...key, revision: record ? record.revision + 1 : 0, accepted: record?.accepted ?? null, deferred: { revision, at: deps.now() } });
   return { kind: "deferred", revision };
  }
- const current = reading.kind === "valid" ? reading.block : defaultLifecycleConfig(key.repo, deps.base);
+ const current = existing ?? defaultLifecycleConfig(key.repo, deps.base);
  let block: LifecycleConfig;
- if (choice === NOT_APPLICABLE) block = withShip(current, "not-applicable");
+ if (choice === KEEP_SHIP && existing) block = structuredClone(existing);
+ else if (choice === NOT_APPLICABLE) block = withShip(current, "not-applicable");
  else if (choice === CONFIGURE) {
   const options = mechanisms(deps.detection), answers = await deps.ask(destinationBatch(options));
   if (answers.status === "cancelled") return { kind: "cancelled" };
   block = withShip(current, shipTarget(answers.answers, options, current.land.base));
  } else throw new Error("Respuesta de onboarding inválida; no se guardó nada");
- const summary = lifecycleDiff(record?.accepted?.block, block, key);
+ const reviewed = await configureLifecycleReview(block, existing?.review.provider ?? null, reviewCandidates(deps.detection), deps.ask);
+ if (!reviewed) return { kind: "cancelled" };
+ const configured = await configureLifecycleContinuity(reviewed, deps.ask);
+ if (!configured) return { kind: "cancelled" };
+ signal.throwIfAborted(); block = configured;
+ // Guardar sin tomar una recomendación es haberla visto: posterga esa revisión para que el harness no insista.
+ const remaining = lifecycleRecommendations(block, deps.detection), deferral = remaining.length ? { revision: `lifecycle:${lifecycleHash(block)}`, at: deps.now() } : undefined;
+ const pending = remaining.length ? `${listed("Recomendaciones sin tomar", remaining)}\nGuardar así posterga esta revisión: el harness no la vuelve a ofrecer; volvé con omi init --development.` : "";
+ const summary = `${lifecycleDiff(record?.accepted?.block, block, key)}\n${reviewProviderSummary(block.review.provider)}${pending}\n${CONTINUITY_NOTICE}`;
  const accept = await deps.ask({ title: "Resumen antes de guardar", questions: [closed("accept", "Guardar", "¿Guardar en la KB y aceptar esta configuración?", [[SAVE, "Escribe perillas y aceptación local; no ejecuta nada"], [SKIP, "No escribe nada"]], false, { detail: summary })] });
  if (accept.status === "cancelled" || chosen(accept.answers, "accept") !== SAVE) return { kind: "declined" };
  const prepared = await prepareLifecycleSave(deps.kb, key, block, signal, reading.kind === "valid" ? reading.hash : null, deps.cwd);
- return { kind: "saved", pin: await commitLifecycleSave(deps.kb, key, block, prepared, { trustDir: deps.trustDir, expectedRevision: record?.revision, signal, now: deps.now }) };
+ return { kind: "saved", pin: await commitLifecycleSave(deps.kb, key, block, prepared, { trustDir: deps.trustDir, expectedRevision: record?.revision, signal, now: deps.now, ...(deferral ? { deferred: deferral } : {}) }) };
 }

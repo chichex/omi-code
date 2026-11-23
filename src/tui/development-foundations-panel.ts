@@ -3,7 +3,7 @@
 import type { ExtensionContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type Focusable, type TUI } from "@earendil-works/pi-tui";
 import {
-	AUTO_WARNINGS, checkBlock, EMPTY_RULES_WARNING, foundationsDiff, MAX_RULES, ruleProblem, DEFAULT_POLICY, visibleText,
+	ASK_HELP, AUTO_WARNINGS, checkBlock, EMPTY_RULES_WARNING, foundationsDiff, MAX_RULES, ruleProblem, DEFAULT_POLICY, visibleText,
 	type FoundationsBlock, type FoundationsPolicy, type PolicyPoint,
 } from "../harness/foundations.ts";
 import { FoundationsRulesEditor } from "./development-foundations-editor.ts";
@@ -11,11 +11,6 @@ import { commandDisplayLines } from "./development-approval.ts";
 
 const POINTS: readonly PolicyPoint[] = ["arranque", "receta", "push_pr"];
 const LABELS: Record<PolicyPoint, string> = { arranque: "Arranque", receta: "Receta", push_pr: "Push + PR draft" };
-const ASK_HELP: Record<PolicyPoint, string> = {
-	arranque: "te pide el sí antes de crear el issue, el worktree y la sesión",
-	receta: "te muestra la receta para que la apruebes antes de implementar",
-	push_pr: "te pide el sí antes del push de la rama y del PR draft",
-};
 const RULES_ROW = 3; const SAVE = 4; const CANCEL = 5; const ROWS = 6; const PREVIEW = 3; const LABEL_WIDTH = 20;
 const ROW_HELP: Record<number, string> = {
 	[RULES_ROW]: "Comandos que piden tu sí antes de correr, por ejemplo git push *. Enter para editarlos.",

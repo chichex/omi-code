@@ -1,8 +1,7 @@
-// Presenters de las vistas de sólo lectura. La selección, carga y navegación viven en el controlador.
+// Presenters de las vistas de sólo lectura. La selección, carga y navegación viven en el controlador. La pestaña OMI está en omi-view.ts.
 import { basename } from "node:path";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import type { EnvironmentStatus, GitSnapshot, GithubItem } from "./data.ts";
+import type { GitSnapshot, GithubItem } from "./data.ts";
 import type { IssuePreparationEntry } from "./issue-registry.ts";
 import { ISSUE_TYPES } from "./issue-worktree.ts";
 import { align, changedFileLine, surface, text } from "./presentation.ts";
@@ -20,9 +19,7 @@ interface GithubSnapshot {
 	detailBusy: boolean;
 	now: number;
 }
-/** `foundations`: las líneas del harness (vigente, procedencia, políticas y catálogo), ya sin secuencias del terminal. */
-interface OmiSnapshot { project: string | undefined; services: readonly string[]; environments: readonly EnvironmentStatus[]; error: string | undefined; at: number | undefined; now: number; foundations: readonly string[] }
-const age = (at: number | undefined, now: number): string => at === undefined ? "sin datos" : `hace ${Math.max(0, Math.floor((now - at) / 1000))}s`;
+export const age = (at: number | undefined, now: number): string => at === undefined ? "sin datos" : `hace ${Math.max(0, Math.floor((now - at) / 1000))}s`;
 
 export function changesViewLines(t: Theme, snapshot: ChangesSnapshot, width: number): string[] {
 	const { git, gitError, diff, diffLoading, selectedFile } = snapshot;
@@ -51,25 +48,5 @@ export function githubViewLines(t: Theme, snapshot: GithubSnapshot, width: numbe
 	}
 	if (state.items?.length === 100) lines.push(t.fg("dim", " Mostrando hasta 100 resultados abiertos."));
 	if (detailBusy) lines.push(t.fg("muted", " Cargando detalle…"));
-	return lines.map((line) => surface(t, line, width));
-}
-
-export function omiViewLines(t: Theme, snapshot: OmiSnapshot, width: number): string[] {
-	const { project, services, environments, error, at, now, foundations } = snapshot;
-	const lines = [t.bold(" OMI"), t.fg("dim", " r actualizar · f Foundations · Esc chat · infraestructura del proyecto"), "", t.fg("accent", ` PROYECTO OMI · ${age(at, now)}`)];
-	if (error) lines.push(t.fg("warning", ` ${error}${project ? " · datos desactualizados" : ""}`));
-	if (project) {
-		lines.push(` ${text(project)}`, "", t.fg("accent", " SERVICIOS Y AMBIENTES"));
-		for (const service of services) {
-			lines.push(t.bold(` ${text(service)}`));
-			const serviceEnvironments = environments.filter((environment) => environment.service === service);
-			for (const environment of serviceEnvironments) lines.push(text(`   ${environment.name} · ${environment.version ?? "sin versión"} · ${environment.state}`));
-			if (!serviceEnvironments.length) lines.push(t.fg("muted", "   Sin ambientes informados."));
-		}
-	} else if (!error) lines.push(at ? " Sin proyecto OMI vinculado. Usá omi init para vincularlo." : " Consultando vínculo y ambientes OMI…");
-	// Se parte en líneas: un catálogo largo se ve entero, desplazando la vista.
-	lines.push("", t.fg("accent", " FOUNDATIONS · cuándo te pide confirmación el agente"), ...foundations.flatMap((line) => wrapTextWithAnsi(text(line), Math.max(1, width - 2)).map((part) => ` ${part}`)),
-		t.fg("dim", " f editar"));
-	lines.push("", t.fg("accent", " OPERACIONES OMI"), " Estado, variables, recursos, jobs, versiones, logs y deploys:", " pedilos en Chat. Se conservan las herramientas y confirmaciones.", "", t.fg("dim", " Vista de sólo lectura. Un estado running no es un health check."));
 	return lines.map((line) => surface(t, line, width));
 }

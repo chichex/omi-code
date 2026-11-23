@@ -4,10 +4,19 @@ import { constants } from "node:fs";
 import { lstat, open, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { parseProjectLink } from "../project/link.ts";
+import { REVIEW_ARTIFACT_FILE, REVIEW_CONTRACT, REVIEW_RUN_PREFIX } from "./gha-review-contract.ts";
+import { declaresDispatchInput, dispatchInputRequired, dispatchInputValues } from "./lifecycle-detect-inputs.ts";
+import { GhaReviewEffortSchema, GhaReviewModelSchema, type GhaReviewEffort, type GhaReviewModel } from "./lifecycle-schema.ts";
 const MAX_BYTES = 256 * 1024, MAX_WORKFLOWS = 50, MAX_SCRIPTS = 100;
 const MANIFESTS = ["Cargo.toml", "Dockerfile", "Makefile", "go.mod", "package.json", "pyproject.toml"];
+/** Valores de `model` y `effort` que el workflow_dispatch acepta: vacío si no declara el input. Fijar otro hace fallar el dispatch.
+ * `required`: los que exige sin default. El wizard puede dejarlos sin fijar, así que ese workflow no se propone. */
+export interface ReviewTuning { model: GhaReviewModel[]; effort: GhaReviewEffort[]; required?: ReviewInput[] }
+type ReviewInput = "model" | "effort";
+type DetectedWorkflow = { file: string; dispatch: boolean; release: boolean } & ({ contract: null } | { contract: typeof REVIEW_CONTRACT; tuning: ReviewTuning });
 export interface LifecycleDetection {
- workflows: { file: string; dispatch: boolean; release: boolean }[]; scripts: string[]; manifests: string[];
+ /** `contract`: el workflow declara los marcadores de omi-review-v1. Es una propuesta: el runtime valida run y artefacto. */
+ workflows: DetectedWorkflow[]; scripts: string[]; manifests: string[];
  omi: { organization: string; project: string; services: string[] } | "invalid" | null; skipped: string[];
 }
 const missing = (e: unknown) => e instanceof Error && "code" in e && (e.code === "ENOENT" || e.code === "ENOTDIR");
@@ -19,13 +28,28 @@ async function readBounded(root: string, path: string, skipped: string[], signal
  const file = await open(join(root, path), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
  try { const bytes = Buffer.alloc(MAX_BYTES + 1), { bytesRead } = await file.read(bytes, 0, bytes.length, 0); if (bytesRead > MAX_BYTES) { skipped.push(path); return null; } return bytes.subarray(0, bytesRead).toString("utf8"); } finally { await file.close(); }
 }
+const literal = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const expression = (name: string) => `\\$\\{\\{\\s*${literal(name)}\\s*\\}\\}`;
+// Lo que el host exige: inputs fuertes bajo `on.workflow_dispatch`, run-name correlacionado y artefacto `review.json` por run y attempt.
+const REVIEW_ARTIFACT = new RegExp(`${literal(REVIEW_CONTRACT)}-${expression("inputs.correlation_id")}-${expression("github.run_id")}-${expression("github.run_attempt")}`);
+function reviewContract(text: string): typeof REVIEW_CONTRACT | null {
+ const runName = /^run-name[ \t]*:(.*)$/m.exec(text)?.[1] ?? "";
+ const correlated = runName.includes(REVIEW_RUN_PREFIX) && /\binputs\.pr\b/.test(runName) && /\binputs\.correlation_id\b/.test(runName);
+ const ok = declaresDispatchInput(text, "expected_head_sha") && declaresDispatchInput(text, "correlation_id") && correlated && REVIEW_ARTIFACT.test(text) && text.includes(REVIEW_ARTIFACT_FILE);
+ return ok ? REVIEW_CONTRACT : null;
+}
+function reviewTuning(text: string): ReviewTuning {
+ const required = (["model", "effort"] as const).filter(name => dispatchInputRequired(text, name));
+ return { model: dispatchInputValues(text, "model", GhaReviewModelSchema.enum), effort: dispatchInputValues(text, "effort", GhaReviewEffortSchema.enum), ...(required.length ? { required } : {}) };
+}
 async function workflows(root: string, skipped: string[], signal: AbortSignal): Promise<LifecycleDetection["workflows"]> {
  const dir = join(root, ".github/workflows");
  try { const entry = await lstat(dir); if (!entry.isDirectory() || entry.isSymbolicLink()) { skipped.push(".github/workflows"); return []; } } catch (e) { if (missing(e)) return []; throw e; }
  const names = (await readdir(dir)).filter(n => /^[A-Za-z0-9_][A-Za-z0-9_.-]*\.ya?ml$/.test(n)).sort().slice(0, MAX_WORKFLOWS), found: LifecycleDetection["workflows"] = [];
  for (const file of names) {
   const text = await readBounded(root, `.github/workflows/${file}`, skipped, signal); if (text === null) continue;
-  found.push({ file, dispatch: /\bworkflow_dispatch\b/.test(text), release: /\btags\s*:|\brelease\b/i.test(text) });
+  const base = { file, dispatch: /\bworkflow_dispatch\b/.test(text), release: /\btags\s*:|\brelease\b/i.test(text) };
+  found.push(reviewContract(text) ? { ...base, contract: REVIEW_CONTRACT, tuning: reviewTuning(text) } : { ...base, contract: null });
  }
  return found;
 }

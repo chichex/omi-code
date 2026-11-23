@@ -29,12 +29,16 @@ import type { KbClient } from "./kb-client.ts";
 import { FoundationsGate, foundationsLines } from "./development-foundations.ts";
 import { foundationsDir } from "../harness/foundations-trust.ts";
 import { showCommandChoices } from "./development-command-dialog.ts";
-import { lifecycleLines } from "../harness/lifecycle-progress.ts";
+import { lifecycleLines, lifecyclePauseLine } from "../harness/lifecycle-progress.ts";
+import { correctionPushGuide } from "../harness/after-draft-guide.ts";
 import type { LifecyclePorts } from "./development-lifecycle.ts";
+import { LifecycleContinuityHost } from "./development-lifecycle-continuity.ts";
+import { LENS_CALL_POLICY, type LensCallPolicy } from "./development-lens-call.ts";
 
 export const DEVELOPMENT_ANCHOR = "omi-development-workflow";
 const AnchorSchema = Type.Object({ id: Type.String(), root: Type.String(), issue: Type.Integer({ minimum: 1 }), revision: Type.Integer({ minimum: 0 }), disabled: Type.Optional(Type.Boolean()) });
-export interface DevelopmentDeps { runner?: Runner; now?: () => string; loader?: WaitLoader; kb?: KbClient; lifecycle?: LifecyclePorts; classifyTimeoutMs?: number }
+/** lensCall: plazo y backoff de cada parte de un lente; sólo los tests lo acortan. */
+export interface DevelopmentDeps { runner?: Runner; now?: () => string; loader?: WaitLoader; kb?: KbClient; lifecycle?: LifecyclePorts; classifyTimeoutMs?: number; lensCall?: LensCallPolicy }
 // El preflight y el documento íntegro se comparten con la revisión TUI y RPC.
 export function approvalPreview(state: Workflow): string { return approvalText(approvalDocument(state)); }
 export class DevelopmentSession {
@@ -49,6 +53,8 @@ export class DevelopmentSession {
 	/** Espera con Esc para cancelar: clasificar un pedido o leer la KB. */
 	readonly loader: WaitLoader;
 	readonly lifecycle = new AbortController();
+	readonly lensCall: LensCallPolicy;
+	readonly continuity = new LifecycleContinuityHost(this);
 	private context: ExtensionContext | undefined;
 	// Último vínculo válido de la conversación: permite salir aunque el estado no se pueda leer.
 	private lastAnchor: { id: string; root: string; issue: number; revision: number } | undefined;
@@ -94,7 +100,7 @@ export class DevelopmentSession {
 		this.pi = pi; this.io = io;
 		this.runner = deps.runner ?? processRunner; this.now = deps.now ?? (() => new Date().toISOString()); this.loader = deps.loader ?? borderedLoader;
 		this.offline = developmentOffline(args, io.env);
-		this.kb = deps.kb; this.githubRunner = deps.runner; this.lifecyclePorts = deps.lifecycle ?? {};
+		this.kb = deps.kb; this.githubRunner = deps.runner; this.lifecyclePorts = deps.lifecycle ?? {}; this.lensCall = deps.lensCall ?? LENS_CALL_POLICY;
 		this.foundations = new FoundationsGate({ kb: deps.kb, runner: this.runner, trustDir: foundationsDir(io.homeDir), now: this.now });
 	}
 	private anchor(): void {
@@ -213,12 +219,29 @@ export class DevelopmentSession {
 		await this.apply({ type: "source_changed", source }, ctx); this.reads.clear();
 		ctx.ui.notify("El pedido cambió. Receta, aprobaciones y verificaciones se invalidaron; vuelve a Explorar.", "warning"); return false;
 	}
+	/** Una acción pendiente pertenece a la sesión que la inició, no sólo a la revisión durable. */
+	continuationGuard(ctx: ExtensionContext): () => void {
+		const origin = this.observationOrigin(), signal = this.lifecycle.signal;
+		return () => {
+			signal.throwIfAborted(); ctx.signal?.throwIfAborted();
+			const current = this.observationOrigin();
+			if (!origin || current?.epoch !== origin.epoch || current.id !== origin.id) throw new Error("La sesión cambió; se descartó la acción pendiente.");
+			this.checkContext(ctx);
+		};
+	}
 	async confirm(ctx: ExtensionContext, title: string, description: string): Promise<boolean> {
 		this.checkContext(ctx);
 		if (!ctx.hasUI) throw new Error(`${title}: requiere confirmación humana interactiva`);
 		this.emit(`Esperando confirmación · ${title}`, true);
-		try { return await ctx.ui.confirm(title, description, { signal: this.lifecycle.signal }); }
-		finally { this.emit(); }
+		const epoch = this.epoch;
+		const signal = AbortSignal.any([this.lifecycle.signal, ...(ctx.signal ? [ctx.signal] : [])]);
+		try {
+			const approved = await ctx.ui.confirm(title, description, { signal });
+			signal.throwIfAborted();
+			if (this.epoch !== epoch) throw new Error("La sesión cambió durante la confirmación; no se ejecutó la acción pendiente.");
+			this.checkContext(ctx);
+			return approved;
+		} finally { this.emit(); }
 	}
 	/** Un selector no autoriza nada por sí mismo; cada caller interpreta sólo sus opciones explícitas. */
 	async select(ctx: ExtensionContext, title: string, options: string[], signal: AbortSignal): Promise<string | undefined> {
@@ -283,8 +306,8 @@ export class DevelopmentSession {
 	async publish(ctx: ExtensionContext): Promise<void> {
 		if (!(await this.fresh(ctx))) return;
 		let state = this.current(ctx);
-		// Un PR adoptado por el lifecycle no se republica: la corrección va al mismo PR con /omi-work fix y su propio sí.
-		if (state.version === 2 && state.pullRequest?.ownership === "adopted") throw new Error("El PR ya es del lifecycle: la corrección se publica en el mismo PR con /omi-work fix, con su propio permiso.");
+		// Un PR adoptado por el lifecycle no se republica: la corrección va al mismo PR, por la cadena o /omi-work fix.
+		if (state.version === 2 && state.pullRequest?.ownership === "adopted") throw new Error(`El PR ya es del lifecycle: no uses publish. ${correctionPushGuide(state)}`);
 		if (state.phase !== "pr") throw new Error("Primero completá todos los pasos y la verificación del cambio actual");
 		const snapshot = await inspectCheckout(state.checkout, this.runner, this.lifecycle.signal);
 		if (!snapshot.clean) throw new Error("El worktree cambió después de verificar. Volvé a Implementar/Verificar.");
@@ -306,6 +329,7 @@ export class DevelopmentSession {
 		await this.apply({ type: "published", ...receipt }, ctx);
 		ctx.ui.notify(publishedNotice(receipt), "info");
 		await updateIssueSection(this, ctx);
+		await this.continuity.publication(ctx);
 	}
 	// Revisión íntegra de un documento: navegable en la TUI, el texto entero en RPC. Volver, cerrar o cancelar no aprueban.
 	private async reviewed(ctx: ExtensionContext, document: ApprovalDocument, cancellation: AbortSignal): Promise<boolean> {
@@ -351,5 +375,5 @@ export class DevelopmentSession {
 		this.state = undefined; this.lockedReason = ""; this.emit();
 	}
 	shutdown(): void { this.alive = false; this.epoch++; this.lifecycle.abort(); }
-	status(): string { return this.lockedReason || (this.state ? [`${PHASE_LABELS[this.state.phase]} · ${this.state.status}`, this.state.activity, this.state.blockedReason, ...lifecycleLines(this.state), "Detalle: /omi-progress"].filter(Boolean).join("\n") : "Sin harness activo. Pedí un cambio en el chat o elegí un issue en Issues. /omi-work resume | approve | pause | refresh | pr | stop"); }
+	status(): string { return this.lockedReason || (this.state ? [`${PHASE_LABELS[this.state.phase]} · ${this.state.status}`, this.state.activity, this.state.blockedReason, lifecyclePauseLine(this.state), ...lifecycleLines(this.state), "Detalle: /omi-progress"].filter(Boolean).join("\n") : "Sin harness activo. Pedí un cambio en el chat o elegí un issue en Issues. /omi-work resume | approve | pause | refresh | pr | stop"); }
 }

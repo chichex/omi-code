@@ -4,15 +4,29 @@ import { Type, type Static } from "typebox";
 const closed = { additionalProperties: false } as const;
 const text = (maxLength = 256) => Type.String({ minLength: 1, maxLength, pattern: "\\S" });
 const Mode = Type.Union([Type.Literal("ask"), Type.Literal("auto")]);
+// Continuidad decide cuándo ofrecer la siguiente etapa, nunca autoriza sus efectos.
+export const ContinuityModeSchema = Type.Enum(["auto", "ask", "manual"]);
+export const LifecycleContinuitySchema = Type.Object({
+ entry: ContinuityModeSchema, review: ContinuityModeSchema, fix: ContinuityModeSchema,
+ land: ContinuityModeSchema, ship: ContinuityModeSchema,
+}, closed);
+export type LifecycleContinuity = Static<typeof LifecycleContinuitySchema>;
+export type ContinuityMode = Static<typeof ContinuityModeSchema>;
 const Timeout = Type.Integer({ minimum: 60, maximum: 7200 });
 const Count = Type.Integer({ minimum: 0, maximum: 10 });
 const Ref = text();
 const WorkflowFile = Type.String({ maxLength: 256, pattern: "^(?:\\.github/workflows/)?[A-Za-z0-9_][A-Za-z0-9_.-]*\\.ya?ml$" });
 const WorkflowIdentity = { workflow: WorkflowFile, ref: Ref };
+// Los mismos valores que acepta el input `model`/`effort` del workflow; ausentes, decide su default.
+export const GhaReviewModelSchema = Type.Enum(["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1", "claude-haiku-4-5"]);
+export const GhaReviewEffortSchema = Type.Enum(["low", "medium", "high", "xhigh", "max"]);
+export type GhaReviewModel = Static<typeof GhaReviewModelSchema>;
+export type GhaReviewEffort = Static<typeof GhaReviewEffortSchema>;
 const ReviewProvider = Type.Union([
  Type.Object({ kind: Type.Literal("local") }, closed),
  Type.Object({ kind: Type.Literal("github"), reviewers: Type.Array(Type.String({ maxLength: 100, pattern: "^[A-Za-z0-9][A-Za-z0-9-]*(?:\\[bot\\])?$" }), { minItems: 1, maxItems: 1000, uniqueItems: true }) }, closed),
- Type.Object({ kind: Type.Literal("gha"), ...WorkflowIdentity, contract: Type.Literal("omi-review-v1") }, closed),
+ // model/effort opcionales: omitirlos conserva el hash de configs existentes.
+ Type.Object({ kind: Type.Literal("gha"), ...WorkflowIdentity, contract: Type.Literal("omi-review-v1"), model: Type.Optional(GhaReviewModelSchema), effort: Type.Optional(GhaReviewEffortSchema) }, closed),
 ]);
 const Endpoint = Type.String({ minLength: 1, maxLength: 1024, pattern: "^/(?!/)[A-Za-z0-9_./~-]*$" });
 const JsonField = Type.String({ minLength: 1, maxLength: 256, pattern: "^[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*$" });
@@ -58,6 +72,8 @@ const Ship = Type.Union([
 ]);
 export const LifecycleConfigSchema = Type.Object({
  version: Type.Literal(1), repo: Type.String({ maxLength: 200, pattern: "^[a-z0-9_.-]+/[a-z0-9_.-]+$" }),
+ // Ausencia legacy se conserva: no materializar defaults ni cambiar su hash.
+ continuity: Type.Optional(LifecycleContinuitySchema),
  review: Type.Object({ mode: Mode, provider: ReviewProvider, timeoutSeconds: Timeout }, closed),
  corrections: Type.Object({ mode: Mode, maxRounds: Count }, closed),
  land: Type.Object({
@@ -69,3 +85,4 @@ export const LifecycleConfigSchema = Type.Object({
  budget: Type.Object({ maxAttempts: Type.Integer({ minimum: 1, maximum: 100 }), maxFixForwardPRs: Type.Integer({ minimum: 0, maximum: 5 }), activeSeconds: Type.Integer({ minimum: 60, maximum: 86400 }) }, closed),
 }, closed);
 export type LifecycleConfig = Static<typeof LifecycleConfigSchema>;
+export type LifecycleReviewProvider = LifecycleConfig["review"]["provider"];

@@ -5,9 +5,10 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent, type AgentTool, type AgentToolResult, type AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
-import type { Usage } from "@earendil-works/pi-ai";
+import { retryDelayMs, type Usage } from "@earendil-works/pi-ai";
 import { truncateHead, type ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
+import { pauseUnlessAborted, providerErrorCause } from "./provider-retry.ts";
 
 const READ_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const ROLES = {
@@ -22,6 +23,8 @@ const MAX_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 const MAX_TURNS = 32;
 const TIMEOUT_MS = 10 * 60_000;
+const MAX_RETRIES = 3;
+const RETRY_BASE_MS = 2000; // 2, 4 y 8 s.
 const OUTPUT_BYTES = 6000; // 8 resultados + encabezados quedan debajo de 50 KiB.
 
 const taskSchema = Type.Object({
@@ -76,6 +79,20 @@ async function boundedOutput(text: string): Promise<{ output: string; outputFile
 	}
 }
 
+/** El último turno falló por algo transitorio y se puede pedir de nuevo: Pi no corrió sus tools y lo anterior es la tarea o un resultado. */
+function retryableFailure(agent: Agent): boolean {
+	const last = agent.state.messages.at(-1); const previous = agent.state.messages.at(-2);
+	return last?.role === "assistant" && last.stopReason === "error" && providerErrorCause(last).retry && previous !== undefined && previous.role !== "assistant";
+}
+function failureOutput(error: string, retries: number, partial: string): string {
+	const line = (error.split("\n", 1)[0] ?? "").trim().replace(/[.\s]+$/, "");
+	const brief = line.length > 200 ? `${line.slice(0, 200)}…` : line;
+	const head = `Interrumpido por un error del proveedor${retries ? ` tras ${retries} ${retries === 1 ? "reintento" : "reintentos"}` : ""}: ${brief}`;
+	return partial.trim()
+		? `### Interrupción\n${head}. Revisar archivos y verificaciones antes de continuar.\n\n### Información recuperada\n${partial}`
+		: `${head}; sin resumen recuperable; revisar archivos y verificaciones antes de continuar`;
+}
+
 /** No ejecutar la implementación cruda: executeTool conserva validación, hooks, cwd y confirmaciones. */
 function delegatedTools(ctx: ExtensionToolContext, role: Role): AgentTool[] {
 	return ctx.tools.filter((tool) => role === "worker" ? tool.name !== "subagent" : READ_TOOLS.has(tool.name))
@@ -102,6 +119,7 @@ async function runTask(task: Task, result: TaskResult, ctx: ExtensionToolContext
 	let limitReached = false;
 	let partialOutput = "";
 	let failed = false;
+	let retries = 0;
 	let agent: Agent | undefined;
 	let unsubscribe = () => {};
 	const cancel = () => agent?.abort();
@@ -117,11 +135,13 @@ async function runTask(task: Task, result: TaskResult, ctx: ExtensionToolContext
 			// Usa el modelo, proveedor (incluso custom) y auth resueltos del padre; no API keys del shell.
 			streamFn: (model, context, options) => ctx.modelRegistry.streamSimple(model, context, options),
 			finishTurn({ message, toolResults }) {
+				// Un turno con error termina el loop igual. Si se reintenta lo decide runTask, y ese turno no cuenta.
+				if (message.stopReason === "error" || message.stopReason === "aborted") return;
 				if (result.turns >= MAX_TURNS) {
 					limitReached = true;
 					return { action: "end" };
 				}
-				if (result.turns === MAX_TURNS - 1 && toolResults.length > 0 && message.stopReason !== "error" && message.stopReason !== "aborted") {
+				if (result.turns === MAX_TURNS - 1 && toolResults.length > 0) {
 					agent?.steer({
 						role: "user", timestamp: Date.now(),
 						content: "Este es tu último turno reservado para cierre por límite de turnos. No continúes trabajando ni uses tools. Respondé con un resumen de avances, archivos afectados, verificaciones realmente ejecutadas y sus resultados, y pendientes. No inventes evidencia ni infieras fallos de tests del corte; indicá lo que no verificaste.",
@@ -148,6 +168,14 @@ async function runTask(task: Task, result: TaskResult, ctx: ExtensionToolContext
 			}
 		});
 		if (!controller.signal.aborted) await agent.prompt(task.task);
+		// Se descarta el turno fallido y se sigue desde el mismo contexto, sin repetir tools. Esc y los 10 min cortan la espera.
+		while (retries < MAX_RETRIES && !controller.signal.aborted && retryableFailure(agent)) {
+			retries++;
+			agent.state.messages = agent.state.messages.slice(0, -1);
+			result.turns--; failed = false; result.status = "running"; result.activity = `reintento ${retries}/${MAX_RETRIES}`; update();
+			await pauseUnlessAborted(retryDelayMs({ baseDelayMs: RETRY_BASE_MS }, retries), controller.signal);
+			if (!controller.signal.aborted) await agent.continue();
+		}
 		if (controller.signal.aborted) {
 			result.status = "error";
 			result.output = signal.aborted ? "Subagente cancelado." : "Subagente: límite de 10 minutos.";
@@ -156,7 +184,9 @@ async function runTask(task: Task, result: TaskResult, ctx: ExtensionToolContext
 			result.output = partialOutput.trim()
 				? `### Interrupción\nInterrumpido por límite de turnos (${MAX_TURNS} requests). Revisar archivos y verificaciones antes de continuar.\n\n### Información recuperada\n${partialOutput}`
 				: "Interrumpido por límite de turnos; sin resumen recuperable; revisar archivos y verificaciones antes de continuar";
-		} else if (!failed) {
+		} else if (failed) {
+			result.output = failureOutput(result.output, retries, partialOutput);
+		} else {
 			result.status = result.output.trim() ? "done" : "error";
 			if (!result.output.trim()) result.output = "El subagente terminó sin respuesta.";
 		}

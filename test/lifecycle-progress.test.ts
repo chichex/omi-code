@@ -12,7 +12,7 @@ import * as life from "../src/harness/lifecycle-state.ts";
 import { adoptPostPrWorkflow } from "../src/harness/lifecycle-corrections.ts";
 import { acceptObservedMerge } from "../src/harness/lifecycle-land.ts";
 import { recordShipVerification, completeShip } from "../src/harness/ship-state.ts";
-import { developmentProgress } from "../src/tui/development-view.ts";
+import { developmentInstructions, developmentProgress } from "../src/tui/development-view.ts";
 import { WorkflowProgressMonitor, workflowProgressDetail, workflowProgressPanel, workflowProgressView } from "../src/tui/workspace/workflow-progress.ts";
 import { AT, lifecycleConfig } from "./helpers/lifecycle.ts";
 
@@ -92,6 +92,87 @@ test("temas y paneles bajos: el bloqueo gana y nada desborda el ancho", () => {
   assert.ok(low.length <= 3); assert.ok(low.every(row => visibleWidth(row) <= width)); assert.match(text(low).split("\n").at(-1) ?? "", /^! Hay hallazgos/);
   assert.ok(workflowProgressView(theme, p, width).every(row => visibleWidth(row) === width));
  }
+});
+
+// Cambio de requisito del dueño (2026-11-23): la pausa vive en un campo estructurado (continuityPause), no en
+// activity con un prefijo. El caso anterior usaba un texto que el host nunca produjo («rechazada por la persona · land»).
+const paused = (pause: Record<string, unknown>, change?: Parameters<typeof lifecycleConfig>[1]): WorkflowV2 => {
+ const r = reviewed(change ?? (b => { b.continuity = { entry: "auto", review: "ask", fix: "manual", land: "auto", ship: "manual" }; }));
+ return { ...r, continuityPause: { subjectId: "subject", lastOperationId: "review1", at: AT, ...pause } } as WorkflowV2;
+};
+const warningRow = (theme: (typeof themes)[number], rows: string[], pattern: RegExp) => {
+ const row = rows.find(r => pattern.test(stripTerminalSequences(r)));
+ assert.ok(row, `falta la fila ${pattern}`);
+ const warn = theme.fg("warning", "x").split("x")[0]!;
+ assert.ok(row.startsWith(warn), `${pattern} se pinta como aviso`);
+ return stripTerminalSequences(row);
+};
+
+test("progreso expone continuidad efectiva y la pausa como aviso legible, una vez y sin mutar ni iniciar nada", () => {
+ const legacy = reviewed(), legacyBefore = JSON.stringify(legacy);
+ assert.match(text(developmentProgress(legacy).lifecycle ?? []), /Continuidad: deshabilitada.*draft/);
+ assert.equal(developmentProgress(legacy).lifecyclePause, undefined);
+ assert.equal(JSON.stringify(legacy), legacyBefore);
+ const active = paused({ reason: "declined", stage: "land" });
+ const before = JSON.stringify(active), p = developmentProgress(active), lines = text(p.lifecycle ?? []);
+ assert.match(lines, /Continuidad: entry=auto · review=ask · fix=manual · land=auto · ship=manual/);
+ assert.equal(p.lifecyclePause, "Dijiste que no a seguir con Land: cuando quieras, /omi-work land");
+ assert.doesNotMatch(lines, /Dijiste que no|declined|Continuidad en pausa/, "las líneas no la duplican ni muestran el código");
+ assert.doesNotMatch(p.activity, /pausa/i, "activity sigue siendo la última actividad del trabajo");
+ assert.match(p.lifecycleSummary ?? "", /^Hallazgos 1/, "el resumen sigue informando el lifecycle");
+ assert.match(lines, /intentos 1\/12/); assert.match(lines, /rondas 0\/2/);
+ for (const theme of themes) {
+  assert.match(warningRow(theme, workflowProgressPanel(theme, p, 41, 40), /Dijiste que no/), /^Ⅱ Dijiste que no a seguir con Land/);
+  assert.match(warningRow(theme, workflowProgressView(theme, p, 100), /Continuidad en pausa/), /Continuidad en pausa · Dijiste que no a seguir con Land: cuando quieras, \/omi-work land/);
+  assert.equal(text(workflowProgressView(theme, p, 100)).split("Dijiste que no").length - 1, 1, "una sola vez en la vista");
+ }
+ const detail = workflowProgressDetail(p).flatMap(entry => typeof entry === "object" && "text" in entry && /Dijiste que no/.test(entry.text) ? [entry.color] : []);
+ assert.deepEqual(detail, ["warning"], "una vez y como aviso en el detalle");
+ const restored = JSON.parse(before) as WorkflowV2;
+ assert.deepEqual(developmentProgress(restored).lifecyclePause, p.lifecyclePause);
+ assert.equal(JSON.stringify(active), before);
+ const monitor = new WorkflowProgressMonitor();
+ assert.equal(monitor.consume({ progress: { ...p, lifecyclePause: 3 } }), false, "el bus rechaza una pausa que no es texto");
+ assert.equal(monitor.consume({ progress: { ...p, lifecyclePause: "Review está en manual\x1b]0;EVIL\x07: corré /omi-work review" } }), true);
+ const git = { root: "/fixture", gitDir: "/fixture/.git", commonDir: "/fixture/.git", mainRoot: "/fixture", linked: false, branch: "feat/work", detached: false, changes: [], changeCount: 0, tracking: false, ahead: undefined, behind: undefined };
+ assert.equal(monitor.current("/fixture", git)?.lifecyclePause, "Review está en manual: corré /omi-work review");
+});
+
+test("la pausa sobrevive a otras transiciones y se oculta si cambió el sujeto, arrancó otra operación o se adoptó", () => {
+ const pause = paused({ reason: "manual", stage: "review" });
+ assert.equal(developmentProgress(pause).lifecyclePause, "Review está en manual: corré /omi-work review");
+ // Antes el reducer reescribía activity en cada evento y la pausa se perdía.
+ const granted = send(pause, { type: "command_granted", key: "npm-test", command: "npm test" });
+ assert.equal(granted.activity, "command_granted");
+ assert.deepEqual(granted.continuityPause, pause.continuityPause);
+ assert.equal(developmentProgress(granted).lifecyclePause, developmentProgress(pause).lifecyclePause);
+ // Una operación nueva (por ejemplo, la que la persona corre después) deja vieja la pausa.
+ const running = structuredClone(pause); assert.ok(running.lifecycle.status === "enabled");
+ running.lifecycle = life.reserveLifecycleOperation(running.lifecycle, { id: "ready1", key: "ready1", kind: "ready", subjectId: "subject", targetId: null, correlationId: "ready-correlation-1", retryOf: null }, { id: "ready-decision", kind: "ready", subjectId: "subject", targetId: null, configHash: running.lifecycle.pinHash, source: "person", at: AT }, "process", AT);
+ assert.equal(developmentProgress(running).lifecyclePause, undefined, "no se muestra con una operación en curso");
+ // Otro HEAD es otro sujeto: el motivo era del anterior.
+ const moved = structuredClone(pause); assert.ok(moved.lifecycle.status === "enabled");
+ moved.lifecycle.subjects.push({ ...moved.lifecycle.subjects[0]!, id: "subject2", headSha: "e".repeat(40) }); moved.lifecycle.currentSubject = "subject2";
+ assert.equal(developmentProgress(moved).lifecyclePause, undefined, "no se muestra si cambió el sujeto");
+ // Una pausa del trabajo deja de aplicar al retomarlo.
+ const stopped = paused({ reason: "workflow-paused" });
+ assert.match(developmentProgress({ ...stopped, status: "paused" }).lifecyclePause ?? "", /pausado/);
+ assert.equal(developmentProgress(stopped).lifecyclePause, undefined, "retomado, ya no está pausado");
+ // Antes de adoptar, el sujeto es el HEAD publicado; adoptar limpia la pausa de entrada.
+ const entry = { ...draft(), continuityPause: { reason: "declined", stage: "entry", subjectId: head, at: AT } } as WorkflowV2;
+ assert.equal(developmentProgress(entry).lifecyclePause, "Dijiste que no a seguir con la adopción del PR: cuando quieras, /omi-work adopt");
+ assert.match(text(developmentProgress(entry).lifecycle ?? []), /Lifecycle no habilitado/);
+ assert.equal(developmentProgress({ ...entry, continuityPause: { reason: "declined", stage: "entry", subjectId: "c".repeat(40), at: AT } } as WorkflowV2).lifecyclePause, undefined);
+ const adopted = adoptPostPrWorkflow(entry, pin(), subject, { id: "adopt", source: "person", at: AT });
+ assert.equal(Object.hasOwn(adopted, "continuityPause"), false, "adoptar deja atrás el motivo anterior");
+});
+
+test("el agente ve el motivo y el próximo paso de la pausa vigente, y nada si no aplica", () => {
+ const active = paused({ reason: "manual", stage: "review" });
+ assert.match(developmentInstructions(active), /Continuidad en pausa · Review está en manual: corré \/omi-work review/);
+ assert.doesNotMatch(developmentInstructions(reviewed()), /Continuidad en pausa/);
+ const moved = structuredClone(active); assert.ok(moved.lifecycle.status === "enabled"); moved.lifecycle.currentSubject = null;
+ assert.doesNotMatch(developmentInstructions(moved), /Continuidad en pausa/);
 });
 
 test("el bus conserva las líneas del lifecycle como copia defensiva", () => {

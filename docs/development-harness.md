@@ -49,6 +49,7 @@ No hay un comando para empezar: `/omi-triage` y `/omi-work start` ya no existen.
 | `/omi-work stack` | Actualizar un [stack de PRs](#stack-de-prs) publicado: mergea el de abajo en el de arriba y re-apunta a `main` el que quedó sobre uno mergeado. Sigue la misma política que el push: con `push_pr: ask` pide el sí. |
 | `/omi-work status` | Consultar el estado sin llamar al modelo, con la revisión de Foundations vigente, sus políticas y sus patrones de confirmación en lista vertical. |
 | `/omi-work foundations` | Abrir el panel dedicado de configuración, como **f** en la vista OMI o `/omi-foundations`. No inicia ni retoma trabajo, no acepta ni guarda al abrir; sólo Guardar explícitamente persiste v2. |
+| `/omi-setup` | Correr [lo que falta configurar](#setup-de-lo-que-falta): el panel de Foundations y después el wizard del lifecycle, también lo postergado. Sin nada para correr, muestra el diagnóstico. Como «Configurar lo que falta» en la paleta (Ctrl K) o **s** en la [pestaña OMI](#pestaña-omi). |
 | `/omi-work stop` | Salir explícitamente del flujo y restaurar las tools normales del chat, sin borrar ni revertir archivos. También sale de un harness bloqueado (estado inválido o atrasado) sin tocar el estado guardado. |
 | Ctrl 6 / `/omi-workflow` | Pantalla 6 · Progreso: recorrido completo de sólo lectura, también con la lateral oculta. |
 | `/omi-progress` | Detalle del progreso en el workspace TUI, también con la lateral oculta. |
@@ -107,14 +108,16 @@ En RPC, donde Pi no ofrece componentes TUI, se conserva una confirmación humana
 - **Implementar:** un C activo por vez, test rojo real, mismo comando verde, commit convencional nuevo por paso. No se completa un paso mediante texto del modelo.
 - **Verificar:** cada D con su comando aprobado, salida/exit code y contenido actuales; gates ejecutados y lentes solicitados. Seguridad y Cumplimiento son obligatorios con riesgo alto. Los lentes son llamadas de sólo lectura, sin tools ni conversación del implementador; no sustituyen la Review externa del PR.
   - **Qué ven.** Los casos D, el alcance, el diff completo y la evidencia que registró el harness, no el modelo: por caso D su última verificación; por paso C su historial rojo→verde con comando, etiqueta, exit code, HEAD, fingerprint y la salida que ya se guarda. Un paso de una vuelta anterior trae su rojo y su verde acreditados, archivados.
-  - **Asesoran, no bloquean.** Cada lente pedido tiene que correr sobre el contenido actual. Un `unknown` o un `fail` queda como aviso y no frena Verificar ni el PR draft. Única excepción: un `fail` de Seguridad bloquea hasta corregir en otra vuelta. Un resultado inválido, incompleto o cancelado queda como `unknown`.
-  - **Corrección liviana (`amend`).** Un hallazgo de un lente que sólo avisa no gasta una vuelta. Si vale la pena corregirlo, el agente usa `amend` con el motivo: agrega un paso `C<n>` con su rojo, verde y commit, sin borrar evidencia ni revisiones. Después repite los D, Seguridad y los lentes que no aprobaron limpio; un lente que aprobó limpio el contenido de partida vale y el PR lo marca «revisado antes de la corrección liviana». Hasta dos por vuelta; lo que queda va como aviso. Con un D, un gate o Seguridad fallados, `amend` se rechaza: eso pide `retry`.
+  - **Asesoran, no bloquean.** Cada lente pedido tiene que correr sobre el contenido actual. Un `unknown` o un `fail` queda como aviso y no frena Verificar ni el PR draft. Única excepción: un `fail` de Seguridad bloquea hasta corregir en otra vuelta. Con riesgo alto, Seguridad sin `pass` tampoco frena: el merge pide el sí de la persona en [Land](#seguridad-en-riesgo-alto). Un resultado inválido, incompleto o cancelado queda como `unknown` **sin resultado** (ver abajo).
+  - **Reintento por parte.** Cada parte es una llamada con plazo propio de 5 minutos y hasta 3 intentos, con 2 s y 4 s de espera entre ellos. La espera se corta si la persona cancela. Se reintenta sólo lo transitorio: un error de conexión (por ejemplo, «Unable to connect», `ECONNRESET`, `ECONNREFUSED`), un proveedor saturado (`overloaded`, 529, 5xx, rate limit, según el clasificador de Pi), o el plazo vencido. Un corte por longitud o un JSON inválido se reintenta una sola vez. No se reintentan cuota, facturación ni autenticación, ni la cancelación de la persona. Nunca se reintenta un veredicto válido, tampoco un `unknown` del modelo: eso sería tirar de nuevo el dado. El uso suma todos los intentos. Si el proveedor no responde ni al abort, se lo deja de esperar a los 10 s. Cada llamada admite hasta 16.384 tokens de salida, para modelos que piensan y responden con el mismo tope. Reintentar no repite efectos: el lente no tiene tools.
+  - **Sin resultado.** Si se agotan los intentos, la parte queda `unknown` con `noResult` y un hallazgo con la causa por categoría, nunca el error crudo del proveedor, que iría al issue y al PR. Ejemplo: «parte 1/2 · Sin resultado del lente: conexión (3 intentos)». Las categorías son conexión, proveedor no disponible, tiempo agotado, respuesta cortada por longitud, formato inválido, cuota o facturación, autenticación y error del proveedor. Un lente cancelado o cuyo cambio se modificó durante la corrida también queda sin resultado. El lente entero queda sin resultado sólo si ninguna parte juzgó `unknown`; un `fail` de una parte sigue siendo `fail`. El progreso, la sección del issue y el PR lo muestran como «⚠️ unknown · sin resultado», y el `refuter` no lo recibe como hallazgo. El agente lo vuelve a correr antes de `verified`, porque no gasta veredictos; si vuelve a quedar sin resultado, queda como aviso. Un `fail` o un `unknown` juzgado por el lente no se repiten.
+  - **Corrección liviana (`amend`).** Un hallazgo de un lente que sólo avisa no gasta una vuelta. Si vale la pena corregirlo, el agente usa `amend` con el motivo: agrega un paso `C<n>` con su rojo, verde y commit, sin borrar evidencia ni revisiones. Después repite los D, Seguridad y los lentes que no aprobaron limpio; un lente que aprobó limpio el contenido de partida vale y el PR lo marca «revisado antes de la corrección liviana». Hasta dos por vuelta; lo que queda va como aviso. Con un D, un gate o Seguridad fallados, `amend` se rechaza: eso pide `retry`. Un lente sin resultado no es un hallazgo y tampoco justifica `amend`: se vuelve a correr.
   - **Sin tope de tamaño.** Si el diff no entra en una llamada, se reparte por archivo en partes. Un archivo más grande se corta por líneas, con una etiqueta por fragmento. El lente corre por parte, con los casos y la evidencia en cada una, y se combina: el peor veredicto gana (`fail`, `unknown`, `pass`) y se juntan los hallazgos con su parte. Nada se trunca en silencio.
   - **Presupuesto por llamada.** Cada llamada entra en 120.000 caracteres, medidos en el JSON que se manda: casos, alcance, evidencia y su parte del diff. Si la evidencia completa no deja lugar para al menos 30.000 de diff, se resume de forma determinista y lo dice en `evidence.summarized`: por paso C el rojo y el verde acreditados (o los últimos), por caso D y por gate la última corrida, y cada salida con su cola y la marca «[recortado: N caracteres]». `omittedRuns` cuenta las corridas que no vinieron. Ejemplo: 5 pasos, un D y 2 gates × 3 vueltas con salidas de 12.000 (≈207 KB) y un diff de ≈600 KB van en 20 llamadas de hasta 120.000, con salidas de 4.000. Si ni resumida entra (por ejemplo, casos D enormes), el lente falla con un error explícito en vez de mandar una llamada que no entra.
-  - **Corridas.** Un lente que falló no se repite sobre el mismo contenido, salvo que un `refuter` posterior apruebe: así un aviso no se borra repitiendo el lente y el fail de Seguridad no se esquiva. Por contenido, cada lente admite tres veredictos y diez corridas: cancelar o un error del proveedor no gasta veredictos.
+  - **Corridas.** Un lente que falló no se repite sobre el mismo contenido, salvo que un `refuter` posterior apruebe: así un aviso no se borra repitiendo el lente y el fail de Seguridad no se esquiva. Por contenido, cada lente admite tres veredictos y diez corridas: una corrida sin resultado (cancelar, un error del proveedor) no gasta veredictos. Los reintentos de una parte son de la misma corrida.
 - **PR:** sólo con cambio limpio y verificado y un SHA autorizado; con `push_pr: ask`, además, confirmación humana remota. Termina en un draft, o en uno por grupo con un stack; no mergea ni cierra el issue.
 
-Dependencia bloqueante, información insuficiente, inferencia nueva o imposibilidad de verificar deben quedar como espera/pausa. Una base que se arma con un comando no es una espera: el agente la prepara con `setup`, en cualquier etapa activa. Ejemplo: un worktree nuevo sin `node_modules` corre `npm ci` en Explorar (sin preguntar sólo si lo permite v2 aceptada o su grant exacto vigente), vuelve a reproducir y registra `explored` de nuevo, sin `refresh`. Sólo queda como base faltante lo que un comando no resuelve, por ejemplo una credencial o un servicio externo.
+Dependencia bloqueante, información insuficiente, inferencia nueva o imposibilidad de verificar deben quedar como espera/pausa. Una base que se arma con un comando no es una espera: el agente la prepara con `setup`, en cualquier etapa activa hasta el PR draft. Ejemplo: un worktree nuevo sin `node_modules` corre `npm ci` en Explorar (sin preguntar sólo si lo permite v2 aceptada o su grant exacto vigente), vuelve a reproducir y registra `explored` de nuevo, sin `refresh`. Sólo queda como base faltante lo que un comando no resuelve, por ejemplo una credencial o un servicio externo.
 
 ## Evidencia y permisos
 
@@ -128,7 +131,8 @@ Dependencia bloqueante, información insuficiente, inferencia nueva o imposibili
   - **No**, Esc, cerrar, respuesta desconocida o error no ejecutan ni conceden grants. Un guardado parcial informa si la KB pudo guardar o si también quedó aceptado localmente, sin ejecutar ni inventar éxito. No se reintenta un envío después de cancelar.
   - Se revalida el trabajo durable antes de guardar/aceptar o ejecutar: una decisión vieja tras pausa o cambio de otra ventana no vale.
   Ejemplo: con `git push *`, ser D5 no autoriza `npm run typecheck && git push origin main`; `npm run typecheck` solo corre sin preguntar, o reutiliza su grant humano exacto.
-- Setup corre en cualquier etapa activa, también antes de aprobar la receta, con la misma autorización. Nunca acredita una prueba y sus errores se muestran.
+- Setup corre en cualquier etapa activa hasta el PR draft, también antes de aprobar la receta, con la misma autorización. Nunca acredita una prueba y sus errores se muestran.
+- Después del PR draft (PR draft abierto, Review, Land, Ship, o con el PR adoptado), `omi_workflow_check` sólo corre durante una corrección en curso: una ronda de `/omi-work fix` o un fix-forward en su checkout. Así un setup no es un camino para disparar workflows por fuera del lifecycle. Ejemplo: con el PR adoptado en Review, `setup` con `gh workflow run claude-review.yml -f pr=8` se rechaza sin ejecutar y guía a `/omi-work review`. Con la corrección ya verificada y el push todavía sin hacer, tampoco corre.
 - Fuera de Implementar, un setup prepara lo que Git ignora (por ejemplo, `node_modules`). Si cambia archivos versionados, no ignorados o HEAD, devuelve un error. No se revierte solo; el cambio queda a la vista en `git status`. Es una detección con el fingerprint, no un sandbox: un comando autorizado que le esconde cambios a Git (por ejemplo, con `git update-index --assume-unchanged`) no se detecta.
 - La reproducción corre en Explorar, Resolver inferencias (donde se puede volver a registrar `explored`) y Diagnóstico.
 - El runner registra salida acotada a 12.000 caracteres, exit code, interrupción, HEAD, fingerprint y tiempos. No imprime el entorno ni mensajes internos potencialmente sensibles del backend. La salida del propio programa puede contener datos sensibles: no autorizar comandos que revelen secretos.
@@ -213,7 +217,7 @@ La autorización de comandos es independiente de estas tres políticas y de su e
 
 ### Aceptar una revisión
 
-1. Al arrancar la sesión, OMI lee las perillas en segundo plano, sin preguntar ni escribir la KB.
+1. Al arrancar la sesión, OMI lee las perillas en segundo plano, sin preguntar ni escribir la KB. En una sesión nueva, si falta configurar algo, el [setup](#setup-de-lo-que-falta) lo ofrece después de esa lectura.
 2. En el primer punto del harness que necesita la política (el arranque, `/omi-work resume`, `approve`, `pr` o el primer comando), si la revisión v2 es nueva, la aplica sin preguntar y avisa la diferencia vertical contra la última aceptada (o contra el default, si no había ninguna). Cada `auto` y la lista vacía traen su aviso. También sin UI. Abrir el panel no la acepta. Ejemplo:
 
    ```
@@ -228,7 +232,7 @@ La autorización de comandos es independiente de estas tres políticas y de su e
    ```
 
 3. Toda revisión nueva se aplica y se avisa, también si sólo quita permisos. La misma revisión en otro documento de perillas (alguien editó otra parte) no vuelve a avisar; sólo actualiza la metadata local de esa aceptación.
-4. El registro **v2** vive en `<OMI_HOME>/agent/foundations/` (por defecto `~/.omi/agent/foundations/`), 0600, por KB, producto y repo. Un registro v1 cuenta como nada aceptado.
+4. El registro **v2** vive en `<OMI_HOME>/agent/foundations/` (por defecto `~/.omi/agent/foundations/`), 0600, por KB, producto y repo. Guarda la aceptación y el «Más adelante» del setup (`deferred`, por revisión). Un registro v1 cuenta como nada aceptado; el setup lo distingue de la ausencia y avisa «Tu configuración de Foundations es de un formato anterior que ya no se usa: configurala de nuevo». Un registro v2 que todavía trae el `offerDeclined` anterior conserva su aceptación; ese campo se ignora y se quita en la próxima escritura.
 5. La revisión queda **fija toda la sesión**: un cambio externo en la KB a mitad de sesión no se aplica. Sobrevive a `/reload` y viaja a la sesión del worktree con `omi_work_begin`, sin otro aviso. La sesión siguiente aplica la revisión nueva y avisa la diferencia. La excepción es Guardar en el panel: tras persistir y aceptar, reemplaza el pin; una decisión anterior pendiente no lo pisa.
 
 Sin ninguna v2 aceptada vale el default: `auto` en los tres puntos y ningún comando pregunta.
@@ -238,7 +242,7 @@ Sin ninguna v2 aceptada vale el default: `auto` en los tres puntos y ningún com
 | Situación | Vale en la sesión |
 |---|---|
 | `--offline`, `PI_OFFLINE`, `--no-mcp`, `-builtin:mcp`, `--no-extensions`, sin login, KB lenta (tope de 10 s) o `harness-kb` redefinido en `mcp.json` | La última v2 aceptada; si no hay, el default (todo `auto`) |
-| Perillas sin bloque para el repo | La última v2 aceptada, con aviso; si no hay, el default, sin ofrecer armarlo |
+| Perillas sin bloque para el repo | La última v2 aceptada, con aviso; si no hay, el default, y el [setup](#setup-de-lo-que-falta) ofrece armarlo |
 | Bloque inválido o v1 | La última v2 aceptada, con aviso y el motivo; si no hay, el default. No se interpreta como lista vacía aceptada |
 | Revisión nueva sin UI | La revisión nueva: aceptarla no necesita UI |
 | Producto inexistente o sin acceso | El default; no crea productos ni finge guardado |
@@ -253,7 +257,7 @@ Sólo **Guardar explícitamente** desde el panel escribe una revisión de las pe
 
 **Panel vertical dedicado**
 
-- Se abre con **f** en la vista OMI (Ctrl 5), «Foundations» en la paleta (Ctrl K), `/omi-foundations`, `/omi-work foundations` o **Editar reglas** del permiso. No inicia ni retoma trabajo. El harness no lo ofrece al arrancar: sin Foundations v2 nada pregunta. No se abre automáticamente al iniciar ni al hacer reload.
+- Se abre con **f** en la vista OMI (Ctrl 5), «Foundations» en la paleta (Ctrl K), `/omi-foundations`, `/omi-work foundations` o **Editar reglas** del permiso. No inicia ni retoma trabajo. Sin ninguna v2 aceptada, el [setup](#setup-de-lo-que-falta) lo ofrece solo al entrar al harness y al abrir una sesión interactiva nueva, con **Configurar ahora** o **Más adelante**; nunca al hacer reload, resume ni restore. Ofrecerlo no cambia las políticas: sin Foundations v2 nada pregunta.
 - Encabezado Foundations + repo, políticas en filas apiladas y editor amplio de una regla por línea, con foco evidente, wrap/scroll y colores del tema. Guardar/Cancelar quedan visibles. No es un wizard por pestañas, JSON ni una respuesta libre de `omi_ask`.
 - Entrar/reabrir precarga la v2 vigente sin aceptarla. Ausencia/v1 empieza con reglas vacías y las políticas del default (`auto`), nunca comandos anteriores ni sugerencias. La aceptación anterior y la precarga son datos separados en el diff.
 - Tab/Shift+Tab cambia foco; Espacio/Enter alterna una política. En el editor, Enter o Ctrl+J agrega línea; líneas exactamente vacías se omiten, espacios al borde/duplicados no se recortan ni deduplican. Pegados largos quedan editables, no marcadores; controles/invisibles se rechazan sin normalizarlos a reglas válidas y se conserva el borrador previo.
@@ -263,7 +267,7 @@ Sólo **Guardar explícitamente** desde el panel escribe una revisión de las pe
 
 **Corte limpio y persistencia**
 
-- Únicamente formato v2. Bloques, pins y aceptaciones v1 son obsoletos: no se migran, invierten ni eliminan automáticamente. Hay que configurar/guardar de nuevo.
+- Únicamente formato v2. Bloques, pins y aceptaciones v1 son obsoletos: no se migran, invierten ni eliminan automáticamente. Hay que configurar/guardar de nuevo: el setup los detecta y lo ofrece. **Más adelante** sobre un registro local v1 lo reemplaza por uno v2 que sólo guarda la postergación, sin trasladar sus comandos ni políticas.
 - El guardado explícito puede reemplazar sólo el bloque antiguo inequívoco de ese repo, sin interpretar/trasladar sus comandos o políticas. Conserva byte a byte lo ajeno. JSON/cercas mal formadas, repo ambiguo o duplicados fallan sin sobrescribir a ciegas.
 - Requiere KB/producto accesibles e identidad KB/producto/origin/issue consistente. Relee para componer, valida expectativa de revisión, comprueba otra vez antes de enviar y confirma contenido/producto/tipo y que siga vigente antes de aceptar localmente. Cambios detectados o un trabajo pausado/desactualizado bloquean.
 - Respuesta perdida: clave idempotente estable, relectura antes del retry y nunca reenvío sobre una revisión concurrente ni después de abortar. Fallos parciales distinguen documento posiblemente guardado, verificación KB completa y aceptación local durable. No hay fallback a grant temporal ni éxito sin persistencia.
@@ -272,7 +276,7 @@ Sólo **Guardar explícitamente** desde el panel escribe una revisión de las pe
 - Las perillas resultantes deben entrar en el límite legible del cliente de KB (**400.000 caracteres**, incluido JSON escapado y contenido ajeno); excederlo falla antes de enviar, sin rebajar límites de validación de reglas.
 - **Concurrencia optimista, no CAS ni exclusión mutua remota**: todavía existe la ventana entre última lectura y envío. No se promete atomicidad distribuida ni se implementa limpieza de datos reales.
 
-`/omi-work status`, la vista OMI y el progreso muestran origen/revisión, tres políticas, patrones verticales y avisos; nunca concatenan reglas con pipes.
+`/omi-work status`, la [pestaña OMI](#pestaña-omi) y el progreso muestran origen/revisión, tres políticas, patrones verticales y avisos; nunca concatenan reglas con pipes. La pestaña OMI suma qué hace cada política y el motivo, por ejemplo el formato anterior.
 
 ### Límites
 
@@ -283,7 +287,7 @@ Sólo **Guardar explícitamente** desde el panel escribe una revisión de las pe
 - Sin KB, una revisión aceptada vieja puede ser más o menos permisiva que la vigente.
 - Revertir código/configuración no deshace efectos de comandos ya ejecutados; no se promete rollback externo.
 - Un repo cuyo nombre no es un producto de la KB no tiene Foundations.
-- Cada sesión en un repo de GitHub lee la KB: tres llamadas MCP.
+- Cada sesión en un repo de GitHub lee la KB: tres llamadas MCP. **r** en la pestaña OMI y cada guardado del setup releen: otras tres.
 
 ## Preguntas en tanda
 
@@ -319,6 +323,8 @@ Un trabajo grande puede terminar en varios PRs encadenados (un **stack**) en vez
 ### Cuándo partir
 
 Lo decide el agente al escribir la spec (ruta Con spec) y lo aprueba la persona con la receta. Conviene cuando el cambio no se revisa bien en un solo PR. Ejemplos: más de unas 400 líneas de diff, o partes que se revisan y mergean por separado (modelo, lógica, UI). Cada PR tiene que pasar sus tests solo. Sin stack, el trabajo va en un solo PR, como siempre. Directa tiene un solo paso: siempre un PR.
+
+Con un [lifecycle](#review-land-y-ship) aceptado que encadena la entrada (`continuity.entry` en `auto` o `ask`), el trabajo va en un solo PR: la cadena adopta un PR y no adopta stacks. La guía de la receta y de la spec se lo dice al agente, y `specified` con `stack` falla sin registrar nada ni tocar GitHub. El error le pide mandar `specified` otra vez sin `stack`, con los mismos pasos C. Si la configuración no se puede leer (KB caída, cambios sin aceptar, sin configurar u `--offline`), vale lo de siempre: el stack se permite. Con `entry: manual` o sin `continuity`, también.
 
 ### Cómo se declara
 
@@ -398,6 +404,7 @@ Frena y pide una persona si:
 - El merge con base fija necesita Git 2.40 o superior.
 - No hay lock con GitHub: otro puede escribir entre la lectura y el push. El push normal lo rechaza y se vuelve a correr.
 - La línea «sobre #N» del cuerpo queda como al abrir el PR. La base vigente la muestran GitHub y la sección del issue.
+- El lifecycle no adopta un stack. Si igual se publica uno con la entrada encadenada (por ejemplo, la configuración se aceptó después de la spec), la cadena pausa sin preguntar ni leer GitHub: «Continuidad en pausa · Este trabajo se publicó como stack de 2 PRs y el lifecycle no adopta stacks: mergealos en orden con su sí». `/omi-work adopt` falla con el mismo motivo. `/omi-work status` y el panel tampoco mandan a adopt: dan el mismo próximo paso.
 
 ## Si el modelo corta solo
 
@@ -510,17 +517,35 @@ No hay garantía de atomicidad entre cambios humanos del issue y todas las accio
 
 ## Review, Land y Ship
 
-El PR draft es el final por defecto. Para seguir el mismo trabajo, la persona lo habilita y lo avanza con comandos propios. El agente no tiene tools para estos efectos: ni `bash` ni `omi_workflow` reservan, mergean, despachan ni despliegan.
+El PR draft es el final por defecto. Para seguir el mismo trabajo se puede habilitar continuidad explícita en la configuración aceptada, o usar los comandos manuales. La continuidad la ejecuta el host: el agente no tiene tools para estos efectos; ni `bash` ni `omi_workflow` reservan, mergean, despachan ni despliegan.
+
+Después del draft, el agente no corre Review, Land ni Ship: se los pasa a la persona como comandos `/omi-work`, nunca como comandos de terminal ni disparando workflows. Su contexto, el motivo de una tool bloqueada y el error de `omi_workflow_check` dicen quién corre cada efecto y el **próximo paso** del estado. Un `!comando` de la persona tampoco corre: el aviso le da ese próximo paso y `/omi-work stop` para salir del flujo, sin mandarla a `omi_workflow_check`. El próximo paso es el de la pausa de la continuidad, si hay una vigente. Si no, sale del estado guardado como lo elegiría la cadena, sin repetir una Review ya registrada. Ejemplos:
+
+```text
+PR draft abierto, sin adoptar  → corré /omi-work adopt y después /omi-work review; si la continuidad está configurada, adopt ya sigue con la Review
+PR adoptado, sin Review        → corré /omi-work review
+Review registrada, 1 hallazgo  → corré /omi-work fix; usa los hallazgos ya registrados
+Pausa por un no a la Review    → cuando quieras, /omi-work review
+Stack publicado               → mergealos en orden con su sí
+```
+
+Con un stack publicado, la guía no ofrece `/omi-work adopt` ni `/omi-work review`, tampoco para una Review con GHA: el lifecycle no adopta stacks y adopt lo rechaza.
+
+Con el PR adoptado, la guía ofrece `/omi-work review` sólo en la etapa Review, que es donde corre. Con el merge observado (Ship, entrega verificada o cerrada) dice que el PR ya está mergeado y la Review no aplica. En otra etapa (Correcciones, Listo para merge, Land) dice que la Review no corre ahí y manda al próximo paso. Ejemplo: en Ship, «revisá el PR» no termina en un `/omi-work review` que falla con «Review corre en la etapa Review; ahora: ship».
+
+Si falta configurar algo que corre el [setup](#setup-de-lo-que-falta) (por ejemplo, el lifecycle), el contexto del agente lo dice y el agente le pasa `/omi-setup` a la persona: no lo configura ni edita la KB.
+
+Caso real: la persona pidió «corré las reviews con GHA» y el agente le pasó un `gh workflow run`. Ahora la respuesta es `/omi-work adopt` y `/omi-work review`: con Review `gha`, OMI dispara el workflow configurado con su permiso (en `chichex/omi-code`, siempre con el sí de la persona). Con el PR adoptado y `continuity.fix` en `auto` o `ask`, el agente no pide `/omi-work fix` para el push: la cadena lo hace al marcar `verified`, con el permiso `push_pr` de Foundations. Con `fix: manual` o sin continuidad, sí lo pide.
 
 | Comando | Qué hace | Permiso |
 |---|---|---|
-| `/omi-work adopt` | Habilita el lifecycle sobre el PR draft abierto: relee el PR en GitHub y el checkout, fija la configuración aceptada | Siempre un sí |
-| `/omi-work review` | Corre la Review configurada: `github` lee reviews, comentarios y checks; `local` usa un revisor aislado; `gha` dispara el workflow y espera su recibo. Con `github`, volver a correrlo en el mismo HEAD sólo relee: no pregunta ni gasta otro intento | `review.mode` |
-| `/omi-work fix` | Agrupa los hallazgos del HEAD actual y abre una ronda: el agente corrige con rojo, verde, commit y todos los D. Al terminar, verifica y hace push al **mismo PR** | Siempre un sí para la ronda y otro para el push |
+| `/omi-work adopt` | Habilita el lifecycle sobre el PR draft abierto: relee el PR en GitHub y el checkout, fija la configuración aceptada. Con `continuity.review` en `auto` o `ask`, el diálogo avisa que después sigue la Review | Siempre un sí |
+| `/omi-work review` | Corre la Review configurada: `github` lee reviews, comentarios y checks; `local` usa un revisor aislado; `gha` dispara el workflow y espera su recibo, con `model` y `effort` sólo si el provider los fija. Con `github`, volver a correrlo en el mismo HEAD sólo relee: no pregunta ni gasta otro intento | `review.mode` |
+| `/omi-work fix` | Agrupa los hallazgos del HEAD actual y abre una ronda: el agente corrige con rojo, verde, commit y todos los D. Al terminar, verifica y hace push al **mismo PR** | El comando manual pide un sí para la ronda y otro para el push, con o sin continuidad. Sólo el push que hace la cadena, con `continuity.fix` en `auto` o `ask`, sigue la política independiente `push_pr` de Foundations |
 | `/omi-work land` | Marca el PR listo (sale de draft), relee checks, reviews y reglas, y mergea por PR y SHA. Reconoce un merge externo | `land.mode` |
-| `/omi-work ship` | Verifica cada destino aceptado con recibos y provenance; termina en Entregado sólo si todos se verifican | `mode` de cada destino |
+| `/omi-work ship` | Verifica cada destino aceptado con recibos y provenance; termina en Entregado sólo si todos se verifican. Si el PR se adoptó sin Ship, primero toma la revisión aceptada vigente: así sirve después de `/omi-setup` | `mode` de cada destino |
 
-Por defecto cada etapa es `ask`. En `chichex/omi-code`, el merge y cualquier dispatch son siempre humanos, aunque la configuración diga `auto`. Cada efecto pasa por el coordinador raíz: actividad, decisión, reserva, una sola invocación y recibo. Un resultado incierto queda como incierto y no se repite solo. Restaurar, recargar o moverse por el árbol de la sesión no ejecuta nada.
+Por defecto los permisos de cada efecto son `ask`; no implican continuidad entre etapas. En `chichex/omi-code`, el merge y cualquier dispatch son siempre humanos, aunque la configuración diga `auto`. Cada efecto pasa por el coordinador raíz: actividad, decisión, reserva, una sola invocación y recibo. Un resultado incierto queda como incierto y no se repite solo. Restaurar, recargar o moverse por el árbol de la sesión no ejecuta nada.
 
 Ejemplo, con Review por GitHub y Ship por una release:
 
@@ -534,30 +559,211 @@ Ejemplo, con Review por GitHub y Ship por una release:
 /omi-work ship     → sí · release v0.2.0 verificada · Entrega verificada
 ```
 
-Un comentario ya corregido que la Review vuelve a ver en el HEAD nuevo se confirma con `/omi-work fix` («Ya corregidos»), sin gastar otra ronda. Land no avanza con hallazgos pendientes ni operaciones inciertas. Un merge no es una entrega: Ship la verifica después. Ship `not-applicable` termina sin entrega y `manual` queda como entrega declarada, nunca como Entrega verificada.
+Un comentario ya corregido que la Review vuelve a ver en el HEAD nuevo se confirma con `/omi-work fix` («Ya corregidos»), sin gastar otra ronda. Con continuidad, confirmarlos es progreso. Si quedan hallazgos nuevos, la cadena sigue con una ronda sólo para ellos, con su propio sí «Corregir N hallazgo(s)»; sin rondas, pausa por rondas. Con `corrections.mode: auto`, la cadena no abre «Ya corregidos»: con rondas, entran en la ronda nueva; sin rondas, pausa por rondas sin pedir «Continuidad · Corregir» y `/omi-work fix` los confirma a mano. Si `/omi-work fix` los confirma todos y esta sesión ya observó la Review de ese HEAD, la cadena sigue con Land sin repetirla. Si confirma una parte, `continuity.fix` está en `auto` o `ask` y esta sesión observó la Review de ese HEAD, el aviso dice que la continuidad sigue con la corrección de los que quedan. Si no (con `fix: manual`, o con la sesión recargada o reabierta), dice que hace falta otro `/omi-work fix`, igual que la pausa. Land no avanza con hallazgos pendientes ni operaciones inciertas. Un merge no es una entrega: Ship la verifica después. Ship `not-applicable` termina sin entrega y `manual` queda como entrega declarada, nunca como Entrega verificada.
 
-Límites de este corte: no se adopta un stack de PRs; un comentario de GitHub sin texto no cuenta como hallazgo; Ship OMI sólo observa (`observe`): publicar o desplegar desde acá no está conectado; los probes health/version de un destino GHA no tienen verificador conectado y quedan como desconocidos; la recuperación (stop, rollback, fix-forward) la decide una persona fuera de estos comandos. Una actividad que quedó abierta en otro proceso bloquea efectos nuevos hasta reconciliarla.
+Límites de este corte: no se adopta un stack de PRs (con la entrada encadenada el trabajo va en un solo PR; ver [Stack de PRs](#stack-de-prs)); un comentario de GitHub sin texto no cuenta como hallazgo; Ship OMI sólo observa (`observe`): publicar o desplegar desde acá no está conectado; los probes health/version de un destino GHA no tienen verificador conectado y quedan como desconocidos; la recuperación (stop, rollback, fix-forward) la decide una persona fuera de estos comandos. Una actividad que quedó abierta en otro proceso bloquea efectos nuevos hasta reconciliarla.
+
+### Seguridad en riesgo alto
+
+Un cambio de riesgo alto llega a Land sólo con `land.maxRisk: high`. Ahí, si el lente de Seguridad no tiene `pass` sobre el contenido que se mergea, el merge pide el sí de la persona aunque `land.mode` diga `auto`. Cuenta como sin `pass` un `unknown`, uno sin resultado, un lente sin correr o un `pass` de un contenido anterior. Riesgo alto es el de la receta o el del testigo de Land.
+
+- No bloquea: Verificar, el PR draft y listo para merge siguen igual. Sólo saca el auto-Land; una decisión por política se rechaza antes del merge.
+- Lo dice primero: la confirmación del merge y el resumen de listo para merge empiezan con «Seguridad sin veredicto en un cambio de riesgo alto: el merge pide tu sí». Con un `fail`, dice «Seguridad en fail…».
+- `omi_pr_merge` no lo muestra. Corre fuera del harness y sólo lee el PR en GitHub, no el estado local del trabajo. Igual pide siempre el sí de la persona.
+
+Ejemplo: riesgo alto, Seguridad `unknown · sin resultado` por un corte de conexión y `land.mode: auto`. `/omi-work land` marca el PR listo y pregunta «Mergear el PR #42» con ese aviso en la primera línea; sin el sí, no mergea.
+
+### Continuidad opt-in: entrada y avance por etapa
+
+El bloque opcional `continuity` del lifecycle configura **cuándo continuar**, no **qué efectos están autorizados**. Omitirlo conserva la parada en draft y los comandos manuales anteriores, sin cambiar hashes legacy. Si se agrega, sus cinco campos son obligatorios:
+
+```json
+"continuity": {
+  "entry": "ask",
+  "review": "auto",
+  "fix": "auto",
+  "land": "manual",
+  "ship": "manual"
+}
+```
+
+- `entry` controla la adopción del draft recién publicado y confirmado por este trabajo. No adopta drafts históricos al cargar. `/omi-work adopt` sigue disponible y exige confirmación humana. Con `entry: ask` hay un único sí: el de la adopción, «Habilitar Review, Land y Ship en el PR #8». Muestra el PR, la rama, el HEAD y la configuración que se fija (Review, Land, presupuesto y continuidad), y va antes de leer GitHub. Si la configuración cambia mientras espera, no se adopta.
+- `review`, `fix`, `land` y `ship` controlan el siguiente paso de la cadena. `auto` lo intenta si los guardrails permiten; `ask` pide continuar; `manual` espera el comando correspondiente. El sí para continuar no reemplaza el permiso del efecto: por ejemplo, `continuity.review:auto` con `review.mode:ask` sigue preguntando antes de Review.
+- La cadena sólo parte de publicación confirmada, comandos lifecycle explícitos o la verificación de una corrección. No hay timers ni efectos por restore, reload o cambio de sesión. Una confirmación o evaluación tardía del contexto anterior se descarta. Un cambio del pin de entrada no hereda el sí dado a otra configuración.
+
+Con `ask` hay un solo sí de continuidad por etapa. Si el primer efecto de la etapa ya pide un sí humano, ese diálogo lo lleva: agrega «Continuidad en ask: al aceptar, la cadena sigue con …» y el mismo sí autoriza ese efecto y la continuidad. Si el primer efecto corre solo, porque su permiso está en `auto`, la continuidad se pregunta aparte y antes, por ejemplo «Continuidad · Review del PR #8». Nunca se saltea el sí de un efecto: los siguientes de la etapa piden el suyo, como el merge después de «listo para review». En Land con `land.mode: auto`, OMI lee antes en GitHub si el PR sigue en draft. Si una persona ya lo sacó de draft, el primer efecto es el merge: en `chichex/omi-code` la continuidad viaja en su diálogo. `auto` sigue sin conceder permisos. Si la predicción falla (por ejemplo, el pin fresco de la etapa dejó el efecto en `auto`), la continuidad se pregunta antes de ese efecto. Un no a cualquiera de esos diálogos pausa la cadena como rechazo y no ejecuta nada.
+
+Ejemplo en `chichex/omi-code`, con todo en `ask`, Review por GitHub, el PR en draft y Ship que no aplica:
+
+```text
+/omi-work adopt → sí · Habilitar Review, Land y Ship en el PR #8
+Review          → sí · Review del PR #8 (también sigue la cadena)
+Land            → sí · Marcar el PR #8 listo para review (también sigue la cadena)
+                → sí · Mergear el PR #8
+Ship            → sí · Continuidad · Ship del PR #8
+```
+
+El push de una corrección verificada no es otra ronda y el diálogo lo dice. Con `push_pr: auto` de Foundations se pregunta «Continuidad · Publicar la corrección (push) en el PR #8». Con `push_pr: ask`, el diálogo «Push de la corrección al PR #8» lleva la continuidad.
+
+Con `continuity.fix:auto` y `corrections.mode:auto`, los hallazgos actuales pasan por un evaluador aislado, sin tools ni conversación del implementador. Contrasta cada hallazgo con la receta aprobada y el diff íntegro; sólo habilita código si acredita alcance y riesgo bajo del grupo actual. Un texto remoto, la severidad o el riesgo declarado en la receta no bastan. Ambigüedad, fuera de alcance, human-required, respuesta inválida/error/cancelación o contexto insuficiente pausan sin abrir una ronda. La evaluación queda ligada a receta, pin, sujeto, grupo y material observado; no concede push, merge ni entrega.
+
+Una ronda autorizada cede al agente para completar rojo→verde, commit y todos los D. Tras `verified`, el host verifica el nuevo HEAD, pide o aplica **por separado** `push_pr` de Foundations y vuelve a Review del SHA nuevo en el mismo PR. `corrections.mode:auto` nunca concede permiso de push. Los presupuestos son los existentes: por defecto 2 rondas, 12 intentos y 7200 segundos activos; agotarlos no crea otro presupuesto ni permite reintentos inciertos. El trabajo de código de una ronda ya reservada puede terminar sin reservar otro intento; publicar sigue necesitando su propia reserva.
+
+La continuidad se detiene por manual, rechazo/cancelación, bloqueo, presupuesto, falta de hechos vigentes, fallo confirmado o resultado incierto. Para retomar se usa el comando explícito después de resolver la causa. No se vuelve a preguntar automáticamente al restaurar.
+
+El motivo de la pausa se guarda en el estado del trabajo como un código cerrado, con la etapa y el sujeto (el HEAD) en que se tomó. Otras transiciones del trabajo no lo pisan. Se muestra en español, con el próximo paso: en el panel de progreso como aviso, una sola vez en `/omi-work status` y en el contexto del agente. Por ejemplo:
+
+```text
+Continuidad en pausa · Review está en manual: corré /omi-work review
+Continuidad en pausa · Hay una operación con resultado incierto: no se repite sola; revisá en GitHub
+Continuidad en pausa · La configuración vigente ya no tiene continuidad: seguí a mano con /omi-work land
+Continuidad en pausa · La Review del HEAD actual no se observó en esta sesión: corré /omi-work land; relee GitHub y no repite la Review
+```
+
+La Review observada vive en la sesión que la ingirió. Restaurar, recargar o reabrir la sesión no la recrea: la cadena no encadena Land con una Review que no vio. El próximo paso sale de los hallazgos ya registrados y no gasta otro intento ni otro dispatch: sin pendientes, `/omi-work land`, que relee GitHub y exige la Review confirmada del HEAD; con pendientes, `/omi-work fix`; con uno que necesita una persona, la pausa lo dice.
+
+Un rechazo o un error del efecto lleva un código genérico y su texto como detalle. Si el pin fresco quita la continuidad a mitad de cadena, el motivo lo dice, en vez de «manual». El motivo deja de mostrarse si cambió el sujeto o empezó otra operación después de la pausa. Se borra al empezar una corrida nueva de la cadena, al correr un comando `/omi-work adopt | review | fix | land | ship` y al adoptar el PR. Deshabilitar la continuidad o cambiar sus modos sólo controla acciones futuras: no revierte pushes, merges ni entregas remotas ya observadas. Las capacidades desconectadas siguen desconectadas.
+
+## Setup de lo que falta
+
+OMI detecta solo lo que falta configurar y lo corre en orden: primero el [panel de Foundations](#foundations-comandos-y-permisos-por-repo), después el [wizard del lifecycle](#onboarding-del-lifecycle). `/omi-setup`, «Configurar lo que falta» en la paleta (Ctrl K) o **s** en la [pestaña OMI](#pestaña-omi) lo corren a pedido.
+
+| Área | Se ofrece si | No se ofrece |
+|---|---|---|
+| Foundations | No hay ninguna v2 aceptada, ni en la KB ni la última local: ausente, bloque inválido, o registro/bloque del formato anterior | Hay una v2 vigente; la KB está caída u offline («no disponible»); el repo no tiene producto en la KB («no aplica») |
+| Lifecycle | Sin configurar, aceptado sin Ship, revisión pendiente de aceptar, sin continuidad o con una Review GHA disponible | Aceptado sin recomendaciones; inválido (pide revisión humana); KB no disponible |
+| Proyecto OMI | Nunca: `omi init` vincula el repo y crea recursos en OMI. Sólo se informa | — |
+
+Se dispara solo, sin apretar nada:
+
+- **Al entrar al harness.** Reemplaza la oferta anterior del lifecycle.
+- **Al abrir una sesión interactiva nueva** (arranque u `/new`, sin mensajes) en un repo de GitHub con la KB disponible. Espera la lectura de la KB en segundo plano y no interrumpe un turno que ya empezó. Si la charla empezó mientras leía, ya no es una sesión nueva y no abre nada. Un arranque con prompt (`omi "arreglá los 2 bugs"`) empieza con ese turno, no con el setup. Si la persona ya está escribiendo en el editor, el setup no se abre, porque toma el foco y las teclas caerían en sus opciones. Sólo avisa: «Falta configurar Foundations y el lifecycle. No abrí el setup porque estabas escribiendo. Cuando quieras: /omi-setup.»
+- **Al publicar el PR draft**, si el lifecycle falta, está pendiente o no tiene continuidad: sólo el wizard del lifecycle, nunca Foundations. Guardar no adopta el draft ya publicado: OMI avisa que para seguir con ese PR hay que usar `/omi-work adopt`. Una entrada `auto` o `ask` vale desde la próxima publicación. Si se publicó un stack, el aviso no manda a adopt, porque el lifecycle no adopta stacks: «Guardar no adoptó el stack. Este trabajo se publicó como stack de 2 PRs y el lifecycle no adopta stacks. Mergealos en orden con su sí.»
+
+Nunca offline, sin UI (print o RPC), con la KB no disponible, ni al restaurar, recargar (`/reload`), retomar (resume) o bifurcar (fork) una sesión. Una sesión que ya tiene mensajes no es nueva. Se ofrece una vez por revisión y sesión.
+
+Corre un setup a la vez. Si la persona lanza `/omi-setup` mientras la oferta de una sesión nueva todavía lee la KB, manda el comando y la oferta no abre nada. Si el setup ya está abierto, `/omi-setup` no abre otro: «Ya hay un setup abierto. Terminalo o cerralo con Esc, y volvé con /omi-setup. No se cambió nada.»
+
+El wizard del lifecycle necesita la rama base de `origin/HEAD`. Sin ella, el disparo automático lo omite sin avisar, y `/omi-setup` dice cómo resolverlo: «corré git remote set-head origin --auto y volvé con /omi-setup».
+
+Cada parte tiene **Más adelante**, que se guarda por revisión: Foundations en su registro local y el lifecycle en su aceptación. No se vuelve a ofrecer solo hasta que esa revisión cambie; `/omi-setup` corre también lo postergado. Un bloque de Foundations inválido es otra revisión si cambia su texto, aunque el motivo sea el mismo; editar otra parte de las perillas no la cambia. **Esc** corta el setup: no guarda nada de lo que faltaba. Guardar escribe sólo la KB y la aceptación local: no ejecuta comandos, workflows, merge ni deploy.
+
+Cada ítem tiene un estado: `ok`, `falta`, `formato anterior`, `pendiente` (una revisión sin aceptar), `recomendado` (△, por ejemplo una Review por GitHub Actions disponible: el setup la propone), `opcional` (·, sólo informa: el proyecto OMI sin vincular), `inválido`, `no disponible`, `postergado` o `no aplica`. Sin nada para correr, `/omi-setup` muestra el diagnóstico. Ejemplo, sin login en la KB:
+
+```text
+Configuración de OMI:
+? Foundations · no disponible: No se pudo leer Foundations: la KB no conectó a tiempo (sin login en /mcp, sin red o lenta).
+  Revisá el login de la KB en /mcp o la red, y volvé con /omi-setup.
+? Lifecycle · no disponible: No se pudo leer el lifecycle: la KB no conectó a tiempo (sin login en /mcp, sin red o lenta).
+  Revisá el login de la KB en /mcp o la red.
+· Proyecto OMI · opcional: Sin proyecto OMI vinculado: Ship no propone destinos OMI.
+  omi init en una terminal lo vincula y crea recursos en OMI: no se corre solo.
+Nada para configurar desde acá.
+```
+
+El diagnóstico es puro (`src/harness/config-doctor.ts`): usa la lectura de Foundations que la sesión ya hizo, sin otra llamada a la KB. Los slugs de `.omi/project.json` vienen del repo y los motivos, de la KB: sus controles e invisibles se muestran como `\uXXXX`, nunca como secuencias del terminal. Por ejemplo, un `organizationSlug` con `ESC ]52` se ve `acme\u001b]52;…` y no escribe el portapapeles. `/omi-setup` relee la KB y, al publicar, el lifecycle se relee para no ofrecer sobre una lectura vieja. Un lifecycle aceptado con Ship sin configurar no es «sin lifecycle»: Review y Land corren, y el ítem dice «Lifecycle aceptado sin Ship: Review y Land corren, pero la entrega no se verifica».
+
+En la TUI, lo que falta se resuelve con `/omi-setup`, no con un comando de terminal. Lo dicen publicar sin lifecycle, `/omi-work adopt` con la configuración ausente o pendiente, `/omi-work ship` sin Ship, la línea de Ship de `/omi-work status` y las pausas de la continuidad `config-required` y `ship-unconfigured`. La pausa `ship-manual` no manda a `/omi-setup`: con Ship manual, la entrega se declara con `/omi-work ship`. Con la KB caída, el texto manda a `/mcp` o la red; con un bloque inválido, a revisar la KB o a `omi init --development` en una terminal, porque el setup no lo corre. Por ejemplo:
+
+```text
+Lifecycle sin configurar para acme/app: configuralo con /omi-setup. No se inició ningún efecto.
+Lifecycle con cambios sin aceptar para acme/app: aceptalo con /omi-setup. No se inició ningún efecto.
+Continuidad en pausa · Ship no está configurado: configuralo con /omi-setup y después corré /omi-work ship
+Continuidad en pausa · Ship es manual y OMI no verifica la entrega: declarala con /omi-work ship
+```
+
+El agente ve lo mismo en su contexto, mientras falte algo que el setup corre, también lo postergado: «Falta configurar en este repo: Sin lifecycle: el trabajo termina en el PR draft, sin Review, Land ni Ship. Lo configura la persona con /omi-setup…». Sale del diagnóstico que ya tiene la pestaña OMI, sin leer la KB en el turno; sin la TUI interactiva no hay diagnóstico y la línea no está. El proyecto OMI sin vincular, la KB caída y un bloque inválido no aparecen.
 
 ## Onboarding del lifecycle
 
 Al abrir la sesión, un detector lee en segundo plano los workflows, scripts, manifiestos y el vínculo `.omi/project.json` del checkout. Sólo lee: no ejecuta scripts ni copia comandos, URLs o secretos.
 
-Al entrar al harness, si el repo no tiene lifecycle configurado en la KB, OMI ofrece el mismo wizard que `omi init --development`. No aparece en consultas simples ni en needs-info, que siguen en el chat. Se ofrece una vez por revisión de la configuración y sesión.
+El detector marca un workflow como Review `omi-review-v1` sólo si tiene todos los marcadores que exige el runtime: los inputs `expected_head_sha` y `correlation_id` bajo `on.workflow_dispatch.inputs` (un `workflow_dispatch` comentado o una clave con ese nombre en un step no cuentan), un `run-name` con `omi-review-v1 PR #`, `inputs.pr` e `inputs.correlation_id`, y el artefacto `omi-review-v1-${{ inputs.correlation_id }}-${{ github.run_id }}-${{ github.run_attempt }}` con `review.json`. En este repo lo cumple `claude-review.yml`. Es una propuesta: el runtime igual valida run, artefacto y SHA. Un workflow de Review nunca se propone como destino de Ship.
 
-- **Configurar ahora**: propone destino, verificación y recuperación con lo detectado; muestra el resumen y guarda sólo con un sí.
-- **Más adelante**: posterga esa revisión; no se vuelve a ofrecer hasta que cambie.
-- **Esc**: cancela sin escribir, aceptar ni desactivar nada.
+El [setup](#setup-de-lo-que-falta) ofrece el mismo wizard que `omi init --development` si el repo no tiene lifecycle en la KB, si tiene Ship sin configurar, si la revisión está pendiente de aceptar o si hay **recomendaciones**:
+
+- `continuity` ausente: «Continuidad sin configurar: el trabajo para en el PR draft».
+- Un workflow `omi-review-v1` detectado mientras la Review es local (o no hay config): propone pasarla a GitHub Actions.
+
+No aparece en consultas simples ni en needs-info, que siguen en el chat. Se ofrece una vez por revisión de la configuración y sesión.
+
+El wizard pregunta, en orden:
+
+1. **Ship.** Con una config válida, **Mantener Ship actual** va primero y conserva los destinos tal cual (rollback, probes, timeouts), sin reingresarlos. **Configurar ahora** propone destino, verificación y recuperación con lo detectado. **Más adelante** posterga esa revisión: no se vuelve a ofrecer hasta que cambie. **Este repo no necesita Ship** lo guarda como no-aplica.
+2. **Review.** Opciones: «Mantener <actual>», «GitHub Actions · <workflow> (omi-review-v1)» por cada workflow detectado y «Revisor local». GitHub Actions va primero (recomendada) si hoy revisa el local o no hay config; si no, mantener va primero. Sin alternativa real (por ejemplo, revisor local y nada detectado) no pregunta. Elegir GitHub Actions guarda la identidad del esquema y suma una sola pregunta de modelo: **Default del workflow** (recomendada: no fija `model`) o **Sonnet** (`model: claude-sonnet-5-5`). La pregunta sale sólo si el `workflow_dispatch` declara el input `model` y acepta Sonnet (un `string`, o un `choice` con ese valor): fijar un input que el workflow no declara hace fallar el dispatch. Un workflow que exige `model` o `effort` sin `default` no se propone: el wizard puede no fijarlos y GitHub rechazaría el dispatch. Si ya había un `effort` para ese workflow, se conserva sólo si el workflow lo declara y acepta ese valor. Cambiar el proveedor no cambia `review.mode`.
+3. **Continuidad**, como en [Continuidad opt-in](#continuidad-opt-in-entrada-y-avance-por-etapa).
+4. **Resumen** con el diff por campo, una línea `Review: …` con el modelo efectivo y las recomendaciones sin tomar. Guarda sólo con un sí.
+
+```json
+"provider": { "kind": "gha", "workflow": "claude-review.yml", "ref": "main", "contract": "omi-review-v1", "model": "claude-sonnet-5-5" }
+```
+
+`ref` es la base de Land, la rama de donde el runtime toma el workflow. El detector lee el checkout, así que la opción lo avisa: el workflow tiene que estar en esa rama, no sólo en la del trabajo. `model` y `effort` son opcionales y aceptan los valores del workflow (`claude-opus-5-5`, `claude-sonnet-5-5`, `claude-fable-5-1`, `claude-haiku-4-5`; `low` a `max`). Omitirlos no cambia el hash de una config existente. En `chichex/omi-code` el dispatch sigue pidiendo un sí, aunque `review.mode` sea `auto`.
+
+Guardar sin tomar una recomendación también posterga esa revisión: el harness no insiste. `omi init --development` y `/omi-setup` preguntan siempre. **Esc** cancela sin escribir, aceptar ni desactivar nada.
 
 ## `omi init --development`
 
-Configura Review, Land y Ship del repo en las perillas del producto en la KB, con el mismo wizard de la TUI. Necesita una persona en una terminal interactiva; ningún flag acepta por ella.
+Configura Review, Land y Ship del repo y su continuidad opcional en las perillas del producto en la KB, con el mismo wizard de la TUI. Necesita una persona en una terminal interactiva; ningún flag acepta por ella.
 
 ```sh
-omi init --development                 # wizard: destino, verificación, recuperación, resumen y un sí
+omi init --development                 # wizard: Ship, Review, continuidad, resumen y un sí
 omi init --development --check --json  # diagnóstico de sólo lectura
 ```
 
-`--check` informa el estado (`unconfigured`, `pending`, `configured`, `manual`, `not-applicable`, `invalid` o `unavailable`), si se pueden iniciar efectos y lo detectado. Una KB caída es `unavailable`, nunca «sin configurar». Guardar no ejecuta workflows, merge ni deploy.
+`--check` informa el estado (`unconfigured`, `pending`, `configured`, `manual`, `not-applicable`, `invalid` o `unavailable`), si se pueden iniciar efectos, lo detectado (cada workflow con su `contract`: `omi-review-v1` o `null`; uno de Review trae en `tuning` los `model` y `effort` que acepta y, en `required`, los que exige sin default) y las recomendaciones. Ejemplo: `"recommendations": [{ "kind": "continuity", "message": "Continuidad sin configurar: el trabajo para en el PR draft" }]`. Sin `--json`, cada una sale como `Recomendación: …`. Una KB caída es `unavailable`, nunca «sin configurar». Guardar no ejecuta workflows, merge ni deploy.
+
+## Pestaña OMI
+
+La pestaña **5 · OMI** (Ctrl 5 o `/omi-platform`) muestra toda la configuración a la vista, en vertical, sin apretar nada. Pedido del dueño (2026-11-23). Las secciones, en orden:
+
+| Sección | Qué muestra |
+|---|---|
+| Proyecto OMI | El vínculo `.omi/project.json`, servicios y ambientes, como antes |
+| Foundations | Origen y revisión; cada política en su línea con lo que hace en `ask` o `auto`; todos los patrones de confirmación, uno por línea; el aviso de la sesión y el motivo, por ejemplo el formato anterior o la KB caída |
+| Lifecycle | Estado (`configurado`, `pendiente de aceptar`, `sin configurar`, `no disponible`, `inválido`, más `postergado`; aceptado sin Ship es `configurado · … · Ship sin configurar`); Review con proveedor (revisor local, reviews de GitHub o `workflow@ref` con modelo) y espera; correcciones con modo y rondas; Land con modo, base, método, riesgo máximo y checks requeridos; Ship con estado y cada destino campo por campo: proveedor, modo, qué hace si falla y con qué modo (`si falla: rollback (auto)`), espera, reintentos, workflow de rollback y lo que verifica (release con tag, assets y checksums, recibo, OMI, health y versión); presupuesto |
+| Continuidad | Las cinco palancas con lo que hace cada modo, o «Deshabilitada: el trabajo para en el PR draft» |
+| Falta configurar | El diagnóstico del [setup](#setup-de-lo-que-falta), cada ítem con cómo resolverlo, o «Todo configurado» |
+
+Teclas: **r** actualiza el proyecto OMI y relee la configuración de la KB; **s** corre `/omi-setup`; **f** abre el panel de Foundations; **Esc** vuelve al chat. Las flechas, PgUp/PgDn, Home y la rueda desplazan la vista.
+
+Un recorte a 80 columnas en `acme/app`, sin Foundations ni lifecycle (`…` marca lo omitido):
+
+```text
+ FOUNDATIONS · cuándo te pide confirmación el agente
+ Origen: por defecto (sin configurar: nada pregunta)
+ Se fija en esta sesión al empezar un trabajo.
+ Arranque: auto. Crea el issue, el worktree y la sesión sin preguntar, con el
+   texto del agente.
+ …
+ Patrones que requieren confirmación:
+   (sin configurar: nada pregunta)
+ Motivo: Sin Foundations para acme/app: rige el default, nada pregunta.
+
+ LIFECYCLE · Review · Land · Ship
+ Estado: sin configurar · el trabajo termina en el PR draft, sin Review, Land
+   ni Ship
+
+ CONTINUIDAD · cómo sigue después del PR draft
+ Deshabilitada: el trabajo para en el PR draft.
+
+ FALTA CONFIGURAR · hace 4s
+ ✗ Foundations · falta: Sin Foundations para acme/app: rige el default, nada
+   pregunta.
+   Con /omi-setup armás las reglas y políticas; sólo Guardar escribe.
+ …
+```
+
+De dónde salen los datos:
+
+- La pestaña vive en otra extensión: el harness calcula la configuración y la publica por `pi.events` (`omi:config`). La pestaña sólo la lee; dibujar no hace I/O.
+- Al abrir la sesión usa la lectura de Foundations que la sesión ya hizo: no suma llamadas a la KB. **r** relee la KB. Después de guardar desde el setup también se relee; después de guardar Foundations, se usa lo guardado.
+- Foundations muestra el pin de la sesión con «Vigente en esta sesión». Si todavía no se fijó, muestra lo que va a regir con «Se fija en esta sesión al empezar un trabajo»: la v2 de la KB, la última aceptada en esta máquina o el default. Si la KB ya tiene otra revisión, lo dice: vale desde la próxima sesión.
+- Con la KB caída, el lifecycle muestra la última aceptación local, rotulada «sólo para observar, no inicia efectos».
+- Sin datos lo dice con el motivo: sin sesión persistente, leyendo, o la lectura falló. Si falla una relectura, se ve la anterior con el error.
+- Sólo con la TUI interactiva; offline, **r** no consulta la KB.
+
+Las líneas largas se parten al ancho y conservan la sangría: nada se corta a 80 ni a 132 columnas.
 
 ## Progreso en la TUI
 
@@ -573,4 +779,4 @@ El panel sólo pertenece al cwd/worktree/rama correctos, se reinicia al cambiar 
 
 ## Verificación del cambio
 
-El arranque tiene sus propios tests, con Git, worktrees y sesiones reales y con GitHub y modelo falsos: pedido nuevo sin preguntar por defecto y con un solo sí con `arranque: ask`, issue existente sin duplicar, decir que no, token de un solo uso, guardas sin efectos y recarga sin kickoff. Los tests de pty real recorren el panel de issue existente y los tres resultados del pedido nuevo: harness, chat y falta de información. El del panel: Enter en Issues, el sí, Esc en la clasificación y el harness arrancado en el worktree. El del agente: un pedido en el chat, la tool, un turno que termina sin seguir, clasificar antes de crear el issue y antes del sí, reutilizar ese resultado y arrancar el harness en el worktree sólo después de confirmar. Los otros dos resultados continúan en el chat original sin recursos, con las tools normales y sin permisos nuevos. Los lentes tienen tests con Git real: la evidencia que reciben, los avisos que no frenan el PR draft, el bloqueo por un fail de Seguridad y un diff de más de 200.000 caracteres revisado por partes sin truncar, y ninguna llamada por encima del presupuesto, con la evidencia resumida y explícita cuando no entra. Los tests del flujo cubren las tres rutas con Git y comandos reales en repos temporales, modelos/GitHub falsos, consentimientos, invalidación, evidencia, recuperación, concurrencia, cancelación y panel estrecho/claro/oscuro. El cuerpo del PR draft tiene cobertura de su formato, de un único `Closes` fuera de bloques con datos hostiles (cierres falsos, menciones, HTML, `</details>`, marcadores, controles), de los presupuestos con aviso, del cuerpo exacto que recibe `gh` y se muestra antes del sí, y del recibo pendiente de un cuerpo anterior con `ask` y con `auto`. La sección del issue tiene cobertura del pedido byte a byte, marcadores rotos, contraste que la ignora, escape de contenido hostil (sin links, imágenes, autolinks, HTML ni menciones activos) y escrituras no confirmadas. El stack tiene tests del reducer (agrupación, plan de ramas y bases, PRs abiertos, actualización sin cambiar la identidad), de la publicación contra un GitHub falso (orden, bases, `Refs`/`Closes`, recuperación sin duplicar y validaciones por PR), de la actualización con Git real contra un remoto bare local (merge del de abajo, squash a `main` sin conflicto, re-apuntar, segunda corrida sin cambios, conflicto, PR cerrado y rama reescrita) y un recorrido completo con dos PRs encadenados. Los acuerdos del chat, de citas aceptadas y rechazadas (modelo, tools, mensajes de OMI, inventadas y triviales). Las preguntas en tanda tienen tests del componente (lo que dibuja y cada tecla, también respuesta libre, elección múltiple, pestañas y cancelar), del contrato de `omi_ask` (esquema, sin UI, cancelar, opción frente a texto libre y el harness) y un PTY real que abre una tanda dentro del workspace, con resize y Esc. El panel de Foundations tiene tests de precarga v2 frente a aceptación, borradores/errores, pegado largo e invisible, foco, wrap/scroll, cancelar, revisión, temas y resize 80×24/132×40. Su integración usa Git temporal y KB falsa: apertura sin escrituras, reemplazo v1 acotado, edición sin ejecución/grant y reintento explícito. Los tests de persistencia cubren retry concurrente, límite de documento, aceptación pendiente frente a pin nuevo y fallos parciales sin permisos falsos. Los del arranque verifican que sin Foundations no se ofrece ni se pregunta nada. Foundations tiene tests con un MCP falso por HTTP y el `createMcpExtension` real de Pi, que fallan si un bump de Pi cambia cómo se registran o ejecutan las tools MCP o cómo se reemplaza `builtin:mcp`; y cuentan los avisos de aceptación, reutilización de permisos, cambio de etiqueta, `resume`, `replan`, rechazo, KB caída y bloque inválido o ajeno. La aprobación tiene cobertura específica de documento íntegro, comandos largos/multilínea y caracteres de control, navegación/resize/temas, decisiones negativas y revalidación durante la revisión. Una prueba con Pi en PTY real recorre 80×24, resize a 132×40 y vuelta, temas claro/oscuro, navegación hasta el final del comando, cancelar y aprobar explícitamente con GitHub falso; no es una evaluación visual humana. El empaquetado comprueba el binario instalado. No equivalen a una prueba contra GitHub/OMI real ni a una evaluación de calidad de modelos: esas pruebas requieren una persona.
+El arranque tiene sus propios tests, con Git, worktrees y sesiones reales y con GitHub y modelo falsos: pedido nuevo sin preguntar por defecto y con un solo sí con `arranque: ask`, issue existente sin duplicar, decir que no, token de un solo uso, guardas sin efectos y recarga sin kickoff. Los tests de pty real recorren el panel de issue existente y los tres resultados del pedido nuevo: harness, chat y falta de información. El del panel: Enter en Issues, el sí, Esc en la clasificación y el harness arrancado en el worktree. El del agente: un pedido en el chat, la tool, un turno que termina sin seguir, clasificar antes de crear el issue y antes del sí, reutilizar ese resultado y arrancar el harness en el worktree sólo después de confirmar. Los otros dos resultados continúan en el chat original sin recursos, con las tools normales y sin permisos nuevos. Los lentes tienen tests con Git real: la evidencia que reciben, los avisos que no frenan el PR draft, el bloqueo por un fail de Seguridad y un diff de más de 200.000 caracteres revisado por partes sin truncar, y ninguna llamada por encima del presupuesto, con la evidencia resumida y explícita cuando no entra. Land tiene tests de Seguridad en riesgo alto: `unknown`, sin resultado, sin correr o de otro contenido sacan el auto-Land con el motivo primero, rechazan una decisión por política y aparecen en la primera línea de la confirmación del merge; un `pass` del contenido o el riesgo bajo no cambian nada. El reintento tiene tests con un modelo falso con guion: un transitorio y después un resultado da pass con el uso sumado; tres errores dan `unknown` sin resultado con la causa y sin el error crudo; cuota, autenticación, un `unknown` juzgado y el abort de la persona (durante la llamada o el backoff) no se reintentan; un cuelgue se corta por el plazo, aunque el proveedor ignore el abort; y el refuter no recibe lo que quedó sin resultado. Los tests del flujo cubren las tres rutas con Git y comandos reales en repos temporales, modelos/GitHub falsos, consentimientos, invalidación, evidencia, recuperación, concurrencia, cancelación y panel estrecho/claro/oscuro. El cuerpo del PR draft tiene cobertura de su formato, de un único `Closes` fuera de bloques con datos hostiles (cierres falsos, menciones, HTML, `</details>`, marcadores, controles), de los presupuestos con aviso, del cuerpo exacto que recibe `gh` y se muestra antes del sí, y del recibo pendiente de un cuerpo anterior con `ask` y con `auto`. La sección del issue tiene cobertura del pedido byte a byte, marcadores rotos, contraste que la ignora, escape de contenido hostil (sin links, imágenes, autolinks, HTML ni menciones activos) y escrituras no confirmadas. El stack tiene tests del reducer (agrupación, plan de ramas y bases, PRs abiertos, actualización sin cambiar la identidad), de la publicación contra un GitHub falso (orden, bases, `Refs`/`Closes`, recuperación sin duplicar y validaciones por PR), de la actualización con Git real contra un remoto bare local (merge del de abajo, squash a `main` sin conflicto, re-apuntar, segunda corrida sin cambios, conflicto, PR cerrado y rama reescrita) y un recorrido completo con dos PRs encadenados. Los acuerdos del chat, de citas aceptadas y rechazadas (modelo, tools, mensajes de OMI, inventadas y triviales). Las preguntas en tanda tienen tests del componente (lo que dibuja y cada tecla, también respuesta libre, elección múltiple, pestañas y cancelar), del contrato de `omi_ask` (esquema, sin UI, cancelar, opción frente a texto libre y el harness) y un PTY real que abre una tanda dentro del workspace, con resize y Esc. El panel de Foundations tiene tests de precarga v2 frente a aceptación, borradores/errores, pegado largo e invisible, foco, wrap/scroll, cancelar, revisión, temas y resize 80×24/132×40. Su integración usa Git temporal y KB falsa: apertura sin escrituras, reemplazo v1 acotado, edición sin ejecución/grant y reintento explícito. Los tests de persistencia cubren retry concurrente, límite de documento, aceptación pendiente frente a pin nuevo y fallos parciales sin permisos falsos. Los del setup verifican que al arrancar el harness o una sesión nueva sin Foundations se ofrece una vez, que no se abre con texto en el editor, con un prompt de arranque ni en una charla que empezó durante la lectura, que **Más adelante** persiste por revisión y Esc no escribe, que el formato anterior se avisa como tal, que publicar sin continuidad ofrece el wizard sin adoptar el draft, que la oferta de una sesión nueva y `/omi-setup` no abren dos setups a la vez, y que no se ofrece en resume, reload, fork, offline, sin UI ni con la KB caída. El diagnóstico tiene tests de un lifecycle aceptado sin Ship, que no se confunde con uno ausente, y de controles de terminal en `.omi/project.json` y en los motivos de la KB, que llegan escapados a `/omi-setup`. La integración de áreas tiene tests de los textos que mandan a `/omi-setup` (publicar sin lifecycle, `/omi-work adopt` y `/omi-work status`) y de la guía al agente: la línea está mientras falta algo y se va al configurarlo. La [pestaña OMI](#pestaña-omi) tiene tests del presenter a 132, 80 y 40 columnas (cada sección, los estados del lifecycle, el formato anterior, sin datos y sin cortes) y del harness que la publica: al abrir la sesión, con **r**, después de `/omi-setup`, sin UI y offline. Son de renderer, no una evaluación visual humana. Foundations tiene tests con un MCP falso por HTTP y el `createMcpExtension` real de Pi, que fallan si un bump de Pi cambia cómo se registran o ejecutan las tools MCP o cómo se reemplaza `builtin:mcp`; y cuentan los avisos de aceptación, reutilización de permisos, cambio de etiqueta, `resume`, `replan`, rechazo, KB caída y bloque inválido o ajeno. La aprobación tiene cobertura específica de documento íntegro, comandos largos/multilínea y caracteres de control, navegación/resize/temas, decisiones negativas y revalidación durante la revisión. Una prueba con Pi en PTY real recorre 80×24, resize a 132×40 y vuelta, temas claro/oscuro, navegación hasta el final del comando, cancelar y aprobar explícitamente con GitHub falso; no es una evaluación visual humana. El empaquetado comprueba el binario instalado. No equivalen a una prueba contra GitHub/OMI real ni a una evaluación de calidad de modelos: esas pruebas requieren una persona.

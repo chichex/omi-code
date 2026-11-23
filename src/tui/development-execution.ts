@@ -6,18 +6,21 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isInside } from "../core/files.ts";
 import type { Evidence, EvidenceKind, Workflow } from "../harness/model.ts";
 import { commandAuthorization } from "../harness/authorization.ts";
+import { afterDraftCheckError } from "../harness/after-draft-guide.ts";
 import { expectedFailure, isApproved, recipeApprovalHash, successful } from "../harness/state.ts";
 import { inspectCheckout, assertStepCommit } from "../harness/git.ts";
 import { runWorkflowCommand, type WorkflowCommandResult } from "../harness/commands.ts";
 import { workflowWritePath } from "../harness/permissions.ts";
-import { assertCorrectionHead, assertCorrectionExecution } from "../harness/execution-scope.ts";
+import { afterDraft, assertCorrectionHead, assertCorrectionExecution } from "../harness/execution-scope.ts";
 import type { DevelopmentSession } from "./development-session.ts";
 import { authorizeProjectCommand } from "./development-command-authorization.ts";
 
 export interface CheckInput { kind: EvidenceKind | "setup"; command: string; stepId?: string; caseId?: string; timeoutSeconds?: number }
-/** En qué etapa corre cada etiqueta. Setup no acredita nada: prepara el checkout en cualquier etapa activa. */
+/** En qué etapa corre cada etiqueta. Setup no acredita nada: prepara el checkout en cualquier etapa activa hasta el PR
+ * draft; después, sólo durante una corrección en curso. */
 function assertCheckPhase(state: Workflow, kind: CheckInput["kind"]): void {
 	assertCorrectionExecution(state);
+	if (afterDraft(state)) throw new Error(afterDraftCheckError(state));
 	if (state.status === "paused" || state.status === "complete") throw new Error("El trabajo no está activo");
 	if (kind === "setup") return;
 	// Resolver inferencias admite volver a registrar explored: también puede volver a reproducir.

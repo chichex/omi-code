@@ -17,13 +17,22 @@ function requireCurrentGroup(s: EnabledLifecycle, round: CorrectionRound): void 
 function finish(state: WorkflowV2, activity: string, at: string): WorkflowV2 {
  state.revision++; state.activity = activity; state.history = [...state.history, { phase: state.phase, at, activity }].slice(-MAX_HISTORY); return parseWorkflow(JSON.stringify(state));
 }
-export function adoptPostPrWorkflow(original: unknown, pin: unknown, input: unknown, observedAdoption: unknown): WorkflowV2 {
+export function adoptPostPrWorkflow(original: unknown, pin: unknown, input: unknown, observedAdoption: unknown, publication?: { head: string; number: number; revision: number }): WorkflowV2 {
  const state = parseWorkflow(JSON.stringify(original)); lifecycleAssert(Value.Check(SubjectSchema, input) && Value.Check(AdoptionSchema, observedAdoption), "adopción/sujeto inválidos");
  lifecycleAssert(state.publication.status === "opened" && state.pullRequest?.ownership === "unadopted" && state.phase === "done" && state.status === "complete" && isApproved(state), "sólo un draft finalizado propio puede adoptarse");
+ if (observedAdoption.source === "publication" && state.lifecycle.status === "disabled" && publication) {
+  lifecycleAssert(publication.revision === state.revision && publication.head === state.pullRequest.head && publication.number === state.pullRequest.number, "la publicación fresca cambió; no se adopta");
+  const initialized = initializeLifecycle({ workflowId: state.id, issue: state.source.number, repo: input.repo }, pin);
+  const entry = initialized.pins[0]?.accepted.block.continuity?.entry;
+  lifecycleAssert(entry === "auto" || entry === "ask", "entrada de continuidad no habilitada explícitamente");
+  state.lifecycle = initialized;
+ }
  lifecycleAssert(observedAdoption.source === "person" || observedAdoption.source === "publication" && state.lifecycle.status === "enabled", "histórico exige adopción humana explícita; restaurar no adopta");
  lifecycleAssert(!input.mergedSha && input.number === state.pullRequest.number && input.headSha === state.pullRequest.head && input.branch === state.checkout.branch && input.base === state.pullRequest.base && lifecycleRef(input.branch), "ownership/HEAD/PR/base ajenos o ya mergeados");
  const lifecycle = state.lifecycle.status === "enabled" ? state.lifecycle : initializeLifecycle({ workflowId: state.id, issue: state.source.number, repo: input.repo }, pin);
  state.lifecycle = bindLifecycleSubject(lifecycle, input, observedAdoption); state.pullRequest = { ...state.pullRequest, ownership: "adopted" };
+ // Adoptar deja atrás el motivo de una pausa de entrada: lo que sigue es otra etapa.
+ delete state.continuityPause;
  state.phase = "review"; state.status = "active"; state.blockedReason = ""; return finish(state, "PR adoptado explícitamente para lifecycle", observedAdoption.at);
 }
 function current(original: unknown) {
