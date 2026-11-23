@@ -398,6 +398,7 @@ Frena y pide una persona si:
 - El merge con base fija necesita Git 2.40 o superior.
 - No hay lock con GitHub: otro puede escribir entre la lectura y el push. El push normal lo rechaza y se vuelve a correr.
 - La línea «sobre #N» del cuerpo queda como al abrir el PR. La base vigente la muestran GitHub y la sección del issue.
+- El lifecycle no adopta un stack. Si igual se publica uno con la entrada encadenada (por ejemplo, la configuración se aceptó después de la spec), la cadena pausa sin preguntar ni leer GitHub: «Continuidad en pausa · Este trabajo se publicó como stack de 2 PRs y el lifecycle no adopta stacks: mergealos en orden con su sí, o publicá un solo PR». `/omi-work adopt` falla con el mismo motivo.
 
 ## Si el modelo corta solo
 
@@ -536,7 +537,7 @@ Ejemplo, con Review por GitHub y Ship por una release:
 
 Un comentario ya corregido que la Review vuelve a ver en el HEAD nuevo se confirma con `/omi-work fix` («Ya corregidos»), sin gastar otra ronda. Con continuidad, confirmarlos es progreso. Si quedan hallazgos nuevos, la cadena sigue con una ronda sólo para ellos, con su propio sí «Corregir N hallazgo(s)»; sin rondas, pausa por rondas. Si `/omi-work fix` los confirma todos y esta sesión ya observó la Review de ese HEAD, la cadena sigue con Land sin repetirla. Land no avanza con hallazgos pendientes ni operaciones inciertas. Un merge no es una entrega: Ship la verifica después. Ship `not-applicable` termina sin entrega y `manual` queda como entrega declarada, nunca como Entrega verificada.
 
-Límites de este corte: no se adopta un stack de PRs; un comentario de GitHub sin texto no cuenta como hallazgo; Ship OMI sólo observa (`observe`): publicar o desplegar desde acá no está conectado; los probes health/version de un destino GHA no tienen verificador conectado y quedan como desconocidos; la recuperación (stop, rollback, fix-forward) la decide una persona fuera de estos comandos. Una actividad que quedó abierta en otro proceso bloquea efectos nuevos hasta reconciliarla.
+Límites de este corte: no se adopta un stack de PRs (ver [Stack de PRs](#stack-de-prs)); un comentario de GitHub sin texto no cuenta como hallazgo; Ship OMI sólo observa (`observe`): publicar o desplegar desde acá no está conectado; los probes health/version de un destino GHA no tienen verificador conectado y quedan como desconocidos; la recuperación (stop, rollback, fix-forward) la decide una persona fuera de estos comandos. Una actividad que quedó abierta en otro proceso bloquea efectos nuevos hasta reconciliarla.
 
 ### Continuidad opt-in: entrada y avance por etapa
 

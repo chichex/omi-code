@@ -206,6 +206,22 @@ test("the reserved coding correction yields without replay; PR continues fix, un
  pause(i, "operation-unsettled");
 });
 
+// S2.3 · Un stack publicado no entra a la cadena.
+const stackPull = (index: number, base: string) => ({ title: `Parte ${index}`, steps: [`C${index}`], branch: `feat/work-${index}`, base, head: String(index).repeat(40),
+ number: 80 + index, url: `https://github.com/${repo}/pull/${80 + index}`, status: "draft" as const });
+test("a published stack pauses entry as stack-unsupported without offering adopt, whatever entry asks", () => {
+ const i = input(), published = workflow(); i.workflow = published;
+ const single = published.publication;
+ i.workflow.publication = { ...single, stack: [stackPull(1, "main"), stackPull(2, "feat/work-1")] };
+ for (const entry of ["auto", "ask"] as const) {
+  const selected = select({ ...i, config: { ...config(), continuity: { ...allAuto, entry } }, trigger: "publication-confirmed" });
+  assert.deepEqual(selected, { kind: "pause", reason: "stack-unsupported", stage: "entry" }, `entry ${entry}`);
+ }
+ // Sin stack, la misma publicación sigue ofreciendo la adopción.
+ i.workflow.publication = single;
+ action({ ...i, trigger: "publication-confirmed" }, "adopt", "auto", "entry");
+});
+
 // S2.3 · «Ya corregidos» y Review no observada en la cadena.
 test("rounds exhausted: confirming already corrected findings is offered only while some are still pending", () => {
  const i = reviewed(); finding(i);

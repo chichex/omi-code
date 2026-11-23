@@ -8,7 +8,7 @@ import type { Workflow, WorkflowV2 } from "./model.ts";
 export const SELECTED_PAUSES = ["workflow-paused", "workflow-waiting", "workflow-blocked", "publication-required", "entry-trigger-required",
  "manual", "config-required", "subject-required", "lifecycle-paused", "operation-unsettled", "operation-failed", "budget-exhausted",
  "review-facts-required", "human-required", "rounds-exhausted", "correction-failed", "correction-facts-required", "ship-unconfigured",
- "activity-unsettled"] as const;
+ "activity-unsettled", "stack-unsupported"] as const;
 /** Los decide el host al ejecutar: un no, un error (su texto va como detalle) o la continuidad quitada a mitad de cadena. */
 export const HOST_PAUSES = ["declined", "not-adopted", "no-progress", "continuity-disabled", "error"] as const;
 export const CONTINUITY_PAUSES = [...SELECTED_PAUSES, ...HOST_PAUSES] as const;
@@ -25,6 +25,9 @@ export const ContinuityPauseSchema = Type.Object({
  lastOperationId: Type.Optional(text(256)),
  /** Texto libre de un rechazo o error del efecto. Acompaña al código; nunca lo reemplaza. */
  detail: Type.Optional(text(1000)),
+ /** Sólo con stack-unsupported: cuántos PRs del stack hay que mergear en orden. El tope es MAX_STACK de model.ts,
+  * que importa este módulo: no se importa de vuelta (un test los compara). */
+ stackPulls: Type.Optional(Type.Integer({ minimum: 2, maximum: 10 })),
  at: text(100),
 }, { additionalProperties: false });
 export type ContinuityPauseRecord = Static<typeof ContinuityPauseSchema>;
@@ -38,8 +41,9 @@ const lastOperation = (state: WorkflowV2): string | undefined => state.lifecycle
 
 export function continuityPauseRecord(state: WorkflowV2, cause: PauseCause, at: string): ContinuityPauseRecord {
  const subjectId = currentSubject(state), lastOperationId = lastOperation(state), detail = cause.detail?.trim().slice(0, 1000);
+ const stackPulls = cause.reason === "stack-unsupported" && state.publication.status === "opened" ? state.publication.stack?.length : undefined;
  return { reason: cause.reason, ...(cause.stage ? { stage: cause.stage } : {}), ...(subjectId ? { subjectId } : {}),
-  ...(lastOperationId ? { lastOperationId } : {}), ...(detail ? { detail } : {}), at };
+  ...(lastOperationId ? { lastOperationId } : {}), ...(detail ? { detail } : {}), ...(stackPulls ? { stackPulls } : {}), at };
 }
 /** Una pausa del trabajo deja de aplicar cuando el trabajo ya no está en esa condición (por ejemplo, al retomarlo). */
 function stillApplies(pause: ContinuityPauseRecord, state: WorkflowV2): boolean {

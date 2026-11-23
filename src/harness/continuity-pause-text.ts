@@ -8,6 +8,14 @@ const COMMANDS = { entry: "/omi-work adopt", review: "/omi-work review", fix: "/
 const NAMES = { entry: "la adopción del PR", review: "Review", fix: "la corrección", land: "Land", ship: "Ship" } satisfies Record<Stage, string>;
 const sentence = (value: string) => value.charAt(0).toUpperCase() + value.slice(1);
 export interface PauseGuide { message: string; next: string }
+/** El lifecycle adopta un solo PR. Sin el número (una pausa sin ese dato), no inventa uno. */
+function stackUnsupportedGuide(pulls?: number): PauseGuide {
+ return { message: `Este trabajo se publicó como stack de ${pulls === undefined ? "PRs" : `${pulls} PRs`} y el lifecycle no adopta stacks`, next: "mergealos en orden con su sí, o publicá un solo PR" };
+}
+/** La misma razón como error de /omi-work adopt: dos oraciones, con el próximo paso. */
+export function stackUnsupportedText(pulls: number): string {
+ const { message, next } = stackUnsupportedGuide(pulls); return `${message}. ${sentence(next)}.`;
+}
 /** Sin la Review observada en esta sesión, el próximo paso sale de los hallazgos ya registrados: Land o fix no repiten la Review. */
 function unobservedReviewGuide(stage?: Stage): PauseGuide {
  const message = "La Review del HEAD actual no se observó en esta sesión";
@@ -16,7 +24,8 @@ function unobservedReviewGuide(stage?: Stage): PauseGuide {
  return { message: "Falta la Review observada del HEAD actual", next: "corré /omi-work review" };
 }
 
-export function continuityPauseGuide(reason: ContinuityPause, stage?: Stage): PauseGuide {
+/** `stackPulls`: sólo lo usa stack-unsupported. */
+export function continuityPauseGuide(reason: ContinuityPause, stage?: Stage, stackPulls?: number): PauseGuide {
  const name = stage ? NAMES[stage] : "la etapa", command = stage ? COMMANDS[stage] : "el comando /omi-work de la etapa";
  switch (reason) {
   case "workflow-paused": return { message: "El trabajo está pausado", next: "retomalo con /omi-work resume" };
@@ -38,6 +47,7 @@ export function continuityPauseGuide(reason: ContinuityPause, stage?: Stage): Pa
   case "correction-facts-required": return { message: "Faltan los hechos de la corrección en curso", next: "revisá /omi-work status y seguí con /omi-work fix" };
   case "ship-unconfigured": return { message: "Ship no está configurado o es manual", next: "configuralo con /omi-setup o declaralo con /omi-work ship" };
   case "activity-unsettled": return { message: "Hay una actividad del lifecycle sin cerrar", next: "reconciliala antes de otro efecto; está en /omi-progress" };
+  case "stack-unsupported": return stackUnsupportedGuide(stackPulls);
   case "declined": return { message: `Dijiste que no a seguir con ${name}`, next: `cuando quieras, ${command}` };
   case "not-adopted": return { message: "No se adoptó el PR", next: "adoptalo con /omi-work adopt" };
   case "no-progress": return { message: `La cadena no confirmó progreso en ${name} y no repite el efecto`, next: `mirá /omi-progress y seguí con ${command}` };
@@ -47,8 +57,8 @@ export function continuityPauseGuide(reason: ContinuityPause, stage?: Stage): Pa
  }
 }
 /** «mensaje: próximo paso», con el detalle de texto libre al final si lo hay. */
-export function continuityPauseText(pause: Pick<ContinuityPauseRecord, "reason" | "stage" | "detail">): string {
- const { message, next } = continuityPauseGuide(pause.reason, pause.stage);
+export function continuityPauseText(pause: Pick<ContinuityPauseRecord, "reason" | "stage" | "detail" | "stackPulls">): string {
+ const { message, next } = continuityPauseGuide(pause.reason, pause.stage, pause.stackPulls);
  return `${message}: ${next}${pause.detail ? ` · Detalle: ${pause.detail}` : ""}`.slice(0, 1000);
 }
-export const continuityPauseLine = (pause: Pick<ContinuityPauseRecord, "reason" | "stage" | "detail">): string => `${CONTINUITY_PAUSE_TITLE} · ${continuityPauseText(pause)}`;
+export const continuityPauseLine = (pause: Pick<ContinuityPauseRecord, "reason" | "stage" | "detail" | "stackPulls">): string => `${CONTINUITY_PAUSE_TITLE} · ${continuityPauseText(pause)}`;

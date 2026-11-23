@@ -25,6 +25,7 @@ import { startGhaReview } from "../harness/lifecycle-gha-review.ts";
 import { landReadiness, prepareLand, landPullRequest, acceptObservedMerge } from "../harness/lifecycle-land.ts";
 import { markDraftReady } from "../harness/draft-ready.ts";
 import { lifecycleBlocks } from "../harness/lifecycle-progress.ts";
+import { stackUnsupportedText } from "../harness/continuity-pause-text.ts";
 import type { GhaShipDeps } from "../harness/ship-context.ts";
 import type { ToolRuntime } from "../tools/types.ts";
 import { createLocalReviewCall } from "./development-local-review.ts";
@@ -125,7 +126,7 @@ export async function adoptLifecycle(session: DevelopmentSession, ctx: Extension
 	if (state.version !== 2) throw new Error("Estado del harness sin migrar; retomalo con /omi-work resume.");
 	if (state.lifecycle.status === "enabled") { ctx.ui.notify(session.status(), "info"); return false; }
 	if (state.phase !== "done" || state.publication.status !== "opened" || state.pullRequest?.ownership !== "unadopted") throw new Error("Adoptar requiere el PR draft que abrió este trabajo (etapa «PR draft abierto»).");
-	if (state.publication.stack) throw new Error("Un stack de PRs todavía no se puede adoptar para Review, Land y Ship.");
+	if (state.publication.stack) throw new Error(stackUnsupportedText(state.publication.stack.length));
 	if (session.offline) throw new Error("Adoptar necesita leer el PR en GitHub; quitá --offline.");
 	const pin = await acceptedPin(session, state), client = githubClient(session, state), pr = state.pullRequest;
 	if (publication && publication.pinHash !== pin.accepted.blockHash) throw new Error("La configuración de entrada cambió; hay que revisar su continuidad antes de adoptar.");

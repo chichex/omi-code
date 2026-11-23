@@ -66,6 +66,27 @@ test("el estado guarda la pausa estructurada; los estados sin el campo siguen va
  for (const continuityPause of invalid) assert.throws(() => migrateWorkflow({ ...w, continuityPause }), /Estado del harness inválido/, JSON.stringify(continuityPause));
 });
 
+// S2.3 · Un stack publicado no entra a la cadena.
+test("stack-unsupported: dice cuántos PRs tiene el stack y qué hacer, con el mismo texto que el adopt manual", async () => {
+ const { stackUnsupportedText } = await import("../src/harness/continuity-pause-text.ts");
+ const expected = "Este trabajo se publicó como stack de 3 PRs y el lifecycle no adopta stacks: mergealos en orden con su sí, o publicá un solo PR";
+ assert.equal(continuityPauseText({ reason: "stack-unsupported", stage: "entry", stackPulls: 3 }), expected);
+ assert.equal(stackUnsupportedText(3), "Este trabajo se publicó como stack de 3 PRs y el lifecycle no adopta stacks. Mergealos en orden con su sí, o publicá un solo PR.");
+ assert.match(line("stack-unsupported", "entry"), /stack de PRs y el lifecycle no adopta stacks/, "sin el número no inventa uno");
+});
+
+test("la pausa de stack guarda cuántos PRs tenía al pausar; el campo es sólo de esa pausa", async () => {
+ const { continuityPauseRecord } = await import("../src/harness/continuity-pause.ts");
+ const { MAX_STACK } = await import("../src/harness/model.ts");
+ const pull = (index: number, base: string) => ({ title: `Parte ${index}`, steps: [`C${index}`], branch: `feat/pausa-${index}`, base, head: String(index).repeat(40), number: 7 + index, url: `https://github.com/acme/app/pull/${7 + index}`, status: "draft" as const });
+ const w = { ...workflow(), phase: "done" as const, publication: { status: "opened" as const, head: "2".repeat(40), number: 9, url: "https://github.com/acme/app/pull/9", stack: [pull(1, "main"), pull(2, "feat/pausa-1")] } };
+ assert.deepEqual(continuityPauseRecord(w, { reason: "stack-unsupported", stage: "entry" }, AT), { reason: "stack-unsupported", stage: "entry", subjectId: "2".repeat(40), stackPulls: 2, at: AT });
+ assert.equal(Object.hasOwn(continuityPauseRecord(w, { reason: "declined", stage: "entry" }, AT), "stackPulls"), false);
+ const saved = { reason: "stack-unsupported", stage: "entry", stackPulls: MAX_STACK, at: AT };
+ assert.deepEqual(migrateWorkflow({ ...workflow(), continuityPause: saved }).continuityPause, saved);
+ for (const stackPulls of [1, MAX_STACK + 1, 2.5]) assert.throws(() => migrateWorkflow({ ...workflow(), continuityPause: { ...saved, stackPulls } }), /Estado del harness inválido/, String(stackPulls));
+});
+
 // S2.3 · Review no observada en esta sesión.
 test("review-facts-required: el próximo paso sale de los hallazgos ya registrados y no repite la Review", () => {
  assert.equal(line("review-facts-required", "land"), "La Review del HEAD actual no se observó en esta sesión: corré /omi-work land; relee GitHub y no repite la Review");

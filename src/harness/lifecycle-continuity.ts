@@ -95,6 +95,8 @@ export function selectLifecycleContinuation(input: ContinuityInput): ContinuityS
  const s = w.lifecycle;
  if (!s || s.status === "disabled") {
   if (w.publication.status !== "opened") return pause("publication-required");
+  // El lifecycle adopta un solo PR: un stack no se adopta ni se pregunta su entrada.
+  if (w.publication.stack) return { kind: "pause", reason: "stack-unsupported", stage: "entry" };
   if (input.trigger !== "publication-confirmed") return pause("entry-trigger-required");
   return input.config ? offer(input.config, "entry", "adopt") : pause("config-required");
  }
