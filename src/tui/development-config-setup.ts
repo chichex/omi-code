@@ -4,6 +4,7 @@
 // recargar, retomar o bifurcar una sesión. Esc corta el setup sin guardar nada; guardar no ejecuta ni adopta nada.
 import type { ExtensionAPI, ExtensionContext, SessionStartEvent } from "@earendil-works/pi-coding-agent";
 import { configLines, stopsAtDraft, type ConfigDiagnosis, type SetupPart } from "../harness/config-doctor.ts";
+import { stackUnsupportedText } from "../harness/continuity-pause-text.ts";
 import { foundationsDir, readTrust, writeTrust, type TrustKey } from "../harness/foundations-trust.ts";
 import { detectLifecycle, type LifecycleDetection } from "../harness/lifecycle-detect.ts";
 import { runLifecycleOnboarding, type LifecycleOnboardingOutcome } from "../harness/lifecycle-onboarding.ts";
@@ -142,6 +143,8 @@ export class ConfigSetup {
 	private adoptHint(ctx: ExtensionContext, block: LifecycleConfig): void {
 		const state = this.session.state;
 		if (state?.version !== 2 || state.publication.status !== "opened" || state.lifecycle.status !== "disabled") return;
+		// El lifecycle no adopta stacks: el próximo paso es el mismo que da /omi-work adopt.
+		if (state.publication.stack) { ctx.ui.notify(`Guardar no adoptó el stack. ${stackUnsupportedText(state.publication.stack.length)}`, "info"); return; }
 		const entry = block.continuity?.entry, pr = `PR draft #${state.publication.number}`;
 		ctx.ui.notify(entry === "auto" || entry === "ask"
 			? `Guardar no adoptó el ${pr}: la entrada ${entry} de la continuidad vale desde la próxima publicación. Para seguir con este PR: /omi-work adopt.`

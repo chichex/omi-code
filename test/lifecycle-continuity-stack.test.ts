@@ -11,6 +11,8 @@ import { developmentFixture } from "./helpers/development.ts";
 import { memoryKb } from "./helpers/mock-kb.ts";
 import { acceptLifecycleConfig, fakeGitHub, lifecycleConfig, type FakeGitHub } from "./helpers/lifecycle.ts";
 import { autoContinuity } from "./helpers/lifecycle-continuity.ts";
+import { KEYS } from "./helpers/questions.ts";
+import { execFileSync } from "node:child_process";
 
 const REPO = "acme/app";
 const steps: Spec["steps"] = [{ id: "C1", title: "Primer valor", cases: ["D1"] }, { id: "C2", title: "Segundo valor", cases: ["D2"] }];
@@ -148,3 +150,21 @@ for (const entry of ["auto", "ask"] as const) {
   assert.deepEqual(gh.reads, []);
  });
 }
+
+// Integración de áreas: el setup al publicar no manda a /omi-work adopt un stack que el lifecycle no adopta.
+test("stack publicado sin continuidad: guardarla desde el setup no promete adoptar el stack", async t => {
+ const { f, accept } = await atSpec(t);
+ execFileSync("git", ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"], { cwd: f.checkout.root });
+ await accept(undefined);
+ await f.action({ action: "specified", spec: spec(true) });
+ const answers: [RegExp, string[]][] = [[/Ship de acme\/app/, ["1"]], [/Review del PR/, ["1"]], [/Continuidad del lifecycle/, ["2"]],
+  [/Entrada, Review, Fix y Land/, ["1", "1", "1", "1", KEYS.enter]], [/Continuidad de Ship/, ["1"]], [/Resumen antes de guardar/, ["1", KEYS.enter]]];
+ f.uiControl.questions = screen => answers.find(([pattern]) => pattern.test(screen))?.[1] ?? [KEYS.esc];
+ await implementAndPublish(f);
+ const state = await f.state();
+ assert.equal(f.remote.prs.length, 2, "se publicó el stack"); assert.ok(state.version === 2 && state.lifecycle.status === "disabled");
+ assert.ok(f.asked.some(screens => /Resumen antes de guardar/.test(screens[0] ?? "")), "el setup ofreció el wizard y se guardó");
+ const hint = f.messages.find(m => /^Guardar no adoptó/.test(m));
+ assert.equal(hint, "Guardar no adoptó el stack. Este trabajo se publicó como stack de 2 PRs y el lifecycle no adopta stacks. Mergealos en orden con su sí, o publicá un solo PR.");
+ assert.ok(!f.messages.some(m => /Para seguir con este PR: \/omi-work adopt|Para seguir con Review, Land y Ship: \/omi-work adopt/.test(m)), "no manda a adopt un stack");
+});

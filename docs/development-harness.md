@@ -633,7 +633,7 @@ Se dispara solo, sin apretar nada:
 
 - **Al entrar al harness.** Reemplaza la oferta anterior del lifecycle.
 - **Al abrir una sesión interactiva nueva** (arranque u `/new`, sin mensajes) en un repo de GitHub con la KB disponible. Espera la lectura de la KB en segundo plano y no interrumpe un turno que ya empezó.
-- **Al publicar el PR draft**, si el lifecycle falta, está pendiente o no tiene continuidad: sólo el wizard del lifecycle, nunca Foundations. Guardar no adopta el draft ya publicado: OMI avisa que para seguir con ese PR hay que usar `/omi-work adopt`. Una entrada `auto` o `ask` vale desde la próxima publicación.
+- **Al publicar el PR draft**, si el lifecycle falta, está pendiente o no tiene continuidad: sólo el wizard del lifecycle, nunca Foundations. Guardar no adopta el draft ya publicado: OMI avisa que para seguir con ese PR hay que usar `/omi-work adopt`. Una entrada `auto` o `ask` vale desde la próxima publicación. Si se publicó un stack, el aviso no manda a adopt, porque el lifecycle no adopta stacks: «Guardar no adoptó el stack. Este trabajo se publicó como stack de 2 PRs y el lifecycle no adopta stacks. Mergealos en orden con su sí, o publicá un solo PR.»
 
 Nunca offline, sin UI (print o RPC), con la KB no disponible, ni al restaurar, recargar (`/reload`), retomar (resume) o bifurcar (fork) una sesión. Una sesión que ya tiene mensajes no es nueva. Se ofrece una vez por revisión y sesión.
 
