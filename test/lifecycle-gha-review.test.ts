@@ -267,3 +267,13 @@ test("workflow: el contexto runner sólo aparece dentro de steps; en el env de u
  }
  assert.deepEqual(offending, []);
 });
+
+test("workflow: una expresión sin comillas no lleva ' #': YAML lo toma como comentario y corta la expresión", async () => {
+ const workflow = await readFile(new URL("../.github/workflows/claude-review.yml", import.meta.url), "utf8");
+ const offending = workflow.split("\n").filter((line) => {
+  const value = /^\s*(?:- )?[\w.-]+:\s+(.*)$/.exec(line)?.[1];
+  if (!value || /^["'|>]/.test(value)) return false;
+  return [...value.matchAll(/\$\{\{(.*?)(?:\}\}|$)/g)].some((match) => match[1]!.includes(" #"));
+ }).map((line) => line.trim().slice(0, 40));
+ assert.deepEqual(offending, []);
+});

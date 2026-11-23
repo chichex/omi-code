@@ -18,7 +18,8 @@
 #     anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
 
 name: Claude Review
-run-name: ${{ inputs.correlation_id != '' && format('omi-review-v1 PR #{0} {1}', inputs.pr, inputs.correlation_id) || format('Claude Review PR #{0}', inputs.pr) }}
+# Entre comillas: sin ellas, el " #" de "PR #{0}" es un comentario de YAML y corta la expresión.
+run-name: "${{ inputs.correlation_id != '' && format('omi-review-v1 PR #{0} {1}', inputs.pr, inputs.correlation_id) || format('Claude Review PR #{0}', inputs.pr) }}"
 
 on:
   workflow_dispatch:
