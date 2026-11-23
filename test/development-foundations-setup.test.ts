@@ -159,3 +159,11 @@ test("foundations_setup: abrir sólo avisa si la KB tiene un bloque inválido; u
 		assert.doesNotMatch(f.messages.at(-1) ?? "", /\bv2\b/, "el aviso de guardado no habla de versiones");
 	}
 });
+test("foundations_setup: abrir muestra una espera mientras lee la KB; Esc la cancela sin abrir el panel ni guardar", async (t) => {
+	const f = await fixture(t); f.uiControl.foundations = () => [KEYS.esc]; await f.start();
+	await f.command("foundations");
+	assert.deepEqual(f.loaderTitles, ["Leyendo Foundations de la KB"]); assert.equal(f.foundationsScreens.length, 1);
+	f.uiControl.cancelLoader = true; await f.command("foundations");
+	assert.equal(f.foundationsScreens.length, 1, "cancelar la lectura no abre el panel"); assert.equal(saves(f.kb), 0);
+	assert.match(f.messages.at(-1) ?? "", /Lectura de Foundations cancelada/);
+});

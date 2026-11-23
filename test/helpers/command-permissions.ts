@@ -26,7 +26,7 @@ export async function commandFixture(t: TestContext, options: { body?: string | 
 	assert.equal((await f.state()).phase, "implement", "la fixture llega a la etapa que permite setup");
 	// Frontera Pi mínima: el propio DevelopmentSession sigue validando contexto, permisos y estado durable.
 	const pi = { appendEntry: (name: string, data: unknown) => f.manager.appendCustomEntry(name, data), events: { emit() {} } } as unknown as ExtensionAPI;
-	const session = new DevelopmentSession(pi, testIo({ homeDir: f.home, cwd: f.checkout.root }), [], { runner: f.runner, ...(options.withoutKb ? {} : { kb }) });
+	const session = new DevelopmentSession(pi, testIo({ homeDir: f.home, cwd: f.checkout.root }), [], { runner: f.runner, loader: f.loader, ...(options.withoutKb ? {} : { kb }) });
 	await session.restore(f.context);
 	const executed: string[] = [];
 	const check = (command = COMMAND, signal = new AbortController().signal) => executeCheck(session, { kind: "setup", command }, f.context, signal, async (_checkout, actual) => {

@@ -20,10 +20,9 @@ import { assertIssueIdentity, discoverLegacyPreparations, readIssuePreparation, 
 import { PHASE_LABELS } from "./development-view.ts";
 import { checkIssueWorktree, mainBaseCommit } from "./workspace/issue-worktree.ts";
 import { carryFoundationsPin } from "./development-foundations.ts";
-import { WaitingLoader } from "./development-loader.ts";
+import type { WaitLoader } from "./development-loader.ts";
 
-/** Muestra un trabajo largo con opción de cancelar; undefined si la persona canceló. */
-export type BeginLoader = <T>(ctx: ExtensionContext, title: string, work: (signal: AbortSignal) => Promise<T>) => Promise<T | undefined>;
+export type BeginLoader = WaitLoader;
 export interface BeginOptions {
 	runner: Runner; offline: boolean; signal: AbortSignal; now: () => string; loader: BeginLoader; sessionDir: string | undefined;
 	confirm: (ctx: ExtensionContext, title: string, description: string) => Promise<boolean>;
@@ -211,19 +210,6 @@ async function prepareAndSwitch(ctx: ExtensionCommandContext, git: GitSnapshot, 
 		if (result.cancelled) ctx.ui.notify(`Cambio de sesión cancelado. El worktree quedó en ${record.state.worktree}; volvé a pedir el issue #${issueNumber} para seguir.`, "warning");
 	} finally { if (!switched) revokeDevelopmentTicket(token); }
 }
-
-export const borderedLoader: BeginLoader = async <T>(ctx: ExtensionContext, title: string, work: (signal: AbortSignal) => Promise<T>): Promise<T | undefined> => {
-	let failure: unknown; let value: T | undefined;
-	await ctx.ui.custom<void>((tui, theme, _keys, done) => {
-		const loader = new WaitingLoader(tui, theme, title);
-		let finished = false; const finish = () => { if (!finished) { finished = true; done(); } };
-		loader.onAbort = finish;
-		work(loader.signal).then((result) => { if (!loader.signal.aborted) value = result; finish(); }, (error) => { if (!loader.signal.aborted) failure = error; finish(); });
-		return loader;
-	}, { overlay: true });
-	if (failure) throw failure;
-	return value;
-};
 
 const BeginToolSchema = Type.Object({
 	issue: Type.Optional(Type.Integer({ minimum: 1, description: "Número de un issue existente de este repo (#N). Si el pedido lo nombra, usalo en lugar de crear otro." })),
