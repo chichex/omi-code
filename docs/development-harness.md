@@ -713,7 +713,7 @@ La pestaña **5 · OMI** (Ctrl 5 o `/omi-platform`) muestra toda la configuraci�
 |---|---|
 | Proyecto OMI | El vínculo `.omi/project.json`, servicios y ambientes, como antes |
 | Foundations | Origen y revisión; cada política en su línea con lo que hace en `ask` o `auto`; todos los patrones de confirmación, uno por línea; el aviso de la sesión y el motivo, por ejemplo el formato anterior o la KB caída |
-| Lifecycle | Estado (`configurado`, `pendiente de aceptar`, `sin configurar`, `no disponible`, `inválido`, más `postergado`; aceptado sin Ship es `configurado · … · Ship sin configurar`); Review con proveedor (revisor local, reviews de GitHub o `workflow@ref` con modelo) y espera; correcciones con modo y rondas; Land con modo, base, método, riesgo máximo y checks requeridos; Ship con estado y cada destino; presupuesto |
+| Lifecycle | Estado (`configurado`, `pendiente de aceptar`, `sin configurar`, `no disponible`, `inválido`, más `postergado`; aceptado sin Ship es `configurado · … · Ship sin configurar`); Review con proveedor (revisor local, reviews de GitHub o `workflow@ref` con modelo) y espera; correcciones con modo y rondas; Land con modo, base, método, riesgo máximo y checks requeridos; Ship con estado y cada destino campo por campo: proveedor, modo, qué hace si falla y con qué modo (`si falla: rollback (auto)`), espera, reintentos, workflow de rollback y lo que verifica (release con tag, assets y checksums, recibo, OMI, health y versión); presupuesto |
 | Continuidad | Las cinco palancas con lo que hace cada modo, o «Deshabilitada: el trabajo para en el PR draft» |
 | Falta configurar | El diagnóstico del [setup](#setup-de-lo-que-falta), cada ítem con cómo resolverlo, o «Todo configurado» |
 

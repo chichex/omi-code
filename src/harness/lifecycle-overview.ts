@@ -46,16 +46,32 @@ function statusLine({ state, reading, local }: LifecycleOverview, view: Shown | 
 	const label = state.status === "unconfigured" && !lifecycleMissing(state) ? STATUS.configured : STATUS[state.status];
 	return `Estado: ${label}${detail}${deferred ? " · postergado (Más adelante)" : ""}`;
 }
-function targetText(target: LifecycleTarget): string {
-	const provider = target.provider;
+/** Lo que Ship exige para dar la entrega por verificada. */
+function evidenceText({ evidence }: LifecycleTarget): string {
+	const kind = evidence.kind === "github-release"
+		? [`release ${evidence.tag ? `con tag ${evidence.tag}` : "sin tag fijo"}`, `assets ${evidence.assets.join(", ")}`, `checksums ${evidence.checksumsAsset}`]
+		: evidence.kind === "receipt" ? ["recibo"] : ["OMI", ...(evidence.provenance ? ["recibo de publicación"] : [])];
+	const probes = [
+		...(evidence.health ? [`health ${evidence.health.path} → ${evidence.health.status}`] : []),
+		...(evidence.version ? [`versión ${evidence.version.path} · campo ${evidence.version.versionField}${evidence.version.commitField ? ` · commit ${evidence.version.commitField}` : ""}`] : []),
+	];
+	return `verifica: ${[...kind, ...probes].join(" · ")}`;
+}
+/** Cada campo del destino: una línea con qué y cómo, y debajo plazos, rollback y evidencia. */
+function targetLines(target: LifecycleTarget): string[] {
+	const provider = target.provider, { action, mode } = target.onFailure;
 	const where = provider.kind === "gha"
 		? `GitHub Actions · ${provider.workflow}@${provider.ref} · ${provider.mode} · ${provider.contract === "github-release" ? "release de GitHub" : "recibo omi-ship-v1"}`
 		: `OMI · ${provider.service} · ${provider.environment} · ${provider.mode}`;
-	return `${target.id} · ${where} · ${target.mode} · si falla: ${target.onFailure.action}`;
+	// stop no compensa nada: su modo no se usa.
+	const recovery = action === "stop" ? action : `${action} (${mode})`;
+	const retries = target.maxRetries ? `hasta ${count(target.maxRetries, "reintento", "reintentos")}` : "sin reintentos";
+	const rollback = provider.kind === "gha" && provider.rollback ? [`    rollback: ${provider.rollback.workflow}@${provider.rollback.ref} · recibo omi-ship-v1`] : [];
+	return [`  ${target.id} · ${where} · ${target.mode} · si falla: ${recovery}`, `    espera hasta ${duration(target.timeoutSeconds)} · ${retries}`, ...rollback, `    ${evidenceText(target)}`];
 }
 function shipLines(ship: LifecycleConfig["ship"]): string[] {
 	switch (ship.status) {
-		case "configured": return ["Ship: configurado", ...ship.targets.map((target) => `  ${targetText(target)}`)];
+		case "configured": return ["Ship: configurado", ...ship.targets.flatMap(targetLines)];
 		case "manual": return ["Ship: manual (sin destino verificable)"];
 		case "not-applicable": return ["Ship: no aplica"];
 		case "unconfigured": return ["Ship: sin configurar"];

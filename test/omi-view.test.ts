@@ -95,6 +95,24 @@ test("omi_view: LIFECYCLE muestra Review GHA con modelo, correcciones, Land con 
 	}
 });
 
+// Sin apretar f: cada campo de cada destino, también lo que decide qué pasa con auto (rollback, reintentos, evidencia).
+test("omi_view: cada destino de Ship muestra timeout, reintentos, recuperación con su modo, rollback y la evidencia exigida", () => {
+	const deploy = target({ id: "deploy", mode: "auto", timeoutSeconds: 900, maxRetries: 3, onFailure: { action: "rollback", mode: "auto" },
+		provider: { kind: "gha", workflow: "deploy.yml", ref: "main", mode: "dispatch", contract: "omi-ship-v1", rollback: { workflow: "rollback.yml", ref: "main", contract: "omi-ship-v1" } },
+		evidence: { kind: "receipt", health: { path: "/health", status: 200 }, version: { path: "/version", versionField: "build.version", commitField: "build.commit" } } });
+	const release = target({ id: "release", maxRetries: 1, onFailure: { action: "fix-forward", mode: "ask" }, provider: { kind: "gha", workflow: "release.yml", ref: "main", mode: "observe", contract: "github-release" },
+		evidence: { kind: "github-release", tag: "v1.2.3", assets: ["app.tar.gz", "app.zip"], checksumsAsset: "checksums.txt" } });
+	const omi = target({ id: "omi-api-prod", provider: { kind: "omi", service: "api", environment: "prod", mode: "observe" }, evidence: { kind: "omi", health: { path: "/health", status: 204 }, provenance: "publication-receipt" } });
+	for (const width of [132, 80]) {
+		const lines = render(view({ lifecycle: fullConfig((block) => { block.ship = { status: "configured", targets: [deploy, release, omi] }; }) }), { width });
+		assert.ok(lines.every((line) => visibleWidth(line) <= width), `nada se pasa de ${width} columnas`);
+		const lifecycle = prose(section(lines, "LIFECYCLE"));
+		assert.match(lifecycle, /deploy · GitHub Actions · deploy\.yml@main · dispatch · recibo omi-ship-v1 · auto · si falla: rollback \(auto\) espera hasta 15 min · hasta 3 reintentos rollback: rollback\.yml@main · recibo omi-ship-v1 verifica: recibo · health \/health → 200 · versión \/version · campo build\.version · commit build\.commit/);
+		assert.match(lifecycle, /release · GitHub Actions · release\.yml@main · observe · release de GitHub · ask · si falla: fix-forward \(ask\) espera hasta 30 min · hasta 1 reintento verifica: release con tag v1\.2\.3 · assets app\.tar\.gz, app\.zip · checksums checksums\.txt/);
+		assert.match(lifecycle, /omi-api-prod · OMI · api · prod · observe · ask · si falla: stop espera hasta 30 min · sin reintentos verifica: OMI · recibo de publicación · health \/health → 204/);
+	}
+});
+
 test("omi_view: sin continuidad el trabajo para en el PR draft; Review local y de GitHub, Ship manual y sin checks también se leen", () => {
 	const legacy = fullConfig((block) => { delete block.continuity; block.review.provider = { kind: "github", reviewers: ["ada", "bob"] }; block.review.mode = "ask"; block.review.timeoutSeconds = 1200; block.land.requiredChecks = []; block.ship = { status: "manual", targets: [] }; });
 	const lines = render(view({ lifecycle: legacy }));
