@@ -6,7 +6,7 @@ import { artifactHash, issueRepository, type Evidence, type StackPull, type Work
 import { PHASE_LABELS } from "./phases.ts";
 import { stackBodyLine, stackIssueLine } from "./stack.ts";
 import { lensStatuses } from "./lenses.ts";
-import { agreementLine, caseLines, cell, code, codeBlock, evidenceResult, LENSES, list, recipeApproval, ROUTES, text, TYPES, VERDICTS } from "./markdown.ts";
+import { agreementLine, CARRIED, caseLines, cell, code, codeBlock, evidenceResult, LENSES, list, recipeApproval, ROUTES, text, TYPES, VERDICTS } from "./markdown.ts";
 
 /** Límite de GitHub para el cuerpo de un PR. Se mide en bytes UTF-8, que nunca cuentan menos que GitHub. */
 export const PR_BODY_LIMIT = 65536;
@@ -76,7 +76,7 @@ function verification(w: Workflow, budget: number): string[] {
 }
 function warnings(w: Workflow, budget: number): string[] {
 	const statuses = lensStatuses(w);
-	const lenses = statuses.flatMap((s) => [`  - **${LENSES[s.lens]}:** ${VERDICTS[s.verdict]}${s.blocking ? " · bloquea" : ""}`, ...s.findings.map((f) => `    - ${text(f)}`)]);
+	const lenses = statuses.flatMap((s) => [`  - **${LENSES[s.lens]}:** ${VERDICTS[s.verdict]}${s.blocking ? " · bloquea" : ""}${s.carried ? CARRIED : ""}`, ...s.findings.map((f) => `    - ${text(f)}`)]);
 	const kept = bounded(lenses, budget);
 	return ["## Advertencias",
 		w.recipe?.classification.risk === "high" ? "- **Riesgo alto: revisión humana obligatoria antes de aprobar o mergear.**" : "- El PR draft requiere revisión y aprobación humana; nunca se mergea automáticamente.",

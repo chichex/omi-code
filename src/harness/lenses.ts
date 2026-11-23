@@ -63,7 +63,17 @@ export function lensRequests(context: Record<string, unknown>, state: Workflow, 
 }
 
 // Los lentes asesoran: su fail/unknown es un aviso visible. Sólo un fail de seguridad bloquea.
-export interface LensStatus { lens: Lens; verdict: Review["verdict"] | "not-run"; findings: string[]; blocking: boolean }
+// carried: el lente aprobó limpio el contenido del que partió una corrección liviana y no se repitió.
+export interface LensStatus { lens: Lens; verdict: Review["verdict"] | "not-run"; findings: string[]; blocking: boolean; carried: boolean }
+/** La revisión que vale para un lente sobre este contenido. Tras una corrección liviana, el pass limpio del contenido
+ * de partida sigue valiendo, salvo el de security: lo único que bloquea se revisa siempre sobre el contenido final. */
+export function lensReview(reviews: readonly Review[], lens: Lens, fingerprint: string | undefined, amends: readonly { from: string }[] = []): { review: Review; carried: boolean } | undefined {
+	const current = reviews.findLast((r) => r.lens === lens && r.fingerprint === fingerprint);
+	if (current) return { review: current, carried: false };
+	const latest = reviews.findLast((r) => r.lens === lens);
+	return lens !== "security" && latest?.verdict === "pass" && !latest.findings.length && amends.some((a) => a.from === latest.fingerprint) ? { review: latest, carried: true } : undefined;
+}
+export const amendsOf = (state: Workflow): readonly { from: string }[] => state.version === 2 ? state.amends ?? [] : [];
 // El contenido revisado: el de la última verificación o, antes de verificar, el del último lente.
 function reviewedFingerprint(state: Workflow): string | undefined {
 	return state.evidence.findLast((e) => e.kind === "verification")?.fingerprint ?? state.reviews.at(-1)?.fingerprint;
@@ -71,8 +81,8 @@ function reviewedFingerprint(state: Workflow): string | undefined {
 export function lensStatuses(state: Workflow): LensStatus[] {
 	const fingerprint = reviewedFingerprint(state);
 	return (state.recipe?.lenses ?? []).map((lens) => {
-		const review = state.reviews.findLast((r) => r.lens === lens && r.fingerprint === fingerprint);
-		return { lens, verdict: review?.verdict ?? "not-run", findings: review?.findings ?? [], blocking: lens === "security" && review?.verdict === "fail" };
+		const found = lensReview(state.reviews, lens, fingerprint, amendsOf(state)); const review = found?.review;
+		return { lens, verdict: review?.verdict ?? "not-run", findings: review?.findings ?? [], blocking: lens === "security" && review?.verdict === "fail", carried: found?.carried ?? false };
 	});
 }
 export const lensWarnings = (state: Workflow): LensStatus[] => lensStatuses(state).filter((s) => s.verdict === "fail" || s.verdict === "unknown");

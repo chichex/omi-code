@@ -36,6 +36,8 @@ export const list = (label: string, values: string[]) => values.length ? [`- **$
 export const caseLines = (d: Recipe["cases"][number]): string[] => d.command.includes("\n") ? [`- **${text(d.id)}** ${text(d.description)}`, ...codeBlock(d.command)] : [`- **${text(d.id)}** ${code(d.command)} · ${text(d.description)}`];
 export const agreementLine = (a: Agreement): string => `- «${text(a.quote)}» → ${text(a.summary)} _(${PHASE_LABELS[a.phase]}${a.replan ? "; rehízo la receta" : ""})_`;
 export const VERDICTS = { pass: "✅ pass", fail: "❌ fail", unknown: "⚠️ unknown", "not-run": "sin correr" };
+/** Un lente que aprobó limpio el contenido de partida de una corrección liviana y no se repitió. */
+export const CARRIED = " · revisado antes de la corrección liviana";
 export function evidenceResult(e: Evidence): string {
 	if (e.outcome === "interrupted") return "⚠️ interrumpido";
 	if (e.outcome === "passed") return `✅ exit ${e.exitCode}`;

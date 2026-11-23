@@ -1,7 +1,8 @@
-import { artifactHash, MAX_AGREEMENTS, MAX_ATTEMPTS, MAX_EVIDENCE, MAX_GRANTS, MAX_HISTORY, MAX_REVIEWS, MAX_STEPS, parseWorkflow, sourceHash, type Workflow, type WorkflowV2, type Exploration, type InferenceInput, type Plan, type Spec, type Evidence, type Review, type Step, type StackPull } from "./model.ts";
+import { artifactHash, MAX_AGREEMENTS, MAX_AMENDS, MAX_ATTEMPTS, MAX_EVIDENCE, MAX_GRANTS, MAX_HISTORY, MAX_REVIEWS, MAX_STEPS, parseWorkflow, sourceHash, type Workflow, type WorkflowV2, type Exploration, type InferenceInput, type Plan, type Spec, type Evidence, type Review, type Step, type StackPull } from "./model.ts";
 
 import { recipeNextPhase, recipeRoute } from "./phases.ts";
 import { executionEvidence, executionReviews, assertCorrectionExecution } from "./execution-scope.ts";
+import { amendsOf, lensReview } from "./lenses.ts";
 import { openedStack, planStack, stackGroups, stackProblem, syncedStack } from "./stack.ts";
 
 export type WorkflowEvent =
@@ -20,6 +21,8 @@ export type WorkflowEvent =
  | { type: "reviewed"; review: Review }
  | { type: "verified"; fingerprint: string }
  | { type: "retry"; reason: string }
+ // fingerprint: el contenido commiteado y limpio que se corrige.
+ | { type: "amend"; reason: string; fingerprint: string }
  | { type: "pause"; reason: string }
  | { type: "resume" }
  | { type: "source_changed"; source: Workflow["source"] }
@@ -116,6 +119,7 @@ const EXHAUSTED = "Se agotaron las vueltas; se necesita intervención humana";
 // cancelaciones y errores del proveedor (unknown), que no gastan veredictos.
 const MAX_LENS_VERDICTS = 3; const MAX_LENS_RUNS = 10;
 const SECURITY_FAILED = "el lente de seguridad falló sobre este contenido: bloquea Verificar; corregí el cambio con retry";
+const ADVISORY_RETRY = "retry gasta una vuelta y sólo corresponde si falló un D, un gate o security. Los hallazgos de esta vuelta sólo avisan: corregilos con amend, que no gasta vuelta, o dejalos como aviso en el PR";
 // Un lente que falló no se vuelve a tirar sobre el mismo contenido, salvo que un refuter
 // posterior apruebe: el aviso no se borra tirándolo de nuevo, y el fail de seguridad sigue bloqueando.
 export function lensRunBlock(state: Workflow, lens: Review["lens"], fingerprint: string): string {
@@ -195,9 +199,9 @@ function verifiedEvidence(state: Workflow, fingerprint: string, head?: string): 
   requireCondition(latest && successful(latest) && latest.command === c.command && latest.fingerprint === fingerprint && (head === undefined || latest.head === head), `falta verificación actual del caso ${c.id}`);
  }
  // Los lentes asesoran: cada uno pedido corre sobre este contenido y su fail/unknown queda como aviso.
- // Sólo un fail de seguridad bloquea.
+ // Sólo un fail de seguridad bloquea. Tras amend, un pass limpio del contenido de partida sigue valiendo.
  for (const lens of state.recipe.lenses) {
-  const review = reviews.findLast(r => r.lens === lens && r.fingerprint === fingerprint);
+  const review = lensReview(reviews, lens, fingerprint, amendsOf(state))?.review;
   requireCondition(review, `falta correr el lente ${lens} sobre este contenido`);
   requireCondition(review.verdict !== "pass" || review.findings.length === 0, `el lente ${lens} no puede aprobar con hallazgos`);
   requireCondition(lens !== "security" || review.verdict !== "fail", SECURITY_FAILED);
@@ -233,30 +237,65 @@ function archiveAttempt(state: Workflow, reason: string, at: string): void {
  const evidence = state.evidence.map(e => ({ ...e, output: e.output.slice(-500) }));
  state.attempts = [...(state.attempts ?? []), { sourceHash: state.source.hash, round: state.round, reason, at, evidence, reviews: state.reviews }].slice(-MAX_ATTEMPTS);
 }
-// Lo ya commiteado sigue hecho: no puede volver a dar rojo. La vuelta agrega un paso de
-// corrección que cubre todos los D y exige su propio rojo, verde y commit.
+// Lo ya commiteado sigue hecho: no puede volver a dar rojo. Una corrección agrega un paso que cubre
+// todos los D y exige su propio rojo, verde y commit.
+function correctionStep(state: Workflow, title: string): void {
+ const next = Math.max(0, ...state.steps.map(s => Number(/^C(\d+)$/.exec(s.id)?.[1] ?? 0))) + 1;
+ state.steps.push({ id: `C${next}`, title: title.slice(0, 4000), cases: state.recipe!.cases.map(c => c.id), status: "pending", red: null, green: null, commit: null });
+ state.phase = "implement"; state.publication = { status: "none" };
+}
+// Una vuelta entera es para lo que bloquea: un D o un gate que falló, o security. Si en la vuelta sólo hay avisos de
+// lentes, retry se rechaza. Los topes de evidencia y de lentes siguen pidiendo retry o refresh.
+function retryBlock(state: Workflow): string {
+ const evidence = executionEvidence(state), reviews = executionReviews(state);
+ const blocking = evidence.some(e => (e.kind === "verification" || e.kind === "gate") && !successful(e)) || reviews.some(r => r.lens === "security" && r.verdict === "fail");
+ const advisory = reviews.some(r => r.lens !== "security" && (r.verdict === "fail" || r.findings.length > 0));
+ const full = state.evidence.length >= MAX_EVIDENCE || state.reviews.length >= MAX_REVIEWS;
+ return advisory && !blocking && !full ? ADVISORY_RETRY : "";
+}
 function retry(state: Workflow, reason: string, at: string): void {
  requireCondition(state.version !== 2 || state.pullRequest?.ownership !== "adopted", "post-PR usa corrección propia; retry no puede borrar publication ni presupuesto");
  requirePhase(state, "verify", "pr"); requireCondition(nonempty(reason), "falta motivo del reintento");
  requireCondition(state.status === "active" && !decisionBlock(state) && state.recipe, "hay un bloqueo pendiente");
+ const advisory = retryBlock(state); requireCondition(!advisory, advisory);
  if (state.round >= state.maxRounds) { setBlock(state, EXHAUSTED); return; }
  requireCondition(state.steps.length < MAX_STEPS, "no quedan pasos para otra vuelta; dividí la tarea");
  archiveAttempt(state, reason, at);
- state.round++; state.phase = "implement";
- const next = Math.max(0, ...state.steps.map(s => Number(/^C(\d+)$/.exec(s.id)?.[1] ?? 0))) + 1;
- state.steps.push({ id: `C${next}`, title: `Corrección de la vuelta ${state.round}: ${reason}`.slice(0, 4000), cases: state.recipe.cases.map(c => c.id), status: "pending", red: null, green: null, commit: null });
- state.evidence = []; state.reviews = []; state.publication = { status: "none" };
+ state.round++; correctionStep(state, `Corrección de la vuelta ${state.round}: ${reason}`); clearAmends(state);
+ state.evidence = []; state.reviews = [];
  // La aprobación se conserva sólo para exactamente el mismo source/receta/spec.
  if (!isApproved(state)) state.approval = null;
  setBlock(state, state.approval ? "" : "Falta aprobación humana vigente");
 }
+// Lo que bloquea Verificar sobre este contenido: la última corrida de un D o de un gate falló, o security falló.
+function blockingFailure(state: Workflow, fingerprint: string): boolean {
+ const runs = executionEvidence(state).filter(e => e.fingerprint === fingerprint && (e.kind === "verification" || e.kind === "gate"));
+ const latest = new Map(runs.map(e => [`${e.kind}:${e.kind === "gate" ? e.command : e.caseId}`, e]));
+ return [...latest.values()].some(e => !successful(e)) || executionReviews(state).findLast(r => r.lens === "security" && r.fingerprint === fingerprint)?.verdict === "fail";
+}
+// Corrección liviana: arregla un hallazgo de un lente que sólo avisa sin gastar vuelta ni borrar evidencia. Después
+// se repiten los D, security y los lentes que no aprobaron limpio; el resto vale desde el contenido de partida.
+function amend(state: WorkflowV2, reason: string, fingerprint: string, at: string): void {
+ requireCondition(state.pullRequest?.ownership !== "adopted", "post-PR usa corrección propia; amend no aplica");
+ requirePhase(state, "verify", "pr"); requireCondition(nonempty(reason), "falta motivo de la corrección");
+ requireCondition(nonempty(fingerprint), "falta el contenido que se corrige");
+ requireCondition(state.status === "active" && !decisionBlock(state) && state.recipe, "hay un bloqueo pendiente");
+ requireCondition(!blockingFailure(state, fingerprint), "falló un D, un gate o security sobre este contenido: eso pide retry, no amend");
+ requireCondition(executionReviews(state).some(r => r.fingerprint === fingerprint && r.lens !== "security" && (r.verdict === "fail" || r.findings.length > 0)), "amend corrige un hallazgo de un lente sobre este contenido y no hay ningún hallazgo");
+ const amends = state.amends ?? [];
+ requireCondition(amends.length < MAX_AMENDS, `ya se usaron las ${MAX_AMENDS} correcciones livianas de esta vuelta: lo que queda va como aviso en el PR`);
+ requireCondition(state.steps.length < MAX_STEPS, "no quedan pasos para otra corrección; dividí la tarea");
+ state.amends = [...amends, { from: fingerprint, reason: reason.slice(0, 4000), at }];
+ correctionStep(state, `Corrección liviana: ${reason}`);
+}
+function clearAmends(state: Workflow): void { if (state.version === 2) delete state.amends; }
 function sourceChanged(state: Workflow, source: Workflow["source"], at: string): void {
  requireCondition(source.number === state.source.number && source.url === state.source.url, "no se puede cambiar la identidad del issue");
  archiveAttempt(state, "Cambió el pedido o se volvió a explorar", at);
  state.source = { ...source, hash: sourceHash(source.title, source.body) };
  state.observations = [];
  state.exploration = null; state.inferences = []; state.recipe = null; state.diagnosis = null; state.spec = null;
- state.steps = []; state.evidence = []; state.reviews = []; state.approval = null; state.round = 0; state.grants = [];
+ state.steps = []; state.evidence = []; state.reviews = []; state.approval = null; state.round = 0; state.grants = []; clearAmends(state);
  state.publication = { status: "none" }; state.phase = "explore"; setBlock(state, "");
 }
 // El chat vale como autorización: el host ya verificó la cita. Con un cambio de alcance (replan) la
@@ -277,7 +316,7 @@ function agree(state: Workflow, event: Extract<WorkflowEvent, { type: "agreed" }
  // El host manda fingerprint sólo con el checkout limpio: lo que cambió desde Explorar son los pasos commiteados, base de la receta nueva.
  if (state.exploration && event.fingerprint && ["implement", "verify", "pr"].includes(state.phase)) state.exploration.fingerprint = event.fingerprint;
  state.observations = (state.observations ?? []).filter(o => !["implement", "verify", "pr"].includes(o.phase));
- state.approval = null; state.spec = null; state.steps = []; state.evidence = []; state.reviews = []; state.round = 0;
+ state.approval = null; state.spec = null; state.steps = []; state.evidence = []; state.reviews = []; state.round = 0; clearAmends(state);
  state.publication = { status: "none" }; state.phase = "recipe"; setBlock(state, "");
 }
 // El bloqueo de vueltas agotadas vive en el estado, no en el historial: el historial es una ventana acotada.
@@ -311,12 +350,12 @@ export function transition(original: Workflow, event: WorkflowEvent, at: string)
  if (state.status === "waiting" && retriesExhausted(state)) requireCondition(["pause", "resume", "source_changed", "agreed", "command_granted"].includes(event.type), "se agotaron las vueltas");
  applyEvent(state, event, at);
  state.revision++;
- state.activity = (event.type === "pause" || event.type === "retry" ? `${event.type}: ${event.reason}` : event.type).slice(0, 4000);
+ state.activity = (event.type === "pause" || event.type === "retry" || event.type === "amend" ? `${event.type}: ${event.reason}` : event.type).slice(0, 4000);
  state.history = [...state.history, { at, phase: state.phase, activity: state.activity }].slice(-MAX_HISTORY);
  return validate(state);
 }
 // Tabla de eventos: los helpers mantienen juntas las invariantes de cada artefacto.
-function applyEvent(state: Workflow, event: WorkflowEvent, at: string): void {
+function applyEvent(state: WorkflowV2, event: WorkflowEvent, at: string): void {
  switch (event.type) {
   case "explored":
    requirePhase(state, "explore", "decide"); state.exploration = event.exploration;
@@ -366,6 +405,7 @@ function applyEvent(state: Workflow, event: WorkflowEvent, at: string): void {
   case "reviewed": recordReview(state, event.review); return;
   case "verified": requirePhase(state, "verify"); verifiedEvidence(state, event.fingerprint); state.phase = "pr"; return;
   case "retry": retry(state, event.reason, at); return;
+  case "amend": amend(state, event.reason, event.fingerprint, at); return;
   case "pause":
    requireCondition(nonempty(event.reason), "falta motivo de pausa");
    // El motivo de pausa queda en activity/history; un bloqueo previo no debe perderse.

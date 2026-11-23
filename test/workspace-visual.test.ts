@@ -522,7 +522,7 @@ test("workspace_Enter en el detalle de un issue pide empezar el trabajo; Esc y e
 			ui.input("\r");
 			for (let i = 0; i < 100 && !ui.prompts.length; i++) await setTimeout(20);
 			for (let i = 0; i < 5; i++) await Promise.resolve();
-			assert.match(ui.prompts.at(-1)!, /Enter iniciar trabajo/); assert.match(ui.prompts.at(-1)!, /main local/); assert.match(ui.prompts.at(-1)!, /confirmación/);
+			assert.match(ui.prompts.at(-1)!, /Enter iniciar trabajo/); assert.match(ui.prompts.at(-1)!, /desde main actualizada/); assert.match(ui.prompts.at(-1)!, /confirmación/);
 			assert.equal(ui.dispatched.length, key === "\r" ? 1 : 0); assert.deepEqual(ui.switches, []);
 			// El trabajo sigue en el chat: el sí, el aviso y el agente se ven ahí, y Ctrl-D vuelve a cerrar OMI.
 			assert.match(ui.frame().lines.map(stripTerminalSequences).join("\n"), key === "\r" ? /\[1 Chat\]/ : /\[2 Issues\]/);

@@ -121,3 +121,28 @@ test("development_lenses la evidencia cuenta en el presupuesto: ninguna llamada 
 	const full = execFileSync("git", ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--color=never", f.checkout.baseCommit, "--"], { cwd: f.checkout.root, encoding: "utf8" });
 	assert.equal(sent.map((m) => m.diff.replace(/^\[continúa [^\n]*\]\n/gm, "")).join(""), full, "ninguna parte trunca el diff");
 });
+
+test("development_lenses un aviso se corrige con amend sin gastar vuelta: se repiten los D y el lente que avisó, no el que aprobó", async (t) => {
+	const f = await verifying(t, ["quality", "compliance"]);
+	const isQuality = (call: unknown) => (call as LensCall).systemPrompt.includes("Evaluá nombres");
+	let compliance = 0;
+	f.modelControl.reply = (input) => JSON.stringify(isQuality(input) || compliance++ ? { verdict: "pass", findings: [] } : { verdict: "fail", findings: ["test.cjs:1 · falta el caso 0"] });
+	await f.invoke("omi_workflow_lens", { lens: "quality" });
+	const flagged = await f.invoke("omi_workflow_lens", { lens: "compliance" });
+	assert.match(JSON.stringify(flagged.content), /amend/);
+	await assert.rejects(f.action({ action: "retry", reason: "Cubrir el caso 0" }), /amend/);
+	await f.action({ action: "amend", reason: "Cubrir el caso 0" });
+	let state = await f.state(); assert.equal(state.phase, "implement"); assert.equal(state.round, 0);
+	assert.deepEqual(state.steps.map((s) => s.id), ["C1", "C2"]);
+	await f.action({ action: "step", id: "C2" });
+	await f.write("zero.test.cjs", 'require("node:assert/strict").equal(require("./zero.cjs"), 0);\n'); await f.invoke("omi_workflow_check", { kind: "red", command: "node zero.test.cjs", stepId: "C2" });
+	await f.write("zero.cjs", "module.exports = 0;\n"); await f.invoke("omi_workflow_check", { kind: "green", command: "node zero.test.cjs", stepId: "C2" });
+	await f.invoke("omi_workflow_commit", { stepId: "C2", paths: ["zero.test.cjs", "zero.cjs"], message: "test: cubrir el caso 0" });
+	await assert.rejects(f.action({ action: "verified" }), /caso D1/);
+	await f.invoke("omi_workflow_check", { kind: "verification", command: "node test.cjs", caseId: "D1" });
+	await assert.rejects(f.action({ action: "verified" }), /lente compliance/);
+	await f.invoke("omi_workflow_lens", { lens: "compliance" });
+	await f.action({ action: "verified" });
+	state = await f.state(); assert.equal(state.phase, "pr"); assert.equal(state.round, 0);
+	assert.equal(f.modelCalls.filter(isQuality).length, 1);
+});

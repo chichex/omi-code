@@ -3,7 +3,7 @@ import { lstat, realpath } from "node:fs/promises";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { GitSnapshot, GithubItem } from "./data.ts";
 import { classifyIssue, createIssueSession, issueTriageState } from "./issue-triage.ts";
-import { checkIssueWorktree, createPlannedIssueWorktree, ensureIssueWorktree, inspectIssueWorktree, planIssueWorktree } from "./issue-worktree.ts";
+import { checkIssueWorktree, createPlannedIssueWorktree, ensureIssueWorktree, inspectIssueWorktree, planIssueWorktree, refreshMain } from "./issue-worktree.ts";
 import { assertIssueIdentity, discoverLegacyPreparations, readIssuePreparation, readIssueSession, saveIssuePreparation, verifyIssuePreparation, withIssuePreparationLock, type IssuePreparation } from "./issue-registry.ts";
 
 export type IssueClassification = Awaited<ReturnType<typeof classifyIssue>> & { body: string };
@@ -37,6 +37,9 @@ export async function prepareIssue(git: GitSnapshot, number: number, item: Githu
 			classification = await options.classify();
 			if (!classification) return undefined;
 			current();
+			// El worktree sale de main recién traída de origin; si no se puede, de main local, y se avisa.
+			const stale = await refreshMain(git, options.signal); current();
+			if (stale) ctx.ui.notify(stale, "warning");
 			const plan = await planIssueWorktree(git, item, classification.triage.type, options.signal);
 			record = { version: 1, commonDir: await realpath(git.commonDir), state: issueTriageState(item, classification.triage, plan), phase: "triaged", source: { body: classification.body, labels: item.labels } };
 			await saveIssuePreparation(git, record);
