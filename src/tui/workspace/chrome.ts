@@ -1,5 +1,6 @@
 // Chrome del workspace: montaje de paneles y controles persistentes, sin cargar datos ni cambiar sesiones.
 import { basename } from "node:path";
+import pkg from "../../../package.json" with { type: "json" };
 import type { CustomEditor, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { HStack, ScrollView, VStack, wrapTextWithAnsi, type Component, type Container, type TUI } from "@earendil-works/pi-tui";
 import { Lines, PaintedDocument } from "./components.ts";
@@ -16,7 +17,7 @@ interface HeaderSnapshot { theme: Theme; cwd: string; git: GitSnapshot | undefin
 export function workspaceHeader(snapshot: () => HeaderSnapshot, actions: NavigationActions): Component {
 	return new Lines((width) => {
 		const { theme: t, cwd, git, view } = snapshot(); const name = text(basename(git?.root ?? cwd));
-		return [surface(t, align(t.bold(t.fg("accent", " > omi code")) + `  ·  ${name}`, t.fg("dim", width >= 90 ? "Ctrl K comandos  F4 lateral " : "Ctrl K comandos "), width), width, true),
+		return [surface(t, align(t.bold(t.fg("accent", " > omi code")) + t.fg("dim", ` v${pkg.version}`) + `  ·  ${name}`, t.fg("dim", width >= 90 ? "Ctrl K comandos  F4 lateral " : "Ctrl K comandos "), width), width, true),
 			surface(t, workspaceTabs(width, view).map((tab) => tab.view === view ? t.fg("accent", t.bold(tab.label)) : t.fg("muted", tab.label)).join(""), width, true),
 			t.fg("border", "─".repeat(Math.max(0, width)))];
 	}, (event) => { if (event.type !== "click") return; if (event.y === 0 && event.x > event.width - 22) { void actions.palette(); return { handled: true }; } if (event.y === 1) { const tab = workspaceTabs(event.width, snapshot().view).find((item) => event.x >= item.start && event.x < item.end); if (tab) { actions.switchView(tab.view); return { handled: true }; } } return undefined; });
