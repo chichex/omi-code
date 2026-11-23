@@ -98,7 +98,7 @@ async function replaceTrustFile(dir: string, path: string, serialized: string, c
 }
 /** Escritura atómica, 0600, sin symlinks. Sólo tras una decisión humana; no es CAS entre procesos. */
 export async function writeTrust(dir: string, record: TrustRecord, options: TrustWriteOptions = {}): Promise<void> {
-	if (!Value.Check(RecordSchema, record)) throw new Error("Registro de Foundations inválido u obsoleto; configurá v2 de nuevo");
+	if (!Value.Check(RecordSchema, record)) throw new Error("Registro local de Foundations inválido; configuralo de nuevo con /omi-foundations");
 	if (record.accepted) {
 		const checked = checkBlock(record.accepted.block);
 		if ("reason" in checked || checked.block.repo !== record.repo || foundationsHash(checked.block) !== record.accepted.blockHash) throw new Error("Aceptación de Foundations inválida: bloque, repo o hash no coinciden");

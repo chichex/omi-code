@@ -94,7 +94,7 @@ test("foundations_session: inválido, ausente, v1 o sin KB no avisan y usan la a
 		const empty = ctx();
 		const fallback = await decideFoundations(await reading(t, other), empty.ctx, empty.deps(dir));
 		assert.equal(fallback.origin, "default", name); assert.equal(fallback.block, null, name); assert.equal(empty.notices.length, 0, name);
-		assert.match(fallback.notice, /todo auto/, name);
+		assert.match(fallback.notice, /todo auto/, name); assert.doesNotMatch(fallback.notice, /\bv[12]\b|obsolet/i, name);
 		assert.deepEqual(effectivePolicy(fallback), { politica: DEFAULT_POLICY, command: { block: null, accepted: false }, hash: null }, name);
 	}
 	await decideFoundations(await reading(t, kb), ctx().ctx, ctx().deps(dir));
@@ -171,7 +171,7 @@ test("foundations_session: sin KB y sin aceptada vale el default: nada pregunta"
 	const status = f.messages.at(-1)!;
 	assert.match(status, /Foundations: por defecto/);
 	assert.match(status, /arranque: auto\n  receta: auto\n  push \+ PR draft: auto/);
-	assert.match(status, /sin v2 aceptada: nada pregunta/);
+	assert.match(status, /sin configurar: nada pregunta/);
 	assert.doesNotMatch(status, /estricta|todo pregunta/);
 });
 

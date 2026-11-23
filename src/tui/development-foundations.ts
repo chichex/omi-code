@@ -19,7 +19,7 @@ export type FoundationsReading =
 	| { kind: "none"; reason: string }
 	| { kind: "unavailable"; key: TrustKey; reason: string }
 	| { kind: "missing"; key: TrustKey; perillas: KbDoc | null }
-	| { kind: "invalid"; key: TrustKey; reason: string; perillas: KbDoc }
+	| { kind: "invalid"; key: TrustKey; reason: string; perillas: KbDoc; legacy?: true }
 	| { kind: "valid"; key: TrustKey; block: FoundationsBlock; hash: string; perillas: KbDoc };
 export interface FoundationsPin {
 	version: 2; origin: "kb" | "local" | "default";
@@ -53,7 +53,7 @@ export async function readFoundations(kb: KbClient | undefined, cwd: string, run
 		if (!perillas) return { kind: "missing", key, perillas: null };
 		const parsed = parseFoundations(perillas.cuerpo, repo);
 		if (parsed.status === "valid") return { kind: "valid", key, block: parsed.block, hash: parsed.hash, perillas };
-		return parsed.status === "missing" ? { kind: "missing", key, perillas } : { kind: "invalid", key, reason: parsed.reason, perillas };
+		return parsed.status === "missing" ? { kind: "missing", key, perillas } : { kind: "invalid", key, reason: parsed.reason, perillas, ...(parsed.legacy ? { legacy: true as const } : {}) };
 	} catch (error) {
 		signal.throwIfAborted();
 		return { kind: "unavailable", key, reason: error instanceof Error ? error.message : "falló la lectura" };
@@ -71,7 +71,7 @@ function acceptedBlock(pin: FoundationsPin | undefined): FoundationsBlock | null
 	return checked.block;
 }
 function safePin(pin: FoundationsPin): FoundationsPin {
-	return pin.version !== 2 || pin.block && !acceptedBlock(pin) ? defaultPin(pin.reading, `Foundations inválido u obsoleto: ${DEFAULT_NOTICE}. Para pedir confirmaciones, guardá v2 con /omi-foundations.`) : pin;
+	return pin.version !== 2 || pin.block && !acceptedBlock(pin) ? defaultPin(pin.reading, `Foundations sin configurar: ${DEFAULT_NOTICE}. Para pedir confirmaciones, configuralo con /omi-foundations.`) : pin;
 }
 /** Qué vale en la sesión. Nunca pregunta: una revisión v2 nueva y válida se acepta sola, se registra y se avisa. */
 export async function decideFoundations(reading: FoundationsReading, ctx: ExtensionContext, deps: DecideDeps): Promise<FoundationsPin> {
@@ -81,8 +81,9 @@ export async function decideFoundations(reading: FoundationsReading, ctx: Extens
 		? { version: 2, origin: "local", block: accepted.block, hash: accepted.blockHash, docId: accepted.docId, author: accepted.author, date: accepted.date, notice: `${why}: vale la última revisión aceptada.`, reading }
 		: defaultPin(reading, `${why}: ${DEFAULT_NOTICE}.`);
 	if (reading.kind === "unavailable") return fallback(`KB no disponible (${reading.reason})`);
-	if (reading.kind === "missing") return fallback(`Las perillas de ${reading.key.product} no tienen Foundations v2 para ${reading.key.repo}`);
-	if (reading.kind === "invalid") return fallback(`Foundations inválido u obsoleto en la KB (${reading.reason})`);
+	// Un bloque del formato anterior es, para la persona, lo mismo que no tener Foundations.
+	if (reading.kind === "missing" || reading.kind === "invalid" && reading.legacy) return fallback(`Las perillas de ${reading.key.product} no tienen Foundations para ${reading.key.repo}`);
+	if (reading.kind === "invalid") return fallback(`Foundations inválido en la KB (${reading.reason})`);
 	const checked = checkBlock(reading.block);
 	if ("reason" in checked || foundationsHash(checked.block) !== reading.hash) return fallback("Foundations inválido en la KB");
 	if (deps.isCurrent?.() === false) return fallback("La decisión de Foundations quedó obsoleta durante la lectura");
@@ -113,17 +114,33 @@ export function effectivePolicy(pin: FoundationsPin | undefined, state?: Workflo
 	const block = accepted && (!state || issueRepo(state.source.url) === accepted.repo) ? accepted : null;
 	return { politica: block?.politica ?? DEFAULT_POLICY, command: { block, accepted: block !== null }, hash: block ? pin?.hash ?? null : null };
 }
-const ORIGINS = { kb: "KB", local: "local (última aceptada)", default: "por defecto (sin Foundations v2: nada pregunta)" };
+const ORIGINS = { kb: "KB", local: "local (última aceptada)", default: "por defecto (sin configurar: nada pregunta)" };
+const origin = (pin: FoundationsPin): string => `${ORIGINS[pin.origin]}${pin.hash ? ` · revisión ${pin.hash.slice(0, 8)}` : ""}${pin.docId ? ` · perillas ${pin.docId.slice(0, 8)}${pin.author ? ` · ${pin.author}` : ""}` : ""}`;
 /** Para /omi-work status y el detalle del progreso. Sin I/O. */
 export function foundationsLines(pin: FoundationsPin | undefined): string[] {
 	if (!pin) return ["Foundations: se lee de la KB; se decide en el primer punto del harness."];
 	pin = safePin(pin);
 	const block = acceptedBlock(pin); const policy = block?.politica ?? DEFAULT_POLICY;
 	return [
-		visibleText(`Foundations: ${ORIGINS[pin.origin]}${pin.hash ? ` · revisión ${pin.hash.slice(0, 8)}` : ""}${pin.docId ? ` · perillas ${pin.docId.slice(0, 8)}${pin.author ? ` · ${pin.author}` : ""}` : ""}`),
+		visibleText(`Foundations: ${origin(pin)}`),
 		"Políticas:", ...(Object.keys(POLICY_LABELS) as PolicyPoint[]).map((point) => `  ${POLICY_LABELS[point]}: ${policy[point]}`),
-		"Patrones que requieren confirmación:", ...(block?.confirmar.length ? block.confirmar.map((rule) => visibleText(`  ${rule}`)) : [block ? "  (lista vacía: todo comando SIMPLE sin confirmación por esta política)" : "  (sin v2 aceptada: nada pregunta)"]),
+		"Patrones que requieren confirmación:", ...(block?.confirmar.length ? block.confirmar.map((rule) => visibleText(`  ${rule}`)) : [block ? "  (lista vacía: todo comando SIMPLE sin confirmación por esta política)" : "  (sin configurar: nada pregunta)"]),
 		...(pin.notice ? [visibleText(`Aviso: ${pin.notice}`)] : []), "Editar: /omi-foundations",
+	];
+}
+const PREVIEW = 3;
+const label = (point: PolicyPoint) => POLICY_LABELS[point].charAt(0).toUpperCase() + POLICY_LABELS[point].slice(1);
+/** Para la pantalla OMI: qué pregunta, qué reglas hay y de dónde sale, en pocas líneas. Sin I/O. */
+export function foundationsSummary(pin: FoundationsPin | undefined): string[] {
+	if (!pin) return ["Todavía no se leyó de la KB: se decide al empezar un trabajo."];
+	pin = safePin(pin);
+	const block = acceptedBlock(pin); const policy = block?.politica ?? DEFAULT_POLICY; const rules = block?.confirmar ?? [];
+	const listed = rules.slice(0, PREVIEW).map((rule) => visibleText(rule)).join(" · ") + (rules.length > PREVIEW ? ` · y ${rules.length - PREVIEW} más` : "");
+	return [
+		(Object.keys(POLICY_LABELS) as PolicyPoint[]).map((point) => `${label(point)} ${policy[point]}`).join(" · "),
+		`Reglas de comandos: ${rules.length ? listed : "ninguna"}`,
+		block ? visibleText(origin(pin)) : "Sin configurar: el agente no te pide confirmación.",
+		...(block && pin.notice ? [visibleText(`Aviso: ${pin.notice}`)] : []),
 	];
 }
 interface Entry { reading: Promise<FoundationsReading>; generation?: number; pin?: FoundationsPin | undefined; deciding?: Promise<FoundationsPin> | undefined; triage?: Promise<TriagePolicyPin> }

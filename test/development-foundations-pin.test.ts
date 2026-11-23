@@ -4,7 +4,7 @@ import { readFile, mkdir, writeFile } from "node:fs/promises";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { checkBlock, DEFAULT_POLICY, foundationsHash, renderFoundationsBlock, STRICT_POLICY, type FoundationsBlock } from "../src/harness/foundations.ts";
 import { readTrust, trustPath, writeTrust } from "../src/harness/foundations-trust.ts";
-import { FoundationsGate, decideFoundations, effectivePolicy, foundationsLines, readFoundations, type FoundationsPin } from "../src/tui/development-foundations.ts";
+import { FoundationsGate, decideFoundations, effectivePolicy, foundationsLines, foundationsSummary, readFoundations, type FoundationsPin } from "../src/tui/development-foundations.ts";
 import { memoryKb } from "./helpers/mock-kb.ts";
 import { tempDir } from "./helpers/io.ts";
 
@@ -23,12 +23,13 @@ test("foundations_pin: pins legacy/invalid/hash alterado/default nunca aplican r
 	const legacy = { version: 1, repo: "test/repo", comandos: ["npm test"], politica: { ...STRICT_POLICY, fuera_de_catalogo: "auto" } };
 	for (const candidate of [undefined, { ...pin(), version: 1 }, { ...pin(), block: legacy }, { ...pin(), block: { ...value, confirmar: [""] } }, { ...pin(), hash: "0".repeat(64) }, { ...pin(), origin: "default" }, { ...pin(), reading: { ...reading, hash: "otro" } }]) byDefault(candidate);
 	assert.deepEqual(effectivePolicy(pin()).command, { block: value, accepted: true });
-	assert.match(foundationsLines({ ...pin(), version: 1 } as never).join("\n"), /obsoleto|configur/i);
+	assert.match(foundationsLines({ ...pin(), version: 1 } as never).join("\n"), /sin configurar/i);
+	assert.doesNotMatch(foundationsLines({ ...pin(), version: 1 } as never).join("\n"), /\bv[12]\b|obsolet/i);
 });
 test("foundations_pin: resumen vertical distingue lista vacía aceptada del default", () => {
 	assert.match(foundationsLines(pin()).join("\n"), /todo comando SIMPLE sin confirmación por esta política/);
 	assert.match(foundationsLines(undefined).join("\n"), /se decide en el primer punto/);
-	assert.match(foundationsLines({ ...pin(), origin: "default", block: null, hash: null }).join("\n"), /sin v2 aceptada: nada pregunta/);
+	assert.match(foundationsLines({ ...pin(), origin: "default", block: null, hash: null }).join("\n"), /sin configurar: nada pregunta/);
 	const rules = { ...value, confirmar: ["git push *", "npm publish"] }; const hash = foundationsHash(rules);
 	const rows = foundationsLines({ ...pin(), block: rules, hash, reading: { ...reading, block: rules, hash } });
 	assert.ok(rows.includes("  git push *")); assert.ok(rows.includes("  npm publish"));
@@ -71,4 +72,16 @@ test("foundations_pin: leer para abrir panel no acepta, no escribe KB ni confian
 	assert.equal(result.kind, "valid"); assert.equal(gate.current(context), undefined);
 	assert.ok(!kb.calls.some((call) => call.tool === "guardar")); assert.equal(await readTrust(dir, { ...key, kbUrl: kb.url }), undefined);
 	assert.equal((await readFoundations(undefined, "/tmp", runner, new AbortController().signal)).kind, "unavailable");
+});
+
+test("foundations_pin: resumen corto para la pantalla OMI: qué pregunta, qué reglas hay y de dónde sale", () => {
+	assert.deepEqual(foundationsSummary(undefined), ["Todavía no se leyó de la KB: se decide al empezar un trabajo."]);
+	const unset = foundationsSummary({ ...pin(), version: 1 } as never).join("\n");
+	assert.match(unset, /^Arranque auto · Receta auto · Push \+ PR draft auto$/m); assert.match(unset, /^Reglas de comandos: ninguna$/m);
+	assert.match(unset, /Sin configurar/); assert.doesNotMatch(unset, /\bv[12]\b|obsolet|Aviso/i);
+	const many = { ...value, confirmar: ["git push *", "npm publish*", "rm -rf *", "gh pr merge *"] }; const hash = foundationsHash(many);
+	const accepted = foundationsSummary({ ...pin(), block: many, hash, reading: { ...reading, block: many, hash } }).join("\n");
+	assert.match(accepted, /^Arranque ask · Receta ask · Push \+ PR draft ask$/m);
+	assert.match(accepted, /^Reglas de comandos: git push \* · npm publish\* · rm -rf \* · y 1 más$/m);
+	assert.match(accepted, new RegExp(`^KB · revisión ${hash.slice(0, 8)} · perillas doc$`, "m")); assert.doesNotMatch(accepted, /Sin configurar/);
 });
