@@ -187,6 +187,7 @@ el historial y la edición siguen usando el renderer de Pi; no hay un segundo pr
   Esta vista no edita, agrega al stage, comitea ni cambia de branch.
 - **5 · OMI:** proyecto vinculado, servicios y ambientes con versión y estado informados por OMI.
   Usa el vínculo local y la sesión de `omi login`; **r** actualiza. Sin vínculo se indica `omi init`, sin inventar servicios.
+  Abajo muestra todo, sin apretar nada: Foundations, lifecycle (Review · Land · Ship), continuidad y lo que falta configurar. **r** también relee la configuración de la KB, **s** corre `/omi-setup` y **f** edita Foundations ([detalle](docs/development-harness.md#pestaña-omi)).
   Es el punto de consulta de infraestructura, separado de GitHub. Las operaciones de variables, recursos, registry, visibilidad, jobs, versiones, logs y deploys
   siguen disponibles mediante las herramientas en Chat, con sus confirmaciones habituales; el panel no las ejecuta automáticamente.
 - **Ubicación del repo:** la lateral y `/omi-workspace` muestran branch, cambios locales, divergencia cuando existe upstream, tipo de checkout y ruta activa.
@@ -248,9 +249,9 @@ el historial y la edición siguen usando el renderer de Pi; no hay un segundo pr
 | Ctrl 2 o `/omi-issues` | Issues abiertos de GitHub |
 | Ctrl 3 o `/omi-prs` | PRs abiertos de GitHub |
 | Ctrl 4 o `/omi-changes` | Cambios locales |
-| Ctrl 5 o `/omi-platform` | OMI: proyecto, servicios, ambientes y Foundations vigente con su origen |
+| Ctrl 5 o `/omi-platform` | OMI: proyecto, servicios, ambientes, Foundations, lifecycle, continuidad y lo que falta configurar |
 | **f** en OMI o `/omi-foundations` | Editar Foundations en el panel vertical: patrones que requieren confirmación y políticas `ask`/`auto`; Guardar vale ya en la sesión ([detalle](docs/development-harness.md#foundations-comandos-y-permisos-por-repo)) |
-| `/omi-setup` o «Configurar lo que falta» en Ctrl K | Corre lo que falta configurar: Foundations y después el lifecycle (Review, Land, Ship y continuidad). Sin nada para correr, muestra el diagnóstico ([detalle](docs/development-harness.md#setup-de-lo-que-falta)) |
+| `/omi-setup`, «Configurar lo que falta» en Ctrl K o **s** en la vista OMI | Corre lo que falta configurar: Foundations y después el lifecycle (Review, Land, Ship y continuidad). Sin nada para correr, muestra el diagnóstico ([detalle](docs/development-harness.md#setup-de-lo-que-falta)) |
 | Ctrl 6 o `/omi-workflow` | Progreso: recorrido completo del harness y modo previsto/real por etapa |
 | Ctrl K o `/omi` | Paleta de comandos (Ctrl K reemplaza borrar hasta fin de línea en el editor) |
 | F4 o `/omi-sidebar` | Mostrar / ocultar lateral |

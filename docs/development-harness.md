@@ -49,7 +49,7 @@ No hay un comando para empezar: `/omi-triage` y `/omi-work start` ya no existen.
 | `/omi-work stack` | Actualizar un [stack de PRs](#stack-de-prs) publicado: mergea el de abajo en el de arriba y re-apunta a `main` el que quedó sobre uno mergeado. Sigue la misma política que el push: con `push_pr: ask` pide el sí. |
 | `/omi-work status` | Consultar el estado sin llamar al modelo, con la revisión de Foundations vigente, sus políticas y sus patrones de confirmación en lista vertical. |
 | `/omi-work foundations` | Abrir el panel dedicado de configuración, como **f** en la vista OMI o `/omi-foundations`. No inicia ni retoma trabajo, no acepta ni guarda al abrir; sólo Guardar explícitamente persiste v2. |
-| `/omi-setup` | Correr [lo que falta configurar](#setup-de-lo-que-falta): el panel de Foundations y después el wizard del lifecycle, también lo postergado. Sin nada para correr, muestra el diagnóstico. Como «Configurar lo que falta» en la paleta (Ctrl K). |
+| `/omi-setup` | Correr [lo que falta configurar](#setup-de-lo-que-falta): el panel de Foundations y después el wizard del lifecycle, también lo postergado. Sin nada para correr, muestra el diagnóstico. Como «Configurar lo que falta» en la paleta (Ctrl K) o **s** en la [pestaña OMI](#pestaña-omi). |
 | `/omi-work stop` | Salir explícitamente del flujo y restaurar las tools normales del chat, sin borrar ni revertir archivos. También sale de un harness bloqueado (estado inválido o atrasado) sin tocar el estado guardado. |
 | Ctrl 6 / `/omi-workflow` | Pantalla 6 · Progreso: recorrido completo de sólo lectura, también con la lateral oculta. |
 | `/omi-progress` | Detalle del progreso en el workspace TUI, también con la lateral oculta. |
@@ -273,7 +273,7 @@ Sólo **Guardar explícitamente** desde el panel escribe una revisión de las pe
 - Las perillas resultantes deben entrar en el límite legible del cliente de KB (**400.000 caracteres**, incluido JSON escapado y contenido ajeno); excederlo falla antes de enviar, sin rebajar límites de validación de reglas.
 - **Concurrencia optimista, no CAS ni exclusión mutua remota**: todavía existe la ventana entre última lectura y envío. No se promete atomicidad distribuida ni se implementa limpieza de datos reales.
 
-`/omi-work status`, la vista OMI y el progreso muestran origen/revisión, tres políticas, patrones verticales y avisos; nunca concatenan reglas con pipes.
+`/omi-work status`, la [pestaña OMI](#pestaña-omi) y el progreso muestran origen/revisión, tres políticas, patrones verticales y avisos; nunca concatenan reglas con pipes. La pestaña OMI suma qué hace cada política y el motivo, por ejemplo el formato anterior.
 
 ### Límites
 
@@ -284,7 +284,7 @@ Sólo **Guardar explícitamente** desde el panel escribe una revisión de las pe
 - Sin KB, una revisión aceptada vieja puede ser más o menos permisiva que la vigente.
 - Revertir código/configuración no deshace efectos de comandos ya ejecutados; no se promete rollback externo.
 - Un repo cuyo nombre no es un producto de la KB no tiene Foundations.
-- Cada sesión en un repo de GitHub lee la KB: tres llamadas MCP.
+- Cada sesión en un repo de GitHub lee la KB: tres llamadas MCP. **r** en la pestaña OMI y cada guardado del setup releen: otras tres.
 
 ## Preguntas en tanda
 
@@ -565,7 +565,7 @@ La continuidad se detiene por manual, rechazo/cancelación, bloqueo, presupuesto
 
 ## Setup de lo que falta
 
-OMI detecta solo lo que falta configurar y lo corre en orden: primero el [panel de Foundations](#foundations-comandos-y-permisos-por-repo), después el [wizard del lifecycle](#onboarding-del-lifecycle). `/omi-setup` o «Configurar lo que falta» en la paleta (Ctrl K) lo corre a pedido.
+OMI detecta solo lo que falta configurar y lo corre en orden: primero el [panel de Foundations](#foundations-comandos-y-permisos-por-repo), después el [wizard del lifecycle](#onboarding-del-lifecycle). `/omi-setup`, «Configurar lo que falta» en la paleta (Ctrl K) o **s** en la [pestaña OMI](#pestaña-omi) lo corren a pedido.
 
 | Área | Se ofrece si | No se ofrece |
 |---|---|---|
@@ -637,6 +637,58 @@ omi init --development --check --json  # diagnóstico de sólo lectura
 
 `--check` informa el estado (`unconfigured`, `pending`, `configured`, `manual`, `not-applicable`, `invalid` o `unavailable`), si se pueden iniciar efectos, lo detectado (cada workflow con su `contract`: `omi-review-v1` o `null`) y las recomendaciones. Ejemplo: `"recommendations": [{ "kind": "continuity", "message": "Continuidad sin configurar: el trabajo para en el PR draft" }]`. Sin `--json`, cada una sale como `Recomendación: …`. Una KB caída es `unavailable`, nunca «sin configurar». Guardar no ejecuta workflows, merge ni deploy.
 
+## Pestaña OMI
+
+La pestaña **5 · OMI** (Ctrl 5 o `/omi-platform`) muestra toda la configuración a la vista, en vertical, sin apretar nada. Pedido del dueño (2026-11-23). Las secciones, en orden:
+
+| Sección | Qué muestra |
+|---|---|
+| Proyecto OMI | El vínculo `.omi/project.json`, servicios y ambientes, como antes |
+| Foundations | Origen y revisión; cada política en su línea con lo que hace en `ask` o `auto`; todos los patrones de confirmación, uno por línea; el aviso de la sesión y el motivo, por ejemplo el formato anterior o la KB caída |
+| Lifecycle | Estado (`configurado`, `pendiente de aceptar`, `sin configurar`, `no disponible`, `inválido`, más `postergado`); Review con proveedor (revisor local, reviews de GitHub o `workflow@ref` con modelo) y espera; correcciones con modo y rondas; Land con modo, base, método, riesgo máximo y checks requeridos; Ship con estado y cada destino; presupuesto |
+| Continuidad | Las cinco palancas con lo que hace cada modo, o «Deshabilitada: el trabajo para en el PR draft» |
+| Falta configurar | El diagnóstico del [setup](#setup-de-lo-que-falta), cada ítem con cómo resolverlo, o «Todo configurado» |
+
+Teclas: **r** actualiza el proyecto OMI y relee la configuración de la KB; **s** corre `/omi-setup`; **f** abre el panel de Foundations; **Esc** vuelve al chat. Las flechas, PgUp/PgDn, Home y la rueda desplazan la vista.
+
+Un recorte a 80 columnas en `acme/app`, sin Foundations ni lifecycle (`…` marca lo omitido):
+
+```text
+ FOUNDATIONS · cuándo te pide confirmación el agente
+ Origen: por defecto (sin configurar: nada pregunta)
+ Se fija en esta sesión al empezar un trabajo.
+ Arranque: auto. Crea el issue, el worktree y la sesión sin preguntar, con el
+   texto del agente.
+ …
+ Patrones que requieren confirmación:
+   (sin configurar: nada pregunta)
+ Motivo: Sin Foundations para acme/app: rige el default, nada pregunta.
+
+ LIFECYCLE · Review · Land · Ship
+ Estado: sin configurar · el trabajo termina en el PR draft, sin Review, Land
+   ni Ship
+
+ CONTINUIDAD · cómo sigue después del PR draft
+ Deshabilitada: el trabajo para en el PR draft.
+
+ FALTA CONFIGURAR · hace 4s
+ ✗ Foundations · falta: Sin Foundations para acme/app: rige el default, nada
+   pregunta.
+   Con /omi-setup armás las reglas y políticas; sólo Guardar escribe.
+ …
+```
+
+De dónde salen los datos:
+
+- La pestaña vive en otra extensión: el harness calcula la configuración y la publica por `pi.events` (`omi:config`). La pestaña sólo la lee; dibujar no hace I/O.
+- Al abrir la sesión usa la lectura de Foundations que la sesión ya hizo: no suma llamadas a la KB. **r** relee la KB. Después de guardar desde el setup también se relee; después de guardar Foundations, se usa lo guardado.
+- Foundations muestra el pin de la sesión con «Vigente en esta sesión». Si todavía no se fijó, muestra lo que va a regir con «Se fija en esta sesión al empezar un trabajo»: la v2 de la KB, la última aceptada en esta máquina o el default. Si la KB ya tiene otra revisión, lo dice: vale desde la próxima sesión.
+- Con la KB caída, el lifecycle muestra la última aceptación local, rotulada «sólo para observar, no inicia efectos».
+- Sin datos lo dice con el motivo: sin sesión persistente, leyendo, o la lectura falló. Si falla una relectura, se ve la anterior con el error.
+- Sólo con la TUI interactiva; offline, **r** no consulta la KB.
+
+Las líneas largas se parten al ancho y conservan la sangría: nada se corta a 80 ni a 132 columnas.
+
 ## Progreso en la TUI
 
 `PROGRESO · #N` muestra ruta, etapa, actividad, pasos, checks observados y bloqueos. Con el lifecycle habilitado, el recorrido suma Review del PR, Land, Ship y Entrega verificada, y una sección **Review · Land · Ship** con presupuesto (intentos, rondas, tiempo activo), Review, checks del SHA actual, hallazgos, merge, cada destino Ship y bloqueos; la lateral resume hallazgos, rondas e intentos en una línea. `/omi-work status` muestra lo mismo. Un trabajo que terminó en PR draft sin lifecycle sigue como **PR draft abierto** y avisa que no hubo Review, Land ni Ship. El detalle muestra también Foundations: revisión, origen, tres políticas y patrones de confirmación verticales. Los eventos de lectura, comandos, preguntas y lentes actualizan la actividad sin esperar el refresco de recursos. El detalle incluye preguntas, evidencia, lentes e intentos anteriores. No convierte una tool exitosa ni un workflow verde de Actions en aprobación del PR.
@@ -651,4 +703,4 @@ El panel sólo pertenece al cwd/worktree/rama correctos, se reinicia al cambiar 
 
 ## Verificación del cambio
 
-El arranque tiene sus propios tests, con Git, worktrees y sesiones reales y con GitHub y modelo falsos: pedido nuevo sin preguntar por defecto y con un solo sí con `arranque: ask`, issue existente sin duplicar, decir que no, token de un solo uso, guardas sin efectos y recarga sin kickoff. Los tests de pty real recorren el panel de issue existente y los tres resultados del pedido nuevo: harness, chat y falta de información. El del panel: Enter en Issues, el sí, Esc en la clasificación y el harness arrancado en el worktree. El del agente: un pedido en el chat, la tool, un turno que termina sin seguir, clasificar antes de crear el issue y antes del sí, reutilizar ese resultado y arrancar el harness en el worktree sólo después de confirmar. Los otros dos resultados continúan en el chat original sin recursos, con las tools normales y sin permisos nuevos. Los lentes tienen tests con Git real: la evidencia que reciben, los avisos que no frenan el PR draft, el bloqueo por un fail de Seguridad y un diff de más de 200.000 caracteres revisado por partes sin truncar, y ninguna llamada por encima del presupuesto, con la evidencia resumida y explícita cuando no entra. Los tests del flujo cubren las tres rutas con Git y comandos reales en repos temporales, modelos/GitHub falsos, consentimientos, invalidación, evidencia, recuperación, concurrencia, cancelación y panel estrecho/claro/oscuro. El cuerpo del PR draft tiene cobertura de su formato, de un único `Closes` fuera de bloques con datos hostiles (cierres falsos, menciones, HTML, `</details>`, marcadores, controles), de los presupuestos con aviso, del cuerpo exacto que recibe `gh` y se muestra antes del sí, y del recibo pendiente de un cuerpo anterior con `ask` y con `auto`. La sección del issue tiene cobertura del pedido byte a byte, marcadores rotos, contraste que la ignora, escape de contenido hostil (sin links, imágenes, autolinks, HTML ni menciones activos) y escrituras no confirmadas. El stack tiene tests del reducer (agrupación, plan de ramas y bases, PRs abiertos, actualización sin cambiar la identidad), de la publicación contra un GitHub falso (orden, bases, `Refs`/`Closes`, recuperación sin duplicar y validaciones por PR), de la actualización con Git real contra un remoto bare local (merge del de abajo, squash a `main` sin conflicto, re-apuntar, segunda corrida sin cambios, conflicto, PR cerrado y rama reescrita) y un recorrido completo con dos PRs encadenados. Los acuerdos del chat, de citas aceptadas y rechazadas (modelo, tools, mensajes de OMI, inventadas y triviales). Las preguntas en tanda tienen tests del componente (lo que dibuja y cada tecla, también respuesta libre, elección múltiple, pestañas y cancelar), del contrato de `omi_ask` (esquema, sin UI, cancelar, opción frente a texto libre y el harness) y un PTY real que abre una tanda dentro del workspace, con resize y Esc. El panel de Foundations tiene tests de precarga v2 frente a aceptación, borradores/errores, pegado largo e invisible, foco, wrap/scroll, cancelar, revisión, temas y resize 80×24/132×40. Su integración usa Git temporal y KB falsa: apertura sin escrituras, reemplazo v1 acotado, edición sin ejecución/grant y reintento explícito. Los tests de persistencia cubren retry concurrente, límite de documento, aceptación pendiente frente a pin nuevo y fallos parciales sin permisos falsos. Los del setup verifican que al arrancar el harness o una sesión nueva sin Foundations se ofrece una vez, que **Más adelante** persiste por revisión y Esc no escribe, que el formato anterior se avisa como tal, que publicar sin continuidad ofrece el wizard sin adoptar el draft, y que no se ofrece en resume, reload, fork, offline, sin UI ni con la KB caída. Foundations tiene tests con un MCP falso por HTTP y el `createMcpExtension` real de Pi, que fallan si un bump de Pi cambia cómo se registran o ejecutan las tools MCP o cómo se reemplaza `builtin:mcp`; y cuentan los avisos de aceptación, reutilización de permisos, cambio de etiqueta, `resume`, `replan`, rechazo, KB caída y bloque inválido o ajeno. La aprobación tiene cobertura específica de documento íntegro, comandos largos/multilínea y caracteres de control, navegación/resize/temas, decisiones negativas y revalidación durante la revisión. Una prueba con Pi en PTY real recorre 80×24, resize a 132×40 y vuelta, temas claro/oscuro, navegación hasta el final del comando, cancelar y aprobar explícitamente con GitHub falso; no es una evaluación visual humana. El empaquetado comprueba el binario instalado. No equivalen a una prueba contra GitHub/OMI real ni a una evaluación de calidad de modelos: esas pruebas requieren una persona.
+El arranque tiene sus propios tests, con Git, worktrees y sesiones reales y con GitHub y modelo falsos: pedido nuevo sin preguntar por defecto y con un solo sí con `arranque: ask`, issue existente sin duplicar, decir que no, token de un solo uso, guardas sin efectos y recarga sin kickoff. Los tests de pty real recorren el panel de issue existente y los tres resultados del pedido nuevo: harness, chat y falta de información. El del panel: Enter en Issues, el sí, Esc en la clasificación y el harness arrancado en el worktree. El del agente: un pedido en el chat, la tool, un turno que termina sin seguir, clasificar antes de crear el issue y antes del sí, reutilizar ese resultado y arrancar el harness en el worktree sólo después de confirmar. Los otros dos resultados continúan en el chat original sin recursos, con las tools normales y sin permisos nuevos. Los lentes tienen tests con Git real: la evidencia que reciben, los avisos que no frenan el PR draft, el bloqueo por un fail de Seguridad y un diff de más de 200.000 caracteres revisado por partes sin truncar, y ninguna llamada por encima del presupuesto, con la evidencia resumida y explícita cuando no entra. Los tests del flujo cubren las tres rutas con Git y comandos reales en repos temporales, modelos/GitHub falsos, consentimientos, invalidación, evidencia, recuperación, concurrencia, cancelación y panel estrecho/claro/oscuro. El cuerpo del PR draft tiene cobertura de su formato, de un único `Closes` fuera de bloques con datos hostiles (cierres falsos, menciones, HTML, `</details>`, marcadores, controles), de los presupuestos con aviso, del cuerpo exacto que recibe `gh` y se muestra antes del sí, y del recibo pendiente de un cuerpo anterior con `ask` y con `auto`. La sección del issue tiene cobertura del pedido byte a byte, marcadores rotos, contraste que la ignora, escape de contenido hostil (sin links, imágenes, autolinks, HTML ni menciones activos) y escrituras no confirmadas. El stack tiene tests del reducer (agrupación, plan de ramas y bases, PRs abiertos, actualización sin cambiar la identidad), de la publicación contra un GitHub falso (orden, bases, `Refs`/`Closes`, recuperación sin duplicar y validaciones por PR), de la actualización con Git real contra un remoto bare local (merge del de abajo, squash a `main` sin conflicto, re-apuntar, segunda corrida sin cambios, conflicto, PR cerrado y rama reescrita) y un recorrido completo con dos PRs encadenados. Los acuerdos del chat, de citas aceptadas y rechazadas (modelo, tools, mensajes de OMI, inventadas y triviales). Las preguntas en tanda tienen tests del componente (lo que dibuja y cada tecla, también respuesta libre, elección múltiple, pestañas y cancelar), del contrato de `omi_ask` (esquema, sin UI, cancelar, opción frente a texto libre y el harness) y un PTY real que abre una tanda dentro del workspace, con resize y Esc. El panel de Foundations tiene tests de precarga v2 frente a aceptación, borradores/errores, pegado largo e invisible, foco, wrap/scroll, cancelar, revisión, temas y resize 80×24/132×40. Su integración usa Git temporal y KB falsa: apertura sin escrituras, reemplazo v1 acotado, edición sin ejecución/grant y reintento explícito. Los tests de persistencia cubren retry concurrente, límite de documento, aceptación pendiente frente a pin nuevo y fallos parciales sin permisos falsos. Los del setup verifican que al arrancar el harness o una sesión nueva sin Foundations se ofrece una vez, que **Más adelante** persiste por revisión y Esc no escribe, que el formato anterior se avisa como tal, que publicar sin continuidad ofrece el wizard sin adoptar el draft, y que no se ofrece en resume, reload, fork, offline, sin UI ni con la KB caída. La [pestaña OMI](#pestaña-omi) tiene tests del presenter a 132, 80 y 40 columnas (cada sección, los estados del lifecycle, el formato anterior, sin datos y sin cortes) y del harness que la publica: al abrir la sesión, con **r**, después de `/omi-setup`, sin UI y offline. Son de renderer, no una evaluación visual humana. Foundations tiene tests con un MCP falso por HTTP y el `createMcpExtension` real de Pi, que fallan si un bump de Pi cambia cómo se registran o ejecutan las tools MCP o cómo se reemplaza `builtin:mcp`; y cuentan los avisos de aceptación, reutilización de permisos, cambio de etiqueta, `resume`, `replan`, rechazo, KB caída y bloque inválido o ajeno. La aprobación tiene cobertura específica de documento íntegro, comandos largos/multilínea y caracteres de control, navegación/resize/temas, decisiones negativas y revalidación durante la revisión. Una prueba con Pi en PTY real recorre 80×24, resize a 132×40 y vuelta, temas claro/oscuro, navegación hasta el final del comando, cancelar y aprobar explícitamente con GitHub falso; no es una evaluación visual humana. El empaquetado comprueba el binario instalado. No equivalen a una prueba contra GitHub/OMI real ni a una evaluación de calidad de modelos: esas pruebas requieren una persona.
