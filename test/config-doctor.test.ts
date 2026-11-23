@@ -1,7 +1,7 @@
 // Diagnóstico puro de lo que falta configurar: sin I/O, sólo lecturas que ya hizo la sesión.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { configLines, diagnoseConfig, FORMATO_ANTERIOR, type ConfigDoctorInput } from "../src/harness/config-doctor.ts";
+import { configLines, diagnoseConfig, FORMATO_ANTERIOR, stopsAtDraft, type ConfigDoctorInput } from "../src/harness/config-doctor.ts";
 import { foundationsHash, type FoundationsBlock } from "../src/harness/foundations.ts";
 import type { TrustRecord } from "../src/harness/foundations-trust.ts";
 import type { LifecycleOnboardingState } from "../src/harness/lifecycle-onboarding.ts";
@@ -117,4 +117,16 @@ test("config_doctor: las líneas muestran área, estado y cómo resolver, sin re
 	assert.match(text, /Lifecycle · falta:/); assert.match(text, /Proyecto OMI · falta:/);
 	assert.match(text, /\/omi-setup/); assert.doesNotMatch(text, /\|/);
 	assert.ok(lines.every((line) => line.length > 0));
+});
+
+test("config_doctor: al publicar el draft sólo cuenta un lifecycle que falta, está pendiente o no tiene continuidad", () => {
+	const reading: FoundationsReading = { kind: "valid", key, block, hash: foundationsHash(block), perillas };
+	const at = (state: LifecycleOnboardingState, local: LifecycleTrustReading = { kind: "missing" }) => stopsAtDraft(diagnoseConfig(input(reading, { lifecycle: { state, local } })));
+	assert.equal(at(lifecycle("unconfigured", [CONTINUITY], "missing:doc-7")), true);
+	assert.equal(at(lifecycle("pending")), true);
+	assert.equal(at(lifecycle("not-applicable", [CONTINUITY])), true);
+	assert.equal(at(lifecycle("configured", [REVIEW])), false, "sólo la Review GHA no frena en el draft");
+	assert.equal(at(lifecycle("configured")), false);
+	assert.equal(at(lifecycle("not-applicable", [CONTINUITY]), lifecycleDeferred("lifecycle:abc")), false, "postergado no insiste al publicar");
+	assert.equal(at({ status: "unavailable", revision: null, reason: "KB caída", recommendations: [] }), false);
 });

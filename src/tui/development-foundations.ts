@@ -171,6 +171,12 @@ export class FoundationsGate {
 			.catch((error: unknown): FoundationsReading => ({ kind: "none", reason: `No se pudo leer Foundations: ${error instanceof Error ? error.message : "lectura cancelada"}` }));
 		remember(file, { reading });
 	}
+	/** La lectura que empezó al abrir la sesión (o la del último Guardar), sin releer la KB ni decidir el pin: la usa el setup. */
+	async loaded(ctx: ExtensionContext): Promise<FoundationsReading | undefined> {
+		const file = this.file(ctx);
+		if (!file) return undefined;
+		this.load(ctx); return sessions.get(file)?.reading;
+	}
 	/** El editor usa esta lectura, nunca pin(): abrir no acepta ni escribe nada. */
 	async read(ctx: ExtensionContext, signal: AbortSignal): Promise<FoundationsReading> {
 		return readFoundations(this.deps.kb, ctx.cwd, this.deps.runner, signal);

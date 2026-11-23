@@ -669,6 +669,14 @@ test("workspace_main sólo ofrece volver en worktrees: paleta, Enter en Ubicaci�
 	} finally { await main.stop(); }
 });
 
+test("workspace_paleta: «Configurar lo que falta» despacha /omi-setup al harness, junto a Foundations", async (t) => {
+	const ui = await visualHarness(await tempDir(t), { paletteAction: "Configurar lo que falta" }); t.after(ui.stop);
+	await ui.command("omi");
+	const options = ui.paletteOptions.at(-1) ?? [];
+	assert.equal(options[options.indexOf("Foundations") + 1], "Configurar lo que falta");
+	assert.deepEqual(ui.dispatched.at(-1), { text: "/omi-setup", options: { expandPromptTemplates: true } });
+});
+
 test("workspace_SUBAGENTS: bus real, render inmediato, sigue al quedar padre idle y finaliza por end", async (t) => {
 	const ui = await visualHarness(await tempDir(t)); t.after(ui.stop);
 	const screen = () => ui.frame(132, 70).lines.map(stripTerminalSequences).join("\n");

@@ -252,6 +252,11 @@ export function workspaceExtension(io: Io, args: string[]): InlineExtension {
 				["Progreso de desarrollo", showProgress], ["Foundations", editFoundations], ["PR de la rama actual", showBranchPr], ["GitHub Actions", showActions], ["Subagentes", showSubagents], ["Elegir modelo", showModel], ["Ventana de contexto", showContext], ["Ubicación / worktree", showWorkspace], ["Recursos del equipo", showResources], ["Mostrar / ocultar lateral", toggleSidebar], ["Personalizar lateral", customizeSidebar], ["Alternar detalle de herramientas", () => { ctx.ui.setToolsExpanded(!ctx.ui.getToolsExpanded()); }], ["Actualizar datos", () => { void refreshLocal(); void refreshRemote(); }],
 				["Trabajar en el issue seleccionado", workOnSelectedIssue]];
 			if (git?.linked) actions.splice(WORKSPACE_VIEWS.length, 0, ["Volver al repo principal", () => pi.sendUserMessage("/omi-main", { expandPromptTemplates: true })]);
+			// El setup también es del harness: corre lo que falta configurar (Foundations y lifecycle).
+			actions.splice(actions.findIndex(([label]) => label === "Foundations") + 1, 0, ["Configurar lo que falta", () => {
+				if (!ctx.isIdle() || ctx.hasPendingMessages()) { ctx.ui.notify("Esperá a que termine el turno antes de configurar.", "warning"); return; }
+				pi.sendUserMessage("/omi-setup", { expandPromptTemplates: true });
+			}]);
 			let selected: string | undefined;
 			try {
 				selected = await ctx.ui.custom<string | undefined>((ui, _theme, keys, done) => {

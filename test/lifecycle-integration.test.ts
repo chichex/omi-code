@@ -167,6 +167,7 @@ test("chichex/omi-code: merge siempre humano aunque Land diga auto", async t => 
  assert.ok(!effects(gh).some(e => e.includes("PUT")), "sin sí no hay merge"); assert.equal((await f.state()).phase, "land");
 });
 
+// Cambio de requisito del dueño (2026-11-23): al entrar al harness corre el setup unificado, Foundations primero y después el lifecycle.
 test("onboarding: el detector lee al abrir la sesión, la oferta aparece al entrar al harness y Esc no desactiva nada", async t => {
  const kb = memoryKb({ products: ["app"] });
  const f = await developmentFixture(t, { kb, repo: "acme/app" }); const root = f.checkout.root;
@@ -174,9 +175,11 @@ test("onboarding: el detector lee al abrir la sesión, la oferta aparece al entr
  git(root, "add", "."); git(root, "commit", "-q", "-m", "ci: release"); git(root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
  await f.attach();
  assert.equal(f.asked.length, 0, "abrir la sesión no pregunta: el detector sólo lee");
+ // Sin Foundations en la KB, el setup lo ofrece primero; «Más adelante» sigue con el lifecycle.
+ f.uiControl.questions = screen => /Foundations de acme\/app/.test(screen) ? ["2"] : ["\x1b"];
  await f.start();
- assert.equal(f.asked.length, 1, "la oferta aparece al entrar al harness");
- const screen = f.asked[0]!.join("\n"); assert.match(screen, /Ship/); assert.match(screen, /Más adelante/);
+ assert.equal(f.asked.length, 2, "la oferta del lifecycle aparece al entrar al harness, después de Foundations");
+ const screen = f.asked[1]!.join("\n"); assert.match(screen, /Ship/); assert.match(screen, /Más adelante/);
  assert.deepEqual(await readLifecycleTrust(lifecycleTrustDir(f.home), { kbUrl: kb.url, product: "app", repo: "acme/app" }), { kind: "missing" }, "Esc no acepta ni posterga");
  assert.equal(kb.calls.filter(c => c.tool === "guardar").length, 0, "Esc no escribe la KB");
  assert.equal((await f.state()).phase, "explore", "el harness sigue igual");

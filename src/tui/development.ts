@@ -24,6 +24,7 @@ import { adoptLifecycle, landLifecycle, LIFECYCLE_COMMANDS, LifecycleDeclined, r
 import { fixLifecycle } from "./development-lifecycle-fix.ts";
 import { shipLifecycle } from "./development-lifecycle-ship.ts";
 import { LifecycleOnboarding } from "./development-lifecycle-onboarding.ts";
+import { registerConfigSetup, type ConfigSetupDeps } from "./development-config-setup.ts";
 import { continueDevelopment } from "./development-continue.ts";
 
 const KICKOFF = "Continuá el harness de desarrollo activo desde su etapa persistida. Respetá sus bloqueos y pedí los permisos pendientes; no saltees etapas.";
@@ -44,7 +45,7 @@ async function checkWriteTarget(root: string, path: string): Promise<void> {
 		}
 	}
 }
-export function developmentHarnessExtension(io: Io, args: readonly string[], deps: DevelopmentDeps = {}): InlineExtension {
+export function developmentHarnessExtension(io: Io, args: readonly string[], deps: DevelopmentDeps & ConfigSetupDeps = {}): InlineExtension {
 	return { name: "omi-development", factory: async (pi: ExtensionAPI) => {
 		const session = new DevelopmentSession(pi, io, args, deps);
 		const onboarding = new LifecycleOnboarding(session);
@@ -60,6 +61,7 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 			pi.setActiveTools([...names].filter((name) => name === "subagent" || WORKFLOW_TOOLS.includes(name) || (session.state ? workflowToolAllowed(session.state, name, {}) : ["read", "grep", "find", "ls", ASK_TOOL].includes(name))));
 		};
 		session.onChange = loadout;
+		const setup = registerConfigSetup(pi, session, onboarding, deps, loadout);
 		registerDevelopmentTools(pi, session);
 		// El arranque del harness también queda guardado como mensaje "user": no es una cita de la persona.
 		trackExtensionMessages(pi, session, [KICKOFF]);
@@ -72,12 +74,11 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 			pi.sendUserMessage(KICKOFF);
 		};
 		// Sólo después del arranque de begin (el sí o arranque: auto), que también reanuda un trabajo pausado.
-		// Sin Foundations no se ofrece armarlo: sin Foundations nada pregunta.
 		const startHere = async (ctx: ExtensionContext) => {
 			await session.start(ctx);
 			if (session.state?.status === "paused") await session.apply({ type: "resume" }, ctx);
-			// La oferta del lifecycle es al entrar al harness: las consultas simples y needs-info no llegan acá.
-			await onboarding.offer(ctx);
+			// Al entrar al harness se ofrece lo que falta (Foundations y lifecycle): las consultas simples y needs-info no llegan acá.
+			await setup.offer(ctx, "harness");
 			loadout(); proceed(ctx);
 		};
 		async function begin(token: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -180,7 +181,7 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 			},
 		});
 		// Pi ya restauró las tools de la rama: con el harness activo, las restringidas.
-		pi.on("session_start", async (event, ctx) => { held.recall(ctx.sessionManager.getBranch(), event.reason === "reload" ? "reload" : "start"); session.foundations.load(ctx); onboarding.detect(ctx.cwd); await session.restore(ctx); loadout(); });
+		pi.on("session_start", async (event, ctx) => { held.recall(ctx.sessionManager.getBranch(), event.reason === "reload" ? "reload" : "start"); session.foundations.load(ctx); onboarding.detect(ctx.cwd); await session.restore(ctx); loadout(); setup.sessionStarted(event.reason, ctx); });
 		pi.on("session_tree", async (_event, ctx) => { held.recall(ctx.sessionManager.getBranch(), "tree"); await session.restore(ctx); loadout(); });
 		pi.on("session_shutdown", () => { readsInFlight.clear(); session.shutdown(); });
 		pi.on("before_agent_start", (event, ctx) => {

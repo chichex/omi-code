@@ -8,6 +8,7 @@ import { SessionManager, type ExtensionAPI, type ExtensionContext, type Extensio
 import { processRunner, type Runner } from "../../src/core/exec.ts";
 import { developmentHarnessExtension } from "../../src/tui/development.ts";
 import type { DevelopmentDeps } from "../../src/tui/development-session.ts";
+import type { ConfigSetupDeps } from "../../src/tui/development-config-setup.ts";
 import { readGit } from "../../src/tui/workspace/data.ts";
 import { createIssueWorktree } from "../../src/tui/workspace/issue-worktree.ts";
 import { ISSUE_TRIAGE_ENTRY, issueTriageState } from "../../src/tui/workspace/issue-triage.ts";
@@ -26,9 +27,9 @@ import type { FoundationsPolicy } from "../../src/harness/foundations.ts";
 import { acceptFoundations } from "./foundations.ts";
 
 /** `foundations`: una revisión v2 aceptada con esas políticas y `confirmar` (por defecto `*`). Sin ella, vale el default: nada pregunta. */
-/** `repo`: owner/name de origin y del issue. `github`: responde primero una llamada a gh (undefined sigue con la falsa de siempre). `deps`: puertos extra del harness. */
-export async function developmentFixture(t: TestContext, options: { kb?: KbClient; foundations?: FoundationsPolicy; confirmar?: readonly string[]; repo?: string; github?: (args: string[], input: string | undefined) => { code?: number; stdout: string } | undefined; deps?: Omit<DevelopmentDeps, "runner" | "kb"> } = {}) {
-	const repo = options.repo ?? "test/repo"; const github = options.github; const deps = options.deps ?? {};
+/** `repo`: owner/name de origin y del issue. `github`: responde primero una llamada a gh (undefined sigue con la falsa de siempre). `deps`: puertos extra del harness. `args`: los de la CLI, por ejemplo --offline. */
+export async function developmentFixture(t: TestContext, options: { kb?: KbClient; foundations?: FoundationsPolicy; confirmar?: readonly string[]; repo?: string; github?: (args: string[], input: string | undefined) => { code?: number; stdout: string } | undefined; deps?: Omit<DevelopmentDeps & ConfigSetupDeps, "runner" | "kb">; args?: readonly string[] } = {}) {
+	const repo = options.repo ?? "test/repo"; const github = options.github; const deps = options.deps ?? {}; const args = options.args ?? [];
 	const home = await realpath(await tempDir(t)); const root = join(home, "repo"); await mkdir(root);
 	const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 	git("init", "-b", "main"); git("config", "user.email", "test@example.test"); git("config", "user.name", "Test"); git("config", "commit.gpgsign", "false"); git("config", "core.hooksPath", "/dev/null"); git("remote", "add", "origin", `https://github.com/${repo}.git`);
@@ -187,7 +188,7 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 	} as unknown as ExtensionContext;
 	const emit = (name: string, event: unknown = {}) => emitLikePi(events.get(name) ?? [], name, event, context);
 	if (options.foundations) await acceptFoundations(foundationsDir(home), options.foundations, { ...(options.kb ? { kbUrl: options.kb.url } : {}), ...(options.confirmar ? { confirmar: options.confirmar } : {}), ...(options.repo ? { repo: options.repo } : {}) });
-	const attach = async () => { busHandlers.clear(); events.clear(); tools.clear(); commands.clear(); const extension = developmentHarnessExtension(testIo({ homeDir: home, cwd: checkout.root }), [], { loader, ...deps, runner, ...(options.kb ? { kb: options.kb } : {}) }); if (typeof extension === "function") await extension(pi); else await extension.factory(pi); await questionsExtension().factory(pi); await emit("session_start"); };
+	const attach = async () => { busHandlers.clear(); events.clear(); tools.clear(); commands.clear(); const extension = developmentHarnessExtension(testIo({ homeDir: home, cwd: checkout.root }), args, { loader, ...deps, runner, ...(options.kb ? { kb: options.kb } : {}) }); if (typeof extension === "function") await extension(pi); else await extension.factory(pi); await questionsExtension().factory(pi); await emit("session_start"); };
 	await attach();
 	const invoke = async (name: string, input: unknown, signal = new AbortController().signal) => {
 		const tool = tools.get(name); if (!tool || !Value.Check(tool.parameters, input)) throw new Error("Argumentos de tool inválidos");

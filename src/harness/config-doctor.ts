@@ -96,6 +96,11 @@ export function diagnoseConfig(input: ConfigDoctorInput): ConfigDiagnosis {
 	return { items: [foundations.item, ...lifecycle.items, omiItem(input.omi)], foundations: foundations.part, lifecycle: lifecycle.part };
 }
 
+/** Al publicar el draft: el lifecycle falta, está pendiente o no tiene continuidad, y esa revisión no está postergada. Una Review GHA disponible sola no cuenta. */
+export function stopsAtDraft(diagnosis: ConfigDiagnosis): boolean {
+	return diagnosis.lifecycle.kind === "run" && diagnosis.items.some((i) => (i.id === "lifecycle" || i.id === "lifecycle-continuity") && (i.status === "falta" || i.status === "pendiente"));
+}
+
 const AREAS: Record<ConfigArea, string> = { foundations: "Foundations", lifecycle: "Lifecycle", "omi-project": "Proyecto OMI" };
 const LABELS: Record<ConfigStatus, string> = { ok: "ok", falta: "falta", "formato-anterior": "formato anterior", pendiente: "pendiente", invalido: "inválido", "no-disponible": "no disponible", postergado: "postergado", "no-aplica": "no aplica" };
 const MARKS: Record<ConfigStatus, string> = { ok: "✓", falta: "✗", "formato-anterior": "✗", pendiente: "△", invalido: "✗", "no-disponible": "?", postergado: "…", "no-aplica": "·" };
