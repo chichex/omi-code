@@ -47,6 +47,10 @@ export class LifecycleContinuityHost {
   this.remember(observed);
   await this.run(ctx, "advance", observed ?? this.recall());
  }
+ /** Sin efectos: lo que advance() elegiría ahora con la Review que esta sesión ingirió. Sólo redacta avisos. */
+ preview(state: Workflow, config: LifecycleConfig): ContinuitySelection {
+  return selectLifecycleContinuation({ workflow: state, config, trigger: "advance", reviewObserved: this.recall() });
+ }
  private remember(review: ObservedLifecycleReview | null): void {
   const origin = this.session.observationOrigin();
   if (review && origin) this.observed = { review, epoch: origin.epoch, id: origin.id };

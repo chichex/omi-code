@@ -144,7 +144,7 @@ export async function fixLifecycle(session: DevelopmentSession, ctx: ExtensionCo
 	// Auto no transforma hallazgos repetidos en un permiso humano implícito ni abre un diálogo de disposición.
 	const automatic = options.source === "chain" && !!currentLifecyclePin(s).accepted.block.continuity && currentLifecyclePin(s).accepted.block.corrections.mode === "auto";
 	if (!automatic && await confirmCorrected(session, ctx, s, found, options.chain)) {
-		const after = enabledWork(session, ctx), left = pending(after.s), block = currentLifecyclePin(after.s).accepted.block, { maxRounds } = block.corrections, fix = block.continuity?.fix;
+		const after = enabledWork(session, ctx), left = pending(after.s), block = currentLifecyclePin(after.s).accepted.block, { maxRounds } = block.corrections;
 		// En la cadena, confirmar ya es progreso: los que quedan siguen en una ronda, con el mismo sí de continuidad y el
 		// propio de «Corregir». Sin rondas, vuelve al selector, que pausa por rondas.
 		if (options.source === "chain" && left.length && after.s.budget.roundsUsed < maxRounds) {
@@ -152,8 +152,10 @@ export async function fixLifecycle(session: DevelopmentSession, ctx: ExtensionCo
 			ctx.ui.notify(`Ronda de corrección autorizada para los ${left.length} hallazgo(s) que quedan: el agente sigue con el paso nuevo.\n${session.status()}`, "info");
 			return true;
 		}
-		// A mano, con la continuidad de fix en auto o ask, la cadena que sigue abre la ronda: no hace falta otro comando.
-		const next = fix === "auto" || fix === "ask" ? `la continuidad de fix (${fix}) sigue con su corrección.` : "/omi-work fix para corregirlos.";
+		// A mano, la cadena que sigue abre la ronda sólo si la elige: fix en auto o ask y la Review de este HEAD observada en esta
+		// sesión. Recargada la sesión, pausa: el aviso pide el comando, como la pausa.
+		const selection = session.continuity.preview(after.state, block);
+		const next = selection.kind === "action" && selection.action === "fix" ? `la continuidad de fix (${selection.mode}) sigue con su corrección.` : "/omi-work fix para corregirlos.";
 		ctx.ui.notify(!left.length ? `Sin hallazgos pendientes.\n${session.status()}` : after.s.budget.roundsUsed < maxRounds ? `Quedan ${left.length} hallazgo(s): ${next}`
 			: `Quedan ${left.length} hallazgo(s) y se agotaron las rondas de corrección (${after.s.budget.roundsUsed}/${maxRounds}): decide una persona.`, "info");
 		return false;

@@ -177,6 +177,35 @@ test("/omi-work fix: «Ya corregidos» parcial con continuity.fix auto avisa que
  assert.equal(enabled(state).budget.roundsUsed, 2);
 });
 
+test("/omi-work fix: «Ya corregidos» parcial con continuity.fix auto tras recargar la sesión no promete que la cadena sigue", async t => {
+ const fixture = await firstRound(block => { block.continuity = { ...autoContinuity, land: "manual" }; block.corrections.maxRounds = 2; }, t);
+ const { f, gh } = fixture;
+ await f.command("adopt");
+ const newHead = await correct(fixture);
+ gh.inline.push({ id: 502, body: "Falta el caso del valor 4", commit_id: newHead, path: "test.cjs", line: 1 });
+ const confirm = f.context.ui.confirm.bind(f.context.ui);
+ let decline = true;
+ f.context.ui.confirm = async (title, detail, options) => {
+  const answer = await confirm(title, detail, options);
+  if (decline && /^Ya corregidos/.test(title)) { decline = false; return false; }
+  return answer;
+ };
+ await f.action({ action: "verified" });
+ // Recargar descarta la Review que esta sesión ingirió: la cadena no puede seguir sin ella.
+ await f.emit("session_start", { reason: "reload" });
+ const before = f.messages.length, prompts = f.prompts.length;
+ await f.command("fix");
+ const notices = f.messages.slice(before).join("\n");
+ assert.match(notices, /Quedan 1 hallazgo\(s\): \/omi-work fix para corregirlos/);
+ assert.doesNotMatch(notices, /la continuidad de fix \(auto\) sigue/, "sin la Review observada, la cadena pausa");
+ const paused = pauseOf(await f.state());
+ assert.deepEqual(paused && { reason: paused.reason, stage: paused.stage }, { reason: "review-facts-required", stage: "fix" });
+ assert.equal(asked(f, prompts, /^Corregir /), 0, "no se abrió la ronda");
+ await f.command("fix");
+ assert.equal(asked(f, prompts, /^Corregir 1 hallazgo\(s\) en el PR #42$/), 1, "el próximo paso indicado alcanza");
+ assert.equal((await f.state()).phase, "implement");
+});
+
 test("/omi-work fix: «Ya corregidos» parcial con continuity.fix manual sigue pidiendo /omi-work fix", async t => {
  const fixture = await firstRound(block => { block.continuity = { ...autoContinuity, fix: "manual", land: "manual" }; block.corrections.maxRounds = 2; }, t);
  const { f, gh } = fixture;
