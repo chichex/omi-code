@@ -59,8 +59,12 @@ export async function callLensPart<T>(produce: (signal: AbortSignal) => Promise<
 	const usage = emptyUsage(); let reformatted = false;
 	for (let attempt = 1; ; attempt++) {
 		if (signal.aborted) return { kind: "canceled", attempts: attempt - 1, usage };
-		const deadline = AbortSignal.timeout(policy.timeoutMs); const bounded = AbortSignal.any([signal, deadline]);
-		const response = await answer(produce(bounded), bounded, policy.graceMs);
+		// Un timer con ref, no AbortSignal.timeout: el de Node no mantiene vivo el proceso, y en Node 22 un proveedor
+		// colgado sin otro I/O deja el event loop vacío antes del plazo.
+		const expiry = new AbortController(), deadline = expiry.signal;
+		const timer = setTimeout(() => expiry.abort(new DOMException("Plazo del intento agotado", "TimeoutError")), policy.timeoutMs);
+		const bounded = AbortSignal.any([signal, deadline]);
+		const response = await answer(produce(bounded), bounded, policy.graceMs).finally(() => clearTimeout(timer));
 		if (response) addUsage(usage, response.usage);
 		const result = judge(response, accept, signal, deadline);
 		if (result.kind === "answered") return { kind: "answered", value: result.value, attempts: attempt, usage };
