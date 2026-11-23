@@ -31,8 +31,8 @@ function target(input: Record<string, unknown>): LifecycleTarget {
 const release = (id: string, mode: "ask" | "auto") => target({ id, mode, timeoutSeconds: 60, provider: { kind: "gha", workflow: "release.yml", ref: "main", mode: "observe", contract: "github-release" }, evidence: { kind: "github-release", assets: ["app.tar.gz"], checksumsAsset: "checksums.txt" } });
 const dispatched = (mode: "ask" | "auto") => target({ id: "deploy", mode, timeoutSeconds: 60, provider: { kind: "gha", workflow: "deploy.yml", ref: "main", mode: "dispatch", contract: "omi-ship-v1" }, evidence: { kind: "receipt" } });
 const omi = (mode: "observe" | "tag") => target({ id: "api", mode: "auto", timeoutSeconds: 60, provider: { kind: "omi", service: "api", environment: "stage", mode }, evidence: { kind: "omi", health: { path: "/health", status: 200 } } });
-function gate(action: ContinuityAction, block: LifecycleConfig, options: { s?: EnabledLifecycle; ownRepo?: boolean; pushPolicy?: "ask" | "auto" } = {}): EffectGate {
- const input: EffectGateInput = { action, config: block, lifecycle: options.s ?? lifecycle(block), ownRepo: options.ownRepo ?? false, pushPolicy: options.pushPolicy };
+function gate(action: ContinuityAction, block: LifecycleConfig, options: { s?: EnabledLifecycle; ownRepo?: boolean; pushPolicy?: "ask" | "auto"; pull?: { draft: boolean; merged: boolean } } = {}): EffectGate {
+ const input: EffectGateInput = { action, config: block, lifecycle: options.s ?? lifecycle(block), ownRepo: options.ownRepo ?? false, pushPolicy: options.pushPolicy, ...(options.pull ? { pull: options.pull } : {}) };
  return firstEffectGate(input);
 }
 
@@ -74,6 +74,16 @@ test("Land: ask pregunta en ready y merge; con auto, draft corre solo y el merge
  assert.equal(gate("land", auto, { s: ready }), "unknown", "afuera, el merge auto depende de hechos que todavía no se leyeron");
  const pushed = bindLifecycleSubject(ready, subject("head2", "e".repeat(40)), { id: "adopt2", source: "correction", at });
  assert.equal(gate("land", auto, { s: pushed, ownRepo: true }), "human", "un push al mismo PR no lo vuelve draft");
+});
+
+test("Land auto con el PR leído: manda lo que dice GitHub, no el ready de OMI", () => {
+ const auto = config(b => { b.land.mode = "auto"; }), ready = confirmed(lifecycle(auto), "ready");
+ const listed = { draft: false, merged: false }, draft = { draft: true, merged: false }, merged = { draft: false, merged: true };
+ assert.equal(gate("land", auto, { ownRepo: true, pull: listed }), "human", "listo a mano en GitHub: el primer efecto es el merge humano de omi-code");
+ assert.equal(gate("land", auto, { pull: listed }), "unknown", "afuera, el merge auto depende de la readiness que se lee después");
+ assert.equal(gate("land", auto, { s: ready, ownRepo: true, pull: draft }), "auto", "vuelto a draft: ready corre solo aunque OMI lo haya marcado antes");
+ assert.equal(gate("land", auto, { ownRepo: true, pull: merged }), "auto", "mergeado afuera: registrarlo no es un efecto que pregunte");
+ assert.equal(gate("land", config(), { ownRepo: true, pull: draft }), "human", "land.mode ask pregunta igual");
 });
 
 test("Ship: el primer destino pendiente decide; sin efecto o sin conectar se pregunta aparte", () => {

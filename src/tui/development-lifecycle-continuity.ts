@@ -8,7 +8,7 @@ import { continuityPauseRecord, type PauseCause } from "../harness/continuity-pa
 import { continuityPauseLine } from "../harness/continuity-pause-text.ts";
 import type { Workflow } from "../harness/model.ts";
 import type { LifecycleConfig } from "../harness/lifecycle-schema.ts";
-import { acceptedPin, adoptLifecycle, freshPin, landLifecycle, lifecycleRepo, LifecycleDeclined, OWN_REPO, reviewLifecycle, type ObservedLifecycleReview } from "./development-lifecycle.ts";
+import { acceptedPin, adoptLifecycle, freshPin, githubClient, landLifecycle, lifecycleRepo, LifecycleDeclined, OWN_REPO, readPull, reviewLifecycle, type ObservedLifecycleReview } from "./development-lifecycle.ts";
 import { shipLifecycle } from "./development-lifecycle-ship.ts";
 import { fixLifecycle, pushLifecycleCorrection } from "./development-lifecycle-fix.ts";
 import { ChainConsent } from "./development-lifecycle-chain.ts";
@@ -72,7 +72,11 @@ export class LifecycleContinuityHost {
   if (selection.mode !== "ask" || state.version !== 2) return { kind: "go", chain: undefined };
   const chain = new ChainConsent(this.session, ctx, selection.action, pr);
   const pushPolicy = selection.action === "push" ? (await this.session.foundations.policy(ctx, state)).politica.push_pr : undefined;
-  const gate = firstEffectGate({ action: selection.action, lifecycle: state.lifecycle, config, ownRepo: lifecycleRepo(state) === OWN_REPO, pushPolicy });
+  // Land auto: si una persona ya sacó el PR de draft, el primer efecto es el merge y no ready. Leerlo no es un efecto.
+  const read = selection.action === "land" && config.land.mode === "auto" && pr !== undefined && !this.session.offline
+   ? await readPull(githubClient(this.session, state), pr, this.session.lifecycle.signal) : undefined;
+  const pull = read && { draft: read.draft, merged: read.merged };
+  const gate = firstEffectGate({ action: selection.action, lifecycle: state.lifecycle, config, ownRepo: lifecycleRepo(state) === OWN_REPO, pushPolicy, pull });
   if (gate === "human") return { kind: "go", chain };
   if (!(await chain.ask(gate))) return { kind: "declined" };
   await this.session.assertUnchanged(state, ctx);

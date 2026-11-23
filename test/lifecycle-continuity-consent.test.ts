@@ -61,6 +61,24 @@ test("omi-code con Land auto y PR draft: la continuidad se pregunta antes de mar
  assert.deepEqual(decisionOf(await f.state(), "ready"), ["policy"], "el sí de continuidad no se registra como permiso del efecto");
 });
 
+test("omi-code con Land auto y un PR que una persona ya sacó de draft: un solo diálogo, el del merge, con la continuidad adentro", async t => {
+ const { f, gh, head } = await continuityFixture(t, { repo: "chichex/omi-code", historical: true, change: block => {
+  block.continuity = { ...autoContinuity, land: "ask" }; block.review.mode = "auto"; block.land.mode = "auto";
+ } });
+ gh.reviews.push({ id: 601, login: "ada", state: "APPROVED", commit_id: head, body: "" });
+ gh.pull.draft = false; // marcado listo en la UI de GitHub, sin operación ready de OMI
+ await f.command("adopt");
+ const seen = dialogs(f, 1);
+ assert.deepEqual(seen.map(d => d.title), ["Mergear el PR #42"], "el primer efecto es el merge humano: lleva la continuidad");
+ assert.match(seen[0]!.detail, /^Continuidad en ask: al aceptar, la cadena sigue con Land\./m);
+ assert.doesNotMatch(seen.map(d => d.detail).join("\n"), /corre sin otro sí/, "no promete un primer paso sin sí");
+ assert.equal(gh.pull.merged, true);
+ assert.deepEqual(gh.mutations.filter(args => args.includes("ready")), [], "no hubo ready que correr");
+ const state = await f.state();
+ assert.deepEqual(decisionOf(state, "land"), ["person"], "el merge en omi-code sigue siendo de una persona");
+ assert.deepEqual(decisionOf(state, "ready"), []);
+});
+
 test("efecto auto y continuidad ask: un diálogo, de continuidad, y el efecto corre por su propio permiso", async t => {
  const { f, gh, head } = await continuityFixture(t, { historical: true, change: block => {
   block.continuity = { ...autoContinuity, review: "ask", land: "manual" }; block.review.mode = "auto";

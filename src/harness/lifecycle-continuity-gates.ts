@@ -15,6 +15,8 @@ export interface EffectGateInput {
  ownRepo: boolean;
  /** push_pr de Foundations; sólo la necesita push. Sin leerla, push queda unknown. */
  pushPolicy: "ask" | "auto" | undefined;
+ /** draft y merged del PR leídos en GitHub; sólo los usa Land con land.mode auto. Sin leerlos, se predice por el ready confirmado. */
+ pull?: { draft: boolean; merged: boolean } | undefined;
 }
 
 /** Destinos sin entrega verificada (o no aplicable) para el sujeto y el pin vigentes, en orden. */
@@ -31,12 +33,14 @@ function reviewGate(s: EnabledLifecycle, config: LifecycleConfig, ownRepo: boole
  if (config.review.mode !== "auto") return "human";
  return provider.kind === "gha" && ownRepo ? "human" : "auto";
 }
-function landGate(s: EnabledLifecycle, config: LifecycleConfig, ownRepo: boolean): EffectGate {
+function landGate(s: EnabledLifecycle, config: LifecycleConfig, ownRepo: boolean, pull: EffectGateInput["pull"]): EffectGate {
  if (config.land.mode !== "auto") return "human"; // ready y merge preguntan
+ if (pull?.merged) return "auto"; // Registrar un merge externo no es un efecto que pregunte.
  const number = s.subjects.find(x => x.id === s.currentSubject)?.number;
  const samePr = (id: string) => number !== undefined && s.subjects.some(x => x.id === id && x.number === number);
- // El PR nace draft: sin ready confirmado, el primer efecto es ready, que con land.mode auto no pregunta.
- if (!confirmed(s, "ready", samePr)) return "auto";
+ // En draft, el primer efecto es ready, que con land.mode auto no pregunta. Sin leer GitHub: el PR nace draft
+ // y sigue así sin un ready confirmado. Una persona puede sacarlo de draft a mano: por eso manda lo leído.
+ if (pull ? pull.draft : !confirmed(s, "ready", samePr)) return "auto";
  // Ya listo, el primer efecto es el merge: humano en omi-code; afuera depende de la readiness que se lee después.
  return ownRepo ? "human" : "unknown";
 }
@@ -63,7 +67,7 @@ export function firstEffectGate(input: EffectGateInput): EffectGate {
   // corrections.mode auto pasa por el evaluador aislado sin otro sí; si no, «Ya corregidos» o «Corregir» preguntan.
   case "fix": return config.corrections.mode === "auto" ? "auto" : "human";
   case "push": return input.pushPolicy === undefined ? "unknown" : input.pushPolicy === "ask" ? "human" : "auto";
-  case "land": return landGate(s, config, ownRepo);
+  case "land": return landGate(s, config, ownRepo, input.pull);
   case "ship": return shipGate(s, config, ownRepo);
   default: { const unhandled: never = action; throw new Error(`Acción de continuidad desconocida: ${String(unhandled)}`); }
  }
