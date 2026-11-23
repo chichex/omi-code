@@ -94,6 +94,22 @@ test("temas y paneles bajos: el bloqueo gana y nada desborda el ancho", () => {
  }
 });
 
+test("progreso expone continuidad efectiva y pausa durable sin mutar ni iniciar nada", () => {
+ const legacy = reviewed(), legacyBefore = JSON.stringify(legacy);
+ assert.match(text(developmentProgress(legacy).lifecycle ?? []), /Continuidad: deshabilitada.*draft/);
+ assert.equal(JSON.stringify(legacy), legacyBefore);
+ const active = reviewed(b => { b.continuity = { entry: "auto", review: "ask", fix: "manual", land: "auto", ship: "manual" }; });
+ active.activity = "Continuidad en pausa: rechazada por la persona · land";
+ const before = JSON.stringify(active), p = developmentProgress(active), lines = text(p.lifecycle ?? []);
+ assert.match(lines, /Continuidad: entry=auto · review=ask · fix=manual · land=auto · ship=manual/);
+ assert.match(lines, /Continuidad en pausa: rechazada por la persona · land/);
+ assert.match(p.lifecycleSummary ?? "", /Continuidad en pausa: rechazada/);
+ assert.match(lines, /intentos 1\/12/); assert.match(lines, /rondas 0\/2/);
+ const restored = JSON.parse(before) as WorkflowV2;
+ assert.deepEqual(developmentProgress(restored).lifecycle, p.lifecycle);
+ assert.equal(JSON.stringify(active), before);
+});
+
 test("el bus conserva las líneas del lifecycle como copia defensiva", () => {
  const monitor = new WorkflowProgressMonitor(), p = developmentProgress(reviewed());
  assert.equal(monitor.consume({ progress: p }), true);

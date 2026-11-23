@@ -8,6 +8,7 @@ import { batchProblem, type AskResult, type QuestionBatch } from "../src/tui/que
 import { detectLifecycle } from "../src/harness/lifecycle-detect.ts";
 import { lifecycleOnboardingStatus, runLifecycleOnboarding, shouldOfferLifecycleOnboarding } from "../src/harness/lifecycle-onboarding.ts";
 import { readLifecycle } from "../src/harness/lifecycle-kb.ts";
+import { defaultLifecycleConfig, lifecycleHash, renderLifecycleBlock } from "../src/harness/lifecycle-config.ts";
 import { lifecycleTrustDir, readLifecycleTrust, type LifecycleKey } from "../src/harness/lifecycle-trust.ts";
 
 const key: LifecycleKey = { kbUrl: "https://kb.example.test/mcp", product: "app", repo: "acme/app" };
@@ -82,23 +83,55 @@ test("Esc cancela sin escribir ni desactivar; Más adelante posterga durable por
 });
 
 test("no-aplica explícito requiere resumen y aceptación; ausencia de release no es no-aplica", async t => {
- const f = await fixture(t), declined = script([["Este repo no necesita Ship"], ["No guardar"]]);
+ const f = await fixture(t), declined = script([["Este repo no necesita Ship"], ["Mantener continuidad actual"], ["No guardar"]]);
  assert.deepEqual(await runLifecycleOnboarding(f.deps(declined.ask)), { kind: "declined" }); assert.ok(!f.kb.calls.some(c => c.tool === "guardar")); assert.equal((await f.status()).status, "unconfigured");
- const summary = declined.seen[1]!.questions[0]!; assert.match(summary.detail ?? "", /ship\.status: unconfigured → not-applicable/); assert.equal(summary.recommended, false, "aceptar nunca es la opción por defecto");
- const accepted = script([["Este repo no necesita Ship"], ["Guardar y aceptar"]]); const outcome = await runLifecycleOnboarding(f.deps(accepted.ask));
+ const summary = declined.seen[2]!.questions[0]!; assert.match(summary.detail ?? "", /ship\.status: unconfigured → not-applicable/); assert.equal(summary.recommended, false, "aceptar nunca es la opción por defecto");
+ const accepted = script([["Este repo no necesita Ship"], ["Mantener continuidad actual"], ["Guardar y aceptar"]]); const outcome = await runLifecycleOnboarding(f.deps(accepted.ask));
  assert.ok(outcome.kind === "saved"); assert.equal(outcome.pin.block.ship.status, "not-applicable"); assert.equal((await f.status()).status, "not-applicable");
 });
 
 test("configurar desde lo detectado guarda KB y acepta tras el resumen, sin ejecutar workflow ni deploy", async t => {
  const f = await fixture(t);
- const answers: (string[] | { text: string })[] = [["Configurar ahora"], ["OMI · api · stage"], { text: "/health" }, ["Detener (stop)"], ["Preguntar antes (ask)"], ["Guardar y aceptar"]];
+ const answers: (string[] | { text: string })[] = [["Configurar ahora"], ["OMI · api · stage"], { text: "/health" }, ["Detener (stop)"], ["Preguntar antes (ask)"], ["Mantener continuidad actual"], ["Guardar y aceptar"]];
  const run = script(answers); const outcome = await runLifecycleOnboarding(f.deps(run.ask)); assert.ok(outcome.kind === "saved");
  const mechanisms = run.seen[1]!.questions.find(q => q.id === "mechanism")!.options.map(o => o.label); assert.ok(mechanisms.includes("GitHub Actions · release.yml")); assert.ok(mechanisms.includes("OMI · api · stage")); assert.ok(mechanisms.includes("Manual (sin destino verificable)"));
  assert.deepEqual(outcome.pin.block.ship, { status: "configured", targets: [{ id: "omi-api-stage", mode: "ask", timeoutSeconds: 1800, maxRetries: 0, onFailure: { action: "stop", mode: "ask" }, provider: { kind: "omi", service: "api", environment: "stage", mode: "observe" }, evidence: { kind: "omi", health: { path: "/health", status: 200 } } }] });
  assert.equal((await f.status()).status, "configured"); assert.deepEqual(new Set(f.kb.calls.map(c => c.tool)), new Set(["mis_productos", "buscar", "leer", "guardar"])); assert.equal(f.kb.calls.filter(c => c.tool === "guardar").length, 1);
  assert.match(run.seen.at(-1)!.questions[0]!.detail ?? "", /no ejecuta review, merge, workflows ni deploy/);
- const gha = await fixture(t), ship = script([["Configurar ahora"], ["GitHub Actions · release.yml"], ["Recibo del proveedor"], ["Detener (stop)"], ["Automático (auto)"], ["Guardar y aceptar"]]); const saved = await runLifecycleOnboarding(gha.deps(ship.ask)); assert.ok(saved.kind === "saved");
+ const gha = await fixture(t), ship = script([["Configurar ahora"], ["GitHub Actions · release.yml"], ["Recibo del proveedor"], ["Detener (stop)"], ["Automático (auto)"], ["Mantener continuidad actual"], ["Guardar y aceptar"]]); const saved = await runLifecycleOnboarding(gha.deps(ship.ask)); assert.ok(saved.kind === "saved");
  assert.deepEqual(saved.pin.block.ship.targets[0]?.provider, { kind: "gha", workflow: "release.yml", ref: "main", mode: "observe", contract: "omi-ship-v1" }); assert.equal(saved.pin.block.ship.targets[0]?.mode, "auto");
+});
+
+test("continuidad opt-in configura cinco etapas, separa permisos y guardar no inicia efectos", async t => {
+ const f = await fixture(t), before = await snapshot(f.root);
+ const run = script([["Este repo no necesita Ship"], ["Configurar continuidad"], ["Automático (auto)"], ["Preguntar antes (ask)"], ["Manual (comando explícito)"], ["Automático (auto)"], ["Manual (comando explícito)"], ["Guardar y aceptar"]]);
+ const outcome = await runLifecycleOnboarding(f.deps(run.ask)); assert.ok(outcome.kind === "saved");
+ assert.deepEqual(outcome.pin.block.continuity, { entry: "auto", review: "ask", fix: "manual", land: "auto", ship: "manual" });
+ assert.equal(outcome.pin.block.corrections.mode, "ask", "continuidad no cambia autorización de efectos");
+ assert.deepEqual(run.seen[1]!.questions[0]!.options.map(o => o.label), ["Mantener continuidad actual", "Configurar continuidad"]);
+ const detail = run.seen.at(-1)!.questions[0]!.detail ?? "";
+ assert.match(detail, /continuity.entry: auto/); assert.match(detail, /Foundations/); assert.match(detail, /merge.*dispatch.*human/i);
+ assert.deepEqual(await snapshot(f.root), before); assert.equal(f.kb.calls.filter(c => c.tool === "guardar").length, 1);
+});
+
+test("mantener legacy conserva hash, cancelar o rechazar no guarda y deshabilitar sólo cambia futuro", async t => {
+ const f = await fixture(t), legacy = defaultLifecycleConfig(key.repo, "main"); legacy.ship = { status: "not-applicable", targets: [] };
+ f.kb.perillas("app", renderLifecycleBlock(legacy));
+ const keep = script([["Este repo no necesita Ship"], ["Mantener continuidad actual"], ["Guardar y aceptar"]]);
+ const kept = await runLifecycleOnboarding(f.deps(keep.ask)); assert.ok(kept.kind === "saved");
+ assert.equal(kept.pin.blockHash, lifecycleHash(legacy)); assert.equal(Object.hasOwn(kept.pin.block, "continuity"), false);
+ for (const replies of [ [ ["Este repo no necesita Ship"], "esc" ], [ ["Este repo no necesita Ship"], ["Configurar continuidad"], "esc" ] ] as (string[] | "esc")[][]) {
+  const writes = f.kb.calls.filter(c => c.tool === "guardar").length;
+  assert.equal((await runLifecycleOnboarding(f.deps(script(replies).ask))).kind, "cancelled");
+  assert.equal(f.kb.calls.filter(c => c.tool === "guardar").length, writes);
+ }
+ const enabled = structuredClone(legacy); enabled.continuity = { entry: "auto", review: "auto", fix: "ask", land: "manual", ship: "manual" };
+ f.kb.perillas("app", renderLifecycleBlock(enabled));
+ const unchanged = await runLifecycleOnboarding(f.deps(script([["Este repo no necesita Ship"], ["Mantener continuidad actual"], ["Guardar y aceptar"]]).ask));
+ assert.ok(unchanged.kind === "saved"); assert.equal(unchanged.pin.blockHash, lifecycleHash(enabled));
+ const off = script([["Este repo no necesita Ship"], ["Detener en draft (legacy)"], ["Guardar y aceptar"]]);
+ const disabled = await runLifecycleOnboarding(f.deps(off.ask)); assert.ok(disabled.kind === "saved"); assert.equal(disabled.pin.blockHash, lifecycleHash(legacy));
+ assert.match(off.seen.at(-1)!.questions[0]!.detail ?? "", /no revierte efectos/);
 });
 
 test("KB caída o sin acceso no es ausencia: no pregunta, no posterga ni sobrescribe", async t => {
