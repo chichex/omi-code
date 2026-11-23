@@ -17,10 +17,15 @@ const Count = Type.Integer({ minimum: 0, maximum: 10 });
 const Ref = text();
 const WorkflowFile = Type.String({ maxLength: 256, pattern: "^(?:\\.github/workflows/)?[A-Za-z0-9_][A-Za-z0-9_.-]*\\.ya?ml$" });
 const WorkflowIdentity = { workflow: WorkflowFile, ref: Ref };
+// Los mismos valores que acepta el input `model`/`effort` del workflow; ausentes, decide su default.
+export const GhaReviewModelSchema = Type.Enum(["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1", "claude-haiku-4-5"]);
+export const GhaReviewEffortSchema = Type.Enum(["low", "medium", "high", "xhigh", "max"]);
+export type GhaReviewModel = Static<typeof GhaReviewModelSchema>;
 const ReviewProvider = Type.Union([
  Type.Object({ kind: Type.Literal("local") }, closed),
  Type.Object({ kind: Type.Literal("github"), reviewers: Type.Array(Type.String({ maxLength: 100, pattern: "^[A-Za-z0-9][A-Za-z0-9-]*(?:\\[bot\\])?$" }), { minItems: 1, maxItems: 1000, uniqueItems: true }) }, closed),
- Type.Object({ kind: Type.Literal("gha"), ...WorkflowIdentity, contract: Type.Literal("omi-review-v1") }, closed),
+ // model/effort opcionales: omitirlos conserva el hash de configs existentes.
+ Type.Object({ kind: Type.Literal("gha"), ...WorkflowIdentity, contract: Type.Literal("omi-review-v1"), model: Type.Optional(GhaReviewModelSchema), effort: Type.Optional(GhaReviewEffortSchema) }, closed),
 ]);
 const Endpoint = Type.String({ minLength: 1, maxLength: 1024, pattern: "^/(?!/)[A-Za-z0-9_./~-]*$" });
 const JsonField = Type.String({ minLength: 1, maxLength: 256, pattern: "^[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*$" });
@@ -79,3 +84,4 @@ export const LifecycleConfigSchema = Type.Object({
  budget: Type.Object({ maxAttempts: Type.Integer({ minimum: 1, maximum: 100 }), maxFixForwardPRs: Type.Integer({ minimum: 0, maximum: 5 }), activeSeconds: Type.Integer({ minimum: 60, maximum: 86400 }) }, closed),
 }, closed);
 export type LifecycleConfig = Static<typeof LifecycleConfigSchema>;
+export type LifecycleReviewProvider = LifecycleConfig["review"]["provider"];

@@ -4,6 +4,7 @@ import { Value } from "typebox/value";
 import type { Runner } from "../core/exec.ts";
 import { parseWorkflow } from "./model.ts";
 import { lifecycleAssert } from "./lifecycle-invariants.ts";
+import type { LifecycleReviewProvider } from "./lifecycle-schema.ts";
 import { boundedGitHubRunner } from "./lifecycle-github-read.ts";
 import { GhaReviewArtifactSchema, GhaRunSchema, MAX_REVIEW_ARTIFACT_BYTES, checkedGhaRequest, reviewRunName, uniqueReviewFindings, type GhaReviewRequest, type GhaReviewArtifact, type GhaRun } from "./gha-review-contract.ts";
 export { parseReviewDispatchInputs, buildReviewArtifact, reviewRunName } from "./gha-review-contract.ts";
@@ -75,6 +76,10 @@ export async function observeGhaReview(input: unknown, ports: GhaReviewPorts): P
  } catch { return unknown(signal.aborted || ports.now() >= deadline ? "Timeout/cancelación de review; observar, no redisparar" : "Lectura GHA incompleta/cancelada; no acredita revisión ni permite replay"); }
  finally { controller.abort(); }
 }
+/** model/effort del pin aceptado, sólo si se configuraron: ausentes, el workflow usa su default. */
+function tuning(provider: Extract<LifecycleReviewProvider, { kind: "gha" }>): string[] {
+ return [...(provider.model ? ["-f", `model=${provider.model}`] : []), ...(provider.effort ? ["-f", `effort=${provider.effort}`] : [])];
+}
 /** Sólo desde el callback vivo que obtuvo pending en el store. No es una acción declarativa del modelo. */
 export async function startGhaReview(original: unknown, input: unknown, ports: GhaReviewPorts): Promise<GhaReviewResult> {
  const state = parseWorkflow(JSON.stringify(original)); const request = checkedGhaRequest(input);
@@ -101,7 +106,7 @@ export async function startGhaReview(original: unknown, input: unknown, ports: G
  await ports.recordRequest(request); scoped.signal.throwIfAborted();
  try {
   await (ports.runner ?? boundedGitHubRunner).run("gh", ["workflow", "run", String(request.workflow.id), "--repo", request.repo, "--ref", request.workflow.ref,
-   "-f", `pr=${request.pr}`, "-f", `expected_head_sha=${request.headSha}`, "-f", `correlation_id=${request.correlationId}`], { cwd: state.checkout.root, signal: scoped.signal, env: { GH_HOST: "github.com", GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1" } });
+   "-f", `pr=${request.pr}`, "-f", `expected_head_sha=${request.headSha}`, "-f", `correlation_id=${request.correlationId}`, ...tuning(provider)], { cwd: state.checkout.root, signal: scoped.signal, env: { GH_HOST: "github.com", GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1" } });
  } catch { /* Pudo dispararse: no se repite ni se pierde la correlación de la reserva. */ }
  return observeGhaReview(request, { ...scoped, timeoutSeconds: Math.min(ports.timeoutSeconds, pin.accepted.block.review.timeoutSeconds) });
 }
