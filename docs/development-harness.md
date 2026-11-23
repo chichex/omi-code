@@ -515,7 +515,7 @@ El PR draft es el final por defecto. Para seguir el mismo trabajo se puede habil
 | Comando | Qué hace | Permiso |
 |---|---|---|
 | `/omi-work adopt` | Habilita el lifecycle sobre el PR draft abierto: relee el PR en GitHub y el checkout, fija la configuración aceptada | Siempre un sí |
-| `/omi-work review` | Corre la Review configurada: `github` lee reviews, comentarios y checks; `local` usa un revisor aislado; `gha` dispara el workflow y espera su recibo. Con `github`, volver a correrlo en el mismo HEAD sólo relee: no pregunta ni gasta otro intento | `review.mode` |
+| `/omi-work review` | Corre la Review configurada: `github` lee reviews, comentarios y checks; `local` usa un revisor aislado; `gha` dispara el workflow y espera su recibo, con `model` y `effort` sólo si el provider los fija. Con `github`, volver a correrlo en el mismo HEAD sólo relee: no pregunta ni gasta otro intento | `review.mode` |
 | `/omi-work fix` | Agrupa los hallazgos del HEAD actual y abre una ronda: el agente corrige con rojo, verde, commit y todos los D. Al terminar, verifica y hace push al **mismo PR** | El comando manual pide un sí para la ronda. Sin continuidad, otro sí para el push; con continuidad, el push conserva la política independiente `push_pr` de Foundations |
 | `/omi-work land` | Marca el PR listo (sale de draft), relee checks, reviews y reglas, y mergea por PR y SHA. Reconoce un merge externo | `land.mode` |
 | `/omi-work ship` | Verifica cada destino aceptado con recibos y provenance; termina en Entregado sólo si todos se verifican | `mode` de cada destino |
@@ -566,22 +566,40 @@ La continuidad se detiene por manual, rechazo/cancelación, bloqueo, presupuesto
 
 Al abrir la sesión, un detector lee en segundo plano los workflows, scripts, manifiestos y el vínculo `.omi/project.json` del checkout. Sólo lee: no ejecuta scripts ni copia comandos, URLs o secretos.
 
-Al entrar al harness, si el repo no tiene lifecycle configurado en la KB, OMI ofrece el mismo wizard que `omi init --development`. No aparece en consultas simples ni en needs-info, que siguen en el chat. Se ofrece una vez por revisión de la configuración y sesión.
+El detector marca un workflow como Review `omi-review-v1` sólo si tiene todos los marcadores que exige el runtime: `workflow_dispatch`, los inputs `expected_head_sha` y `correlation_id`, un `run-name` con `omi-review-v1 PR #`, `inputs.pr` e `inputs.correlation_id`, y el artefacto `omi-review-v1-${{ inputs.correlation_id }}-${{ github.run_id }}-${{ github.run_attempt }}` con `review.json`. En este repo lo cumple `claude-review.yml`. Es una propuesta: el runtime igual valida run, artefacto y SHA. Un workflow de Review nunca se propone como destino de Ship.
 
-- **Configurar ahora**: propone destino, verificación y recuperación con lo detectado; muestra el resumen y guarda sólo con un sí.
-- **Más adelante**: posterga esa revisión; no se vuelve a ofrecer hasta que cambie.
-- **Esc**: cancela sin escribir, aceptar ni desactivar nada.
+Al entrar al harness, OMI ofrece el mismo wizard que `omi init --development` si el repo no tiene lifecycle en la KB o si hay **recomendaciones**:
+
+- `continuity` ausente: «Continuidad sin configurar: el trabajo para en el PR draft».
+- Un workflow `omi-review-v1` detectado mientras la Review es local (o no hay config): propone pasarla a GitHub Actions.
+
+No aparece en consultas simples ni en needs-info, que siguen en el chat. Se ofrece una vez por revisión de la configuración y sesión.
+
+El wizard pregunta, en orden:
+
+1. **Ship.** Con una config válida, **Mantener Ship actual** va primero y conserva los destinos tal cual (rollback, probes, timeouts), sin reingresarlos. **Configurar ahora** propone destino, verificación y recuperación con lo detectado. **Más adelante** posterga esa revisión: no se vuelve a ofrecer hasta que cambie. **Este repo no necesita Ship** lo guarda como no-aplica.
+2. **Review.** Opciones: «Mantener <actual>», «GitHub Actions · <workflow> (omi-review-v1)» por cada workflow detectado y «Revisor local». GitHub Actions va primero (recomendada) si hoy revisa el local o no hay config; si no, mantener va primero. Sin alternativa real (por ejemplo, revisor local y nada detectado) no pregunta. Elegir GitHub Actions guarda la identidad del esquema y suma una sola pregunta de modelo: **Default del workflow** (recomendada: no fija `model`) o **Sonnet** (`model: claude-sonnet-5-5`). Si ya había un `effort` para ese workflow, se conserva. Cambiar el proveedor no cambia `review.mode`.
+3. **Continuidad**, como en [Continuidad opt-in](#continuidad-opt-in-entrada-y-avance-por-etapa).
+4. **Resumen** con el diff por campo, una línea `Review: …` con el modelo efectivo y las recomendaciones sin tomar. Guarda sólo con un sí.
+
+```json
+"provider": { "kind": "gha", "workflow": "claude-review.yml", "ref": "main", "contract": "omi-review-v1", "model": "claude-sonnet-5-5" }
+```
+
+`ref` es la base de Land, la rama de donde el runtime toma el workflow. `model` y `effort` son opcionales y aceptan los valores del workflow (`claude-opus-5-5`, `claude-sonnet-5-5`, `claude-fable-5-1`, `claude-haiku-4-5`; `low` a `max`). Omitirlos no cambia el hash de una config existente. En `chichex/omi-code` el dispatch sigue pidiendo un sí, aunque `review.mode` sea `auto`.
+
+Guardar sin tomar una recomendación también posterga esa revisión: el harness no insiste. `omi init --development` pregunta siempre. **Esc** cancela sin escribir, aceptar ni desactivar nada.
 
 ## `omi init --development`
 
 Configura Review, Land y Ship del repo y su continuidad opcional en las perillas del producto en la KB, con el mismo wizard de la TUI. Necesita una persona en una terminal interactiva; ningún flag acepta por ella.
 
 ```sh
-omi init --development                 # wizard: destino, verificación, recuperación, resumen y un sí
+omi init --development                 # wizard: Ship, Review, continuidad, resumen y un sí
 omi init --development --check --json  # diagnóstico de sólo lectura
 ```
 
-`--check` informa el estado (`unconfigured`, `pending`, `configured`, `manual`, `not-applicable`, `invalid` o `unavailable`), si se pueden iniciar efectos y lo detectado. Una KB caída es `unavailable`, nunca «sin configurar». Guardar no ejecuta workflows, merge ni deploy.
+`--check` informa el estado (`unconfigured`, `pending`, `configured`, `manual`, `not-applicable`, `invalid` o `unavailable`), si se pueden iniciar efectos, lo detectado (cada workflow con su `contract`: `omi-review-v1` o `null`) y las recomendaciones. Ejemplo: `"recommendations": [{ "kind": "continuity", "message": "Continuidad sin configurar: el trabajo para en el PR draft" }]`. Sin `--json`, cada una sale como `Recomendación: …`. Una KB caída es `unavailable`, nunca «sin configurar». Guardar no ejecuta workflows, merge ni deploy.
 
 ## Progreso en la TUI
 
