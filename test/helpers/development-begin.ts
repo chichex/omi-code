@@ -22,7 +22,7 @@ const TRIAGE = JSON.stringify({ type: "fix", summary: "Corregir el valor", ratio
 const ASSESSMENT = { scope: "crosscutting", impact: "local-behavior", reversible: "yes", verification: "clear", risk: "low", riskAreas: [], rationale: "Requiere seguimiento de varios puntos." };
 
 /** `foundations`: una revisión aceptada con esas políticas. Sin ella, vale el default: nada pregunta. */
-export async function beginFixture(t: TestContext, options: { args?: readonly string[]; trusted?: boolean; authenticated?: boolean; persistent?: boolean; busy?: boolean; noMain?: boolean; kb?: KbClient; foundations?: FoundationsPolicy } = {}) {
+export async function beginFixture(t: TestContext, options: { args?: readonly string[]; trusted?: boolean; authenticated?: boolean; persistent?: boolean; busy?: boolean; noMain?: boolean; kb?: KbClient; foundations?: FoundationsPolicy; classifyTimeoutMs?: number } = {}) {
 	const home = await realpath(await tempDir(t)); const root = join(home, "repo"); await mkdir(root); const sessions = join(home, "sessions");
 	const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 	git("init", "-b", options.noMain ? "trunk" : "main"); git("config", "user.email", "test@example.test"); git("config", "user.name", "Test"); git("config", "commit.gpgsign", "false"); git("config", "core.hooksPath", "/dev/null"); git("remote", "add", "origin", "https://github.com/test/repo.git");
@@ -30,7 +30,7 @@ export async function beginFixture(t: TestContext, options: { args?: readonly st
 	const remote = {
 		issues: new Map<number, { title: string; body: string; labels: string[] }>([[42, { title: "Corregir resultado", body: "El resultado esperado es 2.", labels: ["bug"] }]]),
 		created: [] as { title: string; body: string }[], confirm: true, failCreate: false, classify: TRIAGE, cancelSwitch: false,
-		requestClassify: JSON.stringify({ triage: JSON.parse(TRIAGE), assessment: ASSESSMENT }), cancelClassify: false, failClassify: false, stopReason: "stop", onClassify: undefined as (() => Promise<void>) | undefined,
+		requestClassify: JSON.stringify({ triage: JSON.parse(TRIAGE), assessment: ASSESSMENT }), cancelClassify: false, failClassify: false, stopReason: "stop", onClassify: undefined as ((signal?: AbortSignal) => Promise<void>) | undefined, loaderTitles: [] as string[],
 		cancelInFlight: false, classifyStarted: undefined as Promise<void> | undefined,
 		// Retiene la respuesta del diálogo para probar un segundo arranque mientras el primero espera el sí.
 		hold: undefined as Promise<void> | undefined,
@@ -83,7 +83,7 @@ export async function beginFixture(t: TestContext, options: { args?: readonly st
 			ui: { setStatus: () => {}, notify: (message: string, level?: string) => { live(); instance.notices.push(message); instance.levels.push(level); }, confirm: async (title: string, description: string) => { live(); order.push("confirm"); prompts.push({ title, description }); await remote.hold; return remote.confirm; } },
 			modelRegistry: {
 				hasConfiguredAuth: () => options.authenticated ?? true,
-				complete: async (_model: unknown, input: unknown) => { order.push("classify"); modelCalls.push(input); await remote.onClassify?.(); if (remote.failClassify) throw new Error("Proveedor caído"); const fresh = JSON.stringify(input).includes("SIN issue"); return { stopReason: remote.stopReason, provider: "mock", model: "mock", content: [{ type: "text", text: fresh ? remote.requestClassify : remote.classify }], usage: { input: 1, output: 1, totalTokens: 2, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }; },
+				complete: async (_model: unknown, input: unknown, completeOptions?: { signal?: AbortSignal }) => { order.push("classify"); modelCalls.push(input); await remote.onClassify?.(completeOptions?.signal); if (remote.failClassify) throw new Error("Proveedor caído"); const fresh = JSON.stringify(input).includes("SIN issue"); return { stopReason: remote.stopReason, provider: "mock", model: "mock", content: [{ type: "text", text: fresh ? remote.requestClassify : remote.classify }], usage: { input: 1, output: 1, totalTokens: 2, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }; },
 			},
 			switchSession: async (file: string, switchOptions?: { withSession?: (next: ExtensionCommandContext & { sendUserMessage: typeof send }) => Promise<void> }) => {
 				switches.push(file);
@@ -95,13 +95,14 @@ export async function beginFixture(t: TestContext, options: { args?: readonly st
 				return { cancelled: false };
 			},
 		} as unknown as ExtensionCommandContext;
-		const extension = developmentHarnessExtension(testIo({ homeDir: home, cwd: manager.getCwd() }), [...(options.args ?? []), "--session-dir", sessions], { runner, loader: async (_ctx, _title, work) => {
+		const extension = developmentHarnessExtension(testIo({ homeDir: home, cwd: manager.getCwd() }), [...(options.args ?? []), "--session-dir", sessions], { runner, loader: async (_ctx, title, work) => {
+			remote.loaderTitles.push(title);
 			if (remote.cancelClassify) return undefined;
 			const controller = new AbortController(); const pending = work(controller.signal);
 			if (!remote.cancelInFlight) return pending;
 			cancelledWork = pending.then(() => {}, () => {});
 			await remote.classifyStarted; controller.abort(); return undefined;
-		}, ...(options.kb ? { kb: options.kb } : {}) });
+		}, ...(options.kb ? { kb: options.kb } : {}), ...(options.classifyTimeoutMs === undefined ? {} : { classifyTimeoutMs: options.classifyTimeoutMs }) });
 		if (typeof extension === "function") await extension(pi); else await extension.factory(pi);
 		for (const handler of events.get("session_start") ?? []) await handler({}, instance.ctx);
 		return instance;
