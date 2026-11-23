@@ -72,3 +72,10 @@ test("development_policy no confunde código o plantillas con secretos", () => {
 	for (const path of ["src/auth/credentials.ts", "test/credentials.test.ts", ".env.example", "config/.env.sample", ".env.template"]) assert.ok(workflowWritePath("/tmp/repo", path), path);
 	for (const path of ["credentials", "credentials.json", "config/credentials.yml", "credentials.local", ".env", ".env.local", ".env.production"]) assert.throws(() => workflowWritePath("/tmp/repo", path), /proteg|secreto/i, path);
 });
+
+test("development_policy Verificar: un lente sin resultado se vuelve a correr; un fail o un unknown juzgado no se repiten", () => {
+	const text = developmentInstructions({ ...workflow(), phase: "verify" });
+	assert.match(text, /sin resultado[^.]*\. Volvé a correr este lente antes de verified; no gasta veredictos/i);
+	assert.match(text, /No repitas un fail ni un unknown juzgado/);
+	assert.doesNotMatch(text, /Ejecutá una vez cada lente pedido/, "la regla vieja prohibía también repetir lo que no tuvo resultado");
+});

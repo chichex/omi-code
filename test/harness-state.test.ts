@@ -285,6 +285,12 @@ test("history is a bounded window: long sessions never make the saved state inva
  assert.equal(s.history.length, 1000); assert.equal(s.history[0]?.activity, "old 2"); assert.equal(s.history.at(-2)?.activity, "pause: late"); assert.equal(s.history.at(-1)?.activity, "resume");
  assert.equal(send(s, { type: "pause", reason: "still works" }).status, "paused");
 });
+test("a lens without result is only an unknown: it cannot pass or fail", () => {
+ const s = send(verifying(), { type: "evidence", evidence: evidence("verification") });
+ const review = (verdict: "pass" | "fail" | "unknown") => ({ type: "reviewed" as const, review: { lens: "quality" as const, fingerprint: "tree", verdict, findings: verdict === "pass" ? [] : ["Sin resultado del lente: conexión (3 intentos)"], noResult: true as const, at } });
+ assert.equal(send(s, review("unknown")).reviews.at(-1)?.noResult, true);
+ for (const verdict of ["pass", "fail"] as const) assert.throws(() => send(s, review(verdict)), /sin resultado/);
+});
 test("a failed lens cannot be re-rolled on the same content and lens runs are bounded", () => {
  const review = (verdict: "pass" | "fail" | "unknown", fingerprint = "tree") => ({ type: "reviewed" as const, review: { lens: "quality" as const, fingerprint, verdict, findings: verdict === "pass" ? [] : ["src/a.ts:1 · finding"], at } });
  let s = send(verifying(), { type: "evidence", evidence: evidence("verification") });

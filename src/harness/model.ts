@@ -69,7 +69,8 @@ export const EvidenceSchema = Type.Object({
 	output: Type.String({ maxLength: 12000 }), fingerprint: text(128), head: text(128), startedAt: text(100), finishedAt: text(100),
 }, { additionalProperties: false });
 export type Evidence = Static<typeof EvidenceSchema>;
-export const ReviewSchema = Type.Object({ lens: LensSchema, fingerprint: text(128), verdict: Type.Union([Type.Literal("pass"), Type.Literal("fail"), Type.Literal("unknown")]), findings: list(), at: text(100) }, { additionalProperties: false });
+// noResult: el lente no llegó a juzgar (conexión, plazo, formato, cancelado); sin la marca, un unknown es del modelo.
+export const ReviewSchema = Type.Object({ lens: LensSchema, fingerprint: text(128), verdict: Type.Union([Type.Literal("pass"), Type.Literal("fail"), Type.Literal("unknown")]), findings: list(), noResult: Type.Optional(Type.Literal(true)), at: text(100) }, { additionalProperties: false });
 export type Review = Static<typeof ReviewSchema>;
 // Un acuerdo de alcance dicho por la persona en el chat: su cita textual (verificada por el host) y lo acordado.
 export const AgreementSchema = Type.Object({ quote: text(2000), summary: text(2000), replan: Type.Boolean(), phase: PhaseSchema, at: text(100) }, { additionalProperties: false });

@@ -27,6 +27,8 @@ function checked<S extends TSchema>(schema: S, value: unknown): Static<S> {
 	if (!Value.Check(schema, value)) throw new Error("Faltan datos o no tienen el formato de esta acción del harness");
 	return value;
 }
+// Un unknown sin resultado no es un juicio del lente: repetirlo no re-tira un veredicto. La causa va en findings.
+const NO_RESULT = "Sin resultado: el lente no llegó a juzgar el cambio; la causa va en findings. Volvé a correr este lente antes de verified; no gasta veredictos. Si vuelve a quedar sin resultado, queda como aviso en el progreso y en el PR draft y no bloquea Verificar.";
 const result = (session: DevelopmentSession) => ({ content: [{ type: "text" as const, text: session.state && !session.lockedReason ? developmentInstructions(session.state) : session.status() }], details: { workflow: session.state } });
 async function observedReferences(session: DevelopmentSession, references: Static<typeof InferenceInputSchema>["references"], ctx: ExtensionContext, allowSaved = false): Promise<void> {
 	const state = session.current(ctx);
@@ -145,7 +147,7 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 		async execute(_id, { lens }, signal, _update, ctx) {
 			const result = await runLens(session, lens, ctx, AbortSignal.any([signal ?? new AbortController().signal, session.lifecycle.signal]));
 			const blocking = result.review.lens === "security" && result.review.verdict === "fail";
-			const notice = result.review.verdict === "pass" ? undefined : blocking ? "El fail de seguridad bloquea Verificar: corregí el cambio con retry." : "Aviso: queda visible en el progreso y en el PR draft y no bloquea Verificar. No repitas el lente para borrarlo ni uses retry. Si vale la pena corregirlo, usá omi_workflow action:amend con el motivo: no gasta vuelta.";
+			const notice = result.review.verdict === "pass" ? undefined : blocking ? "El fail de seguridad bloquea Verificar: corregí el cambio con retry." : result.review.noResult ? NO_RESULT : "Aviso: queda visible en el progreso y en el PR draft y no bloquea Verificar. No repitas el lente para borrarlo ni uses retry. Si vale la pena corregirlo, usá omi_workflow action:amend con el motivo: no gasta vuelta.";
 			return { content: [{ type: "text", text: JSON.stringify({ ...result.review, ...(notice ? { notice } : {}), ...(result.error ? { error: result.error } : {}) }) }], details: result.review, usage: result.usage, isError: !!result.error || blocking };
 		},
 	});

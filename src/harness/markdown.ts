@@ -38,6 +38,8 @@ export const agreementLine = (a: Agreement): string => `- «${text(a.quote)}» �
 export const VERDICTS = { pass: "✅ pass", fail: "❌ fail", unknown: "⚠️ unknown", "not-run": "sin correr" };
 /** Un lente que aprobó limpio el contenido de partida de una corrección liviana y no se repitió. */
 export const CARRIED = " · revisado antes de la corrección liviana";
+/** El veredicto visible: un unknown sin resultado (conexión, plazo, formato) no se confunde con uno que juzgó el lente. */
+export const verdictLabel = (verdict: keyof typeof VERDICTS, noResult: boolean | undefined): string => `${VERDICTS[verdict]}${noResult ? " · sin resultado" : ""}`;
 export function evidenceResult(e: Evidence): string {
 	if (e.outcome === "interrupted") return "⚠️ interrumpido";
 	if (e.outcome === "passed") return `✅ exit ${e.exitCode}`;
