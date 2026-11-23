@@ -80,14 +80,16 @@ async function startRound(session: DevelopmentSession, ctx: ExtensionContext, st
 		return activatePostPrCorrection(next, intent.id, at);
 	});
 }
-async function push(session: DevelopmentSession, ctx: ExtensionContext, chain: ChainConsent | undefined): Promise<void> {
-	const { state, s } = enabledWork(session, ctx), subject = currentSubject(s), client = githubClient(session, state), signal = session.lifecycle.signal;
+/** source chain: lo pide la continuidad; manual: /omi-work fix. `chain`: el sí de continuidad ask pendiente. */
+export interface PushOptions { source: "manual" | "chain"; chain?: ChainConsent | undefined }
+async function push(session: DevelopmentSession, ctx: ExtensionContext, options: PushOptions): Promise<void> {
+	const { state, s } = enabledWork(session, ctx), subject = currentSubject(s), client = githubClient(session, state), signal = session.lifecycle.signal, chain = options.chain;
 	const round = s.corrections?.findLast(r => r.status === "verified"); if (!round || round.status !== "verified") throw new Error("No hay una corrección verificada para publicar");
 	const intent = newIntent(s, "push");
 	// Continuidad no concede push. Consultar Foundations por separado y ligar la decisión a su autoridad.
-	// Sin opt-in se conserva el permiso humano del flujo previo.
-	const foundations = await session.foundations.policy(ctx, state);
-	const mode = currentLifecyclePin(s).accepted.block.continuity ? foundations.politica.push_pr : "ask";
+	// Sólo la cadena con continuity.fix auto o ask sigue push_pr; el comando manual (o fix: manual) pide el sí, como antes.
+	const foundations = await session.foundations.policy(ctx, state), fix = currentLifecyclePin(s).accepted.block.continuity?.fix;
+	const mode = options.source === "chain" && (fix === "auto" || fix === "ask") ? foundations.politica.push_pr : "ask";
 	const authorization = await decide(session, ctx, intent, s, `Push de la corrección al PR #${subject.number}`, `${subject.branch}: ${round.startHead.slice(0, 12)} → ${subject.headSha.slice(0, 12)} · push normal al mismo PR, sin force ni PR nuevo. Después hace falta otra Review del HEAD nuevo.`, { mode, chain });
 	const decision = authorization.source === "policy" ? { ...authorization,
 		authorityHash: foundations.hash ?? createHash("sha256").update(JSON.stringify({ authority: "foundations-default", repo: s.root.repo, policy: foundations.politica })).digest("hex"),
@@ -120,7 +122,7 @@ export async function assessLifecycleCorrectionScope(session: DevelopmentSession
 	} catch { return { status: "paused", reason: "Evaluación aislada de alcance falló/cancelada; requiere persona. No se habilitó código." }; }
 }
 /** Verifica la corrección terminada en PR (o toma la ya verificada) y la publica en el mismo PR. No abre rondas. */
-export async function pushLifecycleCorrection(session: DevelopmentSession, ctx: ExtensionContext, chain?: ChainConsent): Promise<void> {
+export async function pushLifecycleCorrection(session: DevelopmentSession, ctx: ExtensionContext, options: PushOptions): Promise<void> {
 	const { state, s } = enabledWork(session, ctx); const round = currentCorrection(state);
 	if (round?.status === "coding" && state.phase === "pr") {
 		const snap = await inspectCheckout(state.checkout, session.runner, session.lifecycle.signal), subject = currentSubject(s);
@@ -128,13 +130,13 @@ export async function pushLifecycleCorrection(session: DevelopmentSession, ctx: 
 		const observedGit = { clean: snap.clean, ancestor: await ancestor(session, state, round.startHead, snap.head) };
 		await session.update(ctx, saved => verifyPostPrCorrection(saved, round.operationId, input, observedGit, session.now()));
 	} else if (round?.status !== "verified") throw new Error("No hay una corrección verificada para publicar");
-	await push(session, ctx, chain);
+	await push(session, ctx, options);
 }
 /** true si quedó una ronda activa para el agente (el host la continúa con el turno). */
 export async function fixLifecycle(session: DevelopmentSession, ctx: ExtensionContext, options: { source: "manual" | "chain"; chain?: ChainConsent | undefined } = { source: "manual" }): Promise<boolean> {
 	const { state, s } = enabledWork(session, ctx); const round = currentCorrection(state);
 	if (round?.status === "coding" && state.phase !== "pr") throw new Error("La corrección sigue en curso: el agente termina el paso con rojo, verde, commit y verified; después /omi-work fix verifica y pide el push.");
-	if (round?.status === "coding" || round?.status === "verified") { await pushLifecycleCorrection(session, ctx, options.chain); return false; }
+	if (round?.status === "coding" || round?.status === "verified") { await pushLifecycleCorrection(session, ctx, options); return false; }
 	if (round) throw new Error(`Ronda de corrección ${round.status} sin reserva vigente: reconciliar antes de otra.`);
 	if (s.stage !== "review") throw new Error(`Las correcciones parten de Review; ahora: ${s.stage}.`);
 	const found = pending(s);

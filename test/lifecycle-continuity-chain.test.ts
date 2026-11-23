@@ -126,3 +126,25 @@ for (const restored of [false, true] as const) {
   assert.equal(reviews(await f.state()), 2);
  });
 }
+
+// Un opt-in a continuidad con fix manual no quita el sí que el comando manual del push pedía antes.
+for (const continuity of [{ ...autoContinuity, fix: "manual", land: "manual" }, { entry: "manual", review: "manual", fix: "manual", land: "manual", ship: "manual" }] as const) {
+ test(`/omi-work fix con continuity.fix manual${continuity.review === "manual" ? " (todo manual)" : ""}: el push pide su sí aunque push_pr sea auto`, async t => {
+  const fixture = await firstRound(block => { block.continuity = { ...continuity }; }, t);
+  const { f, gh } = fixture;
+  await f.command("adopt");
+  if (continuity.review === "manual") await f.command("review");
+  await f.command("fix");
+  assert.equal((await f.state()).phase, "implement", "la persona autorizó la ronda");
+  const newHead = await correct(fixture);
+  await f.action({ action: "verified" });
+  assert.notEqual(f.remote.pushed.get(f.checkout.branch), newHead, "con fix manual, verified no hace el push");
+  const before = f.prompts.length;
+  await f.command("fix");
+  assert.equal(asked(f, before, /^Push de la corrección al PR #42$/), 1, "el comando manual pide el sí del push, como sin continuidad");
+  const state = await f.state();
+  assert.deepEqual(enabled(state).decisions.filter(d => d.kind === "push").map(d => d.source), ["person"], "el push no quedó como decisión de la política");
+  assert.equal(f.remote.pushed.get(f.checkout.branch), newHead);
+  assert.deepEqual(gh.mutations, [], "ni ready ni merge");
+ });
+}

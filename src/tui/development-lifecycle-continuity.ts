@@ -134,7 +134,7 @@ export class LifecycleContinuityHost {
      case "fix":
       if (await fixLifecycle(this.session, ctx, { source: "chain", chain: consent })) return; // El turno del modelo hace TDD y todos los D.
       break;
-     case "push": await pushLifecycleCorrection(this.session, ctx, consent); break;
+     case "push": await pushLifecycleCorrection(this.session, ctx, { source: "chain", chain: consent }); break;
      case "review": observed = await reviewLifecycle(this.session, ctx, consent); this.remember(observed); break;
      case "land":
       if (!(await landLifecycle(this.session, ctx, consent))) { await this.pause(ctx, { reason: "declined", stage }); return; }
