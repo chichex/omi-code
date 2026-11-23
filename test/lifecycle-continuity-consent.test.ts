@@ -253,3 +253,20 @@ for (const answer of [true, false] as const) {
   }
  });
 }
+
+// El sí de /omi-work adopt dice qué sigue después de habilitar, según la continuidad que se fija.
+for (const [label, continuity, expected] of [
+ ["review auto", { ...autoContinuity, review: "auto", fix: "manual", land: "manual" }, /Al habilitar, la continuidad sigue sola con Review \(continuity\.review: auto\)\./],
+ ["review ask", { ...autoContinuity, review: "ask", fix: "manual", land: "manual" }, /Al habilitar, la continuidad pregunta antes de seguir con Review \(continuity\.review: ask\)\./],
+ ["review manual", { ...autoContinuity, review: "manual" }, /Habilitar no ejecuta nada ahora\./],
+ ["sin continuidad", undefined, /Habilitar no ejecuta nada ahora\./],
+] as const) {
+ test(`/omi-work adopt con ${label}: el diálogo dice qué sigue después de habilitar`, async t => {
+  const { f } = await continuityFixture(t, { historical: true, change: block => { if (continuity) block.continuity = { ...continuity }; } });
+  await f.command("adopt");
+  const adopt = dialogs(f).find(d => d.title === "Habilitar Review, Land y Ship en el PR #42");
+  assert.ok(adopt, "pidió el sí de la adopción");
+  assert.match(adopt.detail, expected);
+  if (continuity && continuity.review !== "manual") assert.doesNotMatch(adopt.detail, /Habilitar no ejecuta nada ahora/, "con continuidad, adoptar sigue con Review");
+ });
+}

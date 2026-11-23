@@ -129,6 +129,12 @@ export async function operate(session: DevelopmentSession, ctx: ExtensionContext
 export const receipt = (intent: LifecycleIntent, externalId: string, at: string, outcome: "succeeded" | "failed" = "succeeded") =>
 	({ operationId: intent.id, correlationId: intent.correlationId, subjectId: intent.subjectId, targetId: intent.targetId, externalId: externalId.slice(0, 256), outcome, verifiedSubjectId: intent.subjectId, at });
 
+/** Qué sigue al habilitar a mano: con continuity.review auto o ask, la cadena sigue con Review después del sí. */
+function afterManualAdopt(review: "auto" | "ask" | "manual" | undefined): string {
+	if (review === "auto") return "Al habilitar, la continuidad sigue sola con Review (continuity.review: auto). ";
+	if (review === "ask") return "Al habilitar, la continuidad pregunta antes de seguir con Review (continuity.review: ask). ";
+	return "Habilitar no ejecuta nada ahora. ";
+}
 /** `consent`: entrada ask. Su único sí es el de la adopción, con lo que se fija, y va antes de leer GitHub. */
 export async function adoptLifecycle(session: DevelopmentSession, ctx: ExtensionContext, publication?: { head: string; number: number; revision: number; pinHash: string }, consent?: ChainConsent): Promise<boolean> {
 	const state = session.current(ctx); const signal = session.lifecycle.signal;
@@ -143,7 +149,7 @@ export async function adoptLifecycle(session: DevelopmentSession, ctx: Extension
 	// PR, rama, base y HEAD del trabajo: la lectura de GitHub de abajo exige los mismos antes de adoptar.
 	const title = `Habilitar Review, Land y Ship en el PR #${pr.number}`;
 	const description = [`PR #${pr.number} · ${state.checkout.branch} → ${pr.base} · HEAD ${pr.head.slice(0, 12)}`, "", "Configuración aceptada:", lifecycleDiff(undefined, pin.accepted.block, pin.key), "",
-		`${consent ? "" : "Habilitar no ejecuta nada ahora. "}Review, correcciones, push, merge y Ship piden su propio permiso según esta configuración (ask pregunta antes). En chichex/omi-code merge y dispatch son siempre humanos.`].join("\n");
+		`${consent ? "" : afterManualAdopt(pin.accepted.block.continuity?.review)}Review, correcciones, push, merge y Ship piden su propio permiso según esta configuración (ask pregunta antes). En chichex/omi-code merge y dispatch son siempre humanos.`].join("\n");
 	if (consent?.pending) {
 		if (!(await consent.confirmEffect(title, description))) throw new LifecycleDeclined(`${title}: no. No se habilitó nada.`);
 		// El sí vale para la configuración mostrada: si cambió mientras esperaba, no se adopta con otra.

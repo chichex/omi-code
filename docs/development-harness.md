@@ -537,7 +537,7 @@ Caso real: la persona pidió «corré las reviews con GHA» y el agente le pasó
 
 | Comando | Qué hace | Permiso |
 |---|---|---|
-| `/omi-work adopt` | Habilita el lifecycle sobre el PR draft abierto: relee el PR en GitHub y el checkout, fija la configuración aceptada | Siempre un sí |
+| `/omi-work adopt` | Habilita el lifecycle sobre el PR draft abierto: relee el PR en GitHub y el checkout, fija la configuración aceptada. Con `continuity.review` en `auto` o `ask`, el diálogo avisa que después sigue la Review | Siempre un sí |
 | `/omi-work review` | Corre la Review configurada: `github` lee reviews, comentarios y checks; `local` usa un revisor aislado; `gha` dispara el workflow y espera su recibo, con `model` y `effort` sólo si el provider los fija. Con `github`, volver a correrlo en el mismo HEAD sólo relee: no pregunta ni gasta otro intento | `review.mode` |
 | `/omi-work fix` | Agrupa los hallazgos del HEAD actual y abre una ronda: el agente corrige con rojo, verde, commit y todos los D. Al terminar, verifica y hace push al **mismo PR** | El comando manual pide un sí para la ronda y otro para el push, con o sin continuidad. Sólo el push que hace la cadena, con `continuity.fix` en `auto` o `ask`, sigue la política independiente `push_pr` de Foundations |
 | `/omi-work land` | Marca el PR listo (sale de draft), relee checks, reviews y reglas, y mergea por PR y SHA. Reconoce un merge externo | `land.mode` |
