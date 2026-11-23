@@ -13,14 +13,20 @@ const ADOPT_THEN_REVIEW = "corré /omi-work adopt y después /omi-work review; s
 const NO_WORKFLOWS = "No dispares workflows (por ejemplo, gh workflow run) ni le pases comandos de terminal para hacerlo: pasale el comando /omi-work tal cual";
 
 const adopted = (state: Workflow) => state.version === 2 && state.lifecycle.status === "enabled";
+/** El lifecycle no adopta un stack publicado: adopt lo rechaza, así que la guía no lo ofrece. */
+const stacked = (state: Workflow) => state.publication.status === "opened" && !!state.publication.stack;
 /** Una Review pedida en el chat, también con GHA, es un comando de la persona: adopt la habilita la primera vez. */
-const ghaReview = (state: Workflow) => `Si la persona pide una Review, también con GHA, es ${adopted(state) ? "/omi-work review" : "/omi-work adopt y después /omi-work review"}: corre la Review configurada y, si es gha, OMI dispara el workflow configurado con el sí que corresponda`;
+function ghaReview(state: Workflow): string {
+ if (stacked(state)) return "Si la persona pide una Review, también con GHA: el lifecycle no adopta stacks y no la corre sobre estos PRs";
+ return `Si la persona pide una Review, también con GHA, es ${adopted(state) ? "/omi-work review" : "/omi-work adopt y después /omi-work review"}: corre la Review configurada y, si es gha, OMI dispara el workflow configurado con el sí que corresponda`;
+}
 const enabledPin = (state: Workflow) => {
  if (state.version !== 2 || state.lifecycle.status !== "enabled") return undefined;
  const s = state.lifecycle; return s.pins.find(p => p.accepted.blockHash === s.pinHash)?.accepted.block;
 };
 /** Quién corre los efectos de este PR: antes de adoptarlo, adopt los habilita; después, cada comando de su etapa. */
 function owners(state: Workflow): string {
+ if (stacked(state)) return "El lifecycle no adopta stacks: Review, Land y Ship de estos PRs no corren con /omi-work";
  return adopted(state)
   ? "Review, correcciones, Land y Ship de este PR los corre la persona con /omi-work review | fix | land | ship, o los encadena la continuidad configurada"
   : "Review, Land y Ship de este PR los habilita la persona con /omi-work adopt y la Review se corre con /omi-work review, o los encadena la continuidad configurada";

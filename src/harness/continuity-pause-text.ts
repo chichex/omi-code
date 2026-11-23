@@ -10,7 +10,7 @@ const sentence = (value: string) => value.charAt(0).toUpperCase() + value.slice(
 export interface PauseGuide { message: string; next: string }
 /** El lifecycle adopta un solo PR. Sin el número (una pausa sin ese dato), no inventa uno. */
 function stackUnsupportedGuide(pulls?: number): PauseGuide {
- return { message: `Este trabajo se publicó como stack de ${pulls === undefined ? "PRs" : `${pulls} PRs`} y el lifecycle no adopta stacks`, next: "mergealos en orden con su sí, o publicá un solo PR" };
+ return { message: `Este trabajo se publicó como stack de ${pulls === undefined ? "PRs" : `${pulls} PRs`} y el lifecycle no adopta stacks`, next: "mergealos en orden con su sí" };
 }
 /** La misma razón como error de /omi-work adopt: dos oraciones, con el próximo paso. */
 export function stackUnsupportedText(pulls: number): string {

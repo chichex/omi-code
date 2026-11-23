@@ -404,7 +404,7 @@ Frena y pide una persona si:
 - El merge con base fija necesita Git 2.40 o superior.
 - No hay lock con GitHub: otro puede escribir entre la lectura y el push. El push normal lo rechaza y se vuelve a correr.
 - La línea «sobre #N» del cuerpo queda como al abrir el PR. La base vigente la muestran GitHub y la sección del issue.
-- El lifecycle no adopta un stack. Si igual se publica uno con la entrada encadenada (por ejemplo, la configuración se aceptó después de la spec), la cadena pausa sin preguntar ni leer GitHub: «Continuidad en pausa · Este trabajo se publicó como stack de 2 PRs y el lifecycle no adopta stacks: mergealos en orden con su sí, o publicá un solo PR». `/omi-work adopt` falla con el mismo motivo.
+- El lifecycle no adopta un stack. Si igual se publica uno con la entrada encadenada (por ejemplo, la configuración se aceptó después de la spec), la cadena pausa sin preguntar ni leer GitHub: «Continuidad en pausa · Este trabajo se publicó como stack de 2 PRs y el lifecycle no adopta stacks: mergealos en orden con su sí». `/omi-work adopt` falla con el mismo motivo.
 
 ## Si el modelo corta solo
 
@@ -526,7 +526,10 @@ PR draft abierto, sin adoptar  → corré /omi-work adopt y después /omi-work r
 PR adoptado, sin Review        → corré /omi-work review
 Review registrada, 1 hallazgo  → corré /omi-work fix; usa los hallazgos ya registrados
 Pausa por un no a la Review    → cuando quieras, /omi-work review
+Stack publicado               → mergealos en orden con su sí
 ```
+
+Con un stack publicado, la guía no ofrece `/omi-work adopt` ni `/omi-work review`, tampoco para una Review con GHA: el lifecycle no adopta stacks y adopt lo rechaza.
 
 Si falta configurar algo que corre el [setup](#setup-de-lo-que-falta) (por ejemplo, el lifecycle), el contexto del agente lo dice y el agente le pasa `/omi-setup` a la persona: no lo configura ni edita la KB.
 
@@ -633,7 +636,7 @@ Se dispara solo, sin apretar nada:
 
 - **Al entrar al harness.** Reemplaza la oferta anterior del lifecycle.
 - **Al abrir una sesión interactiva nueva** (arranque u `/new`, sin mensajes) en un repo de GitHub con la KB disponible. Espera la lectura de la KB en segundo plano y no interrumpe un turno que ya empezó. Un arranque con prompt (`omi "arreglá los 2 bugs"`) empieza con ese turno, no con el setup. Si la persona ya está escribiendo en el editor, el setup no se abre, porque toma el foco y las teclas caerían en sus opciones. Sólo avisa: «Falta configurar Foundations y el lifecycle. No abrí el setup porque estabas escribiendo. Cuando quieras: /omi-setup.»
-- **Al publicar el PR draft**, si el lifecycle falta, está pendiente o no tiene continuidad: sólo el wizard del lifecycle, nunca Foundations. Guardar no adopta el draft ya publicado: OMI avisa que para seguir con ese PR hay que usar `/omi-work adopt`. Una entrada `auto` o `ask` vale desde la próxima publicación. Si se publicó un stack, el aviso no manda a adopt, porque el lifecycle no adopta stacks: «Guardar no adoptó el stack. Este trabajo se publicó como stack de 2 PRs y el lifecycle no adopta stacks. Mergealos en orden con su sí, o publicá un solo PR.»
+- **Al publicar el PR draft**, si el lifecycle falta, está pendiente o no tiene continuidad: sólo el wizard del lifecycle, nunca Foundations. Guardar no adopta el draft ya publicado: OMI avisa que para seguir con ese PR hay que usar `/omi-work adopt`. Una entrada `auto` o `ask` vale desde la próxima publicación. Si se publicó un stack, el aviso no manda a adopt, porque el lifecycle no adopta stacks: «Guardar no adoptó el stack. Este trabajo se publicó como stack de 2 PRs y el lifecycle no adopta stacks. Mergealos en orden con su sí.»
 
 Nunca offline, sin UI (print o RPC), con la KB no disponible, ni al restaurar, recargar (`/reload`), retomar (resume) o bifurcar (fork) una sesión. Una sesión que ya tiene mensajes no es nueva. Se ofrece una vez por revisión y sesión.
 

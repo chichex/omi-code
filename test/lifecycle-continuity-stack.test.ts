@@ -144,9 +144,9 @@ for (const entry of ["auto", "ask"] as const) {
   assert.equal(f.prompts.slice(prompts).filter(p => /Habilitar|Continuidad/.test(p)).length, 0, "no pregunta la entrada");
   assert.deepEqual(gh.reads, [], "no lee el PR en GitHub"); assert.deepEqual(gh.mutations, []);
   const text = "Este trabajo se publicó como stack de 2 PRs y el lifecycle no adopta stacks";
-  assert.ok(f.messages.some(m => m.includes(`Continuidad en pausa · ${text}: mergealos en orden con su sí, o publicá un solo PR`)));
+  assert.ok(f.messages.some(m => m === `Continuidad en pausa · ${text}: mergealos en orden con su sí`));
   await f.command("adopt");
-  assert.equal(f.messages.at(-1), `${text}. Mergealos en orden con su sí, o publicá un solo PR.`);
+  assert.equal(f.messages.at(-1), `${text}. Mergealos en orden con su sí.`);
   assert.deepEqual(gh.reads, []);
  });
 }
@@ -165,6 +165,6 @@ test("stack publicado sin continuidad: guardarla desde el setup no promete adopt
  assert.equal(f.remote.prs.length, 2, "se publicó el stack"); assert.ok(state.version === 2 && state.lifecycle.status === "disabled");
  assert.ok(f.asked.some(screens => /Resumen antes de guardar/.test(screens[0] ?? "")), "el setup ofreció el wizard y se guardó");
  const hint = f.messages.find(m => /^Guardar no adoptó/.test(m));
- assert.equal(hint, "Guardar no adoptó el stack. Este trabajo se publicó como stack de 2 PRs y el lifecycle no adopta stacks. Mergealos en orden con su sí, o publicá un solo PR.");
+ assert.equal(hint, "Guardar no adoptó el stack. Este trabajo se publicó como stack de 2 PRs y el lifecycle no adopta stacks. Mergealos en orden con su sí.");
  assert.ok(!f.messages.some(m => /Para seguir con este PR: \/omi-work adopt|Para seguir con Review, Land y Ship: \/omi-work adopt/.test(m)), "no manda a adopt un stack");
 });

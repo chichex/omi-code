@@ -69,9 +69,9 @@ test("el estado guarda la pausa estructurada; los estados sin el campo siguen va
 // S2.3 · Un stack publicado no entra a la cadena.
 test("stack-unsupported: dice cuántos PRs tiene el stack y qué hacer, con el mismo texto que el adopt manual", async () => {
  const { stackUnsupportedText } = await import("../src/harness/continuity-pause-text.ts");
- const expected = "Este trabajo se publicó como stack de 3 PRs y el lifecycle no adopta stacks: mergealos en orden con su sí, o publicá un solo PR";
+ const expected = "Este trabajo se publicó como stack de 3 PRs y el lifecycle no adopta stacks: mergealos en orden con su sí";
  assert.equal(continuityPauseText({ reason: "stack-unsupported", stage: "entry", stackPulls: 3 }), expected);
- assert.equal(stackUnsupportedText(3), "Este trabajo se publicó como stack de 3 PRs y el lifecycle no adopta stacks. Mergealos en orden con su sí, o publicá un solo PR.");
+ assert.equal(stackUnsupportedText(3), "Este trabajo se publicó como stack de 3 PRs y el lifecycle no adopta stacks. Mergealos en orden con su sí.");
  assert.match(line("stack-unsupported", "entry"), /stack de PRs y el lifecycle no adopta stacks/, "sin el número no inventa uno");
 });
 

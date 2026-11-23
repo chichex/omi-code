@@ -8,6 +8,7 @@ import { lifecycleHash } from "../src/harness/lifecycle-config.ts";
 import * as life from "../src/harness/lifecycle-state.ts";
 import { adoptPostPrWorkflow } from "../src/harness/lifecycle-corrections.ts";
 import { developmentInstructions } from "../src/tui/development-view.ts";
+import { afterDraftCheckError, afterDraftToolBlock } from "../src/harness/after-draft-guide.ts";
 import { AT, lifecycleConfig } from "./helpers/lifecycle.ts";
 import { autoContinuity, continuityFixture } from "./helpers/lifecycle-continuity.ts";
 
@@ -52,6 +53,20 @@ test("PR adoptado: el próximo paso sale del estado guardado, sin repetir la Rev
  assert.match(fresh, /No dispares workflows/);
  assert.equal(next(fresh), "corré /omi-work review.");
  assert.equal(next(developmentInstructions(reviewed())), "corré /omi-work fix; usa los hallazgos ya registrados.", "con hallazgos registrados no pide otra Review");
+});
+
+test("stack publicado: la guía no manda a /omi-work adopt ni review, que no adoptan stacks", () => {
+ const r = draft(); assert.ok(r.publication.status === "opened");
+ const pull = (index: number, base: string) => ({ title: `Parte ${index}`, steps: ["C1"], branch: `feat/work-${index}`, base, head, number: 40 + index, url: `https://github.com/${repo}/pull/${40 + index}`, status: "draft" as const });
+ const stacked: WorkflowV2 = { ...r, publication: { ...r.publication, stack: [pull(1, "main"), pull(2, "feat/work-1")] } };
+ const texts = { instrucciones: developmentInstructions(stacked), bash: afterDraftToolBlock(stacked, "bash"), check: afterDraftCheckError(stacked) };
+ for (const [where, text] of Object.entries(texts)) {
+  assert.doesNotMatch(text, /\/omi-work (adopt|review)/, where);
+  assert.match(text, /el lifecycle no adopta stacks/i, where);
+  assert.match(text, /No dispares workflows|no dispara workflows/, where);
+  assert.equal(next(text), "mergealos en orden con su sí.", where);
+ }
+ assert.match(texts.instrucciones, /omi_workflow action stack/, "conserva cómo sincronizar el stack");
 });
 
 test("con una pausa vigente, el próximo paso es el de la pausa", () => {
