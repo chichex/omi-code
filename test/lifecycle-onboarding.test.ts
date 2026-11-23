@@ -291,6 +291,15 @@ test("Review: si el workflow no declara model (o no acepta Sonnet) no pregunta e
  }
 });
 
+// El esquema acepta el workflow con o sin .github/workflows/; el detector lo da sin prefijo. Es el mismo workflow.
+test("Review: volver a elegir el workflow guardado con prefijo .github/workflows/ conserva su effort", async t => {
+ const f = await reviewRepo(t);
+ f.kb.perillas("app", renderLifecycleBlock(legacyBlock(b => { b.review.provider = { kind: "gha", workflow: ".github/workflows/claude-review.yml", ref: "main", contract: "omi-review-v1", effort: "high" }; })));
+ const run = script([["Mantener Ship actual"], [REVIEW], ["Default del workflow"], ["Mantener continuidad actual"], ["Guardar y aceptar"]]);
+ const saved = await runLifecycleOnboarding(f.deps(run.ask)); assert.ok(saved.kind === "saved");
+ assert.deepEqual(saved.pin.block.review.provider, { kind: "gha", workflow: "claude-review.yml", ref: "main", contract: "omi-review-v1", effort: "high" }, "la persona no pidió cambiar effort");
+});
+
 test("Mantener Ship actual conserva destinos personalizados sin reingresarlos; sin GHA detectado no pregunta Review", async t => {
  const f = await fixture(t), target = defaultLifecycleTarget({ id: "gha-deploy", mode: "auto", timeoutSeconds: 900, maxRetries: 2, onFailure: { action: "rollback", mode: "ask" }, provider: { kind: "gha", workflow: "deploy.yml", ref: "main", mode: "observe", contract: "omi-ship-v1", rollback: { workflow: "rollback.yml", ref: "main", contract: "omi-ship-v1" } }, evidence: { kind: "receipt", health: { path: "/health", status: 200 } } });
  assert.ok("target" in target);

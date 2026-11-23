@@ -15,6 +15,8 @@ const LOCAL = "Revisor local", DEFAULT_MODEL = "Default del workflow";
 const SONNET_MODEL: GhaReviewModel = "claude-sonnet-5-5", SONNET = `Sonnet (${SONNET_MODEL})`;
 
 const chosen = (answers: QuestionAnswer[], id: string) => answers.find(a => a.id === id)?.options[0];
+/** El esquema acepta el workflow con o sin `.github/workflows/`; el detector lo da sin prefijo. */
+const workflowName = (workflow: string) => workflow.replace(/^\.github\/workflows\//, "");
 function providerName(provider: LifecycleReviewProvider): string {
  switch (provider.kind) {
   case "local": return "revisor local";
@@ -70,7 +72,7 @@ export async function configureLifecycleReview(block: LifecycleConfig, current: 
   case "gha": {
    const tuning = await askModel(picked.workflow, picked.tuning, ask); if (!tuning) return null;
    // El wizard no pregunta effort: si ya estaba fijado para ese workflow y el workflow lo acepta, se conserva.
-   const kept = current?.kind === "gha" && current.workflow === picked.workflow ? current.effort : undefined;
+   const kept = current?.kind === "gha" && workflowName(current.workflow) === workflowName(picked.workflow) ? current.effort : undefined;
    const effort = kept && picked.tuning.effort.includes(kept) ? kept : undefined;
    return withProvider(block, { kind: "gha", workflow: picked.workflow, ref: block.land.base, contract: REVIEW_CONTRACT, ...(tuning.model ? { model: tuning.model } : {}), ...(effort ? { effort } : {}) });
   }
