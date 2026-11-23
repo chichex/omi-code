@@ -47,6 +47,7 @@ test("publication: with push_pr ask the person reviews the exact body, and only 
 	assert.equal(f.reviews(), reviews + 1, "la TUI abre la revisión navegable, no un confirm de una línea");
 	assert.ok(f.prompts.includes(PUBLISH)); assert.equal(f.pushed().length, 0); assert.equal(f.created().length, 0);
 	assert.equal((await f.state()).publication.status, "none", "decir que no no deja recibo");
+	assert.ok(!f.messages.some((m) => /PR draft abierto/.test(m)), "con el no, no avisa un PR que no existe");
 	assert.match(f.shown(PUBLISH), /│ Closes #42/); assert.match(f.shown(PUBLISH), /│ ## Verificación/); assert.match(f.shown(PUBLISH), /Closes #42».*rama default/s);
 	f.remote.confirmations = true; await f.action({ action: "publish" });
 	const sent = f.created()[0]?.input ?? "";
@@ -78,6 +79,16 @@ test("publication: an old-format pending receipt is never published with its bod
 	assert.equal(sent.split("\n")[1], "Closes #42"); assert.doesNotMatch(sent, /Refs #|"route"/);
 	const done = await f.state(); assert.equal(done.phase, "done");
 	assert.ok(done.history.some((h) => h.activity === "publishing"), "la renovación queda en el historial");
+});
+
+// publish cierra el turno del modelo: sin este aviso, el PR del #82 se abrió sin que nadie mostrara su URL.
+test("publication: al abrir el PR draft OMI avisa su número y su URL, también con push_pr auto", async (t) => {
+	const f = await fixture(t, "auto");
+	const output = await f.action({ action: "publish" });
+	const { publication } = await f.state();
+	assert.ok(publication.status === "opened", "el PR quedó abierto");
+	assert.ok(f.messages.some((m) => m.includes(`PR draft abierto: #${publication.number} ${publication.url}`)), "el aviso trae número y URL");
+	assert.equal((output as { terminate?: boolean }).terminate, true, "publish sigue cerrando el turno");
 });
 
 test("publication: with push_pr ask an old-format receipt shows the whole new body; no keeps receipt and remote intact, yes publishes it", async (t) => {

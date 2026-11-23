@@ -15,6 +15,11 @@ export function publicationSummary(state: Workflow, targets: string, renewing: b
 		...(renewing ? ["", "Había una publicación pendiente con un cuerpo anterior (por ejemplo, del formato viejo). Ese cuerpo no se publica: el recibo se renueva con el cuerpo nuevo."] : []),
 	].join("\n");
 }
+/** El aviso de lo publicado. publish cierra el turno del modelo, así que el número y la URL los muestra OMI. */
+export function publishedNotice(receipt: { number: number; url: string; stack?: readonly { number: number; url: string }[] }): string {
+	if (!receipt.stack || receipt.stack.length < 2) return `PR draft abierto: #${receipt.number} ${receipt.url}`;
+	return [`PRs draft abiertos, en orden (${receipt.stack.length}):`, ...receipt.stack.map((pull) => `#${pull.number} ${pull.url}`)].join("\n");
+}
 export function publicationDocument(summary: string, body: string): ApprovalDocument {
 	return { title: PUBLICATION_TITLE, sections: [
 		{ id: "publication", title: "Publicación", lines: summary.split("\n").map((text) => ({ kind: "text" as const, text })) },
