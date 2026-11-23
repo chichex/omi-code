@@ -176,6 +176,21 @@ test("development_lenses reintenta sólo lo transitorio: conexión o cuelgue y d
 	assert.equal((await f.state()).reviews.at(-1)?.verdict, "pass");
 });
 
+// Un proveedor rechaza un max_tokens mayor que el tope de salida del modelo, y Pi sólo lo recorta contra la ventana.
+test("development_lenses el tope del lente no pasa el de salida del modelo: con 8192 pide 8192; con uno mayor, 16384", async (t) => {
+	const f = await verifying(t, ["quality", "compliance"]);
+	const model = f.context.model; assert.ok(model, "el fixture trae un modelo");
+	model.maxTokens = 8192;
+	let before = f.modelControl.options.length;
+	await f.invoke("omi_workflow_lens", { lens: "quality" });
+	assert.deepEqual(f.modelControl.options.slice(before).map((o) => o.maxTokens), [8192]);
+	assert.equal((await f.state()).reviews.at(-1)?.verdict, "pass");
+	model.maxTokens = 128_000;
+	before = f.modelControl.options.length;
+	await f.invoke("omi_workflow_lens", { lens: "compliance" });
+	assert.deepEqual(f.modelControl.options.slice(before).map((o) => o.maxTokens), [16384]);
+});
+
 test("development_lenses sin resultado tras 3 intentos: unknown con la causa por categoría, se puede volver a correr y no llega al refuter; el PR lo distingue de un unknown juzgado", async (t) => {
 	const f = await verifying(t, ["quality", "compliance", "refuter"], {}, FAST);
 	const before = f.modelCalls.length;
