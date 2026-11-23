@@ -1,5 +1,5 @@
-// Configurar Foundations es una acción humana: abrir no acepta, guarda ni concede un grant. El harness ya no
-// lo ofrece solo al arrancar: sin Foundations nada pregunta. Se abre con /omi-foundations o f en la vista OMI.
+// Configurar Foundations es una acción humana: abrir no acepta, guarda ni concede un grant. Sin Foundations nada
+// pregunta. Se abre con /omi-foundations, f en la vista OMI o el setup de lo que falta (development-config-setup.ts).
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { checkBlock, type FoundationsBlock } from "../harness/foundations.ts";
 import { foundationsDir, readTrust, type TrustKey } from "../harness/foundations-trust.ts";
