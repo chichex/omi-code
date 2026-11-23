@@ -3,7 +3,7 @@
 import { execFileSync } from "node:child_process";
 import { defaultLifecycleConfig, defaultLifecycleTarget, renderLifecycleBlock, type LifecycleConfig } from "../../src/harness/lifecycle-config.ts";
 import { acceptLifecycle } from "../../src/harness/lifecycle-kb.ts";
-import { lifecycleTrustDir, type LifecycleKey } from "../../src/harness/lifecycle-trust.ts";
+import { lifecycleTrustDir, readLifecycleTrust, type LifecycleKey } from "../../src/harness/lifecycle-trust.ts";
 import type { MemoryKb } from "./mock-kb.ts";
 
 export const AT = "2026-01-01T00:00:00Z";
@@ -16,12 +16,16 @@ export function lifecycleConfig(repo: string, change: (block: LifecycleConfig) =
 	block.ship = { status: "configured", targets: [target.target] };
 	change(block); return block;
 }
-/** Guarda las perillas en la KB y la aceptación local, como lo haría `omi init --development`. */
+/** Guarda las perillas en la KB y la aceptación local, como lo haría `omi init --development`. Si ya hay una
+ * aceptación, la reemplaza sobre su revisión vigente, como una persona que vuelve a aceptar. */
 export async function acceptLifecycleConfig(kb: MemoryKb, home: string, cwd: string, block: LifecycleConfig): Promise<LifecycleKey> {
-	const key: LifecycleKey = { kbUrl: kb.url, product: block.repo.split("/")[1]!, repo: block.repo };
+	const key: LifecycleKey = { kbUrl: kb.url, product: block.repo.split("/")[1]!, repo: block.repo }, trustDir = lifecycleTrustDir(home);
 	if (!kb.access.includes(key.product)) kb.access.push(key.product);
 	kb.perillas(key.product, `# Perillas de ${key.product}\n\n${renderLifecycleBlock(block)}\n`);
-	const pin = await acceptLifecycle(kb, key, cwd, { trustDir: lifecycleTrustDir(home), expectedRevision: undefined, now: () => AT, signal: AbortSignal.timeout(5000), confirm: async () => true });
+	const trust = await readLifecycleTrust(trustDir, key);
+	if (trust.kind === "invalid") throw new Error("Registro de aceptación inválido en el fixture");
+	const expectedRevision = trust.kind === "valid" ? trust.record.revision : undefined;
+	const pin = await acceptLifecycle(kb, key, cwd, { trustDir, expectedRevision, now: () => AT, signal: AbortSignal.timeout(5000), confirm: async () => true });
 	if (!pin) throw new Error("No se aceptó el lifecycle del fixture");
 	return key;
 }

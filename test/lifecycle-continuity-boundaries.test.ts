@@ -24,17 +24,20 @@ test("a fresh-entry yes cannot authorize a replacement reviewer pin", async t =>
     block.ship = { status: "not-applicable", targets: [] };
    });
    await acceptLifecycleConfig(kb, f.home, f.checkout.root, replacement);
+   accepted = true;
   }
   return answer;
  };
+ let accepted = false;
  await f.command("pr");
  assert.equal(replaced, true, "the accepted pin changed while the old dialog was pending");
+ assert.equal(accepted, true, "the replacement pin was really accepted, not rejected by the fixture");
  const state = await f.state();
  assert.equal(state.phase, "done");
  assert.equal(state.version === 2 && state.lifecycle.status, "disabled");
  const pause = state.version === 2 ? state.continuityPause : undefined;
  assert.equal(pause?.reason, "error", "un error de texto libre usa el código genérico");
- assert.match(pause?.detail ?? "", /\S/, "y su texto queda como detalle");
+ assert.match(pause?.detail ?? "", /La configuración de entrada cambió mientras esperaba el sí; no se adopta/, "y su texto queda como detalle: el pin cambió durante el sí");
  assert.deepEqual(gh.reads, [], "the mismatched pin is rejected before any lifecycle GitHub reads");
  assert.deepEqual(gh.mutations, []);
 });
@@ -52,14 +55,19 @@ test("disabling continuity in the fresh pin stops future operations in the same 
    await acceptLifecycleConfig(kb, f.home, f.checkout.root, lifecycleConfig("acme/app", block => {
     block.review.mode = "auto"; block.ship = { status: "not-applicable", targets: [] };
    }));
+   accepted = true;
   }
   return currentPerillas(...args);
  };
+ let accepted = false;
  await f.command("pr");
  const state = await f.state();
  assert.equal(replaced, true);
+ assert.equal(accepted, true, "the pin without continuity was really accepted, not rejected by the fixture");
  assert.ok(state.version === 2 && state.lifecycle.status === "enabled");
  assert.equal(state.lifecycle.operations.length, 0, "removing continuity applies before the next reservation");
+ const pause = state.continuityPause;
+ assert.deepEqual(pause && { reason: pause.reason, stage: pause.stage }, { reason: "continuity-disabled", stage: "review" }, "the chain stops because the fresh pin has no continuity, not because the KB failed");
  assert.deepEqual(gh.mutations, []);
 });
 
