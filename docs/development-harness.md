@@ -690,7 +690,7 @@ El wizard pregunta, en orden:
 "provider": { "kind": "gha", "workflow": "claude-review.yml", "ref": "main", "contract": "omi-review-v1", "model": "claude-sonnet-5-5" }
 ```
 
-`ref` es la base de Land, la rama de donde el runtime toma el workflow. `model` y `effort` son opcionales y aceptan los valores del workflow (`claude-opus-5-5`, `claude-sonnet-5-5`, `claude-fable-5-1`, `claude-haiku-4-5`; `low` a `max`). Omitirlos no cambia el hash de una config existente. En `chichex/omi-code` el dispatch sigue pidiendo un sí, aunque `review.mode` sea `auto`.
+`ref` es la base de Land, la rama de donde el runtime toma el workflow. El detector lee el checkout, así que la opción lo avisa: el workflow tiene que estar en esa rama, no sólo en la del trabajo. `model` y `effort` son opcionales y aceptan los valores del workflow (`claude-opus-5-5`, `claude-sonnet-5-5`, `claude-fable-5-1`, `claude-haiku-4-5`; `low` a `max`). Omitirlos no cambia el hash de una config existente. En `chichex/omi-code` el dispatch sigue pidiendo un sí, aunque `review.mode` sea `auto`.
 
 Guardar sin tomar una recomendación también posterga esa revisión: el harness no insiste. `omi init --development` y `/omi-setup` preguntan siempre. **Esc** cancela sin escribir, aceptar ni desactivar nada.
 

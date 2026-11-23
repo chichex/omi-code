@@ -221,6 +221,8 @@ test("Review: con omi-review-v1 detectado y sin config recomienda GHA y guarda l
  assert.ok(mechanisms.includes("GitHub Actions · release.yml")); assert.ok(!mechanisms.some(m => m.includes("claude-review.yml")), "un workflow de review no es destino de Ship");
  const review = run.seen[2]!.questions[0]!; assert.equal(run.seen[2]!.title, "Review del PR");
  assert.deepEqual(review.options.map(o => o.label), [REVIEW, "Revisor local"]); assert.equal(review.recommended, true, "GHA detectado va primero y recomendado");
+ // Se detecta en el checkout, pero se dispara desde la base: avisarlo antes de guardar, no al despachar.
+ assert.match(review.options[0]!.description, /claude-review\.yml@main/); assert.match(review.options[0]!.description, /Tiene que estar en main, no sólo en esta rama\./);
  const model = run.seen[3]!.questions[0]!; assert.deepEqual(model.options.map(o => o.label), ["Default del workflow", "Sonnet (claude-sonnet-5-5)"]); assert.equal(model.recommended, true);
  assert.deepEqual(outcome.pin.block.review.provider, { kind: "gha", workflow: "claude-review.yml", ref: "main", contract: "omi-review-v1" });
  assert.equal(outcome.pin.block.review.mode, "ask", "elegir el proveedor no cambia el permiso del efecto");

@@ -35,8 +35,9 @@ export function reviewProviderText(provider: LifecycleReviewProvider): string {
 /** Una línea para el resumen del wizard. */
 export const reviewProviderSummary = (provider: LifecycleReviewProvider): string => `Review: ${reviewProviderText(provider)}`;
 /** GHA detectado va primero (recomendado) si hoy revisa el local o no hay config; si no, mantener va primero. */
-function reviewOptions(current: LifecycleReviewProvider | null, workflows: ReviewCandidate[]): ReviewOption[] {
- const gha = workflows.map(({ file: workflow, tuning }): ReviewOption => ({ label: `GitHub Actions · ${workflow} (${REVIEW_CONTRACT})`, description: `Dispara el workflow por PR y valida su recibo ${REVIEW_CONTRACT}; sin fallback local`, choice: { kind: "gha", workflow, tuning } }));
+/** `base`: la rama desde la que se dispara. El detector lee el checkout, que puede traer un workflow que la base no tiene. */
+function reviewOptions(current: LifecycleReviewProvider | null, workflows: ReviewCandidate[], base: string): ReviewOption[] {
+ const gha = workflows.map(({ file: workflow, tuning }): ReviewOption => ({ label: `GitHub Actions · ${workflow} (${REVIEW_CONTRACT})`, description: `Dispara ${workflow}@${base} por PR y valida su recibo ${REVIEW_CONTRACT}; sin fallback local. Tiene que estar en ${base}, no sólo en esta rama.`, choice: { kind: "gha", workflow, tuning } }));
  const keep: ReviewOption[] = current ? [{ label: `Mantener ${providerName(current)}`, description: reviewProviderSummary(current), choice: { kind: "keep" } }] : [];
  const local: ReviewOption[] = current?.kind === "local" ? [] : [{ label: LOCAL, description: "Revisor aislado sobre el diff fijo, sin workflow", choice: { kind: "local" } }];
  return gha.length && (!current || current.kind === "local") ? [...gha, ...keep, ...local] : [...keep, ...gha, ...local];
@@ -57,7 +58,7 @@ async function askModel(workflow: string, tuning: ReviewTuning, ask: Ask): Promi
 const withProvider = (block: LifecycleConfig, provider: LifecycleReviewProvider): LifecycleConfig => ({ ...block, review: { ...block.review, provider } });
 /** `current` null es sin config previa. Sin alternativa real no pregunta. Esc devuelve null y no se guarda nada. */
 export async function configureLifecycleReview(block: LifecycleConfig, current: LifecycleReviewProvider | null, workflows: ReviewCandidate[], ask: Ask): Promise<LifecycleConfig | null> {
- const options = reviewOptions(current, workflows);
+ const options = reviewOptions(current, workflows, block.land.base);
  if (options.length < 2) return block;
  const answer = await ask({ title: "Review del PR", questions: [question("review", "Review", "¿Quién revisa el PR antes de Land?", options.map(o => [o.label, o.description]))] });
  if (answer.status === "cancelled") return null;
