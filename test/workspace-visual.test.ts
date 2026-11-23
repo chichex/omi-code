@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import { setTimeout } from "node:timers/promises";
 import { test } from "node:test";
+import pkg from "../package.json" with { type: "json" };
 import { createEventBus, SessionManager, ToolExecutionComponent, type ExtensionCommandContext, type ExtensionContext, type SessionEntry, type SessionHeader, type Theme } from "@earendil-works/pi-coding-agent";
 import { Container, getOsc8LinkAtColumn, parseColor, sliceByColumn, stripTerminalSequences, Text, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 // Mismo contrato versionado que el adaptador de OMI, sin emular el algoritmo de layout.
@@ -245,6 +246,23 @@ test("workspace_lateral refresca commits, distingue ceros reales de referencia a
 	git("update-ref", "-d", "refs/remotes/origin/main"); await ui.command("omi"); await waitFor(/0 archivos · ↑— ↓—/);
 	assert.doesNotMatch(screen(), /Al día|↑0 ↓0|sin upstream/);
 	git("branch", "--unset-upstream"); await ui.command("omi"); await waitFor(/0 archivos · sin upstream/);
+});
+
+test("workspace_cabecera muestra la versión de OMI al redimensionar y ocultar la lateral", async (t) => {
+	for (const appearance of ["dark", "light"]) {
+		const ui = await visualHarness(await tempDir(t), { theme: getThemeByName(appearance)! }); t.after(ui.stop);
+		for (const sidebar of [true, false]) {
+			if (!sidebar) await ui.command("omi-sidebar");
+			for (const [width, height] of [[132, 40], [110, 26], [80, 24], [40, 24], [28, 16]] as const) {
+				const lines = ui.frame(width, height).lines.map(stripTerminalSequences);
+				assert.ok(lines[0]!.includes(`omi code v${pkg.version}`), `${appearance} ${width}x${height}: ${lines[0]}`);
+				assert.match(lines[1]!, /\[1 Chat\]/);
+				assert.equal(lines[2], "─".repeat(width), "la cabecera conserva sus tres filas");
+				assert.equal(lines.length, height); assert.ok(lines.every((line) => visibleWidth(line) <= width));
+				if (!sidebar) assert.doesNotMatch(lines.join("\n"), /SESIÓN|RECURSOS/);
+			}
+		}
+	}
 });
 
 test("workspace_panes bajos y angostos conservan modelo y contexto sin lateral ni overflow", async (t) => {

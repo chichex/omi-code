@@ -101,6 +101,7 @@ test("release real_compila, instala y arranca sin Node ni repo", { skip: !enable
 	const terminal = await exerciseWorkspace(binary, ["--no-extensions", "--no-context-files", "--no-skills", "--offline"], home, { HOME: home, PATH: "/usr/bin:/bin", OMI_HOME: installRoot });
 	assert.equal(terminal.code, 0, terminal.output);
 	const terminalText = plainTerminal(terminal.output);
+	assert.ok(terminalText.includes(`omi code v${version.stdout.trim()}`), "la cabecera coincide con --version del binario instalado");
 	for (const label of ["omi code", "¿Qué hacemos en", "SUBAGENTES", "SESIÓN", "Modelo:", "○".repeat(10), "Elegir modelo · OMI", "Cambios locales", "Ubicación de trabajo", "Recursos · equipo donde corre OMI"]) assert.ok(terminalText.includes(label), label);
 	assert.doesNotMatch(terminalText, /Extension error|TypeError|no compatible|exceeds terminal width|\[Extensions\]|<inline:omi-|Update Available|pi update/);
 
