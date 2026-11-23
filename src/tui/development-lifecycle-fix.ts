@@ -142,8 +142,17 @@ export async function fixLifecycle(session: DevelopmentSession, ctx: ExtensionCo
 	// Auto no transforma hallazgos repetidos en un permiso humano implícito ni abre un diálogo de disposición.
 	const automatic = options.source === "chain" && !!currentLifecyclePin(s).accepted.block.continuity && currentLifecyclePin(s).accepted.block.corrections.mode === "auto";
 	if (!automatic && await confirmCorrected(session, ctx, s, found, options.chain)) {
-		const after = enabledWork(session, ctx).s, left = pending(after);
-		ctx.ui.notify(left.length ? `Quedan ${left.length} hallazgo(s): /omi-work fix para corregirlos.` : `Sin hallazgos pendientes.\n${session.status()}`, "info"); return false;
+		const after = enabledWork(session, ctx), left = pending(after.s), { maxRounds } = currentLifecyclePin(after.s).accepted.block.corrections;
+		// En la cadena, confirmar ya es progreso: los que quedan siguen en una ronda, con el mismo sí de continuidad y el
+		// propio de «Corregir». Sin rondas, vuelve al selector, que pausa por rondas.
+		if (options.source === "chain" && left.length && after.s.budget.roundsUsed < maxRounds) {
+			await startRound(session, ctx, after.state, after.s, left, "chain", options.chain);
+			ctx.ui.notify(`Ronda de corrección autorizada para los ${left.length} hallazgo(s) que quedan: el agente sigue con el paso nuevo.\n${session.status()}`, "info");
+			return true;
+		}
+		ctx.ui.notify(!left.length ? `Sin hallazgos pendientes.\n${session.status()}` : after.s.budget.roundsUsed < maxRounds ? `Quedan ${left.length} hallazgo(s): /omi-work fix para corregirlos.`
+			: `Quedan ${left.length} hallazgo(s) y se agotaron las rondas de corrección (${after.s.budget.roundsUsed}/${maxRounds}): decide una persona.`, "info");
+		return false;
 	}
 	await startRound(session, ctx, state, s, found, options.source, options.chain);
 	ctx.ui.notify(`Ronda de corrección autorizada: el agente sigue con el paso nuevo.\n${session.status()}`, "info");

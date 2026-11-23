@@ -534,7 +534,7 @@ Ejemplo, con Review por GitHub y Ship por una release:
 /omi-work ship     → sí · release v0.2.0 verificada · Entrega verificada
 ```
 
-Un comentario ya corregido que la Review vuelve a ver en el HEAD nuevo se confirma con `/omi-work fix` («Ya corregidos»), sin gastar otra ronda. Land no avanza con hallazgos pendientes ni operaciones inciertas. Un merge no es una entrega: Ship la verifica después. Ship `not-applicable` termina sin entrega y `manual` queda como entrega declarada, nunca como Entrega verificada.
+Un comentario ya corregido que la Review vuelve a ver en el HEAD nuevo se confirma con `/omi-work fix` («Ya corregidos»), sin gastar otra ronda. Con continuidad, confirmarlos es progreso. Si quedan hallazgos nuevos, la cadena sigue con una ronda sólo para ellos, con su propio sí «Corregir N hallazgo(s)»; sin rondas, pausa por rondas. Si `/omi-work fix` los confirma todos y esta sesión ya observó la Review de ese HEAD, la cadena sigue con Land sin repetirla. Land no avanza con hallazgos pendientes ni operaciones inciertas. Un merge no es una entrega: Ship la verifica después. Ship `not-applicable` termina sin entrega y `manual` queda como entrega declarada, nunca como Entrega verificada.
 
 Límites de este corte: no se adopta un stack de PRs; un comentario de GitHub sin texto no cuenta como hallazgo; Ship OMI sólo observa (`observe`): publicar o desplegar desde acá no está conectado; los probes health/version de un destino GHA no tienen verificador conectado y quedan como desconocidos; la recuperación (stop, rollback, fix-forward) la decide una persona fuera de estos comandos. Una actividad que quedó abierta en otro proceso bloquea efectos nuevos hasta reconciliarla.
 
@@ -582,7 +582,10 @@ El motivo de la pausa se guarda en el estado del trabajo como un código cerrado
 Continuidad en pausa · Review está en manual: corré /omi-work review
 Continuidad en pausa · Hay una operación con resultado incierto: no se repite sola; revisá en GitHub
 Continuidad en pausa · La configuración vigente ya no tiene continuidad: seguí a mano con /omi-work land
+Continuidad en pausa · La Review del HEAD actual no se observó en esta sesión: corré /omi-work land; relee GitHub y no repite la Review
 ```
+
+La Review observada vive en la sesión que la ingirió. Restaurar, recargar o reabrir la sesión no la recrea: la cadena no encadena Land con una Review que no vio. El próximo paso sale de los hallazgos ya registrados y no gasta otro intento ni otro dispatch: sin pendientes, `/omi-work land`, que relee GitHub y exige la Review confirmada del HEAD; con pendientes, `/omi-work fix`; con uno que necesita una persona, la pausa lo dice.
 
 Un rechazo o un error del efecto lleva un código genérico y su texto como detalle. Si el pin fresco quita la continuidad a mitad de cadena, el motivo lo dice, en vez de «manual». El motivo deja de mostrarse si cambió el sujeto o empezó otra operación después de la pausa. Se borra al empezar una corrida nueva de la cadena, al correr un comando `/omi-work adopt | review | fix | land | ship` y al adoptar el PR. Deshabilitar la continuidad o cambiar sus modos sólo controla acciones futuras: no revierte pushes, merges ni entregas remotas ya observadas. Las capacidades desconectadas siguen desconectadas.
 

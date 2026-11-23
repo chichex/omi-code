@@ -37,26 +37,33 @@ function observedReview(s: EnabledLifecycle, observed: ContinuityInput["reviewOb
  return !!op && op.id === observed.operationId && op.status === "confirmed" && op.receipt.outcome === "succeeded"
   && op.receipt.verifiedSubjectId === s.currentSubject;
 }
-function findingStatus(s: EnabledLifecycle): "clear" | "fix" | "human" {
- let pending = false;
- for (const f of s.ledger) {
-  const observation = f.observations.at(-1), disposition = f.dispositions.at(-1);
-  const current = disposition?.subjectId === s.currentSubject && disposition.observationHash === observation?.hash
-   && disposition.observationSequence === f.observations.length;
-  if (current && disposition.status === "human-required") return "human";
-  if (!current || !["corrected", "refuted-with-evidence"].includes(disposition.status)) pending = true;
- }
- return pending ? "fix" : "clear";
+type Finding = EnabledLifecycle["ledger"][number];
+/** La última disposición, sólo si es del HEAD actual y de la última observación del hallazgo. */
+function currentDisposition(s: EnabledLifecycle, f: Finding): Finding["dispositions"][number] | undefined {
+ const observation = f.observations.at(-1), disposition = f.dispositions.at(-1);
+ return disposition?.subjectId === s.currentSubject && disposition.observationHash === observation?.hash
+  && disposition.observationSequence === f.observations.length ? disposition : undefined;
 }
-/** El ejecutor puede pedir confirmación humana de hallazgos ya corregidos sin reservar ronda. */
+const settled = (s: EnabledLifecycle, f: Finding) => ["corrected", "refuted-with-evidence"].includes(currentDisposition(s, f)?.status ?? "");
+function findingStatus(s: EnabledLifecycle): "clear" | "fix" | "human" {
+ if (s.ledger.some(f => currentDisposition(s, f)?.status === "human-required")) return "human";
+ return s.ledger.every(f => settled(s, f)) ? "clear" : "fix";
+}
+/** El ejecutor puede pedir confirmación humana de hallazgos ya corregidos sin reservar ronda: sólo de los que siguen pendientes. */
 function canConfirmCorrected(s: EnabledLifecycle): boolean {
  return s.evidence.some(e => e.subjectId === s.currentSubject && e.kind === "verification" && e.outcome === "pass")
-  && s.ledger.some(f => f.observations.at(-1)?.subjectId === s.currentSubject && f.dispositions.some(d => d.status === "corrected"));
+  && s.ledger.some(f => !settled(s, f) && f.observations.at(-1)?.subjectId === s.currentSubject && f.dispositions.some(d => d.status === "corrected"));
+}
+/** Sin la Review observada en esta sesión no se encadena. El próximo paso sale de los hallazgos ya registrados, sin repetir la Review. */
+function unobservedReview(s: EnabledLifecycle): ContinuitySelection {
+ const findings = findingStatus(s);
+ if (findings === "human") return pause("human-required");
+ return { kind: "pause", reason: "review-facts-required", stage: findings === "clear" ? "land" : "fix" };
 }
 function reviewOrFix(input: ContinuityInput, s: EnabledLifecycle, config: LifecycleConfig): ContinuitySelection {
  const op = s.operations.findLast(o => o.kind === "review" && o.subjectId === s.currentSubject);
  if (!op) return offer(config, "review", "review");
- if (!observedReview(s, input.reviewObserved)) return pause("review-facts-required");
+ if (!observedReview(s, input.reviewObserved)) return unobservedReview(s);
  const findings = findingStatus(s);
  if (findings === "human") return pause("human-required");
  if (findings === "fix") {
@@ -116,7 +123,7 @@ export function selectLifecycleContinuation(input: ContinuityInput): ContinuityS
   case "review": return reviewOrFix(input, s, config);
   case "corrections": return pause("correction-facts-required");
   case "ready": case "land":
-   if (!observedReview(s, input.reviewObserved)) return pause("review-facts-required");
+   if (!observedReview(s, input.reviewObserved)) return unobservedReview(s);
    if (findingStatus(s) !== "clear") return reviewOrFix(input, s, config);
    return offer(config, "land", "land");
   case "ship":

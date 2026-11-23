@@ -205,3 +205,31 @@ test("the reserved coding correction yields without replay; PR continues fix, un
  s.operations[1] = { ...op, id: r.operationId, kind: "correction", status: "unknown", reason: "uncertain" };
  pause(i, "operation-unsettled");
 });
+
+// S2.3 · «Ya corregidos» y Review no observada en la cadena.
+test("rounds exhausted: confirming already corrected findings is offered only while some are still pending", () => {
+ const i = reviewed(); finding(i);
+ // Queda otro hallazgo nuevo, sin corregir.
+ i.workflow.lifecycle = ingestLifecycleFinding(enabled(i), { id: "finding2", provider: "local", externalId: "f2", operationId: "review1", subjectId: "head1", text: "Otro error", severity: "medium", resolved: false, outdated: false, at });
+ const s = enabled(i), corrected = s.ledger[0]!;
+ s.evidence.push({ id: "verified1", subjectId: "head1", operationId: "review1", kind: "verification", outcome: "pass", at });
+ corrected.dispositions.push({ findingId: corrected.id, subjectId: "old-head", observationHash: corrected.observations[0]!.hash, observationSequence: 1, reason: "fixed before review", at, status: "corrected", evidenceIds: ["verified1"] });
+ s.budget.roundsUsed = s.pins[0]!.accepted.block.corrections.maxRounds;
+ action(i, "fix"); // Todavía hay uno ya corregido para confirmar, sin otra ronda.
+ // Ya confirmado en el HEAD actual: deja de estar pendiente y no hay ronda para el que queda.
+ corrected.dispositions.push({ findingId: corrected.id, subjectId: "head1", observationHash: corrected.observations[0]!.hash, observationSequence: 1, reason: "confirmado por la persona", at, status: "corrected", evidenceIds: ["verified1"] });
+ pause(i, "rounds-exhausted");
+});
+
+test("a Review not observed in this session names the next step from the findings already recorded", () => {
+ const i = reviewed();
+ assert.deepEqual(select({ ...i, reviewObserved: null }), { kind: "pause", reason: "review-facts-required", stage: "land" }, "sin hallazgos: Land relee GitHub");
+ finding(i);
+ assert.deepEqual(select({ ...i, reviewObserved: null }), { kind: "pause", reason: "review-facts-required", stage: "fix" }, "con hallazgos: fix");
+ const f = enabled(i).ledger[0]!;
+ f.dispositions.push({ findingId: f.id, subjectId: "head1", observationHash: f.observations[0]!.hash, observationSequence: 1, reason: "needs person", at, status: "human-required", evidenceIds: [] });
+ pause({ ...i, reviewObserved: null }, "human-required");
+ // ready/land también: sin la Review observada no se ofrece Land, pero el próximo paso es Land.
+ const ready = reviewed(); enabled(ready).stage = "ready";
+ assert.deepEqual(select({ ...ready, reviewObserved: null }), { kind: "pause", reason: "review-facts-required", stage: "land" });
+});

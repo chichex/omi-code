@@ -8,6 +8,13 @@ const COMMANDS = { entry: "/omi-work adopt", review: "/omi-work review", fix: "/
 const NAMES = { entry: "la adopción del PR", review: "Review", fix: "la corrección", land: "Land", ship: "Ship" } satisfies Record<Stage, string>;
 const sentence = (value: string) => value.charAt(0).toUpperCase() + value.slice(1);
 export interface PauseGuide { message: string; next: string }
+/** Sin la Review observada en esta sesión, el próximo paso sale de los hallazgos ya registrados: Land o fix no repiten la Review. */
+function unobservedReviewGuide(stage?: Stage): PauseGuide {
+ const message = "La Review del HEAD actual no se observó en esta sesión";
+ if (stage === "land") return { message, next: "corré /omi-work land; relee GitHub y no repite la Review" };
+ if (stage === "fix") return { message, next: "corré /omi-work fix; usa los hallazgos ya registrados" };
+ return { message: "Falta la Review observada del HEAD actual", next: "corré /omi-work review" };
+}
 
 export function continuityPauseGuide(reason: ContinuityPause, stage?: Stage): PauseGuide {
  const name = stage ? NAMES[stage] : "la etapa", command = stage ? COMMANDS[stage] : "el comando /omi-work de la etapa";
@@ -24,7 +31,7 @@ export function continuityPauseGuide(reason: ContinuityPause, stage?: Stage): Pa
   case "operation-unsettled": return { message: "Hay una operación con resultado incierto", next: "no se repite sola; revisá en GitHub" };
   case "operation-failed": return { message: "La última operación falló", next: "no se reintenta sola; mirá el motivo en /omi-progress y repetí el comando de esa etapa" };
   case "budget-exhausted": return { message: "Se agotó el presupuesto del lifecycle (intentos o tiempo activo)", next: "la cadena no gasta más; seguí a mano con los comandos /omi-work" };
-  case "review-facts-required": return { message: "Falta la Review observada del HEAD actual", next: "corré /omi-work review" };
+  case "review-facts-required": return unobservedReviewGuide(stage);
   case "human-required": return { message: "Un hallazgo necesita una decisión humana", next: "revisalo en /omi-progress y decidí cómo seguir" };
   case "rounds-exhausted": return { message: "Se agotaron las rondas de corrección", next: "revisá los hallazgos que quedan en /omi-progress y decidí cómo seguir" };
   case "correction-failed": return { message: "La última corrección falló", next: "no se reintenta sola; mirá el motivo en /omi-progress y corré /omi-work fix" };

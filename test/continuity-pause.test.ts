@@ -65,3 +65,10 @@ test("el estado guarda la pausa estructurada; los estados sin el campo siguen va
   { ...pause, extra: true }, { ...pause, at: "" }, { ...pause, detail: " " }, { reason: "manual" }, "Continuidad en pausa: manual"];
  for (const continuityPause of invalid) assert.throws(() => migrateWorkflow({ ...w, continuityPause }), /Estado del harness inválido/, JSON.stringify(continuityPause));
 });
+
+// S2.3 · Review no observada en esta sesión.
+test("review-facts-required: el próximo paso sale de los hallazgos ya registrados y no repite la Review", () => {
+ assert.equal(line("review-facts-required", "land"), "La Review del HEAD actual no se observó en esta sesión: corré /omi-work land; relee GitHub y no repite la Review");
+ assert.equal(line("review-facts-required", "fix"), "La Review del HEAD actual no se observó en esta sesión: corré /omi-work fix; usa los hallazgos ya registrados");
+ assert.match(line("review-facts-required"), /\/omi-work review/, "sin etapa, el comando de siempre");
+});

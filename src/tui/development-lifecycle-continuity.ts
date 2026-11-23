@@ -25,6 +25,9 @@ type Consent = { kind: "go"; chain: ChainConsent | undefined } | { kind: "declin
 /** Un cerrojo por sesión, sin timers, callbacks de onChange ni reconstrucción de hechos desde recibos. */
 export class LifecycleContinuityHost {
  private running = false;
+ /** La última Review que ingirió esta sesión, sin restaurar en el medio. Efímera: restaurar o reabrir no la recrea.
+  * El selector igual la valida contra la última Review confirmada del HEAD actual; no es aprobación de Land. */
+ private observed: { review: ObservedLifecycleReview; epoch: number; id: string } | undefined;
  private readonly session: DevelopmentSession;
  constructor(session: DevelopmentSession) { this.session = session; }
  async publication(ctx: ExtensionContext): Promise<void> {
@@ -37,8 +40,18 @@ export class LifecycleContinuityHost {
   const publication = { head: state.publication.head, number: state.publication.number, revision: state.revision };
   await this.run(ctx, "publication-confirmed", null, publication);
  }
+ /** Sin `observed`, usa la Review que esta misma sesión ya ingirió: «Ya corregidos» no la vuelve a pedir. */
  async advance(ctx: ExtensionContext, observed: ObservedLifecycleReview | null = null): Promise<void> {
-  await this.run(ctx, "advance", observed);
+  this.remember(observed);
+  await this.run(ctx, "advance", observed ?? this.recall());
+ }
+ private remember(review: ObservedLifecycleReview | null): void {
+  const origin = this.session.observationOrigin();
+  if (review && origin) this.observed = { review, epoch: origin.epoch, id: origin.id };
+ }
+ private recall(): ObservedLifecycleReview | null {
+  const origin = this.session.observationOrigin(), saved = this.observed;
+  return saved && origin?.epoch === saved.epoch && origin.id === saved.id ? saved.review : null;
  }
  /** Una corrida o un comando lifecycle nuevos son el próximo paso: el motivo de la pausa anterior ya no rige. */
  async clearPause(ctx: ExtensionContext): Promise<void> {
@@ -120,7 +133,7 @@ export class LifecycleContinuityHost {
       if (await fixLifecycle(this.session, ctx, { source: "chain", chain: consent })) return; // El turno del modelo hace TDD y todos los D.
       break;
      case "push": await pushLifecycleCorrection(this.session, ctx, consent); break;
-     case "review": observed = await reviewLifecycle(this.session, ctx, consent); break;
+     case "review": observed = await reviewLifecycle(this.session, ctx, consent); this.remember(observed); break;
      case "land":
       if (!(await landLifecycle(this.session, ctx, consent))) { await this.pause(ctx, { reason: "declined", stage }); return; }
       break;
