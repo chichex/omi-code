@@ -148,3 +148,47 @@ for (const continuity of [{ ...autoContinuity, fix: "manual", land: "manual" }, 
   assert.deepEqual(gh.mutations, [], "ni ready ni merge");
  });
 }
+
+test("/omi-work fix: «Ya corregidos» parcial con continuity.fix auto avisa que la cadena sigue, no que hay que correr fix", async t => {
+ const fixture = await firstRound(block => { block.continuity = { ...autoContinuity, land: "manual" }; block.corrections.maxRounds = 2; }, t);
+ const { f, gh } = fixture;
+ await f.command("adopt");
+ const newHead = await correct(fixture);
+ gh.inline.push({ id: 502, body: "Falta el caso del valor 4", commit_id: newHead, path: "test.cjs", line: 1 });
+ // En la cadena, la persona dice que no a «Ya corregidos»: la continuidad pausa en fix.
+ const confirm = f.context.ui.confirm.bind(f.context.ui);
+ let decline = true;
+ f.context.ui.confirm = async (title, detail, options) => {
+  const answer = await confirm(title, detail, options);
+  if (decline && /^Ya corregidos/.test(title)) { decline = false; return false; }
+  return answer;
+ };
+ await f.action({ action: "verified" });
+ const paused = pauseOf(await f.state());
+ assert.deepEqual(paused && { reason: paused.reason, stage: paused.stage }, { reason: "declined", stage: "fix" });
+ const before = f.messages.length, prompts = f.prompts.length;
+ await f.command("fix");
+ const notices = f.messages.slice(before).join("\n");
+ assert.match(notices, /Quedan 1 hallazgo\(s\): la continuidad de fix \(auto\) sigue con su corrección/);
+ assert.doesNotMatch(notices, /\/omi-work fix para corregirlos/, "con continuidad no hay que correr otro comando");
+ assert.equal(asked(f, prompts, /^Corregir 1 hallazgo\(s\) en el PR #42$/), 1, "la cadena siguió con la ronda de los que quedan, con su propio sí");
+ const state = await f.state();
+ assert.equal(state.phase, "implement");
+ assert.equal(enabled(state).budget.roundsUsed, 2);
+});
+
+test("/omi-work fix: «Ya corregidos» parcial con continuity.fix manual sigue pidiendo /omi-work fix", async t => {
+ const fixture = await firstRound(block => { block.continuity = { ...autoContinuity, fix: "manual", land: "manual" }; block.corrections.maxRounds = 2; }, t);
+ const { f, gh } = fixture;
+ await f.command("adopt");
+ await f.command("fix");
+ const newHead = await correct(fixture);
+ await f.action({ action: "verified" });
+ gh.inline.push({ id: 502, body: "Falta el caso del valor 4", commit_id: newHead, path: "test.cjs", line: 1 });
+ await f.command("fix"); // push; la cadena revisa el HEAD nuevo y pausa en fix manual
+ const before = f.messages.length;
+ await f.command("fix");
+ const notices = f.messages.slice(before).join("\n");
+ assert.match(notices, /Quedan 1 hallazgo\(s\): \/omi-work fix para corregirlos/);
+ assert.equal((await f.state()).phase, "review", "fix manual no abre otra ronda solo");
+});
