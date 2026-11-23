@@ -9,7 +9,7 @@ import { test, type TestContext } from "node:test";
 import { processRunner } from "../src/core/exec.ts";
 import { inspectCheckout } from "../src/harness/git.ts";
 import { createWorkflow, transition } from "../src/harness/state.ts";
-import { sourceHash, type Evidence, type Plan, type Workflow, type WorkflowV2 } from "../src/harness/model.ts";
+import { sourceHash, type Evidence, type Plan, type Review, type Workflow, type WorkflowV2 } from "../src/harness/model.ts";
 import { updateWorkflow } from "../src/harness/store.ts";
 import { DEVELOPMENT_ANCHOR } from "../src/tui/development-session.ts";
 import { lifecycleTrustDir, readLifecycleTrust } from "../src/harness/lifecycle-trust.ts";
@@ -33,7 +33,7 @@ function releasePorts() {
   verifyProbes: async () => ({ health: "not-configured", version: "not-configured" }) };
 }
 const git = (root: string, ...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-async function setup(t: TestContext, repo = "acme/app", change?: Parameters<typeof lifecycleConfig>[1]) {
+async function setup(t: TestContext, repo = "acme/app", change?: Parameters<typeof lifecycleConfig>[1], work: { plan?: Plan; lenses?: (fingerprint: string) => Review[] } = {}) {
  const kb = memoryKb({ products: [] }); let gh: FakeGitHub | undefined;
  const f = await developmentFixture(t, { kb, repo, github: (args, input) => gh?.handle(args, input), deps: { lifecycle: { ghaShip: () => releasePorts() } } });
  const root = f.checkout.root;
@@ -44,9 +44,11 @@ async function setup(t: TestContext, repo = "acme/app", change?: Parameters<type
  const send = (r: WorkflowV2, event: Parameters<typeof transition>[1]) => transition(r, event, AT);
  let r = createWorkflow({ number: 42, title: TITLE, body: BODY, url: `https://github.com/${repo}/issues/42`, hash: sourceHash(TITLE, BODY) }, f.checkout, "work-42", AT);
  r = send(r, { type: "explored", exploration: { references: [{ path: "value.cjs", line: 1, detail: "Valor" }], findings: ["Devuelve 1"], approach: "Corregir", missingFoundation: [], dependencies: [], disposition: "continue", reason: "Existe" } });
- r = send(r, { type: "inferences", inferences: [] }); r = send(r, { type: "planned", plan }); r = send(r, { type: "approved" }); r = send(r, { type: "step_started", id: "C1" });
+ r = send(r, { type: "inferences", inferences: [] }); r = send(r, { type: "planned", plan: work.plan ?? plan }); r = send(r, { type: "approved" }); r = send(r, { type: "step_started", id: "C1" });
  r = send(r, { type: "evidence", evidence: evidence("red") }); r = send(r, { type: "evidence", evidence: evidence("green") }); r = send(r, { type: "step_completed", id: "C1", commit: head, fingerprint: snapshot.fingerprint });
- r = send(r, { type: "evidence", evidence: evidence("verification") }); r = send(r, { type: "verified", fingerprint: snapshot.fingerprint });
+ r = send(r, { type: "evidence", evidence: evidence("verification") });
+ for (const review of work.lenses?.(snapshot.fingerprint) ?? []) r = send(r, { type: "reviewed", review });
+ r = send(r, { type: "verified", fingerprint: snapshot.fingerprint });
  r = send(r, { type: "publishing", head, bodyHash: "body" }); r = send(r, { type: "published", head, url: `https://github.com/${repo}/pull/42`, number: 42 });
  const saved = { ...r, revision: 0 };
  await updateWorkflow(f.checkout, 42, undefined, () => saved);
@@ -165,6 +167,24 @@ test("chichex/omi-code: merge siempre humano aunque Land diga auto", async t => 
  f.remote.confirmations = false; await f.command("land");
  assert.ok(f.prompts.some(p => /Mergear el PR #42/.test(p)), "omi-code pide el sí del merge");
  assert.ok(!effects(gh).some(e => e.includes("PUT")), "sin sí no hay merge"); assert.equal((await f.state()).phase, "land");
+});
+
+// Riesgo alto: sin pass de Seguridad sobre el contenido, la confirmación del merge lo dice primero; con pass, no.
+for (const verdict of ["unknown", "pass"] as const) test(`riesgo alto con Seguridad ${verdict}: la confirmación del merge ${verdict === "pass" ? "no avisa" : "avisa primero"}`, async t => {
+ const high: Plan = { ...plan, classification: { ...plan.classification, risk: "high" }, lenses: ["compliance", "security"] };
+ const lens = (lens: Review["lens"], verdict: Review["verdict"]) => (fingerprint: string): Review => ({ lens, fingerprint, verdict, findings: verdict === "pass" ? [] : ["Sin resultado del lente: conexión (3 intentos)"], ...(verdict === "unknown" ? { noResult: true as const } : {}), at: AT });
+ const { f, gh, head } = await setup(t, "acme/app", block => { block.land.maxRisk = "high"; }, { plan: high, lenses: fingerprint => [lens("compliance", "pass")(fingerprint), lens("security", verdict)(fingerprint)] });
+ await f.command("adopt");
+ gh.reviews.push({ id: 601, login: "ada", state: "APPROVED", commit_id: head, body: "" });
+ await f.command("review");
+ const confirm = f.context.ui.confirm.bind(f.context.ui);
+ f.context.ui.confirm = async (title, detail, options) => /Mergear el PR/.test(title) ? (await confirm(title, detail, options), false) : confirm(title, detail, options);
+ await f.command("land");
+ const index = f.prompts.findIndex(p => /Mergear el PR #42/.test(p)); assert.ok(index >= 0, "llega a la confirmación del merge");
+ const detail = f.confirmationDetails[index] ?? "";
+ if (verdict === "pass") assert.doesNotMatch(detail, /Seguridad sin veredicto/);
+ else assert.equal(detail.split("\n")[0], "Seguridad sin veredicto en un cambio de riesgo alto: el merge pide tu sí.");
+ assert.ok(!effects(gh).some(e => e.includes("PUT")), "sin sí no hay merge");
 });
 
 test("onboarding: el detector lee al abrir la sesión, la oferta aparece al entrar al harness y Esc no desactiva nada", async t => {
