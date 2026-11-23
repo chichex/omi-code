@@ -20,6 +20,7 @@ import { registerCatalogTools } from "./tools.ts";
 import { runtimeShellExtension } from "./runtime-shell.ts";
 import { workspaceExtension } from "./workspace/index.ts";
 import { questionsExtension } from "./questions/tool.ts";
+import { prMergeExtension } from "./pr-merge.ts";
 
 export type PiMain = (args: string[], options: { extensionFactories?: InlineExtension[] }) => Promise<void>;
 
@@ -60,7 +61,7 @@ export async function launchTui(args: string[], io: Io, deps: LaunchDeps = {}): 
 	const kb = harnessKb(args, io.env, dir);
 	const presentation = workspace ? ["--tui-mode", "fullscreen"] : [];
 	// codemode va antes del harness: el harness toma ese loadout y lo restringe.
-	const extensions = [omiToolsExtension(io), questionsExtension(), await runtimeShellExtension(io), herdrExtension(io, args), workspaceExtension(io, args), await codemodeDefaultExtension(args), developmentHarnessExtension(io, args, { kb }), ...isolation.extensions, ...await defaultExtensions(args, io.env, kb)];
+	const extensions = [omiToolsExtension(io), questionsExtension(), prMergeExtension(), await runtimeShellExtension(io), herdrExtension(io, args), workspaceExtension(io, args), await codemodeDefaultExtension(args), developmentHarnessExtension(io, args, { kb }), ...isolation.extensions, ...await defaultExtensions(args, io.env, kb)];
 	// Son componentes del producto, no extensiones que el usuario deba administrar.
 	if (workspace) for (const extension of extensions) if (typeof extension !== "function") extension.hidden = true;
 	// Pi viene fijado dentro de OMI: actualizarlo por separado rompe el contrato del layout.

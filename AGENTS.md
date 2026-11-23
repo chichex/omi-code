@@ -77,7 +77,7 @@ Techo: tests contra un mock de omi-api. No hay cobertura automática contra una 
 Esto no lo hace un agente solo, con cualquier instrucción:
 
 - **Pushear a `main`**, ni siquiera a un branch con ese nombre de destino, y **forzar un push** (`--force`, `-f` o un refspec con `+`). Todo va por PR.
-- **Mergear.** El merge a `main` es la decisión humana de publicar: dispara el release.
+- **Mergear sin el sí de la persona.** El merge a `main` es la decisión humana de publicar: dispara el release. En omi se mergea con `omi_pr_merge`, que le muestra el PR a la persona y le pide el sí en pantalla; nunca con `gh pr merge` ni con la API desde bash. Otro agente mergea sólo si la persona se lo pide para ese PR.
 - **Publicar a mano.** No empujar tags `vX.Y.Z` ni correr `gh release create`: el pipeline es el único camino.
 - **Lanzar workflows de GitHub** (`gh workflow run`): el dry-run de release y la review a pedido gastan minutos de CI y cuota de Claude.
 - **Commitear credenciales, tokens ni valores de secretos.** El valor de un secreto tampoco pasa por el contexto del modelo ni por la salida de un comando.

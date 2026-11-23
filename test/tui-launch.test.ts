@@ -177,7 +177,7 @@ test("launchTui_una instalación nueva trae OMI, subagentes, Claude bridge y la 
 	const home = await tempDir(t);
 	const calls: Call[] = [];
 	await launchTui([], testIo({ homeDir: home }), { piMain: fakePi(calls) });
-	assert.deepEqual(calls[0]?.extensions, ["omi-tools", "omi-questions", "omi-runtime-shell", "omi-herdr", "omi-workspace", "omi-codemode", "omi-development", "omi-isolated-context", "omi-subagents", "omi-claude-bridge", "omi-kb", "mcp"]);
+	assert.deepEqual(calls[0]?.extensions, ["omi-tools", "omi-questions", "omi-pr-merge", "omi-runtime-shell", "omi-herdr", "omi-workspace", "omi-codemode", "omi-development", "omi-isolated-context", "omi-subagents", "omi-claude-bridge", "omi-kb", "mcp"]);
 	assert.deepEqual(calls[0]?.args, ["--tui-mode", "fullscreen", "--no-context-files"]);
 	assert.deepEqual(calls[0]?.hiddenExtensions, calls[0]?.extensions);
 });
