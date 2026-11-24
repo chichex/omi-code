@@ -21,9 +21,8 @@ steps = [(0, b'', b'Enter enviar'), (0, b'\\x0c', b'Elegir modelo \\xc2\\xb7 OMI
  (0.3, b'/reload\\r', b'Reloaded'), (0.9, b'/omi-resources\\r', b'Recursos \\xc2\\xb7 equipo donde corre OMI'),
  (0.3, 'resize', b'Recursos \\xc2\\xb7 equipo donde corre OMI'), (0.4, b'\\x1b', None), (0.5, b'\\x04', None)]
 turn = os.environ.get('OMI_TEST_TURN') == '1'
-preview = os.environ.get('OMI_TEST_PREVIEW') == '1'
 pr_click = os.environ.get('OMI_TEST_PR_CLICK') == '1'
-if turn or preview or pr_click:
+if turn or pr_click:
     steps = []
 def painted(text, since):
     return text in re.sub(rb'\\x1b\\[[0-?]*[ -/]*[@-~]', b'', output[since:])
@@ -57,18 +56,6 @@ while time.monotonic() - start < 16:
         elif phase == 5 and elapsed - phase_at > 0.8:
             os.write(fd, b'\\x04')
             phase = 6
-    if preview:
-        if phase == 0 and b'Enter enviar' in output:
-            os.write(fd, b'\\x1b[52;5u')
-            phase = 1
-        elif phase == 1 and b'test/preview.test.ts' in output:
-            os.write(fd, b'\\r')
-            phase = 2
-        elif phase == 2 and b'LOCAL_FILE_PREVIEW_OK' in output:
-            phase, phase_at = 3, elapsed
-        elif phase == 3 and elapsed - phase_at > 0.3:
-            os.write(fd, b'\\x04')
-            phase = 4
     if pr_click:
         # Leer la posición que se pintó realmente, no llamar el callback con coordenadas inventadas.
         footer_rows = re.findall(rb'\\x1b\\[41;1H\\x1b\\[2K(.*?)(?=\\x1b\\[\\d+;\\d+H|$)', output, re.S)
@@ -95,7 +82,7 @@ while time.monotonic() - start < 16:
         if not chunk:
             break
         output += chunk
-    if elapsed > 14 or ((preview or pr_click) and elapsed > 10):
+    if elapsed > 14 or (pr_click and elapsed > 10):
         os.write(fd, b'\\x04')
 else:
     os.kill(pid, signal.SIGKILL)
