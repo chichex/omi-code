@@ -33,6 +33,17 @@ test("request_triage: una errata vuelve al chat con evaluación explicable y una
 	assert.match(context.systemPrompt, /estim|medid/i); assert.deepEqual(JSON.parse(context.messages[0]!.content[0]!.text), request);
 });
 
+// Caso real (gpt-6.2-sol, 3 de 3): con dos formatos en el prompt, el modelo siguió el primero, el del issue, y la
+// clasificación falló siempre. El prompt del pedido sin issue tiene que pedir un solo formato: {triage, assessment}.
+test("request_triage: el prompt pide un solo formato de salida, el de triage y assessment", async () => {
+	const f = fixture(); const a = api();
+	await a.classifyDevelopmentRequest(f.ctx, { title: "Errata", body: "Cambiar 'holaa' por 'hola'." }, new AbortController().signal);
+	const { systemPrompt } = f.calls[0]![1] as { systemPrompt: string };
+	assert.ok(systemPrompt.indexOf('{"') >= 0 && systemPrompt.indexOf('{"') === systemPrompt.indexOf('{"triage":{'), "el primer formato JSON del prompt tiene que ser {triage, assessment}");
+	assert.doesNotMatch(systemPrompt, /formato anterior/i, "un formato que reemplaza a otro deja dos formatos en el prompt");
+	for (const field of ['"assessment":{', '"scope":"localized|module|crosscutting|unknown"', '"riskAreas":[]']) assert.ok(systemPrompt.includes(field), field);
+});
+
 test("request_triage: tamaño no equivale a riesgo; riesgos, contratos y reversibilidad exigen harness", () => {
 	const a = api();
 	for (const change of [{ risk: "high" }, { riskAreas: ["permissions"] }, { impact: "public-contract" }, { reversible: "no" }, { verification: "unclear" }, { scope: "crosscutting" }]) {
