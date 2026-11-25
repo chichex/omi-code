@@ -77,7 +77,7 @@ export async function guideFoundations({ key, initial, previousAccepted, notice 
 	while (true) {
 		if (changeRules && !await editRules(ask, block.confirmar)) return undefined;
 		const detail = `${foundationsDiff(previousAccepted, block, key)}\nGuardar no ejecuta comandos ni concede grants. Las demás restricciones de OMI siguen vigentes.`;
-		const saveHint = block.confirmar.length ? "Guarda y acepta esta configuración" : "Lista vacía: todo comando SIMPLE queda sin confirmación por esta política";
+		const saveHint = block.confirmar.length ? "Guarda y acepta esta configuración" : "Lista vacía: ningún comando del proyecto pide confirmación por esta política";
 		const accept = { ...question("save", "Guardar", "¿Guardás estas reglas y políticas en la KB?", [[SAVE, saveHint], [BACK, "Vuelve al borrador sin guardar"], [CANCEL, "Sale sin guardar ni aceptar"]], detail), recommended: false };
 		const answer = await ask({ title: `${GUIDE} · Resumen`, questions: [accept] });
 		if (answer.status === "cancelled") return undefined;

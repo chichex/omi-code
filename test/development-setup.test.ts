@@ -14,7 +14,8 @@ const asked = (f: Fixture) => f.prompts.filter((title) => title === AUTHORIZE).l
 const exploration = (missingFoundation: string[]) => ({ references: [{ path: "value.cjs", line: 1, detail: "Valor actual" }], findings: ["Devuelve 1"], approach: "Corregir", missingFoundation, dependencies: [], disposition: "continue", reason: "Existe" });
 async function withFoundations(t: TestContext) {
 	const kb = memoryKb({ products: ["repo"] });
-	kb.perillas("repo", renderFoundationsBlock({ version: 2, repo: "test/repo", confirmar: [], politica: { arranque: "ask", receta: "ask", push_pr: "ask" } }));
+	// Con una regla rige la puerta de sintaxis: con la lista vacía, lo compuesto no pregunta (2026-11-24).
+	kb.perillas("repo", renderFoundationsBlock({ version: 2, repo: "test/repo", confirmar: ["git push *"], politica: { arranque: "ask", receta: "ask", push_pr: "ask" } }));
 	return developmentFixture(t, { kb });
 }
 test("development_setup: sin Foundations v2 setup corre en Explorar sin preguntar, antes de aprobar la receta", async (t) => {

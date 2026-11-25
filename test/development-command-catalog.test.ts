@@ -48,11 +48,12 @@ test("command_catalog: Guardar después del resumen persiste el draft exacto sin
 	assert.deepEqual((await f.state()).grants ?? [], []); assert.equal(saves(f).length, 1);
 });
 
-test("command_catalog: lista vacía exige revisión explícita y no autoejecuta el pendiente", async (t) => {
+// Pedido del dueño (2026-11-24): con la lista vacía nada pregunta. Guardarla igual exige revisión y no corre el pendiente.
+test("command_catalog: lista vacía exige revisión explícita, no autoejecuta el pendiente y después nada pregunta", async (t) => {
 	const f = await commandFixture(t); edit(f, ""); await savedDraft(f, []);
-	assert.ok(f.foundationsScreens.flat().some((screen) => /Lista vacía: todo comando SIMPLE/.test(screen)));
-	choose(f, "no"); await assert.rejects(f.check(), /no autorizado/i);
-	await f.check("npm test"); assert.deepEqual(f.executed, ["npm test"]); assert.equal(authorizations(f).length, 2);
+	assert.ok(f.foundationsScreens.flat().some((screen) => /Lista vacía: ningún comando del proyecto pide confirmación/.test(screen)));
+	choose(f, "no"); await f.check(); await f.check("npm test");
+	assert.deepEqual(f.executed, [COMMAND, "npm test"], "el pendiente corre sólo al reintentarlo"); assert.equal(authorizations(f).length, 1, "sólo la pregunta de antes de guardar");
 });
 
 test("command_catalog: volver de revisión conserva draft y cancelar no persiste", async (t) => {

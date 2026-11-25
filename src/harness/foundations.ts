@@ -41,7 +41,7 @@ export const AUTO_WARNINGS: Record<PolicyPoint, string> = {
 	push_pr: "hace push de la rama y abre el PR draft sin preguntar; nunca mergea ni fuerza",
 };
 const POINTS: PolicyPoint[] = ["arranque", "receta", "push_pr"];
-export const EMPTY_RULES_WARNING = "Lista vacía: todo comando SIMPLE quedará sin confirmación por esta política. Las restricciones del proyecto y confirmaciones sensibles de OMI siguen vigentes.";
+export const EMPTY_RULES_WARNING = "Lista vacía: ningún comando del proyecto pide confirmación por esta política, tampoco uno compuesto. Las restricciones del proyecto y confirmaciones sensibles de OMI siguen vigentes.";
 
 const obsolete = (value: unknown): boolean => !!value && typeof value === "object" && "version" in value && value.version === 1;
 /** Devuelve el valor validado; jamás convierte comandos antiguos en patrones ni agrega defaults. */

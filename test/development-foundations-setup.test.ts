@@ -68,7 +68,7 @@ test("foundations_setup v2: /omi-foundations abre la guía directa y sólo Guard
 test("foundations_setup v2: sin perillas crea documento sólo al guardar y advierte lista vacía", async (t) => {
 	const f = await fixture(t, null); f.uiControl.foundations = keepAndSave; await f.start(); await f.command("foundations");
 	assert.equal(saves(f.kb), 1); assert.ok(f.kb.documents.at(-1)!.cuerpo.startsWith("# Perillas de repo\n\n## Foundations de omi"));
-	assert.match(f.foundationsScreens.at(-1)!.join("\n"), /SIMPLE/);
+	assert.match(f.foundationsScreens.at(-1)!.join("\n"), /ningún comando del proyecto pide confirmación/);
 });
 test("foundations_setup v2: una regla inválida conserva el texto para corregirlo, no lo recorta", async (t) => {
 	const f = await fixture(t);

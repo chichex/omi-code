@@ -57,7 +57,7 @@ test("foundations_panel: legacy/ausente no precargan comandos, parten vacíos y 
 		const f = await mount(initial); const screen = f.screen();
 		assert.doesNotMatch(screen, /NO-HEREDAR/); assert.doesNotMatch(screen, /\bv[12]\b|obsolet|hered/i, "sin hablar de versiones"); assert.equal((screen.match(/auto/g) ?? []).length >= 3, true);
 		f.press("\x13"); assert.deepEqual(f.results, [], "revisar no guarda");
-		assert.match(f.screen(), /SIMPLE/); f.press("\x13"); assert.deepEqual(f.results, [fresh()]);
+		assert.match(f.screen(), /ningún comando del proyecto pide confirmación/); f.press("\x13"); assert.deepEqual(f.results, [fresh()]);
 	}
 });
 test("foundations_panel: precargar v2 no la presenta como aceptada; el diff usa sólo la aceptación explícita anterior", async () => {

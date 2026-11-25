@@ -43,31 +43,15 @@ Todos corren desde la raíz del repo. Un worktree nuevo no trae `node_modules`: 
 2. `npm test`.
 3. `OMI_REPO=<checkout de chichex/omi> npm test`, si cambió `src/protocol/` o el contrato con omi-api.
 4. `npm run test:packaging`, si cambió algo empaquetado (`src/`, `bin/`, `package.json`, `install.sh`, `scripts/build-release.ts`, `scripts/bundled-tools.*`).
-5. Los dos gates de abajo.
+5. Los dos gates de abajo (`node scripts/gate-commits.ts <base>` y `node scripts/gate-max-lines.ts <base>`).
 
 Techo: tests contra un mock de omi-api. No hay cobertura automática contra una API real, ni forma de probar sin una persona el login ni nada contra `app.ohmyinfra.com`.
 
 ## Reglas de código
 
-- **Commits convencionales:** `tipo(scope)?: resumen`, con tipos `feat`, `fix`, `refactor`, `test`, `docs`, `style`, `chore`, `ci`, `build`, `perf` y `revert`. Gate (sin salida es PASS; `BASE` es el branch contra el que se revisa):
-
-  ```sh
-  git log --no-merges --format=%s "$BASE"..HEAD \
-    | grep -Ev '^(feat|fix|refactor|test|docs|style|chore|ci|build|perf|revert)(\([a-z0-9-]+\))?!?: .+'
-  ```
-
-- **Máximo 500 líneas por archivo `.ts`** que no sea de test. Gate:
-
-  ```sh
-  fail=0
-  git cat-file -e "$BASE^{commit}" 2>/dev/null || { echo "BASE inválido: $BASE"; exit 1; }
-  for f in $(git diff --name-only --diff-filter=ACMR "$BASE"...HEAD -- '*.ts' | grep -Ev '\.test\.ts$'); do
-    actual=$(wc -l < "$f")
-    [ "$actual" -le 500 ] || { echo "FALLA $f ($actual > 500)"; fail=1; }
-  done
-  [ "$fail" -eq 0 ] && echo "MAX_LINES=PASS"
-  ```
-
+- **Commits convencionales:** `tipo(scope)?: resumen`, con tipos `feat`, `fix`, `refactor`, `test`, `docs`, `style`, `chore`, `ci`, `build`, `perf` y `revert`. Gate: `node scripts/gate-commits.ts <base>`, donde `<base>` es el branch o commit contra el que se revisa. Por ejemplo, `node scripts/gate-commits.ts origin/main`. Imprime `CONVENTIONAL_COMMITS=PASS` o lista los commits inválidos y sale con 1.
+- **Máximo 500 líneas por archivo `.ts`** que no sea de test. Gate: `node scripts/gate-max-lines.ts <base>`. Imprime `MAX_LINES=PASS` o una línea `FALLA <archivo> (<líneas> > 500)` por archivo y sale con 1.
+- Los gates son scripts para que sean comandos simples: con Foundations y reglas, una línea con `;`, `|`, `$( )` o comillas pide sí. Escribir la base literal, sin variables: `node scripts/gate-commits.ts "$BASE"` lleva comillas.
 - **Tests primero** cuando hay código, con rojo previo. Prohibido debilitar un test para que pase.
 - **Políticas de código:** `docs/coding-policies.md` (secciones Clean Code y TypeScript). Las juzga la review: no tienen gate.
 - Un cambio vale por lo que pide. No mezclar arreglos que nadie pidió.
