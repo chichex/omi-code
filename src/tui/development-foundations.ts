@@ -118,7 +118,7 @@ const ORIGINS = { kb: "KB", local: "local (última aceptada)", default: "por def
 const origin = (pin: FoundationsPin): string => `${ORIGINS[pin.origin]}${pin.hash ? ` · revisión ${pin.hash.slice(0, 8)}` : ""}${pin.docId ? ` · perillas ${pin.docId.slice(0, 8)}${pin.author ? ` · ${pin.author}` : ""}` : ""}`;
 const POINTS: readonly PolicyPoint[] = ["arranque", "receta", "push_pr"];
 const rulesLines = (block: FoundationsBlock | null): string[] => ["Patrones que requieren confirmación:",
-	...(block?.confirmar.length ? block.confirmar.map((rule) => visibleText(`  ${rule}`)) : [block ? "  (lista vacía: todo comando SIMPLE sin confirmación por esta política)" : "  (sin configurar: nada pregunta)"])];
+	...(block?.confirmar.length ? block.confirmar.map((rule) => visibleText(`  ${rule}`)) : [block ? "  (lista vacía: ningún comando pide confirmación por esta política)" : "  (sin configurar: nada pregunta)"])];
 /** Para /omi-work status y el detalle del progreso. Sin I/O. */
 export function foundationsLines(pin: FoundationsPin | undefined): string[] {
 	if (!pin) return ["Foundations: se lee de la KB; se decide en el primer punto del harness."];

@@ -231,12 +231,12 @@ test("foundations v2: sin aceptación la diferencia parte del default (todo auto
 	assert.deepEqual(STRICT_POLICY, { arranque: "ask", receta: "ask", push_pr: "ask" });
 });
 
-test("foundations v2: lista vacía advierte explícitamente que todos los comandos SIMPLES no requieren confirmar por esta política", () => {
+test("foundations v2: lista vacía advierte explícitamente que ningún comando, tampoco uno compuesto, pide confirmación por esta política", () => {
 	const next = validated(block({ confirmar: [] }));
 	for (const previous of [undefined, validated()]) {
 		const text = foundationsDiff(previous, next, meta);
-		assert.match(text, /(?:todo|cualquier)[^\n]*simple/i);
-		assert.match(text, /sin (?:pedir )?confirmaci[oó]n|sin preguntar/i);
+		assert.match(text, /ning[uú]n comando[^\n]*pide confirmaci[oó]n/i);
+		assert.match(text, /tampoco uno compuesto/i);
 		assert.match(text, /esta pol[ií]tica/i);
 		assert.doesNotMatch(text, /Comandos que corren sin preguntar:\n  \(ninguno\)/);
 	}

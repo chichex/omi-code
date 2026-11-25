@@ -22,6 +22,8 @@ export function commandAuthorization(state: Workflow, command: string, policy: C
 	if (policy?.accepted !== true) return "auto";
 	const checked = checkBlock(policy.block);
 	if ("reason" in checked) return "auto";
+	// Sin reglas no hay patrón que contrastar: lo compuesto tampoco pregunta (pedido del dueño, 2026-11-24).
+	if (!checked.block.confirmar.length) return "auto";
 	if (!isSimpleCommand(command)) return "ask";
 	return checked.block.confirmar.some((pattern) => matchCommandPattern(pattern, command)) ? "ask" : "auto";
 }

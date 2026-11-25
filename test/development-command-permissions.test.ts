@@ -141,14 +141,18 @@ for (const change of ["request", "refresh"] as const) test(`command_permissions:
 	assert.equal(authorizations(f).length, 2); assert.deepEqual(f.executed, [COMMAND]); assert.equal(saves(f).length, 0);
 });
 
-test("command_permissions: lista vacía no autoriza sintaxis compuesta, pero sí simple no coincidente", async (t) => {
-	const f = await commandFixture(t, { value: block([]) }); choose(f, "no");
-	await f.check("npm test"); assert.deepEqual(f.executed, ["npm test"]); assert.equal(authorizations(f).length, 0);
-	for (const command of ['echo "texto"', "npm test && git push origin main", "VAR=x npm test", "echo $(id)", "npm test\nnpm test"]) {
-		await assert.rejects(f.check(command), /no autorizado|cancel/i);
-	}
-	assert.equal(authorizations(f).length, 5); assert.deepEqual(f.executed, ["npm test"]);
-	assert.deepEqual((await f.state()).grants ?? [], []);
+// Pedido del dueño (2026-11-24): sin reglas no pregunta nada, tampoco lo compuesto. Con una regla, lo compuesto sigue pidiendo sí.
+test("command_permissions: lista vacía no pregunta ni por sintaxis compuesta; con una regla, lo compuesto pide sí", async (t) => {
+	const compound = ['echo "texto"', "npm test && git push origin main", "VAR=x npm test", "echo $(id)", "npm test\nnpm test"];
+	const empty = await commandFixture(t, { value: block([]) }); choose(empty, "no");
+	for (const command of ["npm test", ...compound]) await empty.check(command);
+	assert.deepEqual(empty.executed, ["npm test", ...compound]); assert.equal(authorizations(empty).length, 0);
+	assert.deepEqual((await empty.state()).grants ?? [], [], "correr sin preguntar no crea grants");
+	const ruled = await commandFixture(t, { value: block(["git push *"]) }); choose(ruled, "no");
+	await ruled.check("npm test"); assert.deepEqual(ruled.executed, ["npm test"]); assert.equal(authorizations(ruled).length, 0);
+	for (const command of compound) await assert.rejects(ruled.check(command), /no autorizado|cancel/i);
+	assert.equal(authorizations(ruled).length, 5); assert.deepEqual(ruled.executed, ["npm test"]);
+	assert.deepEqual((await ruled.state()).grants ?? [], []);
 });
 
 test("command_permissions: en 80×24 el detalle es navegable y conserva comando completo y decisiones", async (t) => {

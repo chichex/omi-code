@@ -8,7 +8,9 @@ import { STRICT_POLICY, visibleText, type FoundationsBlock } from "../src/harnes
 const source = { number: 68, title: "Foundations", body: "Pedido", url: "https://github.com/test/repo/issues/68", hash: sourceHash("Foundations", "Pedido") };
 const state = () => createWorkflow(source, { root: "/tmp/test", commonDir: "/tmp/.git", branch: "feat/test", baseCommit: "a".repeat(40) }, "work", "now");
 const block = (confirmar: string[] = []): FoundationsBlock => ({ version: 2, repo: "test/repo", confirmar, politica: { ...STRICT_POLICY } });
-function authorize(command: string, rules = block(), current = state(), accepted = true): string {
+// Con reglas rige la puerta de sintaxis. Sin reglas no pregunta nada: ver el test del 2026-11-24.
+const RULES = ["git push *"];
+function authorize(command: string, rules = block(RULES), current = state(), accepted = true): string {
 	return commandAuthorization(current, command, { block: rules, accepted });
 }
 const display = (command: string) => visibleText(JSON.stringify(command));
@@ -25,6 +27,15 @@ for (const command of unsupported) test(`authorization v2: sintaxis no simple pi
 for (const first of ["if", "then", "elif", "else", "fi", "for", "while", "until", "do", "done", "case", "esac", "in", "select", "function", "time", "coproc", "eval", "exec", "command", "builtin", "source", "."]) {
 	test(`authorization v2: primer token reservado ${first}`, () => assert.equal(authorize(`${first} npm test`), "ask"));
 }
+// Pedido del dueño (2026-11-24): sin reglas no hay patrón que contrastar, así que lo compuesto tampoco pregunta.
+// Un `git push origin main` simple ya corría sin preguntar con la lista vacía: preguntar por lo compuesto no protegía nada.
+test("authorization v2: con la lista vacía nada pregunta, tampoco lo compuesto ni lo reservado", () => {
+	for (const command of [...unsupported, "if npm test", "eval npm test", "git push origin main"]) assert.equal(authorize(command, block([])), "auto", display(command));
+	const current = state(), command = 'echo "texto"';
+	const granted = transition(current, { type: "command_granted", key: grantKey(current, command), command }, "now");
+	assert.equal(authorize(command, block([]), granted), "grant", "un grant exacto sigue valiendo");
+	assert.equal(authorize(command, block([]), current, false), "auto", "sin v2 aceptada, el default");
+});
 test("authorization v2: patrones son completos sin trim, regex ni canonización de espacios", () => {
 	const rules = block(["git push *"]);
 	assert.equal(authorize("git push origin main", rules), "ask");
@@ -52,7 +63,7 @@ test("authorization v2: ni una receta humana ni Foundations dispensa confirmaci�
 		current.recipe = { classification: { type: "add", size: "small", risk: "high", riskAreas: [], causeKnown: true }, objective: "Test", approach: "Test", scope: [], outOfScope: [], cases: [{ id: "D1", command: "npm test", description: "Test" }, { id: "D2", command: 'echo "texto"', description: "Quote" }], lenses: ["security"], executor: { mode: "inline", writers: 0 }, route: "direct" };
 		current.approval = { by, sourceHash: current.source.hash, recipeHash: recipeApprovalHash(current), at: "now" };
 		assert.equal(authorize("npm test", block(["npm *"]), current), "ask");
-		assert.equal(authorize('echo "texto"', block(), current), "ask");
+		assert.equal(authorize('echo "texto"', block(RULES), current), "ask");
 		assert.equal(authorize("npm test", block(["*"]), current), "ask");
 	}
 });
