@@ -97,6 +97,25 @@ test("foundations_setup v2: configuración explícita reabre con valores vigente
 	f.uiControl.foundations = cancelAtRules; await f.run("omi-foundations");
 	assert.match(f.foundationsScreens.at(-1)?.[0] ?? "", /npm publish/); assert.doesNotMatch(f.foundationsScreens.at(-1)?.[0] ?? "", /git push \*/); assert.equal(saves(f.kb), 1);
 });
+// Review de #93: sin bloque en la KB, la guía parte de lo aceptado en esta máquina. Lo tiene que decir, y el resumen no puede parecer «sin cambios».
+test("foundations_setup: sin bloque en la KB parte de lo aceptado en esta máquina, lo avisa y el resumen dice que Guardar lo crea", async (t) => {
+	const accepted = block(["git push *"]); const f = await fixture(t, `${HUMAN}\n${renderFoundationsBlock(accepted)}`); await f.start();
+	assert.equal((await readTrust(foundationsDir(f.home), key(f.kb)))?.accepted?.blockHash, foundationsHash(accepted));
+	f.kb.perillas("repo", HUMAN);
+	f.uiControl.foundations = keepAndSave; await f.command("foundations");
+	const first = f.foundationsScreens[0]!.join("\n"), summary = f.foundationsScreens.at(-1)!.join("\n");
+	assert.match(first, /La KB no tiene Foundations/);
+	assert.match(first, new RegExp(`aceptaste antes en\\s+esta máquina \\(revisión ${foundationsHash(accepted).slice(0, 8)}\\)`));
+	assert.match(first, /Conservar \(ask\)/, "precarga las políticas aceptadas");
+	assert.match(summary, /La KB no tiene Foundations\. ¿Lo creás con estas reglas y políticas\?/, "el resumen no parece «sin cambios»"); assert.match(summary, /git push \*/);
+	assert.equal(saves(f.kb), 1);
+	const parsed = parseFoundations(f.kb.documents.at(-1)!.cuerpo, REPO); assert.ok(parsed.status === "valid"); assert.deepEqual(parsed.block, accepted);
+	// Con el bloque de vuelta en la KB, ni el aviso ni el resumen hablan de crearlo.
+	const shown = f.foundationsScreens.length;
+	f.uiControl.foundations = (screen) => /· Resumen/.test(screen) ? [KEYS.esc] : GUIDED_KEEP; await f.command("foundations");
+	const again = f.foundationsScreens.slice(shown).flat().join("\n");
+	assert.match(again, /· Resumen/); assert.doesNotMatch(again, /no tiene Foundations|Lo creás/); assert.equal(saves(f.kb), 1);
+});
 test("foundations_setup v2: abrir antes de tener trabajo no crea issue/worktree ni reanuda el modelo", async (t) => {
 	const f = await fixture(t); const messages = f.messages.length; f.uiControl.foundations = () => [KEYS.esc]; await f.command("foundations");
 	await assert.rejects(f.state(), /Falta estado/); assert.equal(saves(f.kb), 0); assert.equal(f.messages.length, messages); assert.ok(!f.calls.some((call) => call.command === "gh"));

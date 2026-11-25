@@ -43,8 +43,9 @@ export async function editFoundations(ctx: ExtensionContext, session: Developmen
 	let block: FoundationsBlock | undefined;
 	try {
 		const previousAccepted = record?.accepted?.block;
+		// Sin bloque en la KB rige lo aceptado en esta máquina: el borrador parte de ahí, y la guía lo avisa.
 		const initial = reading.kind === "valid" ? reading.block : reading.kind === "missing" ? previousAccepted : undefined;
-		block = await guideFoundations({ key, initial, previousAccepted, notice }, (batch) => askQuestions(ctx, batch, { signal }));
+		block = await guideFoundations({ key, initial, previousAccepted, notice, missing: reading.kind === "missing" }, (batch) => askQuestions(ctx, batch, { signal }));
 	} finally { session.emit(); }
 	if (!block) return false;
 	await assertCurrent();
