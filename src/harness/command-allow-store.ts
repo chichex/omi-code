@@ -8,8 +8,7 @@ import { join } from "node:path";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { agentDir } from "../core/paths.ts";
-import { isSimpleCommand } from "./authorization.ts";
-import { MAX_ALLOWED } from "./command-allow.ts";
+import { commandPrefix, MAX_ALLOWED } from "./command-allow.ts";
 import { trustPath, type TrustKey } from "./foundations-trust.ts";
 
 const MAX_BYTES = 512 * 1024;
@@ -34,7 +33,9 @@ async function safeDirectory(dir: string, create: boolean): Promise<boolean> {
 		return true;
 	} catch (error) { if (codeIs(error, "ENOENT")) return false; throw error; }
 }
-const valid = (value: unknown, key: TrustKey): value is AllowRecord => Value.Check(RecordSchema, value) && value.kbUrl === key.kbUrl && value.product === key.product && value.repo === key.repo && value.prefixes.every(isSimpleCommand);
+// Sólo la forma que propone el diálogo: `git log`, no `git` ni `git -c`, también si alguien edita el archivo a mano.
+const allowable = (prefix: string): boolean => commandPrefix(prefix) === prefix;
+const valid = (value: unknown, key: TrustKey): value is AllowRecord => Value.Check(RecordSchema, value) && value.kbUrl === key.kbUrl && value.product === key.product && value.repo === key.repo && value.prefixes.every(allowable);
 /** Los prefijos de este repo. Sin archivo, roto, ajeno, inseguro o con un prefijo que no es simple: ninguno. */
 export async function readAllowedPrefixes(dir: string, key: TrustKey): Promise<string[]> {
 	try {
@@ -48,14 +49,30 @@ export async function readAllowedPrefixes(dir: string, key: TrustKey): Promise<s
 		} finally { await file.close(); }
 	} catch { return []; }
 }
-// Cola por ruta, sólo en este proceso: dos «no volver a preguntar» seguidos no se pisan.
+// Para modificar: ausente es una lista vacía, pero ilegible no. Pisarlo borraría lo que la persona ya había permitido.
+async function readForUpdate(dir: string, key: TrustKey): Promise<string[]> {
+	const path = trustPath(dir, key);
+	try { await lstat(path); } catch (error) { if (codeIs(error, "ENOENT")) return []; throw error; }
+	const unreadable = new Error(`El registro de comandos permitidos (${path}) no se puede leer: no se cambió. Revisalo o borralo y volvé a permitir los comandos.`);
+	const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK).catch(() => { throw unreadable; });
+	try {
+		const entry = await file.stat();
+		if (!entry.isFile() || entry.nlink !== 1 || entry.size > MAX_BYTES) throw unreadable;
+		let value: unknown;
+		try { value = JSON.parse((await file.readFile()).toString("utf8")); } catch { throw unreadable; }
+		if (!valid(value, key)) throw unreadable;
+		return [...value.prefixes];
+	} finally { await file.close(); }
+}
+// Cola por ruta, sólo en este proceso: dos «no volver a preguntar» seguidos no se pisan. Entre procesos no hay
+// control de concurrencia: dos sesiones que guardan a la vez pueden perder uno de los dos prefijos.
 const writes = new Map<string, Promise<void>>();
 async function update(dir: string, key: TrustKey, change: (prefixes: string[]) => string[]): Promise<void> {
 	await safeDirectory(dir, true);
 	const directory = await realpath(dir); const path = trustPath(directory, key);
 	const previous = writes.get(path) ?? Promise.resolve();
 	const current = previous.then(async () => {
-		const prefixes = change(await readAllowedPrefixes(directory, key));
+		const prefixes = change(await readForUpdate(directory, key));
 		const record: AllowRecord = { version: 1, kbUrl: key.kbUrl, product: key.product, repo: key.repo, prefixes };
 		if (!valid(record, key)) throw new Error("Registro de comandos permitidos inválido; no se guardó");
 		try {
@@ -75,7 +92,7 @@ async function update(dir: string, key: TrustKey, change: (prefixes: string[]) =
 }
 /** Sólo tras el sí de la persona en el diálogo. Un prefijo repetido no se duplica. */
 export async function addAllowedPrefix(dir: string, key: TrustKey, prefix: string): Promise<void> {
-	if (!isSimpleCommand(prefix)) throw new Error(`«${prefix}» no es un prefijo simple; no se guardó`);
+	if (!allowable(prefix)) throw new Error(`«${prefix}» no es un prefijo que se pueda permitir; no se guardó`);
 	await update(dir, key, (prefixes) => {
 		if (prefixes.includes(prefix)) return prefixes;
 		if (prefixes.length >= MAX_ALLOWED) throw new Error(`Ya hay el máximo de ${MAX_ALLOWED} comandos permitidos en este repo: quitá alguno con /omi-permitidos`);

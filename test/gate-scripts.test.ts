@@ -52,14 +52,14 @@ test("gate_scripts: más de 500 líneas en un .ts que no es test falla; tests, o
 	await r.commit("chore: viejo", { "src/borrar.ts": lines(600) });
 	const base = r.git("rev-parse", "HEAD");
 	await rm(join(r.root, "src/borrar.ts")); r.git("add", "-A"); r.git("commit", "-q", "-m", "chore: borrar");
-	await r.commit("feat: archivos", { "src/justo.ts": lines(500), "test/largo.test.ts": lines(900), "docs/largo.md": lines(900) });
+	await r.commit("feat: archivos", { "src/justo.ts": lines(500), "test/largo.test.ts": lines(900), "docs/largo.md": lines(900), "src/configuración.ts": lines(10) });
 	let result = r.run("gate-max-lines.ts", base);
 	assert.equal(result.code, 0, result.out); assert.match(result.out, /MAX_LINES=PASS/);
-	await r.commit("feat: largo", { "src/largo.ts": lines(501) });
+	await r.commit("feat: largo", { "src/largo.ts": lines(501), "src/acción.ts": lines(600) });
 	result = r.run("gate-max-lines.ts", base);
 	assert.equal(result.code, 1, result.out);
 	const nested = spawnSync(process.execPath, [script("gate-max-lines.ts"), base], { cwd: join(r.root, "docs"), encoding: "utf8" });
-	assert.equal(nested.status, 1, "desde un subdirectorio mide los mismos archivos"); assert.match(nested.stdout, /FALLA src\/largo\.ts/); assert.match(result.out, /FALLA src\/largo\.ts \(501 > 500\)/); assert.doesNotMatch(result.out, /justo|largo\.test|PASS/);
+	assert.equal(nested.status, 1, "desde un subdirectorio mide los mismos archivos"); assert.match(nested.stdout, /FALLA src\/largo\.ts/); assert.match(result.out, /FALLA src\/largo\.ts \(501 > 500\)/); assert.match(result.out, /FALLA src\/acción\.ts \(600 > 500\)/, "una ruta con acento se mide, no se escapa"); assert.doesNotMatch(result.out, /justo|largo\.test|PASS/);
 });
 test("gate_scripts: una base inválida o ausente falla sin decir PASS", async (t) => {
 	const r = await repo(t);

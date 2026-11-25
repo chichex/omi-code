@@ -2,7 +2,8 @@
 import { execFileSync } from "node:child_process";
 
 export function git(args: string[], cwd?: string): string {
-	return execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], ...(cwd ? { cwd } : {}) });
+	// Sin el tope de 1 MB por defecto: un rango largo no tiene que fallar por tamaño.
+	return execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], maxBuffer: 256 * 1024 * 1024, ...(cwd ? { cwd } : {}) });
 }
 /** La raíz del repo: los pathspecs se leen desde el cwd y las rutas que informa git, desde la raíz. */
 export const repoRoot = (): string => git(["rev-parse", "--show-toplevel"]).trim();

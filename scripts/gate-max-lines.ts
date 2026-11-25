@@ -8,7 +8,8 @@ import { gitBase, git, repoRoot } from "./gate-git.ts";
 const MAX = 500;
 const base = gitBase("gate-max-lines.ts");
 const root = repoRoot();
-const files = git(["diff", "--name-only", "--diff-filter=ACMR", `${base}...HEAD`, "--", "*.ts"], root).split("\n").filter((file) => file !== "" && !file.endsWith(".test.ts"));
+// -z: rutas tal cual, sin las comillas y escapes que git pone a las que no son ASCII (src/acción.ts).
+const files = git(["diff", "-z", "--name-only", "--diff-filter=ACMR", `${base}...HEAD`, "--", "*.ts"], root).split("\0").filter((file) => file !== "" && !file.endsWith(".test.ts"));
 let failed = false;
 for (const file of files) {
 	const count = (readFileSync(join(root, file), "utf8").match(/\n/g) ?? []).length;
