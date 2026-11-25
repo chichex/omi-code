@@ -2,16 +2,19 @@
 // Cambio de requisito del dueño (2026-11-23): «todas estas fallas de que falta algo de configurar, que se detecten solas y te corra Foundations».
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { FORMATO_ANTERIOR } from "../src/harness/config-doctor.ts";
 import { foundationsDir, readTrust, trustPath } from "../src/harness/foundations-trust.ts";
-import { lifecycleTrustDir, readLifecycleTrust } from "../src/harness/lifecycle-trust.ts";
+import { DEFAULT_POLICY, parseFoundations, renderFoundationsBlock } from "../src/harness/foundations.ts";
+import { defaultLifecycleConfig, lifecycleHash, renderLifecycleBlock } from "../src/harness/lifecycle-config.ts";
+import { lifecycleTrustDir, readLifecycleTrust, writeLifecycleTrust } from "../src/harness/lifecycle-trust.ts";
 import type { WaitLoader } from "../src/tui/development-loader.ts";
 import { developmentFixture } from "./helpers/development.ts";
 import { autoContinuity, continuityFixture } from "./helpers/lifecycle-continuity.ts";
+import { acceptLifecycleConfig, AT } from "./helpers/lifecycle.ts";
 import { memoryKb, type MemoryKb } from "./helpers/mock-kb.ts";
 import { KEYS } from "./helpers/questions.ts";
 import { keepAndSave } from "./helpers/foundations-guide.ts";
@@ -37,7 +40,52 @@ async function fixture(t: TestContext, options: { body?: string | null; availabl
 	};
 	return Object.assign(f, { kb, session, settled: () => Promise.all(background) });
 }
-const titles = (f: { asked: string[][] }) => f.asked.map((screens) => /Foundations de|Ship de|Resumen antes|Continuidad|Review del PR|Entrada/.exec(screens[0] ?? "")?.[0] ?? "?");
+const titles = (f: { asked: string[][] }) => f.asked.map((screens) => /Foundations de|Ship de|Resumen antes|Continuidad|Review del PR|Modelo de la Review|Entrada/.exec(screens[0] ?? "")?.[0] ?? "?");
+const FOUNDATIONS = renderFoundationsBlock({ version: 2, repo: REPO, confirmar: [], politica: { ...DEFAULT_POLICY } });
+const configuredLifecycle = () => ({ ...defaultLifecycleConfig(REPO, "main"), ship: { status: "not-applicable" as const, targets: [] }, continuity: { ...autoContinuity } });
+
+test("config_setup: s retoma una recomendación de Review postergada sin preguntar por Ship, Foundations o continuidad resueltos", async (t) => {
+	const f = await fixture(t), block = configuredLifecycle();
+	const key = await acceptLifecycleConfig(f.kb, f.home, f.checkout.root, block), dir = lifecycleTrustDir(f.home);
+	f.kb.perillas("repo", `${FOUNDATIONS}\n\n${renderLifecycleBlock(block)}\n`);
+	const local = await readLifecycleTrust(dir, key); assert.equal(local.kind, "valid");
+	await writeLifecycleTrust(dir, key, local.record.revision, { ...local.record, revision: local.record.revision + 1, deferred: { revision: `lifecycle:${lifecycleHash(block)}`, at: AT } });
+	const workflow = "claude-review.yml";
+	await mkdir(join(f.checkout.root, ".github/workflows"), { recursive: true });
+	await writeFile(join(f.checkout.root, ".github/workflows", workflow), await readFile(new URL(`../.github/workflows/${workflow}`, import.meta.url)));
+	await f.attach(); // La sesión detecta workflows de su checkout al abrir.
+	f.uiControl.questions = (screen) => /Review del PR|Modelo de la Review/.test(screen) ? ["1"] : /Resumen antes/.test(screen) ? ["1", KEYS.enter] : [KEYS.esc];
+	await f.run("omi-setup");
+	assert.deepEqual(titles(f), ["Review del PR", "Modelo de la Review", "Resumen antes"]);
+	assert.equal(f.foundationsScreens.length, 0); assert.equal(saves(f.kb), 1);
+	const saved = await readLifecycleTrust(dir, key); assert.equal(saved.kind, "valid");
+	assert.deepEqual(saved.record.accepted?.block, { ...block, review: { ...block.review, provider: { kind: "gha", workflow, ref: "main", contract: "omi-review-v1" } } });
+	await f.run("omi-setup");
+	assert.equal(f.asked.length, 3, "resueltas todas las preguntas, s sólo diagnostica"); assert.match(f.messages.at(-1) ?? "", /Nada para configurar/);
+	assert.equal(saves(f.kb), 1);
+});
+
+test("config_setup: s presenta sólo el resumen cuando lo único pendiente es la aceptación", async (t) => {
+	const f = await fixture(t, { body: `${FOUNDATIONS}\n\n${renderLifecycleBlock(configuredLifecycle())}` });
+	f.uiControl.questions = () => [KEYS.esc];
+	await f.run("omi-setup");
+	assert.deepEqual(titles(f), ["Resumen antes"]); assert.equal(saves(f.kb), 0);
+	assert.equal((await readLifecycleTrust(lifecycleTrustDir(f.home), trustKey(f.kb))).kind, "missing");
+});
+
+test("config_setup: s puede reparar un bloque Foundations inválido e inequívoco sólo al Guardar", async (t) => {
+	const body = `# Perillas\n\n\`\`\`omi-foundations\n{"version":2,"repo":"${REPO}","confirmar":["NO-HEREDAR"]}\n\`\`\`\n\nTexto ajeno intacto.\n`;
+	const f = await fixture(t, { body, head: false });
+	f.uiControl.questions = () => ["1"];
+	f.uiControl.foundations = (screen) => /· Resumen/.test(screen) ? [KEYS.esc] : keepAndSave(screen);
+	await f.run("omi-setup");
+	assert.equal(saves(f.kb), 0); assert.equal(f.kb.documents.at(-1)?.cuerpo, body);
+	f.uiControl.foundations = keepAndSave; await f.run("omi-setup");
+	assert.equal(saves(f.kb), 1);
+	const stored = f.kb.documents.at(-1)?.cuerpo ?? "";
+	assert.ok(stored.startsWith("# Perillas\n\n")); assert.ok(stored.endsWith("\n\nTexto ajeno intacto.\n")); assert.doesNotMatch(stored, /NO-HEREDAR/);
+	assert.equal(parseFoundations(stored, REPO).status, "valid");
+});
 
 test("config_setup: /omi-setup corre Foundations y después el lifecycle, en orden, y también lo postergado", async (t) => {
 	const f = await fixture(t);

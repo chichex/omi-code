@@ -165,7 +165,7 @@ export class ConfigSetup {
 		const session = this.session, signal = session.lifecycle.signal, base = await this.base(ctx);
 		if (!base) { ctx.ui.notify("Para configurar el lifecycle falta la rama base de origin: corré git remote set-head origin --auto y volvé con /omi-setup. No se guardó nada.", "warning"); return false; }
 		const outcome = await runLifecycleOnboarding({ kb: session.kb, key, cwd: ctx.cwd, base, trustDir: lifecycleTrustDir(session.io.homeDir), detection: detection ?? await detectLifecycle(ctx.cwd, signal),
-			ask: (batch) => askQuestions(ctx, batch, { signal }), now: session.now, signal });
+			ask: (batch) => askQuestions(ctx, batch, { signal }), now: session.now, signal, ...(trigger === "command" ? { focus: "missing" } : {}) });
 		if (outcome.kind === "unavailable" || outcome.kind === "invalid") { ctx.ui.notify(`No se pudo configurar el lifecycle: ${outcome.reason}. No se guardó nada.`, "warning"); return false; }
 		ctx.ui.notify(LIFECYCLE[outcome.kind], "info");
 		if (outcome.kind === "saved" && trigger === "publication") this.adoptHint(ctx, outcome.pin.block);

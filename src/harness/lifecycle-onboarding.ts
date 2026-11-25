@@ -34,6 +34,8 @@ export function shouldOfferLifecycleOnboarding(intent: "harness" | "simple" | "n
 export interface LifecycleOnboardingDeps {
  kb: KbClient | undefined; key: LifecycleKey; cwd: string; base: string; trustDir: string; detection: LifecycleDetection;
  ask: (batch: QuestionBatch) => Promise<AskResult>; now: () => string; signal: AbortSignal;
+ /** La TUI a pedido no repregunta etapas que ya están resueltas. */
+ focus?: "missing";
 }
 export type LifecycleOnboardingOutcome = { kind: "saved"; pin: LifecycleAcceptance } | { kind: "deferred"; revision: string } | { kind: "cancelled" } | { kind: "declined" } | { kind: "unavailable" | "invalid"; reason: string };
 const KEEP_SHIP = "Mantener Ship actual", CONFIGURE = "Configurar ahora", LATER = "Más adelante", NOT_APPLICABLE = "Este repo no necesita Ship", MANUAL = "Manual (sin destino verificable)", RECEIPT = "Recibo del proveedor", SAVE = "Guardar y aceptar", SKIP = "No guardar";
@@ -81,41 +83,61 @@ function withShip(current: LifecycleConfig, target: LifecycleTarget | "manual" |
  const block = structuredClone(current), kept = block.ship.status === "configured" ? block.ship.targets : [];
  block.ship = typeof target === "string" ? { status: target, targets: [] } : { status: "configured", targets: [...kept.filter(t => t.id !== target.id), target] }; return block;
 }
+async function askShip(deps: LifecycleOnboardingDeps, existing: LifecycleConfig | undefined, recommendations: LifecycleRecommendation[]): Promise<LifecycleConfig | "deferred" | "cancelled"> {
+ const keepShip: [string, string][] = existing ? [[KEEP_SHIP, `Conserva ${shipSummary(existing.ship)} sin reingresar destinos`]] : [];
+ const resume = deps.focus === "missing" ? "/omi-setup" : "omi init";
+ const shipOptions: [string, string][] = [...keepShip, [CONFIGURE, "Proponer destino, verificación y recuperación"], [LATER, `Recordar esta revisión; no desactiva y vuelve con ${resume}`], [NOT_APPLICABLE, "Explícito: se guarda como no-aplica tras el resumen"]];
+ const first = await deps.ask({ title: `Ship de ${deps.key.repo}`, questions: [closed("ship", "Ship", "¿Cómo seguimos con la entrega (Ship) de este repo?", shipOptions, true, { detail: `${detected(deps.detection)}${listed("Recomendaciones", recommendations)}` })] });
+ if (first.status === "cancelled") return "cancelled";
+ deps.signal.throwIfAborted();
+ const choice = chosen(first.answers, "ship");
+ if (choice === LATER) return "deferred";
+ if (choice === KEEP_SHIP && existing) return structuredClone(existing);
+ const current = existing ?? defaultLifecycleConfig(deps.key.repo, deps.base);
+ if (choice === NOT_APPLICABLE) return withShip(current, "not-applicable");
+ if (choice !== CONFIGURE) throw new Error("Respuesta de onboarding inválida; no se guardó nada");
+ const options = mechanisms(deps.detection), answers = await deps.ask(destinationBatch(options));
+ return answers.status === "cancelled" ? "cancelled" : withShip(current, shipTarget(answers.answers, options, current.land.base));
+}
+
 /** Wizard manual (init) o contextual (TUI): Esc cancela sin escribir; postergar no desactiva; guardar exige resumen y sí explícito. */
 export async function runLifecycleOnboarding(deps: LifecycleOnboardingDeps): Promise<LifecycleOnboardingOutcome> {
  const { key, signal } = deps, reading = await readLifecycle(deps.kb, key, deps.cwd, signal), local = await readLifecycleTrust(deps.trustDir, key), state = lifecycleOnboardingStatus(reading, local, deps.detection);
  if (!deps.kb || state.status === "unavailable" || state.status === "invalid" || reading.kind === "unavailable" || reading.kind === "invalid" || local.kind === "invalid") return { kind: state.status === "invalid" ? "invalid" : "unavailable", reason: state.reason };
  const existing = reading.kind === "valid" ? reading.block : undefined;
- const keepShip: [string, string][] = existing ? [[KEEP_SHIP, `Conserva ${shipSummary(existing.ship)} sin reingresar destinos`]] : [];
- const shipOptions: [string, string][] = [...keepShip, [CONFIGURE, "Proponer destino, verificación y recuperación"], [LATER, "Recordar esta revisión; no desactiva y vuelve con omi init"], [NOT_APPLICABLE, "Explícito: se guarda como no-aplica tras el resumen"]];
- const first = await deps.ask({ title: `Ship de ${key.repo}`, questions: [closed("ship", "Ship", "¿Cómo seguimos con la entrega (Ship) de este repo?", shipOptions, true, { detail: `${detected(deps.detection)}${listed("Recomendaciones", state.recommendations)}` })] });
- if (first.status === "cancelled") return { kind: "cancelled" };
- const record = local.kind === "valid" ? local.record : undefined, choice = chosen(first.answers, "ship"); signal.throwIfAborted();
- if (choice === LATER) {
+ const record = local.kind === "valid" ? local.record : undefined;
+ const defer = async (): Promise<LifecycleOnboardingOutcome> => {
   const revision = state.revision; if (!revision) return { kind: "unavailable", reason: state.reason };
+  signal.throwIfAborted();
   await writeLifecycleTrust(deps.trustDir, key, record?.revision, { version: 1, ...key, revision: record ? record.revision + 1 : 0, accepted: record?.accepted ?? null, deferred: { revision, at: deps.now() } });
   return { kind: "deferred", revision };
- }
- const current = existing ?? defaultLifecycleConfig(key.repo, deps.base);
- let block: LifecycleConfig;
- if (choice === KEEP_SHIP && existing) block = structuredClone(existing);
- else if (choice === NOT_APPLICABLE) block = withShip(current, "not-applicable");
- else if (choice === CONFIGURE) {
-  const options = mechanisms(deps.detection), answers = await deps.ask(destinationBatch(options));
-  if (answers.status === "cancelled") return { kind: "cancelled" };
-  block = withShip(current, shipTarget(answers.answers, options, current.land.base));
- } else throw new Error("Respuesta de onboarding inválida; no se guardó nada");
- const reviewed = await configureLifecycleReview(block, existing?.review.provider ?? null, reviewCandidates(deps.detection), deps.ask);
+ };
+ const focused = deps.focus === "missing";
+ const ship = !focused || !existing || existing.ship.status === "unconfigured";
+ const review = !focused || state.recommendations.some(r => r.kind === "review-gha");
+ const continuity = !focused || state.recommendations.some(r => r.kind === "continuity");
+ // Si la KB cambió entre el diagnóstico de la TUI y esta lectura, no se reabre algo ya resuelto.
+ if (!ship && !review && !continuity && state.status !== "pending") return { kind: "declined" };
+ const draft = ship || !existing ? await askShip(deps, existing, state.recommendations) : structuredClone(existing);
+ if (draft === "deferred") return defer();
+ if (draft === "cancelled") return { kind: "cancelled" };
+ const reviewed = review ? await configureLifecycleReview(draft, existing?.review.provider ?? null, reviewCandidates(deps.detection), deps.ask) : draft;
  if (!reviewed) return { kind: "cancelled" };
- const configured = await configureLifecycleContinuity(reviewed, deps.ask);
- if (!configured) return { kind: "cancelled" };
- signal.throwIfAborted(); block = configured;
+ const block = continuity ? await configureLifecycleContinuity(reviewed, deps.ask) : reviewed;
+ if (!block) return { kind: "cancelled" };
+ signal.throwIfAborted();
  // Guardar sin tomar una recomendación es haberla visto: posterga esa revisión para que el harness no insista.
  const remaining = lifecycleRecommendations(block, deps.detection), deferral = remaining.length ? { revision: `lifecycle:${lifecycleHash(block)}`, at: deps.now() } : undefined;
- const pending = remaining.length ? `${listed("Recomendaciones sin tomar", remaining)}\nGuardar así posterga esta revisión: el harness no la vuelve a ofrecer; volvé con omi init --development.` : "";
+ const resume = focused ? "/omi-setup" : "omi init --development";
+ const pending = remaining.length ? `${listed("Recomendaciones sin tomar", remaining)}\nGuardar así posterga esta revisión: el harness no la vuelve a ofrecer; volvé con ${resume}.` : "";
  const summary = `${lifecycleDiff(record?.accepted?.block, block, key)}\n${reviewProviderSummary(block.review.provider)}${pending}\n${CONTINUITY_NOTICE}`;
- const accept = await deps.ask({ title: "Resumen antes de guardar", questions: [closed("accept", "Guardar", "¿Guardar en la KB y aceptar esta configuración?", [[SAVE, "Escribe perillas y aceptación local; no ejecuta nada"], [SKIP, "No escribe nada"]], false, { detail: summary })] });
- if (accept.status === "cancelled" || chosen(accept.answers, "accept") !== SAVE) return { kind: "declined" };
+ const options: [string, string][] = [[SAVE, "Escribe perillas y aceptación local; no ejecuta nada"], [SKIP, "No escribe nada"]];
+ if (focused && !ship) options.push([LATER, "Posterga la revisión sin escribir en la KB ni cambiar la aceptación"]);
+ const accept = await deps.ask({ title: "Resumen antes de guardar", questions: [closed("accept", "Guardar", "¿Guardar en la KB y aceptar esta configuración?", options, false, { detail: summary })] });
+ if (accept.status === "cancelled") return { kind: "declined" };
+ const choice = chosen(accept.answers, "accept");
+ if (choice === LATER && focused && !ship) return defer();
+ if (choice !== SAVE) return { kind: "declined" };
  const prepared = await prepareLifecycleSave(deps.kb, key, block, signal, reading.kind === "valid" ? reading.hash : null, deps.cwd);
  return { kind: "saved", pin: await commitLifecycleSave(deps.kb, key, block, prepared, { trustDir: deps.trustDir, expectedRevision: record?.revision, signal, now: deps.now, ...(deferral ? { deferred: deferral } : {}) }) };
 }

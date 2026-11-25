@@ -52,10 +52,8 @@ export async function editFoundations(ctx: ExtensionContext, session: Developmen
 	if ("reason" in checked || block.repo !== key.repo) throw new Error("El borrador de Foundations es inválido o pertenece a otro repo.");
 	const fresh = await session.foundations.read(ctx, ioSignal()); editable(fresh);
 	if (!sameKey(key, fresh.key)) throw new Error("Cambió la identidad de origin/KB/producto/repo; no se guardó Foundations.");
-	const expectation = reading.kind === "valid" ? reading.hash : reading.kind === "missing" ? null : undefined;
+	const expectation = reading.kind === "valid" ? reading.hash : reading.kind === "missing" ? null : { repair: reading.perillas };
 	const prepared = await prepareFoundationsSave(kb, key, block, ioSignal(), expectation);
-	// Un v1 no es ausencia ni una política operativa: sólo se reemplaza el documento inequívoco que se abrió.
-	if (reading.kind === "invalid" && (prepared.previous?.id !== reading.perillas.id || prepared.previous.cuerpo !== reading.perillas.cuerpo)) throw new Error("Las perillas cambiaron durante la edición; revisá su contenido antes de guardar.");
 	await assertCurrent();
 	session.foundations.supersede(ctx);
 	await commitFoundationsSave(kb, key, block, prepared, { trustDir, now: session.now, signal: ioSignal(),

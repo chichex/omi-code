@@ -14,16 +14,20 @@ export class FoundationsSaveError extends Error {
 
 export interface PreparedSave { previous: KbDoc | null; body: string; clave: string }
 const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
-/** La expectativa se valida sobre el mismo documento que se compone, incluida la ausencia explícita (null). */
-export async function prepareFoundationsSave(kb: KbClient, key: TrustKey, block: FoundationsBlock, signal: AbortSignal, expectedHash?: string | null): Promise<PreparedSave> {
+type SaveExpectation = string | null | { repair: Pick<KbDoc, "id" | "cuerpo"> };
+/** Hash válido, ausencia explícita (null), o las perillas exactas que abrió la guía para reparar. */
+export async function prepareFoundationsSave(kb: KbClient, key: TrustKey, block: FoundationsBlock, signal: AbortSignal, expected?: SaveExpectation): Promise<PreparedSave> {
 	signal.throwIfAborted();
 	const previous = await kb.currentPerillas(key.product, signal);
 	signal.throwIfAborted();
-	if (expectedHash !== undefined) {
+	const repair = expected && typeof expected === "object" ? expected.repair : undefined;
+	if (expected !== undefined) {
 		const parsed = parseFoundations(previous?.cuerpo ?? "", key.repo);
-		if (parsed.status === "invalid" || (parsed.status === "valid" ? parsed.hash : null) !== expectedHash) throw new FoundationsSaveError("conflict", "La revisión de Foundations cambió antes de componer las perillas; no se guardó nada. Revisá la KB en una sesión nueva.");
+		const matches = repair ? parsed.status === "invalid" && previous?.id === repair.id && previous.cuerpo === repair.cuerpo
+			: parsed.status !== "invalid" && (parsed.status === "valid" ? parsed.hash : null) === expected;
+		if (!matches) throw new FoundationsSaveError("conflict", "La revisión de Foundations cambió antes de componer las perillas; no se guardó nada. Revisá la KB en una sesión nueva.");
 	}
-	const body = composePerillas(previous?.cuerpo, key.product, key.repo, block);
+	const body = composePerillas(previous?.cuerpo, key.product, key.repo, block, { repairInvalid: repair !== undefined });
 	if (body.length > MAX_KB_DOCUMENT_LENGTH) throw new Error(`Las perillas resultantes exceden el límite legible de KB (${MAX_KB_DOCUMENT_LENGTH} caracteres); no se guardó nada.`);
 	return { previous, body, clave: `omi-foundations|${key.repo.slice(0, 80)}|${previous?.id ?? "none"}|${sha256(body).slice(0, 40)}` };
 }
