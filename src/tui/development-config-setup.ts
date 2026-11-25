@@ -27,7 +27,7 @@ const READ_TIMEOUT_MS = 30_000;
 const NOW = "Configurar ahora", LATER = "Más adelante";
 const CANCELLED = "Configuración cancelada: no se guardó nada más. Volvé con /omi-setup.";
 const BUSY = "Ya hay un setup abierto. Terminalo o cerralo con Esc, y volvé con /omi-setup. No se cambió nada.";
-const LIFECYCLE: Record<Exclude<LifecycleOnboardingOutcome["kind"], "unavailable" | "invalid">, string> = {
+const LIFECYCLE: Record<Exclude<LifecycleOnboardingOutcome["kind"], "unavailable" | "invalid" | "suppressed">, string> = {
 	saved: "Lifecycle guardado en la KB y aceptado. No se ejecutó ningún workflow, merge ni deploy.",
 	deferred: "Lifecycle postergado para esta revisión: no se vuelve a ofrecer solo hasta que cambie. Volvé con /omi-setup.",
 	cancelled: CANCELLED,
@@ -179,7 +179,9 @@ export class ConfigSetup {
 		const session = this.session, signal = session.lifecycle.signal, base = await this.base(ctx);
 		if (!base) { ctx.ui.notify("Para configurar el lifecycle falta la rama base de origin: corré git remote set-head origin --auto y volvé con /omi-setup. No se guardó nada.", "warning"); return false; }
 		const outcome = await runLifecycleOnboarding({ kb: session.kb, key, cwd: ctx.cwd, base, trustDir: lifecycleTrustDir(session.io.homeDir), detection: detection ?? await detectLifecycle(ctx.cwd, signal),
-			ask: (batch) => askQuestions(ctx, batch, { signal }), now: session.now, signal, ...(trigger === "command" ? { focus: "missing" } : {}), beforeSessionOffer: beforeOffer });
+			ask: (batch) => askQuestions(ctx, batch, { signal }), now: session.now, signal, ...(trigger === "command" ? { focus: "missing" } : {}),
+			...(beforeOffer ? { beforeSessionOffer: beforeOffer } : {}) });
+		if (outcome.kind === "suppressed") return false;
 		if (outcome.kind === "unavailable" || outcome.kind === "invalid") { ctx.ui.notify(`No se pudo configurar el lifecycle: ${outcome.reason}. No se guardó nada.`, "warning"); return false; }
 		ctx.ui.notify(LIFECYCLE[outcome.kind], "info");
 		if (outcome.kind === "saved" && trigger === "publication") this.adoptHint(ctx, outcome.pin.block);

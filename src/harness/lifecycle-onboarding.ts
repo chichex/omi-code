@@ -39,7 +39,7 @@ export interface LifecycleOnboardingDeps {
  /** Sólo para startup/new: reclama la revisión diagnosticada al llegar a la primera pregunta. */
  beforeSessionOffer?: (revision: string) => boolean;
 }
-export type LifecycleOnboardingOutcome = { kind: "saved"; pin: LifecycleAcceptance } | { kind: "deferred"; revision: string } | { kind: "cancelled" } | { kind: "declined" | "suppressed" } | { kind: "unavailable" | "invalid"; reason: string };
+export type LifecycleOnboardingOutcome = { kind: "saved"; pin: LifecycleAcceptance } | { kind: "deferred"; revision: string } | { kind: "cancelled" } | { kind: "declined" } | { kind: "suppressed" } | { kind: "unavailable" | "invalid"; reason: string };
 const KEEP_SHIP = "Mantener Ship actual", CONFIGURE = "Configurar ahora", LATER = "Más adelante", NOT_APPLICABLE = "Este repo no necesita Ship", MANUAL = "Manual (sin destino verificable)", RECEIPT = "Recibo del proveedor", SAVE = "Guardar y aceptar", SKIP = "No guardar";
 const RECOVERY: Record<string, "stop" | "rollback" | "fix-forward"> = { "Detener (stop)": "stop", Rollback: "rollback", "Fix-forward": "fix-forward" };
 const MODES: Record<string, "ask" | "auto"> = { "Preguntar antes (ask)": "ask", "Automático (auto)": "auto" };
