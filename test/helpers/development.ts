@@ -16,7 +16,7 @@ import type { Plan, Workflow } from "../../src/harness/model.ts";
 import { readWorkflow } from "../../src/harness/store.ts";
 import { issueDevelopmentTicket } from "../../src/tui/development-tickets.ts";
 import { tempDir, testIo } from "./io.ts";
-import { getKeybindings, stripTerminalSequences, type Component, type TUI } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, type Component, type TUI } from "@earendil-works/pi-tui";
 import { getThemeByName } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import { emitLikePi } from "./pi-events.ts";
 import type { KbClient } from "../../src/tui/kb-client.ts";
@@ -148,23 +148,11 @@ export async function developmentFixture(t: TestContext, options: { kb?: KbClien
 						return decision;
 					} finally { dispose(); }
 				}
-				if (options?.blocked?.kind === "question" && options.blocked.message === "Configurar Foundations") {
-					let decision: unknown; let settled = false;
-					const component = factory(fakeTui({ columns: 80, rows: 24 }), darkTheme(), getKeybindings(), (value) => { if (!settled) { settled = true; decision = value; } });
-					const screens: string[] = []; foundationsScreens.push(screens);
-					const screen = () => component.render(80).map(stripTerminalSequences).join("\n");
-					Reflect.set(component, "focused", true);
-					try {
-						screens.push(screen());
-						for (const key of uiControl.foundations(screens[0]!) ?? []) {
-							if (settled) break;
-							component.handleInput?.(key); screens.push(screen());
-						}
-					} finally { component.dispose?.(); }
-					return decision;
-				}
 				if (options?.blocked?.kind === "question") {
-					const { value, screens } = await answerCustom(factory, (screen) => uiControl.questions(screen)); asked.push(screens); return value;
+					const guide = options.blocked.message?.startsWith("Guía Foundations");
+					const { value, screens } = await answerCustom(factory, (screen) => guide ? uiControl.foundations(screen) : uiControl.questions(screen));
+					(guide ? foundationsScreens : asked).push(screens);
+					return value;
 				}
 				reviews++;
 				if (uiControl.error) throw new Error("UI fallida");

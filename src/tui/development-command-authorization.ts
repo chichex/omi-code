@@ -25,8 +25,8 @@ export async function authorizeProjectCommand(session: DevelopmentSession, ctx: 
 		"Sí: el permiso del comando exacto queda guardado para este trabajo y pedido, también al retomarlo; cambiar el pedido o refresh lo invalida. No cambia la KB ni autoriza variantes.",
 		...(prefix ? [visibleText(`Sí, y no volver a preguntar: en esta máquina, los comandos simples que empiezan con «${prefix}» corren sin preguntar en ${key!.repo}, también en otros trabajos y aunque coincidan con una regla. No cubre comandos compuestos. Se ven en la pestaña OMI y se quitan con /omi-permitidos.`)] : []),
 		"No o cancelar: no ejecuta ni guarda permisos.",
-		`Editar reglas: abre el panel de Foundations (${where}) sin aceptar, escribir ni autorizar nada al abrir. Sólo Guardar explícitamente cambia la configuración.`,
-		"Al cerrar el panel, incluso si guardaste, este comando NO se ejecuta: hay que reintentarlo y volver a evaluar la política vigente. Guardar no crea un grant humano.",
+		`Editar reglas: abre la guía de Foundations (${where}) sin aceptar, escribir ni autorizar nada al abrir. Sólo Guardar explícitamente cambia la configuración.`,
+		"Al cerrar la guía, incluso si guardaste, este comando NO se ejecuta: hay que reintentarlo y volver a evaluar la política vigente. Guardar no crea un grant humano.",
 		"Nunca habilita merge, tags, workflows, deploys ni secretos; no sustituye las confirmaciones obligatorias de OMI ni las prohibiciones del proyecto.",
 	].join("\n");
 	const choices = [YES, ...(prefix ? [always(prefix)] : []), NO, EDIT];

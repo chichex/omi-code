@@ -10,12 +10,11 @@ import { foundationsDir, trustPath } from "../src/harness/foundations-trust.ts";
 import { FoundationsGate, effectivePolicy } from "../src/tui/development-foundations.ts";
 import { ASK_ALL } from "./helpers/foundations.ts";
 import { COMMAND, HUMAN, KNOWN, REPO, accepted, authorizations, block, choose, commandFixture, key, noPermissionAdded, saves, type CommandFixture } from "./helpers/command-permissions.ts";
+import { changeFirstRule, GUIDED_EDIT } from "./helpers/foundations-guide.ts";
+import { KEYS } from "./helpers/questions.ts";
 
-/** El panel abre en la primera política: tres filas abajo está Reglas de comandos y Enter abre su editor. */
-const TO_RULES = ["\x1b[B", "\x1b[B", "\x1b[B", "\r"];
-const draftKeys = (text: string): readonly string[] => [...TO_RULES, "\x15", `\x1b[200~${text}\x1b[201~`, "\x13", "\x13"];
 function edit(f: CommandFixture, text = "npm publish *"): void {
-	choose(f, "edit"); f.uiControl.foundations = () => draftKeys(text);
+	choose(f, "edit"); f.uiControl.foundations = changeFirstRule(text);
 }
 async function savedDraft(f: CommandFixture, rules: string[]): Promise<void> {
 	await assert.rejects(f.check(), /reintent|no se ejecut/i);
@@ -29,18 +28,19 @@ async function savedDraft(f: CommandFixture, rules: string[]): Promise<void> {
 
 test("command_catalog: Editar reglas precarga v2 y cancelar no escribe ni ejecuta", async (t) => {
 	const f = await commandFixture(t); choose(f, "edit"); const previous = await accepted(f);
+	f.uiControl.foundations = (screen) => /· Reglas/.test(screen) ? [KEYS.esc] : GUIDED_EDIT;
 	await assert.rejects(f.check(), /reintent|no se ejecut/i);
-	assert.equal(f.foundationsScreens.length, 1); assert.match(f.foundationsScreens[0]![0]!, /git push \*/);
-	assert.match(f.foundationsScreens[0]![0]!, /Arranque\s+\[ask\]\s+auto/);
+	assert.equal(f.foundationsScreens.length, 2); assert.match(f.foundationsScreens[1]?.[0] ?? "", /git push \*/);
+	assert.match(f.foundationsScreens[0]?.[0] ?? "", /Arranque[\s\S]*Conservar \(ask\)/);
 	assert.equal(saves(f).length, 0); await noPermissionAdded(f); assert.deepEqual(await accepted(f), previous);
 	choose(f, "no"); await assert.rejects(f.check(), /no autorizado/i);
 	assert.equal(authorizations(f).length, 2, "cancelar la edición no ocultó un grant");
 });
 
-test("command_catalog: Ctrl+S dos veces guarda el draft exacto sin ejecutar ni grant; sólo reintentar reevalúa", async (t) => {
+test("command_catalog: Guardar después del resumen persiste el draft exacto sin ejecutar ni grant; sólo reintentar reevalúa", async (t) => {
 	const f = await commandFixture(t, { value: block([KNOWN]) }); edit(f, "npm publish *");
 	await savedDraft(f, ["npm publish *"]);
-	assert.ok(f.foundationsScreens[0]!.some((screen) => /REVISAR/.test(screen)));
+	assert.ok(f.foundationsScreens.flat().some((screen) => /· Resumen/.test(screen)));
 	choose(f, "no"); await f.check(KNOWN);
 	assert.deepEqual(f.executed, [KNOWN]); assert.equal(authorizations(f).length, 1, "el simple dejó de coincidir sólo al reintentar");
 	await assert.rejects(f.check(COMMAND), /no autorizado/i);
@@ -51,24 +51,25 @@ test("command_catalog: Ctrl+S dos veces guarda el draft exacto sin ejecutar ni g
 // Pedido del dueño (2026-11-24): con la lista vacía nada pregunta. Guardarla igual exige revisión y no corre el pendiente.
 test("command_catalog: lista vacía exige revisión explícita, no autoejecuta el pendiente y después nada pregunta", async (t) => {
 	const f = await commandFixture(t); edit(f, ""); await savedDraft(f, []);
-	assert.ok(f.foundationsScreens[0]!.some((screen) => /Lista vacía: ningún comando del proyecto pide confirmación/.test(screen)));
+	assert.ok(f.foundationsScreens.flat().some((screen) => /Lista vacía: ningún comando del proyecto pide confirmación/.test(screen)));
 	choose(f, "no"); await f.check(); await f.check("npm test");
 	assert.deepEqual(f.executed, [COMMAND, "npm test"], "el pendiente corre sólo al reintentarlo"); assert.equal(authorizations(f).length, 1, "sólo la pregunta de antes de guardar");
 });
 
 test("command_catalog: volver de revisión conserva draft y cancelar no persiste", async (t) => {
 	const f = await commandFixture(t); choose(f, "edit"); const previous = await accepted(f);
-	f.uiControl.foundations = () => [...TO_RULES, "\x15", "\x1b[200~npm publish *\x1b[201~", "\x13", "\x1b", "\x1b", "\x1b"]; // revisión → reglas → lista → cancelar
+	let reviewed = false; const answer = changeFirstRule("npm publish *", ["2", KEYS.enter]);
+	f.uiControl.foundations = (screen) => { if (reviewed) return [KEYS.esc]; if (/· Resumen/.test(screen)) reviewed = true; return answer(screen); };
 	await assert.rejects(f.check(), /reintent|no se ejecut/i);
-	const screens = f.foundationsScreens[0]!;
-	assert.ok(screens.some((screen) => /REVISAR/.test(screen))); assert.match(screens.at(-2)!, /npm publish \*/);
+	assert.ok(f.foundationsScreens.flat().some((screen) => /· Resumen/.test(screen)));
+	assert.match(f.foundationsScreens.at(-1)?.[0] ?? "", /Reglas[\s\S]*npm publish \*/);
 	assert.equal(saves(f).length, 0); await noPermissionAdded(f); assert.deepEqual(await accepted(f), previous);
 });
 
 test("command_catalog: error de la UI de edición no ejecuta ni concede fallback", async (t) => {
 	const f = await commandFixture(t); choose(f, "edit"); const previous = await accepted(f);
-	f.uiControl.foundations = () => { throw new Error("panel fallido"); };
-	await assert.rejects(f.check(), /panel fallido/i);
+	f.uiControl.foundations = () => { throw new Error("guía fallida"); };
+	await assert.rejects(f.check(), /guía fallida/i);
 	assert.equal(saves(f).length, 0); await noPermissionAdded(f); assert.deepEqual(await accepted(f), previous);
 });
 
@@ -121,10 +122,11 @@ test("command_catalog: edición externa ajena a Foundations se relee y conserva"
 	assert.ok(stored.cuerpo.includes("Otra persona cambió esta sección.")); assert.ok(stored.cuerpo.endsWith("\n\nPie nuevo.\n"));
 });
 
-for (const change of ["missing", "rules", "policies"] as const) test(`command_catalog: cambio concurrente ${change} durante el panel no sobrescribe ni acepta`, async (t) => {
+for (const change of ["missing", "rules", "policies"] as const) test(`command_catalog: cambio concurrente ${change} durante la guía no sobrescribe ni acepta`, async (t) => {
 	const f = await commandFixture(t); choose(f, "edit"); const previous = await accepted(f);
 	const replacement = change === "missing" ? HUMAN : `${HUMAN}\n${renderFoundationsBlock(block(["git fetch *"], change === "policies" ? { politica: { ...STRICT_POLICY, push_pr: "auto" } } : {}))}\n`;
-	f.uiControl.foundations = () => { f.kb.perillas("repo", replacement); return draftKeys("npm publish *"); };
+	const answer = changeFirstRule("npm publish *");
+	f.uiControl.foundations = (screen) => { if (/· Resumen/.test(screen)) f.kb.perillas("repo", replacement); return answer(screen); };
 	await assert.rejects(f.check(), /cambi|revisi|Foundations|concurr/i);
 	assert.equal(saves(f).length, 0); assert.equal(f.kb.documents.at(-1)!.cuerpo, replacement);
 	await noPermissionAdded(f); assert.deepEqual(await accepted(f), previous);

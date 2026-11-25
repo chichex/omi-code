@@ -29,7 +29,7 @@ async function git(runner: Runner, cwd: string, args: string[], signal: AbortSig
 const MESSAGES: Record<LifecycleOnboardingOutcome["kind"], string> = {
 	saved: "Lifecycle guardado en la KB y aceptado localmente. No se ejecutó ningún workflow, merge ni deploy.",
 	deferred: "Postergado para esta revisión: el harness no lo vuelve a ofrecer; volvé con `omi init --development`.",
-	cancelled: "Cancelado: no se guardó nada.", declined: "No se guardó nada.", unavailable: "", invalid: "",
+	cancelled: "Cancelado: no se guardó nada.", declined: "No se guardó nada.", unavailable: "", invalid: "", suppressed: "",
 };
 
 export async function developmentInit(args: string[], io: Io, deps: DevelopmentInitDeps = {}): Promise<number> {

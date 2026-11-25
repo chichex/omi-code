@@ -6,7 +6,8 @@ import { foundationsDir, readTrust, type TrustKey } from "../harness/foundations
 import type { DevelopmentSession } from "./development-session.ts";
 import type { FoundationsReading } from "./development-foundations.ts";
 import type { KbClient } from "./kb-client.ts";
-import { showFoundationsPanel } from "./development-foundations-panel.ts";
+import { guideFoundations } from "./development-foundations-guide.ts";
+import { askQuestions } from "./questions/ask.ts";
 import { commitFoundationsSave, prepareFoundationsSave } from "./development-foundations-save.ts";
 
 const SAVE_TIMEOUT_MS = 30_000;
@@ -31,7 +32,7 @@ export async function editFoundations(ctx: ExtensionContext, session: Developmen
 	await assertCurrent();
 	// Leer la KB puede tardar: sin espera visible, f en la pantalla OMI parecía no hacer nada.
 	const reading = await session.loader(ctx, "Leyendo Foundations de la KB", (cancel) => session.foundations.read(ctx, AbortSignal.any([ioSignal(), cancel])));
-	if (!reading) { ctx.ui.notify("Lectura de Foundations cancelada: no se abrió el panel ni se cambió nada.", "info"); return false; }
+	if (!reading) { ctx.ui.notify("Lectura de Foundations cancelada: no se abrió la guía ni se cambió nada.", "info"); return false; }
 	editable(reading);
 	if (state && issueRepo(state.source.url) !== reading.key.repo) throw new Error("El repo de origin no coincide con el issue; no se cambió Foundations.");
 	const key = reading.key; const trustDir = foundationsDir(session.io.homeDir);
@@ -41,8 +42,9 @@ export async function editFoundations(ctx: ExtensionContext, session: Developmen
 	session.emit("Editando Foundations", true);
 	let block: FoundationsBlock | undefined;
 	try {
-		block = await showFoundationsPanel(ctx, { repo: key.repo, product: key.product, kbUrl: key.kbUrl,
-			...(reading.kind === "valid" ? { initial: reading.block } : {}), ...(record?.accepted ? { previousAccepted: record.accepted.block } : {}), ...(notice ? { notice } : {}) }, signal);
+		const previousAccepted = record?.accepted?.block;
+		const initial = reading.kind === "valid" ? reading.block : reading.kind === "missing" ? previousAccepted : undefined;
+		block = await guideFoundations({ key, initial, previousAccepted, notice }, (batch) => askQuestions(ctx, batch, { signal }));
 	} finally { session.emit(); }
 	if (!block) return false;
 	await assertCurrent();
@@ -50,10 +52,8 @@ export async function editFoundations(ctx: ExtensionContext, session: Developmen
 	if ("reason" in checked || block.repo !== key.repo) throw new Error("El borrador de Foundations es inválido o pertenece a otro repo.");
 	const fresh = await session.foundations.read(ctx, ioSignal()); editable(fresh);
 	if (!sameKey(key, fresh.key)) throw new Error("Cambió la identidad de origin/KB/producto/repo; no se guardó Foundations.");
-	const expectation = reading.kind === "valid" ? reading.hash : reading.kind === "missing" ? null : undefined;
+	const expectation = reading.kind === "valid" ? reading.hash : reading.kind === "missing" ? null : { repair: reading.perillas };
 	const prepared = await prepareFoundationsSave(kb, key, block, ioSignal(), expectation);
-	// Un v1 no es ausencia ni una política operativa: sólo se reemplaza el documento inequívoco que se abrió.
-	if (reading.kind === "invalid" && (prepared.previous?.id !== reading.perillas.id || prepared.previous.cuerpo !== reading.perillas.cuerpo)) throw new Error("Las perillas cambiaron durante la edición; revisá su contenido antes de guardar.");
 	await assertCurrent();
 	session.foundations.supersede(ctx);
 	await commitFoundationsSave(kb, key, block, prepared, { trustDir, now: session.now, signal: ioSignal(),

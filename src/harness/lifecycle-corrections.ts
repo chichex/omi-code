@@ -44,7 +44,9 @@ function current(original: unknown) {
 export function preparePostPrCorrection(original: unknown, input: unknown): WorkflowV2 {
  const { state, lifecycle, subject } = current(original); lifecycleAssert(Value.Check(CorrectionProposalSchema, input), "propuesta host inválida");
  lifecycleAssert(state.phase === "review" && lifecycle.stage === "review" && state.steps.every(s => s.status === "done") && !(lifecycle.corrections ?? []).some(r => r.status !== "pushed" && r.status !== "failed"), "hay una corrección pendiente o no corresponde");
- lifecycleAssert(input.scope.withinScope && input.scope.risk === "low" && input.scope.scopeHash === recipeApprovalHash(state) && (input.scope.source === "person" || input.scope.authorityHash), "nuevo alcance/riesgo o falta validación de alcance: requiere humano");
+ // El riesgo bajo lo exige la política (el evaluador aislado). El sí de una persona acepta el riesgo de la receta, pero no
+ // un alcance nuevo (2026-11-25: una receta de riesgo alto no podía corregirse ni con el sí de la persona).
+ lifecycleAssert(input.scope.withinScope && input.scope.scopeHash === recipeApprovalHash(state) && (input.scope.source === "person" || input.scope.risk === "low" && !!input.scope.authorityHash), "nuevo alcance/riesgo o falta validación de alcance: requiere humano");
  const pin = lifecycle.pins.find(p => p.accepted.blockHash === lifecycle.pinHash); lifecycleAssert(pin && lifecycle.budget.roundsUsed < pin.accepted.block.corrections.maxRounds, "rondas post-PR agotadas");
  lifecycleAssert(state.steps.length < MAX_STEPS && !(lifecycle.corrections ?? []).some(r => r.operationId === input.operationId), "sin espacio o ID de corrección reutilizado");
  const findings = input.findingIds.map(id => {

@@ -69,15 +69,28 @@ test("corrección postPR conserva publicación, aprobación, evidencia previa y 
  assert.throws(() => send(r, { type: "retry", reason: "no borrar PR" }));
 });
 
+// Cambio de contrato del dueño (2026-11-25): el riesgo bajo lo exige el evaluador automático (source policy). El sí de una
+// persona abre la ronda con cualquier riesgo de la receta; alcance, hash y hallazgos se siguen exigiendo igual.
 for (const problem of ["scope", "risk", "hash", "finding", "human-required", "stale"]) test(`agrupación ${problem} no abre permiso de código`, () => {
- const r = reviewing(); const p = proposal(r);
+ const r = reviewing(); const p: ReturnType<typeof proposal> = proposal(r);
  if (problem === "scope") p.scope.withinScope = false;
- if (problem === "risk") p.scope.risk = "high";
+ if (problem === "risk") p.scope = { ...p.scope, source: "policy", risk: "high", authorityHash: "a".repeat(64) } as typeof p.scope;
  if (problem === "hash") p.scope.scopeHash = "wrong";
  if (problem === "finding") p.findingIds = ["foreign"];
  if (problem === "human-required" && r.lifecycle.status === "enabled") r.lifecycle.ledger[0]!.dispositions[0]!.status = "human-required";
  if (problem === "stale" && r.lifecycle.status === "enabled") r.lifecycle = life.bindLifecycleSubject(r.lifecycle, corrected(), adoption);
  assert.throws(() => preparePostPrCorrection(r, p));
+});
+
+test("el sí de una persona abre la ronda con una receta de riesgo alto o desconocido; la política, sólo con riesgo bajo", () => {
+ for (const risk of ["high", "unknown"] as const) {
+  const r = reviewing(); const p = proposal(r); p.scope = { ...p.scope, risk } as typeof p.scope;
+  const next = preparePostPrCorrection(r, p); assert.equal(next.lifecycle.status === "enabled" && next.lifecycle.stage, "corrections", risk);
+  const outside = proposal(reviewing()); outside.scope = { ...outside.scope, risk, withinScope: false } as typeof outside.scope;
+  assert.throws(() => preparePostPrCorrection(reviewing(), outside), /alcance/, "fuera de alcance sigue sin abrir, aunque lo pida una persona");
+ }
+ const policy = proposal(reviewing()); policy.scope = { ...policy.scope, source: "policy", risk: "low", authorityHash: "a".repeat(64) } as typeof policy.scope;
+ assert.equal(preparePostPrCorrection(reviewing(), policy).lifecycle.status, "enabled", "la política con riesgo bajo y autoridad abre");
 });
 
 test("la nueva C exige rojo/verde propios; no puede usar el commit ni los D verdes pre-PR", () => {

@@ -1,4 +1,4 @@
-// El panel configura v2 sólo con Guardar. Git temporal, KB en memoria o MCP HTTP falso, nunca KB real.
+// La guía configura Foundations sólo con Guardar. Git temporal, KB en memoria o MCP HTTP falso, nunca KB real.
 // Arrancar el harness sin Foundations lo ofrece una vez (Configurar ahora o Más adelante); Esc no escribe nada.
 import assert from "node:assert/strict";
 import { mkdtemp, readFile } from "node:fs/promises";
@@ -14,6 +14,7 @@ import { developmentFixture } from "./helpers/development.ts";
 import { memoryKb, mockKb, type MemoryKb } from "./helpers/mock-kb.ts";
 import { tempDir } from "./helpers/io.ts";
 import { KEYS, typed } from "./helpers/questions.ts";
+import { changeFirstRule, GUIDED_EDIT, GUIDED_KEEP, GUIDED_SAVE, keepAndSave } from "./helpers/foundations-guide.ts";
 
 process.env.PI_CODING_AGENT_DIR = await mkdtemp(join(tmpdir(), "omi-kb-agent-"));
 const HUMAN = '# Perillas de repo\n\nTono: formal.\n\n```json\n{ "otra": "perilla" }\n```\n';
@@ -23,14 +24,19 @@ const block = (confirmar: string[] = []): FoundationsBlock => ({ version: 2, rep
 const fresh = (confirmar: string[] = []): FoundationsBlock => ({ version: 2, repo: REPO, confirmar, politica: { ...DEFAULT_POLICY } });
 const saves = (kb: { calls: { tool: string }[] }) => kb.calls.filter((call) => call.tool === "guardar").length;
 const key = (kb: { url: string }) => ({ kbUrl: kb.url, product: "repo", repo: REPO });
-const paste = (text: string) => `\x1b[200~${text}\x1b[201~`;
 async function fixture(t: TestContext, body: string | null = HUMAN, products = ["repo"]) {
 	const kb = memoryKb({ products }); if (body !== null) kb.perillas("repo", body);
 	return Object.assign(await developmentFixture(t, { kb }), { kb });
 }
-const SAVE = ["\x13", "\x13"];
-/** El panel abre en la primera política: tres filas abajo está Reglas de comandos y Enter abre su editor. */
-const TO_RULES = [KEYS.down, KEYS.down, KEYS.down, KEYS.enter];
+function addRules(...input: string[][]): (screen: string) => readonly string[] {
+	let next = 0;
+	return (screen) => {
+		if (/· Nueva regla/.test(screen)) return ["2", ...input[next++]!, KEYS.enter];
+		if (/· Reglas/.test(screen)) return [next < input.length ? "2" : "1"];
+		if (/· Resumen/.test(screen)) return GUIDED_SAVE;
+		return GUIDED_EDIT;
+	};
+}
 
 // Cambio de requisito del dueño (2026-11-23): lo que falta configurar se detecta solo y corre Foundations al arrancar.
 test("foundations_setup v2: arrancar el harness sin Foundations lo ofrece; Esc no escribe y Más adelante posterga esa revisión", async (t) => {
@@ -47,41 +53,49 @@ test("foundations_setup v2: arrancar el harness sin Foundations lo ofrece; Esc n
 		assert.equal(stored?.accepted, null, "postergar no acepta nada"); assert.equal(stored?.deferred?.revision, "foundations:missing");
 	}
 });
-test("foundations_setup v2: /omi-foundations abre el panel integrado y sólo Guardar persiste/acepta, preservando perillas", async (t) => {
-	const f = await fixture(t); f.uiControl.foundations = () => [...TO_RULES, ...typed("git push *"), ...SAVE];
-	// Arrancar ofrece el setup (Esc lo corta): /omi-foundations abre el panel directo, sin tandas de preguntas.
-	await f.start(); const offered = f.asked.length; await f.run("omi-foundations"); assert.equal(f.asked.length, offered, "no hay wizard de comandos/políticas por pestañas"); assert.equal(f.editors.length, 0);
-	assert.equal(f.foundationsScreens.length, 1); assert.equal(saves(f.kb), 1);
+test("foundations_setup v2: /omi-foundations abre la guía directa y sólo Guardar persiste/acepta, preservando perillas", async (t) => {
+	const f = await fixture(t); const answer = addRules(typed("git push *"));
+	f.uiControl.foundations = (screen) => { assert.equal(saves(f.kb), 0, "las preguntas y el resumen no guardan"); return answer(screen); };
+	await f.start(); const offered = f.asked.length; await f.run("omi-foundations");
+	assert.equal(f.asked.length, offered, "la guía directa no pasa por la oferta del setup"); assert.equal(f.editors.length, 0);
+	assert.match(f.foundationsScreens[0]?.[0] ?? "", /Guía Foundations · test\/repo/);
+	assert.match(f.foundationsScreens.at(-1)?.join("\n") ?? "", /Resumen[\s\S]*git push \*/); assert.equal(saves(f.kb), 1);
 	const saved = f.kb.documents.at(-1)!; assert.ok(saved.cuerpo.startsWith(HUMAN));
 	const parsed = parseFoundations(saved.cuerpo, REPO); assert.ok(parsed.status === "valid"); assert.deepEqual(parsed.block, fresh(["git push *"]));
 	assert.equal((await readTrust(foundationsDir(f.home), key(f.kb)))?.accepted?.docId, saved.id);
 	await f.invoke("omi_workflow_check", { kind: "reproduction", command: "node test.cjs" }); assert.ok(!f.prompts.includes("Autorizar comando del proyecto"));
 });
 test("foundations_setup v2: sin perillas crea documento sólo al guardar y advierte lista vacía", async (t) => {
-	const f = await fixture(t, null); f.uiControl.foundations = () => SAVE; await f.start(); await f.command("foundations");
+	const f = await fixture(t, null); f.uiControl.foundations = keepAndSave; await f.start(); await f.command("foundations");
 	assert.equal(saves(f.kb), 1); assert.ok(f.kb.documents.at(-1)!.cuerpo.startsWith("# Perillas de repo\n\n## Foundations de omi"));
-	assert.match(f.foundationsScreens[0]!.join("\n"), /ningún comando del proyecto pide confirmación/);
+	assert.match(f.foundationsScreens.at(-1)!.join("\n"), /ningún comando del proyecto pide confirmación/);
 });
-test("foundations_setup v2: errores vuelven al editor con borrador y línea original, no lo recortan", async (t) => {
+test("foundations_setup v2: una regla inválida conserva el texto para corregirlo, no lo recorta", async (t) => {
 	const f = await fixture(t);
-	f.uiControl.foundations = () => [paste("git push *\n\n npm test"), "\x13", "\x01", "\x1b[3~", ...SAVE]; await f.start(); await f.command("foundations");
-	assert.ok(f.foundationsScreens[0]!.some((screen) => /Línea 3/.test(screen))); assert.equal(saves(f.kb), 1);
+	f.uiControl.foundations = addRules(typed("git push *"), [...typed(" npm test"), KEYS.enter, "\x01", "\x1b[3~"]);
+	await f.start(); await f.command("foundations");
+	assert.ok(f.foundationsScreens.flat().some((screen) => /espacios al borde/.test(screen) && / npm test/.test(screen))); assert.equal(saves(f.kb), 1);
 	const parsed = parseFoundations(f.kb.documents.at(-1)!.cuerpo, REPO); assert.ok(parsed.status === "valid"); assert.deepEqual(parsed.block.confirmar, ["git push *", "npm test"]);
 });
-test("foundations_setup v2: cancelar editor o volver desde revisión y cancelar no persiste", async (t) => {
-	for (const keys of [[KEYS.esc], [...TO_RULES, ...typed("git push *"), "\x13", KEYS.esc, KEYS.esc, KEYS.esc]]) {
-		const f = await fixture(t); f.uiControl.foundations = () => keys; await f.start(); await f.command("foundations");
-		assert.equal(f.foundationsScreens.length, 1);
+test("foundations_setup v2: cancelar la guía antes o al ver el resumen no persiste", async (t) => {
+	for (const atSummary of [false, true]) {
+		const f = await fixture(t); const answer = addRules(typed("git push *"));
+		f.uiControl.foundations = (screen) => !atSummary || /· Resumen/.test(screen) ? [KEYS.esc] : answer(screen);
+		await f.start(); await f.command("foundations");
+		assert.match(f.foundationsScreens.at(-1)?.[0] ?? "", atSummary ? /· Resumen/ : /Guía Foundations · test\/repo/);
 		assert.equal(saves(f.kb), 0); assert.equal(await readTrust(foundationsDir(f.home), key(f.kb)), undefined);
 	}
 });
 test("foundations_setup v2: configuración explícita reabre con valores vigentes, sin aceptar ni guardar al abrir", async (t) => {
 	const current = block(["git push *"]); const f = await fixture(t, `${HUMAN}\n${renderFoundationsBlock(current)}`); await f.start();
-	const accepted = await readTrust(foundationsDir(f.home), key(f.kb)); f.uiControl.foundations = () => [KEYS.esc]; await f.command("foundations");
-	assert.equal(saves(f.kb), 0); assert.deepEqual(await readTrust(foundationsDir(f.home), key(f.kb)), accepted); assert.match(f.foundationsScreens[0]![0]!, /git push \*/);
-	f.uiControl.foundations = () => [...TO_RULES, "\x15", ...typed("npm publish"), ...SAVE]; await f.command("foundations");
-	f.uiControl.foundations = () => [KEYS.esc]; await f.command("foundations");
-	assert.match(f.foundationsScreens.at(-1)![0]!, /npm publish/); assert.doesNotMatch(f.foundationsScreens.at(-1)![0]!, /git push \*/); assert.equal(saves(f.kb), 1);
+	const accepted = await readTrust(foundationsDir(f.home), key(f.kb));
+	const cancelAtRules = (screen: string) => /· Reglas/.test(screen) ? [KEYS.esc] : GUIDED_EDIT;
+	f.uiControl.foundations = cancelAtRules; await f.run("omi-foundations");
+	assert.equal(saves(f.kb), 0); assert.deepEqual(await readTrust(foundationsDir(f.home), key(f.kb)), accepted);
+	assert.match(f.foundationsScreens[0]?.[0] ?? "", /Conservar \(ask\)/); assert.match(f.foundationsScreens.at(-1)?.[0] ?? "", /git push \*/);
+	f.uiControl.foundations = changeFirstRule("npm publish"); await f.command("foundations");
+	f.uiControl.foundations = cancelAtRules; await f.run("omi-foundations");
+	assert.match(f.foundationsScreens.at(-1)?.[0] ?? "", /npm publish/); assert.doesNotMatch(f.foundationsScreens.at(-1)?.[0] ?? "", /git push \*/); assert.equal(saves(f.kb), 1);
 });
 test("foundations_setup v2: abrir antes de tener trabajo no crea issue/worktree ni reanuda el modelo", async (t) => {
 	const f = await fixture(t); const messages = f.messages.length; f.uiControl.foundations = () => [KEYS.esc]; await f.command("foundations");
@@ -91,14 +105,17 @@ test("foundations_setup v2: v1 falla cerrado y sólo guardado explícito reempla
 	const legacy = { version: 1, repo: REPO, comandos: ["NO-HEREDAR"], politica: { ...STRICT_POLICY, arranque: "auto", receta: "auto", fuera_de_catalogo: "auto", push_pr: "auto" } };
 	const original = `${HUMAN}\n\`\`\`omi-foundations\n${JSON.stringify(legacy)}\n\`\`\`\nFin.\n`;
 	const f = await fixture(t, original); await f.start(); assert.ok(!f.prompts.includes("Aceptar Foundations")); assert.equal(saves(f.kb), 0);
-	f.uiControl.foundations = () => SAVE; await f.command("foundations"); assert.equal(saves(f.kb), 1);
+	f.uiControl.foundations = keepAndSave; await f.command("foundations"); assert.equal(saves(f.kb), 1);
 	assert.doesNotMatch(f.foundationsScreens[0]![0]!, /NO-HEREDAR/); const saved = f.kb.documents.at(-1)!;
 	assert.ok(saved.cuerpo.startsWith(HUMAN)); assert.ok(saved.cuerpo.endsWith("\nFin.\n"));
 	const parsed = parseFoundations(saved.cuerpo, REPO); assert.ok(parsed.status === "valid"); assert.deepEqual(parsed.block, fresh(), "v1 no se hereda: parte del default vigente"); assert.deepEqual((await f.state()).grants ?? [], []);
 });
 test("foundations_setup v2: cambio de política durante el panel bloquea guardar sobre revisión ajena", async (t) => {
 	const f = await fixture(t, renderFoundationsBlock(block(["git push *"]))); await f.start();
-	f.uiControl.foundations = () => { f.kb.perillas("repo", renderFoundationsBlock(block(["npm publish"]))); return SAVE; }; await f.command("foundations");
+	f.uiControl.foundations = (screen) => {
+		if (!/· Resumen/.test(screen)) return GUIDED_KEEP;
+		f.kb.perillas("repo", renderFoundationsBlock(block(["npm publish"]))); return GUIDED_SAVE;
+	}; await f.command("foundations");
 	assert.equal(saves(f.kb), 0); assert.ok(f.messages.some((message) => /cambi|revisi/i.test(message)));
 	assert.equal((await readTrust(foundationsDir(f.home), key(f.kb)))?.accepted?.blockHash, foundationsHash(block(["git push *"])));
 });
@@ -157,7 +174,7 @@ test("foundations_setup v2: los fallos del guardado dicen en qué quedó la KB",
 test("foundations_setup: abrir sólo avisa si la KB tiene un bloque inválido; un bloque v1 abre como sin configurar y Guardar lo reemplaza", async (t) => {
 	const legacy = "```omi-foundations\n" + JSON.stringify({ version: 1, repo: REPO, comandos: ["NO-HEREDAR"], politica: { arranque: "auto", receta: "auto", fuera_de_catalogo: "auto", push_pr: "auto" } }) + "\n```\n";
 	for (const [name, body, expected] of [["sin bloque", HUMAN, undefined], ["v1", `${HUMAN}\n${legacy}`, undefined], ["inválido", `${HUMAN}\n\`\`\`omi-foundations\n{ roto\n\`\`\`\n`, /configuración de la KB es inválida/]] as const) {
-		const f = await fixture(t, body); f.uiControl.foundations = () => name === "v1" ? SAVE : [KEYS.esc]; await f.start(); await f.command("foundations");
+		const f = await fixture(t, body); f.uiControl.foundations = name === "v1" ? keepAndSave : () => [KEYS.esc]; await f.start(); await f.command("foundations");
 		const screen = f.foundationsScreens[0]!.join("\n");
 		assert.doesNotMatch(screen, /\bv[12]\b|obsolet|Abrir no acepta/i, name); assert.doesNotMatch(screen, /NO-HEREDAR/, name);
 		if (expected) assert.match(screen, expected, name); else assert.doesNotMatch(screen, /inválid/i, name);

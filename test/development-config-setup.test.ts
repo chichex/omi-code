@@ -2,21 +2,25 @@
 // Cambio de requisito del dueño (2026-11-23): «todas estas fallas de que falta algo de configurar, que se detecten solas y te corra Foundations».
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { agentDir } from "../src/core/paths.ts";
 import { FORMATO_ANTERIOR } from "../src/harness/config-doctor.ts";
 import { foundationsDir, readTrust, trustPath } from "../src/harness/foundations-trust.ts";
-import { lifecycleTrustDir, readLifecycleTrust } from "../src/harness/lifecycle-trust.ts";
+import { DEFAULT_POLICY, parseFoundations, renderFoundationsBlock } from "../src/harness/foundations.ts";
+import { defaultLifecycleConfig, lifecycleHash, renderLifecycleBlock } from "../src/harness/lifecycle-config.ts";
+import { lifecycleTrustDir, readLifecycleTrust, writeLifecycleTrust } from "../src/harness/lifecycle-trust.ts";
 import type { WaitLoader } from "../src/tui/development-loader.ts";
 import { developmentFixture } from "./helpers/development.ts";
 import { autoContinuity, continuityFixture } from "./helpers/lifecycle-continuity.ts";
+import { acceptLifecycleConfig, AT } from "./helpers/lifecycle.ts";
 import { memoryKb, type MemoryKb } from "./helpers/mock-kb.ts";
 import { KEYS } from "./helpers/questions.ts";
+import { keepAndSave } from "./helpers/foundations-guide.ts";
 
 const REPO = "test/repo";
-const SAVE = ["\x13", "\x13"];
 const saves = (kb: MemoryKb) => kb.calls.filter((call) => call.tool === "guardar").length;
 const trustKey = (kb: MemoryKb, repo = REPO) => ({ kbUrl: kb.url, product: repo.split("/")[1]!, repo });
 const git = (root: string, ...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -37,15 +41,60 @@ async function fixture(t: TestContext, options: { body?: string | null; availabl
 	};
 	return Object.assign(f, { kb, session, settled: () => Promise.all(background) });
 }
-const titles = (f: { asked: string[][] }) => f.asked.map((screens) => /Foundations de|Ship de|Resumen antes|Continuidad|Review del PR|Entrada/.exec(screens[0] ?? "")?.[0] ?? "?");
+const titles = (f: { asked: string[][] }) => f.asked.map((screens) => /Foundations de|Ship de|Resumen antes|Continuidad|Review del PR|Modelo de la Review|Entrada/.exec(screens[0] ?? "")?.[0] ?? "?");
+const FOUNDATIONS = renderFoundationsBlock({ version: 2, repo: REPO, confirmar: [], politica: { ...DEFAULT_POLICY } });
+const configuredLifecycle = () => ({ ...defaultLifecycleConfig(REPO, "main"), ship: { status: "not-applicable" as const, targets: [] }, continuity: { ...autoContinuity } });
+
+test("config_setup: s retoma una recomendación de Review postergada sin preguntar por Ship, Foundations o continuidad resueltos", async (t) => {
+	const f = await fixture(t), block = configuredLifecycle();
+	const key = await acceptLifecycleConfig(f.kb, f.home, f.checkout.root, block), dir = lifecycleTrustDir(f.home);
+	f.kb.perillas("repo", `${FOUNDATIONS}\n\n${renderLifecycleBlock(block)}\n`);
+	const local = await readLifecycleTrust(dir, key); assert.equal(local.kind, "valid");
+	await writeLifecycleTrust(dir, key, local.record.revision, { ...local.record, revision: local.record.revision + 1, deferred: { revision: `lifecycle:${lifecycleHash(block)}`, at: AT } });
+	const workflow = "claude-review.yml";
+	await mkdir(join(f.checkout.root, ".github/workflows"), { recursive: true });
+	await writeFile(join(f.checkout.root, ".github/workflows", workflow), await readFile(new URL(`../.github/workflows/${workflow}`, import.meta.url)));
+	await f.attach(); // La sesión detecta workflows de su checkout al abrir.
+	f.uiControl.questions = (screen) => /Review del PR|Modelo de la Review/.test(screen) ? ["1"] : /Resumen antes/.test(screen) ? ["1", KEYS.enter] : [KEYS.esc];
+	await f.run("omi-setup");
+	assert.deepEqual(titles(f), ["Review del PR", "Modelo de la Review", "Resumen antes"]);
+	assert.equal(f.foundationsScreens.length, 0); assert.equal(saves(f.kb), 1);
+	const saved = await readLifecycleTrust(dir, key); assert.equal(saved.kind, "valid");
+	assert.deepEqual(saved.record.accepted?.block, { ...block, review: { ...block.review, provider: { kind: "gha", workflow, ref: "main", contract: "omi-review-v1" } } });
+	await f.run("omi-setup");
+	assert.equal(f.asked.length, 3, "resueltas todas las preguntas, s sólo diagnostica"); assert.match(f.messages.at(-1) ?? "", /Nada para configurar/);
+	assert.equal(saves(f.kb), 1);
+});
+
+test("config_setup: s presenta sólo el resumen cuando lo único pendiente es la aceptación", async (t) => {
+	const f = await fixture(t, { body: `${FOUNDATIONS}\n\n${renderLifecycleBlock(configuredLifecycle())}` });
+	f.uiControl.questions = () => [KEYS.esc];
+	await f.run("omi-setup");
+	assert.deepEqual(titles(f), ["Resumen antes"]); assert.equal(saves(f.kb), 0);
+	assert.equal((await readLifecycleTrust(lifecycleTrustDir(f.home), trustKey(f.kb))).kind, "missing");
+});
+
+test("config_setup: s puede reparar un bloque Foundations inválido e inequívoco sólo al Guardar", async (t) => {
+	const body = `# Perillas\n\n\`\`\`omi-foundations\n{"version":2,"repo":"${REPO}","confirmar":["NO-HEREDAR"]}\n\`\`\`\n\nTexto ajeno intacto.\n`;
+	const f = await fixture(t, { body, head: false });
+	f.uiControl.questions = () => ["1"];
+	f.uiControl.foundations = (screen) => /· Resumen/.test(screen) ? [KEYS.esc] : keepAndSave(screen);
+	await f.run("omi-setup");
+	assert.equal(saves(f.kb), 0); assert.equal(f.kb.documents.at(-1)?.cuerpo, body);
+	f.uiControl.foundations = keepAndSave; await f.run("omi-setup");
+	assert.equal(saves(f.kb), 1);
+	const stored = f.kb.documents.at(-1)?.cuerpo ?? "";
+	assert.ok(stored.startsWith("# Perillas\n\n")); assert.ok(stored.endsWith("\n\nTexto ajeno intacto.\n")); assert.doesNotMatch(stored, /NO-HEREDAR/);
+	assert.equal(parseFoundations(stored, REPO).status, "valid");
+});
 
 test("config_setup: /omi-setup corre Foundations y después el lifecycle, en orden, y también lo postergado", async (t) => {
 	const f = await fixture(t);
 	f.uiControl.questions = (screen) => /Foundations de/.test(screen) ? ["1"] : /Ship de/.test(screen) ? ["2"] : [KEYS.esc];
-	f.uiControl.foundations = () => SAVE;
+	f.uiControl.foundations = keepAndSave;
 	await f.run("omi-setup");
 	assert.deepEqual(titles(f), ["Foundations de", "Ship de"], "primero Foundations, después el wizard del lifecycle");
-	assert.equal(f.foundationsScreens.length, 1, "Configurar ahora abre el panel existente"); assert.equal(saves(f.kb), 1, "sólo Guardar del panel escribe la KB");
+	assert.match(f.foundationsScreens[0]?.[0] ?? "", /Guía Foundations/); assert.equal(saves(f.kb), 1, "sólo Guardar de la guía escribe la KB");
 	assert.ok((await readTrust(foundationsDir(f.home), trustKey(f.kb)))?.accepted, "Foundations quedó aceptado");
 	const lifecycle = await readLifecycleTrust(lifecycleTrustDir(f.home), trustKey(f.kb));
 	assert.ok(lifecycle.kind === "valid"); assert.match(lifecycle.record.deferred?.revision ?? "", /^missing:/, "Más adelante posterga esa revisión del lifecycle");
@@ -86,8 +135,82 @@ test("config_setup: una sesión interactiva nueva lo ofrece sola; resume, reload
 	assert.equal(f.asked.length, 0, "abrir una sesión que ya tiene mensajes no es una sesión nueva");
 	for (const reason of ["resume", "reload", "fork"]) { await f.session(reason); assert.equal(f.asked.length, 0, reason); }
 	await f.session("startup"); assert.deepEqual(titles(f), ["Foundations de"], "arranque de una sesión nueva");
-	await f.session("new"); assert.deepEqual(titles(f), ["Foundations de", "Foundations de"], "/new también; Esc no posterga");
+	await f.session("new"); assert.deepEqual(titles(f), ["Foundations de", "Ship de"], "/new sólo ofrece el área que no se abrió antes");
+	await f.session("startup"); assert.deepEqual(titles(f), ["Foundations de", "Ship de"], "un tercer arranque no repite las ofertas");
 	assert.equal(saves(f.kb), 0); assert.equal(await readTrust(foundationsDir(f.home), trustKey(f.kb)), undefined);
+	assert.equal((await readLifecycleTrust(lifecycleTrustDir(f.home), trustKey(f.kb))).kind, "missing", "Esc no equivale a postergar ni aceptar");
+});
+
+test("config_setup: Más adelante al arrancar no repite las áreas y conserva la postergación; otra revisión sí se ofrece", async (t) => {
+	const f = await fixture(t); f.uiControl.questions = () => ["2"];
+	await f.session("startup"); await f.session("new");
+	assert.deepEqual(titles(f), ["Foundations de", "Ship de"]); assert.equal(saves(f.kb), 0);
+	const key = trustKey(f.kb), fd = await readTrust(foundationsDir(f.home), key), lc = await readLifecycleTrust(lifecycleTrustDir(f.home), key);
+	assert.ok(fd); assert.equal(fd.accepted, null); assert.equal(fd.deferred?.revision, "foundations:missing");
+	assert.equal(lc.kind, "valid"); assert.equal(lc.record.accepted, null); assert.match(lc.record.deferred?.revision ?? "", /^missing:/);
+	f.kb.perillas("repo", `\`\`\`omi-foundations\n{ "version": 2, "repo": "${REPO}" }\n\`\`\`\n`);
+	f.uiControl.questions = () => [KEYS.esc]; await f.session("startup");
+	assert.deepEqual(titles(f).slice(2), ["Foundations de"], "un bloque inválido nuevo es otra revisión de Foundations");
+});
+
+test("config_setup: al guardar Foundations en el arranque llega la oferta de lifecycle con la revisión nueva", async (t) => {
+	const f = await fixture(t); f.uiControl.foundations = keepAndSave;
+	f.uiControl.questions = (screen) => /Foundations de/.test(screen) ? ["1"] : [KEYS.esc];
+	await f.session("startup"); await f.session("new");
+	assert.deepEqual(titles(f), ["Foundations de", "Ship de"], "el arranque reclama la ausencia de lifecycle en las perillas recién guardadas");
+	assert.equal(saves(f.kb), 1);
+});
+
+test("config_setup: si el turno se ocupa antes del segundo diálogo, esa área sigue elegible", async (t) => {
+	const f = await fixture(t); let idle = true;
+	Reflect.set(f.context, "isIdle", () => idle);
+	f.uiControl.questions = (screen) => { if (/Foundations de/.test(screen)) { idle = false; return ["2"]; } return [KEYS.esc]; };
+	await f.session("startup"); assert.deepEqual(titles(f), ["Foundations de"]);
+	idle = true; await f.session("new"); assert.deepEqual(titles(f), ["Foundations de", "Ship de"]);
+});
+
+test("config_setup: otra escritura local no cambia la revisión de arranque del lifecycle; otro bloque sí", async (t) => {
+	const f = await fixture(t), block = configuredLifecycle();
+	const key = await acceptLifecycleConfig(f.kb, f.home, f.checkout.root, block), dir = lifecycleTrustDir(f.home);
+	// Otra revisión válida en la KB, todavía pendiente de aceptar.
+	const next = { ...block, ship: { status: "manual" as const, targets: [] } };
+	f.kb.perillas("repo", `${FOUNDATIONS}\n\n${renderLifecycleBlock(next)}`);
+	f.uiControl.questions = () => [KEYS.esc]; await f.session("startup");
+	const trust = await readLifecycleTrust(dir, key); assert.equal(trust.kind, "valid");
+	await writeLifecycleTrust(dir, key, trust.record.revision, { ...trust.record, revision: trust.record.revision + 1 });
+	await f.session("new"); assert.deepEqual(titles(f), ["Ship de"]);
+	f.kb.perillas("repo", `${FOUNDATIONS}\n\n${renderLifecycleBlock({ ...next, corrections: { ...next.corrections, maxRounds: 1 } })}`);
+	await f.session("startup"); assert.deepEqual(titles(f), ["Ship de", "Ship de"]);
+});
+
+test("config_setup: si el registro de arranque no se puede usar, f y s siguen disponibles", async (t) => {
+	const f = await fixture(t); const agent = agentDir(f.home);
+	await mkdir(agent, { recursive: true }); await writeFile(join(agent, "setup-offers"), "no es un directorio");
+	f.uiControl.questions = () => [KEYS.esc]; f.uiControl.foundations = () => [KEYS.esc];
+	await f.session("startup"); assert.deepEqual(titles(f), []);
+	await f.run("omi-foundations"); assert.match(f.foundationsScreens[0]?.[0] ?? "", /Guía Foundations/);
+	await f.run("omi-setup"); assert.deepEqual(titles(f), ["Foundations de"]); assert.equal(saves(f.kb), 0);
+});
+
+test("config_setup: entrar al harness no queda limitado por una oferta de arranque", async (t) => {
+	const f = await fixture(t); f.uiControl.questions = () => [KEYS.esc];
+	await f.session("startup"); assert.deepEqual(titles(f), ["Foundations de"]);
+	// La misma instancia de la extensión, pero se retoma el issue preparado.
+	Reflect.set(f.context, "sessionManager", f.manager); await f.start();
+	assert.deepEqual(titles(f), ["Foundations de", "Foundations de"]);
+});
+
+test("config_setup: publicar el draft no queda limitado por la marca de arranque del lifecycle", async (t) => {
+	const background: Promise<void>[] = [];
+	const { f, gh, kb } = await continuityFixture(t, { background: (work) => background.push(work) }); originHead(f.checkout.root);
+	const block = kb.documents.at(-1)?.cuerpo ?? "";
+	kb.perillas("app", `${renderFoundationsBlock({ version: 2, repo: "acme/app", confirmar: [], politica: { ...DEFAULT_POLICY } })}\n\n${block}`);
+	Reflect.set(f.context, "sessionManager", SessionManager.create(f.checkout.root, join(f.home, "fresh-before-draft")));
+	f.uiControl.questions = () => [KEYS.esc];
+	await f.attach(); await f.emit("session_start", { reason: "startup" }); await Promise.all(background);
+	assert.deepEqual(titles(f), ["Ship de"]);
+	Reflect.set(f.context, "sessionManager", f.manager); await f.attach(); await f.command("pr");
+	assert.deepEqual(titles(f), ["Ship de", "Ship de"]); assert.deepEqual(gh.mutations, []);
 });
 
 // El setup abre un modal que toma el foco: lo que la persona tipea caería en sus opciones («2» es Más adelante).

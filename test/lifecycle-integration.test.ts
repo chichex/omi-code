@@ -169,6 +169,22 @@ test("chichex/omi-code: merge siempre humano aunque Land diga auto", async t => 
  assert.ok(!effects(gh).some(e => e.includes("PUT")), "sin sí no hay merge"); assert.equal((await f.state()).phase, "land");
 });
 
+// Caso real (#93, 2026-11-25): una receta de riesgo alto (harness, permisos) no podía corregirse después del PR. El sí de la
+// persona a «Corregir N hallazgo(s)» fallaba con «nuevo alcance/riesgo… requiere humano». Con el sí, la ronda se abre y avisa el riesgo.
+test("riesgo alto: /omi-work fix con el sí de la persona abre la ronda y el diálogo avisa el riesgo de la receta", async t => {
+ const high: Plan = { ...plan, classification: { ...plan.classification, risk: "high", riskAreas: ["harness", "permissions"] }, lenses: ["compliance", "security"] };
+ const pass = (lens: Review["lens"]) => (fingerprint: string): Review => ({ lens, fingerprint, verdict: "pass", findings: [], at: AT });
+ const { f, gh, head } = await setup(t, "acme/app", undefined, { plan: high, lenses: fingerprint => [pass("compliance")(fingerprint), pass("security")(fingerprint)] });
+ await f.command("adopt");
+ gh.inline.push({ id: 501, body: "Falta cubrir el valor 3", commit_id: head, path: "value.cjs", line: 1 });
+ await f.command("review");
+ await f.command("fix");
+ const state = await f.state(); const s = enabled(state);
+ assert.equal(state.phase, "implement", last(f.messages)); assert.equal(s.stage, "corrections"); assert.equal(s.budget.roundsUsed, 1);
+ const index = f.prompts.findIndex(p => /^Corregir 1 hallazgo\(s\) en el PR #42$/.test(p)); assert.ok(index >= 0, "pide el sí de la ronda");
+ assert.match(f.confirmationDetails[index] ?? "", /riesgo alto/i, "el sí se da sabiendo el riesgo de la receta");
+});
+
 // Riesgo alto: sin pass de Seguridad sobre el contenido, la confirmación del merge lo dice primero; con pass, no.
 for (const verdict of ["unknown", "pass"] as const) test(`riesgo alto con Seguridad ${verdict}: la confirmación del merge ${verdict === "pass" ? "no avisa" : "avisa primero"}`, async t => {
  const high: Plan = { ...plan, classification: { ...plan.classification, risk: "high" }, lenses: ["compliance", "security"] };

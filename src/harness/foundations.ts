@@ -112,7 +112,7 @@ export function renderFoundationsBlock(block: FoundationsBlock): string {
 }
 
 /** Sólo el guardado explícito reemplaza un bloque v1 inequívoco. Lo ajeno conserva exactamente sus bytes. */
-export function composePerillas(current: string | undefined, product: string, repo: string, block: FoundationsBlock): string {
+export function composePerillas(current: string | undefined, product: string, repo: string, block: FoundationsBlock, options?: { repairInvalid?: boolean }): string {
 	const checked = checkBlock(block);
 	const problem = "reason" in checked ? checked.reason : block.repo !== repo.toLowerCase() ? `el bloque declara ${block.repo}, no ${repo.toLowerCase()}` : "";
 	if (problem) throw new Error(`Bloque omi-foundations inválido: ${problem}`);
@@ -126,8 +126,9 @@ export function composePerillas(current: string | undefined, product: string, re
 		if (located.status === "invalid") throw new Error(`Las perillas tienen un bloque inválido (${located.reason}); corregilo antes de guardar.`);
 		if (located.status === "found") {
 			const previous = checkBlock(located.value);
-			// La identidad canónica del repo debe ser inequívoca; no interpretar ni trasladar comandos/políticas v1.
-			if (located.declared !== repo.toLowerCase() || "reason" in previous && !obsolete(located.value)) throw new Error("Las perillas tienen un bloque inválido; corregilo antes de guardar.");
+			// El opt-in de la guía sólo repara el esquema actual; no interpreta una versión futura ni una identidad ambigua.
+			const repair = options?.repairInvalid && !!located.value && typeof located.value === "object" && "version" in located.value && located.value.version === 2;
+			if (located.declared !== repo.toLowerCase() || "reason" in previous && !obsolete(located.value) && !repair) throw new Error("Las perillas tienen un bloque inválido; corregilo antes de guardar.");
 			result = current.slice(0, located.fence.start) + rendered + current.slice(located.fence.end);
 		} else result = `${current}${current.endsWith("\n\n") ? "" : current.endsWith("\n") ? "\n" : "\n\n"}${section}`;
 	}

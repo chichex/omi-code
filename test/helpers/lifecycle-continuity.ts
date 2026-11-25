@@ -17,12 +17,12 @@ import type { MemoryKb } from "./mock-kb.ts";
 
 export const autoContinuity = { entry: "auto", review: "auto", fix: "auto", land: "auto", ship: "auto" } as const;
 export async function continuityFixture(t: TestContext, options: {
- repo?: string; historical?: boolean; change?: (block: LifecycleConfig) => void;
+ repo?: string; historical?: boolean; change?: (block: LifecycleConfig) => void; background?: (work: Promise<void>) => void;
  foundations?: { arranque: "auto" | "ask"; receta: "auto" | "ask"; push_pr: "auto" | "ask" };
 } = {}) {
  const repo = options.repo ?? "acme/app", kb = memoryKb({ products: [repo.split("/")[1]!] });
  let gh: FakeGitHub | undefined;
- const f = await developmentFixture(t, { kb, repo, ...(options.foundations ? { foundations: options.foundations, confirmar: [] } : {}), github: (args, input) => gh?.handle(args, input) });
+ const f = await developmentFixture(t, { kb, repo, ...(options.foundations ? { foundations: options.foundations, confirmar: [] } : {}), github: (args, input) => gh?.handle(args, input), ...(options.background ? { deps: { background: options.background } } : {}) });
  await f.write("value.cjs", "module.exports = 2;\n");
  await f.write("test.cjs", 'require("node:assert/strict").equal(require("./value.cjs"), 2);\n');
  const git = (...args: string[]) => execFileSync("git", args, { cwd: f.checkout.root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
