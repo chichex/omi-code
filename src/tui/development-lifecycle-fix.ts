@@ -63,7 +63,7 @@ async function startRound(session: DevelopmentSession, ctx: ExtensionContext, st
 		if (assessment.status !== "safe") throw new Error(assessment.reason);
 		await session.assertUnchanged(state, ctx);
 	}
-	const authorization = await decide(session, ctx, intent, s, `Corregir ${current.length} hallazgo(s) en el PR #${subject.number}`, `${list}\n\nRonda ${s.budget.roundsUsed + 1}/${config.corrections.maxRounds} · intentos ${s.budget.attemptsUsed + 1}/${config.budget.maxAttempts}. El agente corrige con rojo, verde, commit y todos los D; el push conserva su permiso independiente.`, { mode: automatic ? "auto" : "ask", chain });
+	const authorization = await decide(session, ctx, intent, s, `Corregir ${current.length} hallazgo(s) en el PR #${subject.number}`, `${list}\n\nRonda ${s.budget.roundsUsed + 1}/${config.corrections.maxRounds} · intentos ${s.budget.attemptsUsed + 1}/${config.budget.maxAttempts}. El agente corrige con rojo, verde, commit y todos los D; el push conserva su permiso independiente.${riskNotice(state)}`, { mode: automatic ? "auto" : "ask", chain });
 	const decision = assessment?.status === "safe" ? { ...authorization, authorityHash: assessment.authorityHash } : authorization;
 	assertCurrent();
 	await session.update(ctx, saved => {
@@ -79,6 +79,12 @@ async function startRound(session: DevelopmentSession, ctx: ExtensionContext, st
 		next = { ...next, lifecycle: reserveLifecycleOperation(next.lifecycle, intent, decision, session.owner, at) };
 		return activatePostPrCorrection(next, intent.id, at);
 	});
+}
+// El sí de la persona acepta el riesgo de la receta: que lo vea antes de darlo.
+function riskNotice(state: WorkflowV2): string {
+	const { risk, riskAreas } = state.recipe?.classification ?? { risk: "unknown", riskAreas: [] };
+	if (risk === "low") return "";
+	return `\n\nRiesgo ${risk === "high" ? "alto" : "desconocido"} de la receta${riskAreas.length ? ` (${riskAreas.join(", ")})` : ""}: tu sí autoriza la ronda igual. Sólo corrige estos hallazgos, dentro del alcance aprobado.`;
 }
 /** source chain: lo pide la continuidad; manual: /omi-work fix. `chain`: el sí de continuidad ask pendiente. */
 export interface PushOptions { source: "manual" | "chain"; chain?: ChainConsent | undefined }

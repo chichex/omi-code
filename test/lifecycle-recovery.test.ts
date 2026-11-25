@@ -91,6 +91,19 @@ test("rollback GHA correlaciona workflow/artefacto y SHA previo; recuperado no d
  assert.equal((await Promise.race([hanging, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("wait no respetó deadline")), 300))])).state, "unknown");
 });
 
+// Cambio de contrato del dueño (2026-11-25): como en las correcciones post-PR, el sí de una persona acepta el riesgo de
+// la receta; el riesgo bajo lo exige sólo la política. Fuera de alcance sigue sin abrir.
+for (const risk of ["high", "low"] as const) test(`fix-forward con el sí de una persona abre con riesgo ${risk}; la política con riesgo alto no`, () => {
+ let state = fixture("fix-forward"); state.recipe = { classification: { type: "fix", size: "small", risk: "low", riskAreas: [], causeKnown: true }, objective: "Restaurar entrega aprobada", approach: "Corregir app", scope: ["app"], outOfScope: ["nuevo alcance"], cases: [{ id: "D1", description: "contrato", command: "npm test" }], lenses: [], executor: { mode: "inline", writers: 0 }, route: "direct" }; state.exploration = { references: [{ path: "app.ts", line: 1, detail: "contrato" }], findings: [], approach: "fix", missingFoundation: [], dependencies: [], disposition: "continue", reason: "ready" }; state.approval = { sourceHash: state.source.hash, recipeHash: recipeApprovalHash(state), by: "person", at };
+ assert.ok(state.lifecycle.status === "enabled"); const subjectId = state.lifecycle.currentSubject; assert.ok(subjectId);
+ state.lifecycle = life.reserveLifecycleOperation(state.lifecycle, { id: "fix1", key: "fix1", kind: "fix-forward", subjectId, targetId: "delivery", correlationId: nonce + "fix", retryOf: null }, { id: "fix-decision", kind: "fix-forward", subjectId, targetId: "delivery", configHash: state.lifecycle.pinHash, source: "person", at }, "process", at);
+ const before = structuredClone(state), proposal = { id: "workspace1", failureDeliveryId: "delivery:ship1:1", checkout: { root: "/private/fix-forward", commonDir: "/private/fix-forward/.git", branch: "fix/recovery-43", baseCommit: merge }, base: "main", baseSha: merge, clean: true, containsMerge: true, scope: { source: "person", withinScope: true, risk, scopeHash: recipeApprovalHash(state) }, at };
+ void before;
+ const opened = parseWorkflow(JSON.stringify(prepareFixForwardWorkspace(structuredClone(state), "fix1", proposal))); assert.equal(opened.phase, "implement");
+ assert.throws(() => prepareFixForwardWorkspace(structuredClone(state), "fix1", { ...proposal, scope: { ...proposal.scope, source: "policy", risk: "high", authorityHash: "a".repeat(64) } }), /alcance|riesgo/);
+ assert.throws(() => prepareFixForwardWorkspace(structuredClone(state), "fix1", { ...proposal, scope: { ...proposal.scope, withinScope: false } }), /alcance|riesgo/);
+});
+
 test("fix-forward prepara workspace/C nuevos sin cambiar raíz, publicación ni evidencia de PR42", () => {
  let state = fixture("fix-forward"); state.recipe = { classification: { type: "fix", size: "small", risk: "low", riskAreas: [], causeKnown: true }, objective: "Restaurar entrega aprobada", approach: "Corregir app", scope: ["app"], outOfScope: ["nuevo alcance"], cases: [{ id: "D1", description: "contrato", command: "npm test" }], lenses: [], executor: { mode: "inline", writers: 0 }, route: "direct" }; state.exploration = { references: [{ path: "app.ts", line: 1, detail: "contrato" }], findings: [], approach: "fix", missingFoundation: [], dependencies: [], disposition: "continue", reason: "ready" }; state.approval = { sourceHash: state.source.hash, recipeHash: recipeApprovalHash(state), by: "person", at };
  assert.ok(state.lifecycle.status === "enabled"); const subjectId = state.lifecycle.currentSubject; assert.ok(subjectId);
