@@ -365,7 +365,7 @@ En `specified`, junto a los pasos, `stack` agrupa los pasos C en PRs:
 
 - Cada PR pasa las mismas validaciones que el PR único: aprobación vigente, HEAD verificado y limpio, repo y `origin`, pedido sin cambios, hash del recibo y recuperación sin duplicar. Antes de escribir se arman todos los cuerpos (si uno no entra en GitHub, no se abre ninguno) y se comprueba que cada commit esté debajo del de arriba.
 - Push normal del SHA de cada grupo a su rama, sin force ni tags. La rama del worktree no se sube.
-- Título: `<título del issue> · PR k/n: <título del grupo>`.
+- Título: `<título del PR> · PR k/n: <título del grupo>`, con el tipo una sola vez, al principio (ver «Título del PR draft»). Ejemplo: `feat: Trabajo grande · PR 1/2: Modelo`.
 - El cuerpo es el mismo Markdown del PR único (ver «Cuerpo del PR draft»), con su encabezado propio: `Refs #N` o `Closes #N` y la línea del stack. Ejemplo: ``Stack: PR 2 de 2 · pasos C3 · sobre #123 (rama `feat/issue-46-1`)``. El texto de cada PR dice si cierra el issue o no.
 - Sólo el último PR cierra el issue (`Closes #N`); los de abajo lo referencian (`Refs #N`). GitHub lo cierra cuando ese PR entra en `main`.
 - Si la publicación se corta a mitad, volver a publicar recupera los PRs ya abiertos (por rama, base, head y cuerpo exactos) y sigue con el que falta. Un PR ajeno en una rama del stack frena; los de abajo ya abiertos quedan.
@@ -469,6 +469,19 @@ El harness no crea comentarios en el issue. Su estado va en una **sección admin
 - **Comentarios viejos:** los que dejaron versiones anteriores quedan en GitHub; OMI no los borra ni los edita.
 
 El cuerpo de un issue admite 65.536 caracteres. Si el pedido más la sección no entran, la sección se resume y lo dice en un aviso al principio: primero la evidencia queda con la última prueba de cada caso y cada lente con su primer hallazgo; si tampoco entra, queda una sección mínima (ruta, etapa y veredictos de los lentes) que nombra lo que omite. Nada se corta en silencio y el pedido nunca se toca. Si ni la mínima entra, no se escribe y OMI avisa.
+
+### Título del PR draft
+
+El título del PR es un commit convencional. Al mergear con squash, GitHub usa el título del PR como asunto del commit en `main`. Un release continuo decide la versión por ese asunto. Ejemplo, en omi-code: `feat:` sube el minor y `fix:`, el patch.
+
+- **Tipo de la receta aprobada.** Va adelante del título del issue. Nueva capacidad y Mejora son `feat:`, porque cambian lo que se ve; Fix es `fix:` y Chore, `chore:`. Ejemplo: el issue «Guiar la configuración de Foundations y lifecycle en la TUI», con una receta de Nueva capacidad, abre `feat: Guiar la configuración de Foundations y lifecycle en la TUI`.
+- **Manda la receta, no la rama.** Es el tipo que aprobó la persona y el que muestra el cuerpo del PR. Ejemplo: una rama `feat/issue-46` cuya receta quedó como Fix abre `fix: …`.
+- **Un título que ya es convencional queda igual.** Vale con los tipos y el formato del gate de commits: `tipo(scope)?!?: resumen`, scope en minúsculas. Ejemplo: `fix(harness): PRs en Markdown` no cambia. `Fix: algo` no es convencional: con una receta de Fix abre `fix: Fix: algo`.
+- **Sin receta**, el título es el del issue, como antes.
+- **Stack:** el tipo va una vez, al principio del título completo (ver «Stack de PRs»).
+- **Fix-forward:** siempre `fix:`, porque corrige un PR ya mergeado. Se saca el tipo, el scope y el `!` del título del issue. Ejemplo: `feat(tienda)!: Cambio` abre `fix: Cambio`. El recibo del fix-forward sigue guardando el título del issue.
+- **Recuperar no compara títulos.** Un draft que abrió una versión anterior con el título del issue se recupera igual y no se renombra. En un stack a medias, sólo el PR que falta sale con el título nuevo.
+- **Límite:** con la opción de GitHub «título del commit o del PR» para el squash, un PR de un solo commit toma el asunto de ese commit, no el título del PR.
 
 ### Cuerpo del PR draft
 

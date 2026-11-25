@@ -84,6 +84,25 @@ test("stack_publish recupera un stack a medias sin duplicar ningún PR", async (
  assert.equal(receipt.stack[0]?.number, 3); assert.equal(creates(partial).length, 1, "el PR 1 de una corrida anterior se recupera");
 });
 
+test("stack_publish titula cada PR como commit convencional, con el tipo una vez al principio, y recupera uno abierto con el título anterior", async (t) => {
+ const approved = async () => {
+  const f = await fixture(t);
+  f.workflow.recipe = { route: "spec", classification: { type: "add", size: "large", risk: "low", riskAreas: [], causeKnown: true }, objective: "Grande", approach: "Por partes", scope: [], outOfScope: [], cases: [{ id: "D1", description: "Caso", command: "npm test" }], lenses: [], executor: { mode: "inline", writers: 0 } };
+  if (f.workflow.publication.status === "pending") f.workflow.publication.bodyHash = artifactHash(renderWorkflowArtifact(f.workflow));
+  return f;
+ };
+ const titles = (f: Awaited<ReturnType<typeof fixture>>) => creates(f).map((c) => c.args[c.args.indexOf("--title") + 1]);
+ const f = await approved(); await publishStack(f.workflow, f.runner);
+ assert.deepEqual(titles(f), ["feat: Trabajo grande · PR 1/2: Modelo", "feat: Trabajo grande · PR 2/2: Vista"]);
+ // Un stack a medias de una versión anterior: el PR 1 ya está abierto con el título del issue y se recupera tal cual.
+ const partial = await approved(); partial.pushed.set("feat/task-1", h1);
+ const opened = { number: 3, url: "https://github.com/acme/repo/pull/3", state: "OPEN", isDraft: true, isCrossRepository: false, headRefName: "feat/task-1", baseRefName: "main", headRefOid: h1, body: renderPullRequestBody(partial.workflow, { index: 0 }), title: "Trabajo grande · PR 1/2: Modelo" };
+ partial.state.prs.push(opened);
+ const receipt = await publishStack(partial.workflow, partial.runner);
+ assert.equal(receipt.stack[0]?.number, 3); assert.deepEqual(titles(partial), ["feat: Trabajo grande · PR 2/2: Vista"], "sólo se abre el que falta, ya con el título nuevo");
+ assert.ok(!partial.calls.some((c) => c.args[0] === "pr" && c.args[1] === "edit"), "el PR recuperado no se renombra");
+});
+
 test("stack_publish exige a cada PR las validaciones del PR único y falla antes de escribir lo que puede", async (t) => {
  const foreign = await fixture(t);
  foreign.state.prs.push({ number: 9, url: "https://github.com/acme/repo/pull/9", state: "OPEN", isDraft: true, isCrossRepository: false, headRefName: "feat/task-1", baseRefName: "main", headRefOid: h1, body: "PR ajeno en la misma rama" });

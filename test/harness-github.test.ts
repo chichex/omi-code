@@ -132,6 +132,22 @@ test("publication creates draft with immutable SHA/stdin and recovers ambiguous 
  assert.ok(f.calls.every(c => !["sh", "bash"].includes(c.command)));
 });
 
+test("publication titles the draft as a conventional commit with the approved recipe type; a draft opened with the old title is still recovered", async (t) => {
+ const approved = async () => {
+  const f = await fixture(t);
+  f.workflow.recipe = { route: "direct", classification: { type: "fix", size: "small", risk: "low", riskAreas: [], causeKnown: true }, objective: "Fix", approach: "Fix", scope: [], outOfScope: [], cases: [{ id: "D1", description: "Test", command: "npm test" }], lenses: [], executor: { mode: "inline", writers: 0 } };
+  if (f.workflow.publication.status === "pending") f.workflow.publication.bodyHash = artifactHash(renderWorkflowArtifact(f.workflow));
+  return f;
+ };
+ const f = await approved(); await publishDraft(f.workflow, f.runner);
+ const create = f.calls.find(c => c.args[0] === "pr" && c.args[1] === "create");
+ assert.equal(create?.args[create.args.indexOf("--title") + 1], "fix: $(touch unsafe)", "el squash a main usa este título como asunto; manda la receta aprobada, no el prefijo de la rama feat/task");
+ // Un trabajo en curso que ya abrió su draft con el título del issue se recupera igual: la recuperación no compara títulos.
+ const old = await approved(); old.state.prs = [{ ...old.pr, title: "$(touch unsafe)", body: renderPullRequestBody(old.workflow) }];
+ assert.deepEqual(await publishDraft(old.workflow, old.runner), { number: 3, url: old.pr.url, head: old.pr.headRefOid });
+ assert.equal(old.calls.some(c => c.args.includes("push") || (c.args[0] === "pr" && c.args[1] !== "list")), false, "no se hace push, no se crea otro ni se renombra");
+});
+
 test("publication rechecks snapshot immediately before push and cannot push raced HEAD", async (t) => {
  const f = await fixture(t); f.state.changeHeadOnList = true; await assert.rejects(publishDraft(f.workflow, f.runner)); assert.equal(f.calls.some(c => c.args.includes("push")), false);
  const race = await fixture(t); race.state.changeHeadOnPush = true; await assert.rejects(publishDraft(race.workflow, race.runner));

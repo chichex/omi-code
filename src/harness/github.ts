@@ -5,7 +5,7 @@ import { gitRead, inspectCheckout } from "./git.ts";
 import { issueRepository, sourceHash, type Workflow } from "./model.ts";
 import { pullRequestBody } from "./pr-body.ts";
 import { ISSUE_BODY_LIMIT, issueSectionVariants, parseIssueBody, withIssueSection, type IssueBody } from "./issue-section.ts";
-import { stackTitle } from "./stack.ts";
+import { pullRequestTitle } from "./pr-title.ts";
 
 const START = "<!-- omi-development:start -->";
 const END = "<!-- omi-development:end -->";
@@ -113,7 +113,7 @@ export async function publishDraft(workflow: Workflow, runner: Runner = processR
  const head = pull ? pull.head : workflow.publication.head;
  if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(head)) throw new Error("SHA de publicación inválido");
  const branch = pull ? pull.branch : workflow.checkout.branch; const base = pull ? pull.base : "main";
- const title = stack && position ? stackTitle(workflow.source.title, stack, position.index) : workflow.source.title;
+ const title = pullRequestTitle(workflow, position);
  const target = { branch, base, head, body };
  if ([branch, base].some(b => !/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(b) || b.includes("..") || b.includes("//") || b.endsWith("/") || b.endsWith(".") || b.split("/").some(p => p.startsWith(".") || p.endsWith(".lock")))) throw new Error("Branch no válido para publicación");
  const assertHead = async () => { const snapshot = await inspectCheckout(workflow.checkout, runner, signal); if (workflow.publication.status !== "pending" || !snapshot.clean || snapshot.head !== workflow.publication.head) throw new Error("HEAD de publicación cambió o checkout sucio"); };

@@ -127,9 +127,9 @@ test("reconciliar deployment conocido fallido sólo lee; no reenvía POST ni dev
  const before = structuredClone(state.lifecycle.budget), result = await reconcileOmiOperation(state, "deploy1", p); assert.equal(result.state, "confirmed"); assert.ok(result.receipt); assert.equal(result.receipt.outcome, "failed"); assert.deepEqual(state.lifecycle.budget, before); assert.equal(linked.mutations().length, 0);
 });
 
-async function verifiedFixForward(t: import("node:test").TestContext) {
+async function verifiedFixForward(t: import("node:test").TestContext, type: "fix" | "add" = "fix") {
  const root = await mkdtemp(join(tmpdir(), "omi-fix-forward-")); await mkdir(join(root, ".git")); t.after(() => rm(root, { recursive: true, force: true })); const checkout = { root, commonDir: join(root, ".git"), branch: "fix/recovery-43", baseCommit: merge };
- let state = fixture("fix-forward"); state.recipe = { classification: { type: "fix", size: "small", risk: "low", riskAreas: [], causeKnown: true }, objective: "Restaurar entrega aprobada", approach: "Corregir app", scope: ["app"], outOfScope: ["nuevo alcance"], cases: [{ id: "D1", description: "contrato", command: "npm test" }], lenses: [], executor: { mode: "inline", writers: 0 }, route: "direct" }; state.exploration = { references: [{ path: "app.ts", line: 1, detail: "contrato" }], findings: [], approach: "fix", missingFoundation: [], dependencies: [], disposition: "continue", reason: "ready" }; state.approval = { sourceHash: state.source.hash, recipeHash: recipeApprovalHash(state), by: "person", at };
+ let state = fixture("fix-forward"); state.recipe = { classification: { type, size: "small", risk: "low", riskAreas: [], causeKnown: true }, objective: "Restaurar entrega aprobada", approach: "Corregir app", scope: ["app"], outOfScope: ["nuevo alcance"], cases: [{ id: "D1", description: "contrato", command: "npm test" }], lenses: [], executor: { mode: "inline", writers: 0 }, route: "direct" }; state.exploration = { references: [{ path: "app.ts", line: 1, detail: "contrato" }], findings: [], approach: "fix", missingFoundation: [], dependencies: [], disposition: "continue", reason: "ready" }; state.approval = { sourceHash: state.source.hash, recipeHash: recipeApprovalHash(state), by: "person", at };
  assert.ok(state.lifecycle.status === "enabled"); const subjectId = state.lifecycle.currentSubject; assert.ok(subjectId);
  state.lifecycle = life.reserveLifecycleOperation(state.lifecycle, { id: "fix1", key: "fix1", kind: "fix-forward", subjectId, targetId: "delivery", correlationId: nonce + "fix", retryOf: null }, { id: "fix-decision", kind: "fix-forward", subjectId, targetId: "delivery", configHash: state.lifecycle.pinHash, source: "person", at }, "process", at);
  state = parseWorkflow(JSON.stringify(prepareFixForwardWorkspace(state, "fix1", { id: "workspace1", failureDeliveryId: "delivery:ship1:1", checkout, base: "main", baseSha: merge, clean: true, containsMerge: true, scope: { source: "person", withinScope: true, risk: "low", scopeHash: recipeApprovalHash(state) }, at })));
@@ -153,6 +153,17 @@ function fakeGitHub(checkout: { root: string; commonDir: string; branch: string 
  } } as Runner };
  return github;
 }
+
+test("el PR del fix-forward se titula fix: aunque la receta sea una capacidad nueva; el claim guarda el título del issue", async t => {
+ const { state, checkout } = await verifiedFixForward(t, "add"); assert.ok(state.lifecycle.status === "enabled"); const subjectId = state.lifecycle.currentSubject; assert.ok(subjectId);
+ state.lifecycle = life.reserveLifecycleOperation(state.lifecycle, { id: "push1", key: "push1", kind: "fix-forward-push", subjectId, targetId: "delivery", correlationId: nonce + "push", retryOf: null }, { id: "push-decision", kind: "fix-forward-push", subjectId, targetId: "delivery", configHash: state.lifecycle.pinHash, source: "person", at }, "process", at);
+ const github = fakeGitHub(checkout); let claimed: unknown = null;
+ const result = await publishFixForward(state, "workspace1", "push1", { signal: AbortSignal.timeout(5000), runner: github.runner, persistClaim: async (s: unknown) => { claimed = s; } }); assert.equal(result.state, "opened");
+ const create = github.calls.find(c => c.args[0] === "pr" && c.args[1] === "create");
+ assert.equal(create?.args[create.args.indexOf("--title") + 1], "fix: Change", "corrige un PR ya mergeado: el squash a main es un fix, no otro feat");
+ const request = parseWorkflow(JSON.stringify(claimed)).lifecycle; assert.ok(request.status === "enabled");
+ assert.equal(request.operations.find(o => o.id === "fix1")?.fixForwardRequest?.title, "Change", "el claim sigue con el título del issue: uno guardado por una versión anterior se reconoce igual");
+});
 
 test("fix-forward publica PR43 nuevo ligado a raíz42 con el mismo presupuesto, sin replay ni reabrir PR42", async t => {
  let { state, checkout } = await verifiedFixForward(t); assert.ok(state.lifecycle.status === "enabled"); const subjectId = state.lifecycle.currentSubject; assert.ok(subjectId);
