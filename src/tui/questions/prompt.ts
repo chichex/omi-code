@@ -98,22 +98,26 @@ export class QuestionBatchPrompt implements Component, Focusable {
 
 	private openEditor(draft: Draft): void {
 		this.editing = true; this.error = "";
+		const input = this.question?.freeText;
+		this.editor.disableSubmit = !!input && input.verbatim === true;
 		this.editor.setText(draft.text ?? ""); this.editor.focused = this.hasFocus;
 	}
 	private closeEditor(): void { this.editing = false; this.error = ""; this.editor.focused = false; }
 
 	private editKey(data: string): void {
 		if (matchesKey(data, "escape")) { this.closeEditor(); return; }
-		const multiline = this.question?.freeText && this.question.freeText.multiline;
+		const input = this.question?.freeText;
+		// Editor recorta la respuesta normal; los patrones se validan sin esa normalización.
+		if (input && input.verbatim && matchesKey(data, "enter")) { this.submitText(this.editor.getExpandedText()); return; }
 		// Una respuesta de una línea no admite saltos: Shift+Enter o Ctrl+J no hacen nada.
-		if (!multiline && (data === "\n" || matchesKey(data, "shift+enter"))) return;
+		if (!(input && input.multiline) && (data === "\n" || matchesKey(data, "shift+enter"))) return;
 		this.editor.handleInput(data);
 	}
 
 	private submitText(value: string): void {
 		const question = this.question; const draft = this.drafts[this.tab];
 		if (!question?.freeText || !draft) return;
-		const text = question.freeText.multiline ? value : value.replace(/\s*\n\s*/g, " ");
+		const text = question.freeText.multiline || question.freeText.verbatim ? value : value.replace(/\s*\n\s*/g, " ");
 		if (!text) {
 			draft.text = null;
 			if (!question.multiSelect && draft.checked.size === 0) draft.answered = false;

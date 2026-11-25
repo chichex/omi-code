@@ -1,4 +1,4 @@
-// Setup de lo que falta configurar: el panel de Foundations y después el wizard del lifecycle, cada uno con
+// Setup de lo que falta configurar: la guía de Foundations y después el wizard del lifecycle, cada uno con
 // «Más adelante» por revisión. Corre con /omi-setup, al entrar al harness, al abrir una sesión interactiva nueva
 // y al publicar el PR draft (sólo el lifecycle). Nunca offline, sin UI, con la KB no disponible, ni al restaurar,
 // recargar, retomar o bifurcar una sesión. Esc corta el setup sin guardar nada; guardar no ejecuta ni adopta nada.
@@ -102,6 +102,13 @@ export class ConfigSetup {
 		if (this.busy) throw new Error(BUSY);
 		await this.exclusive(() => this.configure(ctx));
 	}
+	/** f y /omi-foundations abren directamente la guía, sin competir por el foco con otro setup. */
+	async foundationsCommand(ctx: ExtensionContext): Promise<void> {
+		if (this.busy) throw new Error(BUSY);
+		await this.exclusive(async () => {
+			if (await editFoundations(ctx, this.session)) this.config.update(ctx, { kind: "session" });
+		});
+	}
 	/** La lectura y el setup de /omi-setup, con el setup ya tomado. */
 	private async configure(ctx: ExtensionContext): Promise<void> {
 		const session = this.session;
@@ -138,7 +145,7 @@ export class ConfigSetup {
 		const item = diagnosis.items.find((i) => i.id === "foundations");
 		const answer = await askQuestions(ctx, { title: `Foundations de ${key.repo}`, questions: [{
 			id: "foundations", header: "Foundations", question: "¿Configurás Foundations ahora?", ...(item ? { detail: `${item.message}\n${item.resolve}` } : {}),
-			options: [{ label: NOW, description: "Abre el panel de reglas y políticas; sólo Guardar escribe" }, { label: LATER, description: "No se vuelve a ofrecer solo hasta que cambie; /omi-setup lo retoma" }],
+			options: [{ label: NOW, description: "Abre la guía de reglas y políticas; sólo Guardar escribe" }, { label: LATER, description: "No se vuelve a ofrecer solo hasta que cambie; /omi-setup lo retoma" }],
 			multiSelect: false, recommended: true, freeText: false,
 		}] }, { signal: this.session.lifecycle.signal });
 		if (answer.status === "cancelled") return "cancelled";

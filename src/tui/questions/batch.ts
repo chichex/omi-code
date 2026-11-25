@@ -10,6 +10,8 @@ export interface QuestionOption { readonly label: string; readonly description: 
 export interface FreeTextInput {
 	/** Varias líneas con Ctrl+J, por ejemplo un comando por línea. */
 	readonly multiline: boolean;
+	/** Validar lo escrito sin recortar ni plegar saltos de un pegado. */
+	readonly verbatim?: boolean;
 	/** El motivo por el que el texto no vale; sin motivo, vale. */
 	readonly validate?: (text: string) => string | undefined;
 }

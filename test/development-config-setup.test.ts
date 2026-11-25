@@ -14,9 +14,9 @@ import { developmentFixture } from "./helpers/development.ts";
 import { autoContinuity, continuityFixture } from "./helpers/lifecycle-continuity.ts";
 import { memoryKb, type MemoryKb } from "./helpers/mock-kb.ts";
 import { KEYS } from "./helpers/questions.ts";
+import { keepAndSave } from "./helpers/foundations-guide.ts";
 
 const REPO = "test/repo";
-const SAVE = ["\x13", "\x13"];
 const saves = (kb: MemoryKb) => kb.calls.filter((call) => call.tool === "guardar").length;
 const trustKey = (kb: MemoryKb, repo = REPO) => ({ kbUrl: kb.url, product: repo.split("/")[1]!, repo });
 const git = (root: string, ...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -42,10 +42,10 @@ const titles = (f: { asked: string[][] }) => f.asked.map((screens) => /Foundatio
 test("config_setup: /omi-setup corre Foundations y después el lifecycle, en orden, y también lo postergado", async (t) => {
 	const f = await fixture(t);
 	f.uiControl.questions = (screen) => /Foundations de/.test(screen) ? ["1"] : /Ship de/.test(screen) ? ["2"] : [KEYS.esc];
-	f.uiControl.foundations = () => SAVE;
+	f.uiControl.foundations = keepAndSave;
 	await f.run("omi-setup");
 	assert.deepEqual(titles(f), ["Foundations de", "Ship de"], "primero Foundations, después el wizard del lifecycle");
-	assert.equal(f.foundationsScreens.length, 1, "Configurar ahora abre el panel existente"); assert.equal(saves(f.kb), 1, "sólo Guardar del panel escribe la KB");
+	assert.match(f.foundationsScreens[0]?.[0] ?? "", /Guía Foundations/); assert.equal(saves(f.kb), 1, "sólo Guardar de la guía escribe la KB");
 	assert.ok((await readTrust(foundationsDir(f.home), trustKey(f.kb)))?.accepted, "Foundations quedó aceptado");
 	const lifecycle = await readLifecycleTrust(lifecycleTrustDir(f.home), trustKey(f.kb));
 	assert.ok(lifecycle.kind === "valid"); assert.match(lifecycle.record.deferred?.revision ?? "", /^missing:/, "Más adelante posterga esa revisión del lifecycle");

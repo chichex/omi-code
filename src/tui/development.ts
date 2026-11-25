@@ -20,7 +20,6 @@ import { beginCommand, BEGIN_SUBCOMMAND, holdSessionSwitch, revokeDevelopmentTic
 import { restoreIssueTriage } from "./workspace/issue-triage.ts";
 import { IssuePreparationBusyError } from "./workspace/issue-registry.ts";
 import { effectivePolicy, foundationsLines } from "./development-foundations.ts";
-import { editFoundations } from "./development-foundations-setup.ts";
 import { HeldLoadout } from "./development-loadout.ts";
 import { syncWorkStack } from "./development-stack.ts";
 import { adoptLifecycle, landLifecycle, LIFECYCLE_COMMANDS, LifecycleDeclined, reviewLifecycle } from "./development-lifecycle.ts";
@@ -138,7 +137,7 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 					const command = input.trim() || "status";
 					if (command === "status") { ctx.ui.notify([session.status(), ...foundationsLines(session.foundations.current(ctx))].join("\n"), "info"); return; }
 					if (!ctx.isIdle() || ctx.hasPendingMessages()) throw new Error("Esperá a que termine el turno antes de cambiar el trabajo");
-					if (command === "foundations") { if (await editFoundations(ctx, session, deps.kb)) config.update(ctx, { kind: "session" }); loadout(); return; }
+					if (command === "foundations") { await setup.foundationsCommand(ctx); loadout(); return; }
 					const [verb, ...rest] = command.split(/\s+/);
 					if (verb === BEGIN_SUBCOMMAND) { await begin(rest.join(" "), ctx); return; }
 					// Review, correcciones, Land y Ship: comandos de la persona; cada efecto pide su permiso.
@@ -180,13 +179,13 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 				} catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "No se pudo ejecutar el harness", busy(error) ? "warning" : "error"); }
 			},
 		});
-		// La pantalla OMI (otra extensión) lo despacha con «f»: el editor vive acá, con el pin, la KB y la sesión.
+		// La pantalla OMI (otra extensión) lo despacha con «f»: la guía vive acá, con el pin, la KB y la sesión.
 		pi.registerCommand("omi-foundations", {
-			description: "Ver y editar Foundations: patrones que requieren confirmación y políticas ask/auto",
+			description: "Guía de Foundations: patrones que requieren confirmación y políticas ask/auto",
 			handler: async (_input, ctx) => {
 				try {
 					if (!ctx.isIdle() || ctx.hasPendingMessages()) throw new Error("Esperá a que termine el turno antes de editar Foundations.");
-					if (await editFoundations(ctx, session, deps.kb)) config.update(ctx, { kind: "session" });
+					await setup.foundationsCommand(ctx);
 				} catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "No se pudo editar Foundations", "warning"); }
 			},
 		});

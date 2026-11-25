@@ -19,8 +19,8 @@ export async function authorizeProjectCommand(session: DevelopmentSession, ctx: 
 		"Ejecuta código del proyecto con permisos de tu usuario. No es sólo lectura ni un sandbox.",
 		"Sí: el permiso del comando exacto queda guardado para este trabajo y pedido, también al retomarlo; cambiar el pedido o refresh lo invalida. No cambia la KB ni autoriza variantes.",
 		"No o cancelar: no ejecuta ni guarda permisos.",
-		`Editar reglas: abre el panel de Foundations (${where}) sin aceptar, escribir ni autorizar nada al abrir. Sólo Guardar explícitamente cambia la configuración.`,
-		"Al cerrar el panel, incluso si guardaste, este comando NO se ejecuta: hay que reintentarlo y volver a evaluar la política vigente. Guardar no crea un grant humano.",
+		`Editar reglas: abre la guía de Foundations (${where}) sin aceptar, escribir ni autorizar nada al abrir. Sólo Guardar explícitamente cambia la configuración.`,
+		"Al cerrar la guía, incluso si guardaste, este comando NO se ejecuta: hay que reintentarlo y volver a evaluar la política vigente. Guardar no crea un grant humano.",
 		"Nunca habilita merge, tags, workflows, deploys ni secretos; no sustituye las confirmaciones obligatorias de OMI ni las prohibiciones del proyecto.",
 	].join("\n");
 	const choice = await session.select(ctx, title, CHOICES, signal);

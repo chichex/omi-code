@@ -6,7 +6,8 @@ import { foundationsDir, readTrust, type TrustKey } from "../harness/foundations
 import type { DevelopmentSession } from "./development-session.ts";
 import type { FoundationsReading } from "./development-foundations.ts";
 import type { KbClient } from "./kb-client.ts";
-import { showFoundationsPanel } from "./development-foundations-panel.ts";
+import { guideFoundations } from "./development-foundations-guide.ts";
+import { askQuestions } from "./questions/ask.ts";
 import { commitFoundationsSave, prepareFoundationsSave } from "./development-foundations-save.ts";
 
 const SAVE_TIMEOUT_MS = 30_000;
@@ -31,7 +32,7 @@ export async function editFoundations(ctx: ExtensionContext, session: Developmen
 	await assertCurrent();
 	// Leer la KB puede tardar: sin espera visible, f en la pantalla OMI parecía no hacer nada.
 	const reading = await session.loader(ctx, "Leyendo Foundations de la KB", (cancel) => session.foundations.read(ctx, AbortSignal.any([ioSignal(), cancel])));
-	if (!reading) { ctx.ui.notify("Lectura de Foundations cancelada: no se abrió el panel ni se cambió nada.", "info"); return false; }
+	if (!reading) { ctx.ui.notify("Lectura de Foundations cancelada: no se abrió la guía ni se cambió nada.", "info"); return false; }
 	editable(reading);
 	if (state && issueRepo(state.source.url) !== reading.key.repo) throw new Error("El repo de origin no coincide con el issue; no se cambió Foundations.");
 	const key = reading.key; const trustDir = foundationsDir(session.io.homeDir);
@@ -41,8 +42,9 @@ export async function editFoundations(ctx: ExtensionContext, session: Developmen
 	session.emit("Editando Foundations", true);
 	let block: FoundationsBlock | undefined;
 	try {
-		block = await showFoundationsPanel(ctx, { repo: key.repo, product: key.product, kbUrl: key.kbUrl,
-			...(reading.kind === "valid" ? { initial: reading.block } : {}), ...(record?.accepted ? { previousAccepted: record.accepted.block } : {}), ...(notice ? { notice } : {}) }, signal);
+		const previousAccepted = record?.accepted?.block;
+		const initial = reading.kind === "valid" ? reading.block : reading.kind === "missing" ? previousAccepted : undefined;
+		block = await guideFoundations({ key, initial, previousAccepted, notice }, (batch) => askQuestions(ctx, batch, { signal }));
 	} finally { session.emit(); }
 	if (!block) return false;
 	await assertCurrent();
