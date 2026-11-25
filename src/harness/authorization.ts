@@ -2,8 +2,10 @@
 import { artifactHash, type Workflow } from "./model.ts";
 import { checkBlock, matchCommandPattern, type FoundationsBlock } from "./foundations.ts";
 
-export type CommandAuthorization = "grant" | "auto" | "ask";
-export interface CommandPolicy { block: FoundationsBlock | null; accepted: boolean }
+/** `allowed`: lo cubre un prefijo que la persona eligió no volver a preguntar en este repo. */
+export type CommandAuthorization = "grant" | "auto" | "ask" | "allowed";
+/** `allow`: prefijos simples guardados en esta máquina para el repo, por ejemplo `git log`. */
+export interface CommandPolicy { block: FoundationsBlock | null; accepted: boolean; allow?: readonly string[] }
 export const NO_FOUNDATIONS: CommandPolicy = Object.freeze({ block: null, accepted: false });
 /** Cambiar la receta no invalida el sí; cambiar el trabajo o pedido sí. Nunca prefijos ni globs. */
 export const grantKey = (state: Workflow, command: string): string => artifactHash({ id: state.id, source: state.source.hash, command });
@@ -15,6 +17,10 @@ export function isSimpleCommand(command: string): boolean {
 	const first = command.split(" ", 1)[0]!;
 	return !first.includes("=") && !RESERVED.has(first);
 }
+/** Un prefijo permitido cubre el comando igual o con más argumentos, token por token. Nunca otra sintaxis. */
+export function matchesAllowedPrefix(prefix: string, command: string): boolean {
+	return isSimpleCommand(prefix) && isSimpleCommand(command) && (command === prefix || command.startsWith(`${prefix} `));
+}
 export function commandAuthorization(state: Workflow, command: string, policy: CommandPolicy = NO_FOUNDATIONS): CommandAuthorization {
 	const key = grantKey(state, command);
 	if (state.grants?.some((grant) => grant.key === key && grant.command === command)) return "grant";
@@ -22,6 +28,10 @@ export function commandAuthorization(state: Workflow, command: string, policy: C
 	if (policy?.accepted !== true) return "auto";
 	const checked = checkBlock(policy.block);
 	if ("reason" in checked) return "auto";
+	// Sin reglas no hay patrón que contrastar: lo compuesto tampoco pregunta (pedido del dueño, 2026-11-24).
+	if (!checked.block.confirmar.length) return "auto";
 	if (!isSimpleCommand(command)) return "ask";
+	// Gana sobre una regla: la persona eligió no volver a preguntar por ese prefijo en este repo (2026-11-24).
+	if (policy.allow?.some((prefix) => matchesAllowedPrefix(prefix, command))) return "allowed";
 	return checked.block.confirmar.some((pattern) => matchCommandPattern(pattern, command)) ? "ask" : "auto";
 }

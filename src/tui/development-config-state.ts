@@ -2,6 +2,7 @@
 // pestaña pide r (relee la KB) y después de configurar. Sin modales ni escrituras; sólo con la TUI interactiva.
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { foundationsDir, inspectTrust } from "../harness/foundations-trust.ts";
+import { commandAllowDir, readAllowedPrefixes } from "../harness/command-allow-store.ts";
 import { lifecycleFromPerillas, readLifecycle, type LifecycleReading } from "../harness/lifecycle-kb.ts";
 import { lifecycleKeyValid, lifecycleTrustDir, readLifecycleTrust } from "../harness/lifecycle-trust.ts";
 import { canAsk } from "./questions/ask.ts";
@@ -43,13 +44,13 @@ export class ConfigState {
 	async snapshot(ctx: ExtensionContext, reading: FoundationsReading, freshLifecycle: boolean): Promise<ConfigSnapshot> {
 		const session = this.session, home = session.io.homeDir, detection = await this.onboarding.detected(ctx.cwd);
 		if (reading.kind === "none") return assembleConfigSnapshot({ reading, local: { kind: "missing" }, lifecycle: null, detection });
-		const key = reading.key, local = await inspectTrust(foundationsDir(home), key), state = session.state;
+		const key = reading.key, local = await inspectTrust(foundationsDir(home), key), state = session.state, allowed = await readAllowedPrefixes(commandAllowDir(home), key);
 		const sameRepo = !state || state.version === 2 && lifecycleRepo(state) === key.repo;
-		if (!sameRepo || !lifecycleKeyValid(key)) return assembleConfigSnapshot({ reading, local, lifecycle: null, detection });
+		if (!sameRepo || !lifecycleKeyValid(key)) return assembleConfigSnapshot({ reading, local, lifecycle: null, detection, allowed });
 		const lifecycleLocal = await readLifecycleTrust(lifecycleTrustDir(home), key);
 		const lifecycleReading: LifecycleReading = reading.kind === "unavailable" ? { kind: "unavailable", key, reason: reading.reason }
 			: freshLifecycle ? await readLifecycle(session.kb, key, ctx.cwd, session.lifecycle.signal) : lifecycleFromPerillas(key, reading.perillas);
-		return assembleConfigSnapshot({ reading, local, lifecycle: lifecycleSnapshot(lifecycleReading, lifecycleLocal, detection), detection });
+		return assembleConfigSnapshot({ reading, local, lifecycle: lifecycleSnapshot(lifecycleReading, lifecycleLocal, detection), detection, allowed });
 	}
 	/** Un snapshot ya calculado (por ejemplo, el del setup): se muestra sin volver a leer. */
 	show(ctx: ExtensionContext, snapshot: ConfigSnapshot): void {

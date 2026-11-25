@@ -54,9 +54,16 @@ test("foundations_policy v2: match pregunta una vez por comando exacto y sobrevi
 	await f.invoke("omi_workflow_check", { kind: "setup", command: OK });
 	assert.equal(f.asked(), 1); assert.deepEqual((await f.state()).grants?.map((grant) => grant.command), [OK]);
 });
-test("foundations_policy v2: lista vacía no neutraliza sintaxis compuesta ni receta auto crea grants", async (t) => {
+// Pedido del dueño (2026-11-24): la lista vacía no pregunta por nada, tampoco por lo compuesto. Con una regla, sí.
+test("foundations_policy v2: lista vacía avisa y no pregunta por sintaxis compuesta ni crea grants", async (t) => {
 	const f = await fixture(t, block([], { receta: "auto" })); await f.start();
-	assert.ok(f.messages.some((message) => /todo comando SIMPLE.*sin confirmación por esta política/s.test(message)), "el aviso de la revisión nueva advierte la lista vacía");
+	assert.ok(f.messages.some((message) => /ningún comando.*pide confirmación por esta política/s.test(message)), "el aviso de la revisión nueva advierte la lista vacía");
+	await f.invoke("omi_workflow_check", { kind: "reproduction", command: COMPLEX }); await approve(f);
+	await f.invoke("omi_workflow_check", { kind: "setup", command: COMPLEX });
+	assert.equal(f.asked(), 0); assert.deepEqual((await f.state()).grants ?? [], []);
+});
+test("foundations_policy v2: con una regla, receta auto no neutraliza sintaxis compuesta ni crea grants", async (t) => {
+	const f = await fixture(t, block(["git push *"], { receta: "auto" })); await f.start();
 	await f.invoke("omi_workflow_check", { kind: "reproduction", command: COMPLEX }); await approve(f);
 	await f.invoke("omi_workflow_check", { kind: "setup", command: COMPLEX });
 	assert.equal(f.asked(), 1); assert.deepEqual((await f.state()).grants?.map((grant) => grant.command), [COMPLEX]);

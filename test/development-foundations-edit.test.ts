@@ -14,7 +14,8 @@ function fixture(choice: string | undefined) {
 	let pinDecisions = 0; const mutations: unknown[] = []; let assertions = 0;
 	const session = { foundations: { current: () => pin, pin: async () => { pinDecisions++; return pin; } },
 		select: async (_ctx: unknown, detail: string, choices: string[]) => {
-			assert.deepEqual(choices, ["Sí", "No", "Editar reglas"]);
+			// Cambio de contrato del dueño (2026-11-24): un comando simple suma «no volver a preguntar» por su prefijo, en este repo.
+			assert.deepEqual(choices, ["Sí", "Sí, y no volver a preguntar por «git push *» en este repo", "No", "Editar reglas"]);
 			assert.match(detail, /comando exacto|EXACTO/); assert.match(detail, /reintent|volver a intentar/);
 			assert.doesNotMatch(detail, /Permitir siempre/); return choice;
 		}, assertUnchanged: async () => { assertions++; },

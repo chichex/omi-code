@@ -60,7 +60,7 @@ test("foundations_setup v2: /omi-foundations abre el panel integrado y sólo Gua
 test("foundations_setup v2: sin perillas crea documento sólo al guardar y advierte lista vacía", async (t) => {
 	const f = await fixture(t, null); f.uiControl.foundations = () => SAVE; await f.start(); await f.command("foundations");
 	assert.equal(saves(f.kb), 1); assert.ok(f.kb.documents.at(-1)!.cuerpo.startsWith("# Perillas de repo\n\n## Foundations de omi"));
-	assert.match(f.foundationsScreens[0]!.join("\n"), /SIMPLE/);
+	assert.match(f.foundationsScreens[0]!.join("\n"), /ningún comando del proyecto pide confirmación/);
 });
 test("foundations_setup v2: errores vuelven al editor con borrador y línea original, no lo recortan", async (t) => {
 	const f = await fixture(t);

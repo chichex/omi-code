@@ -27,7 +27,7 @@ test("foundations_pin: pins legacy/invalid/hash alterado/default nunca aplican r
 	assert.doesNotMatch(foundationsLines({ ...pin(), version: 1 } as never).join("\n"), /\bv[12]\b|obsolet/i);
 });
 test("foundations_pin: resumen vertical distingue lista vacía aceptada del default", () => {
-	assert.match(foundationsLines(pin()).join("\n"), /todo comando SIMPLE sin confirmación por esta política/);
+	assert.match(foundationsLines(pin()).join("\n"), /ningún comando pide confirmación por esta política/);
 	assert.match(foundationsLines(undefined).join("\n"), /se decide en el primer punto/);
 	assert.match(foundationsLines({ ...pin(), origin: "default", block: null, hash: null }).join("\n"), /sin configurar: nada pregunta/);
 	const rules = { ...value, confirmar: ["git push *", "npm publish"] }; const hash = foundationsHash(rules);
@@ -39,7 +39,7 @@ test("foundations_pin: resumen vertical distingue lista vacía aceptada del defa
 test("foundations_pin: una revisión v2 nueva se acepta sola, avisa la lista vacía y queda durable", async (t) => {
 	const dir = await tempDir(t); notices.length = 0;
 	const result = await decideFoundations(reading, ctx, { trustDir: dir, now: () => "now" });
-	assert.equal(notices.length, 1); assert.match(notices[0]!, /todo comando SIMPLE.*sin confirmación por esta política/);
+	assert.equal(notices.length, 1); assert.match(notices[0]!, /ningún comando.*pide confirmación por esta política/);
 	assert.equal(effectivePolicy(result).command.accepted, true);
 	assert.equal((await readTrust(dir, key))?.accepted?.blockHash, reading.hash);
 });
@@ -74,6 +74,16 @@ test("foundations_pin: leer para abrir panel no acepta, no escribe KB ni confian
 	assert.equal((await readFoundations(undefined, "/tmp", runner, new AbortController().signal)).kind, "unavailable");
 });
 
+// Pedido del dueño (2026-11-24): lo que no vuelve a preguntar se ve en la pestaña OMI, con cómo quitarlo.
+test("foundations_pin: el detalle muestra los prefijos que no vuelven a preguntar y cómo quitarlos", () => {
+	const local = { kind: "missing" } as const;
+	const shown = foundationsDetail(pin(), { reading, local, motive: null, allowed: ["git log", "npm run typecheck"] });
+	const at = shown.indexOf("No vuelven a preguntar en este repo, en esta máquina:");
+	assert.ok(at > 0, shown.join("\n"));
+	assert.deepEqual(shown.slice(at + 1, at + 4), ["  git log *", "  npm run typecheck *", "Quitar: /omi-permitidos"]);
+	assert.equal(foundationsDetail(pin(), { reading, local, motive: null, allowed: [] }).some((line) => /No vuelven a preguntar/.test(line)), false, "sin prefijos no agrega ruido");
+	assert.ok(foundationsDetail(pin(), { reading, local, motive: null, allowed: ["git\u001blog"] }).every((line) => !line.includes("\u001b")), "se escapa como el resto");
+});
 // Cambio de requisito del dueño (2026-11-23): la pantalla OMI muestra todo, sin apretar f; ya no es un resumen corto.
 test("foundations_pin: detalle para la pantalla OMI: origen, cada política con su significado, todos los patrones y el aviso", () => {
 	assert.deepEqual(foundationsDetail(undefined), ["Todavía no se leyó de la KB: se lee al abrir la sesión."]);
@@ -90,5 +100,5 @@ test("foundations_pin: detalle para la pantalla OMI: origen, cada política con 
 	for (const rule of many.confirmar) assert.ok(accepted.includes(`  ${rule}`), rule);
 	assert.ok(accepted.includes(`Origen: KB · revisión ${hash.slice(0, 8)} · perillas doc`)); assert.doesNotMatch(accepted.join("\n"), /y \d+ más|Sin configurar|Aviso/);
 	const empty = foundationsDetail(pin()).join("\n");
-	assert.match(empty, /todo comando SIMPLE sin confirmación por esta política/, "lista vacía aceptada no es el default");
+	assert.match(empty, /ningún comando pide confirmación por esta política/, "lista vacía aceptada no es el default");
 });
