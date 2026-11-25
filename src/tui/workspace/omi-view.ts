@@ -31,7 +31,7 @@ function wrapped(lines: readonly string[], width: number): string[] {
 function foundations(pin: FoundationsPin | undefined, config: ConfigSnapshot | undefined): string[] {
 	const item = config?.diagnosis.items.find((entry) => entry.id === "foundations");
 	const motive = item && item.status !== "ok" && (!pin || item.status === "formato-anterior") ? item.message : null;
-	return foundationsDetail(pin, config ? { reading: config.reading, local: config.local, motive } : undefined);
+	return foundationsDetail(pin, config ? { reading: config.reading, local: config.local, motive, allowed: config.allowed ?? [] } : undefined);
 }
 /** Por qué todavía no hay datos de lifecycle, continuidad ni lo que falta. */
 function waiting(config: Exclude<ConfigView, { status: "ready" }> | undefined, session: boolean): string {

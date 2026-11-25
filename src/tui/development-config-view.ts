@@ -17,9 +17,9 @@ export const CONFIG_REFRESH_EVENT = "omi:config:refresh";
 const MAX_SESSIONS = 50;
 
 export interface LifecycleSnapshot { reading: LifecycleReading; local: LifecycleTrustReading; state: LifecycleOnboardingState }
-/** `lifecycle` null: sin repo de GitHub con producto en la KB, o el trabajo es de otro repo. */
+/** `lifecycle` null: sin repo de GitHub con producto en la KB, o el trabajo es de otro repo. `allowed`: prefijos de «no volver a preguntar». */
 export interface ConfigSnapshot {
-	reading: FoundationsReading; local: TrustInspection; lifecycle: LifecycleSnapshot | null;
+	reading: FoundationsReading; local: TrustInspection; lifecycle: LifecycleSnapshot | null; allowed?: readonly string[];
 	detection: LifecycleDetection | undefined; key: TrustKey | null; diagnosis: ConfigDiagnosis;
 }
 /** `refreshing`: hay una lectura nueva en curso. `error`: la última falló y se muestra la anterior. */

@@ -4,7 +4,9 @@ import { test } from "node:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { darkTheme, fakeTui } from "./helpers/questions.ts";
 import { commandAuthorization } from "../src/harness/authorization.ts";
-import { AUTHORIZE, COMMAND, REPO, accepted, authorizations, block, choose, commandFixture, noPermissionAdded, option, saves } from "./helpers/command-permissions.ts";
+import { AUTHORIZE, COMMAND, REPO, accepted, authorizations, block, choose, commandFixture, key, noPermissionAdded, option, saves } from "./helpers/command-permissions.ts";
+import { commandAllowDir, readAllowedPrefixes } from "../src/harness/command-allow-store.ts";
+import { manageAllowedPrefixes } from "../src/tui/development-command-allow.ts";
 
 for (const mode of ["tui", "rpc"] as const) {
 	test(`command_permissions: ${mode} ofrece Sí/No/Editar reglas y muestra comando, alcance y destino`, async (t) => {
@@ -178,4 +180,50 @@ test("command_permissions: en 80×24 el detalle es navegable y conserva comando 
 	};
 	await assert.rejects(f.check(longCommand), /no autorizado|cancel/i);
 	assert.equal(mounted, true); assert.equal(saves(f).length, 0); await noPermissionAdded(f, longCommand);
+});
+
+// Pedido del dueño (2026-11-24): «Sí, y no volver a preguntar por git log *» en este repo, como en Claude Code.
+const ALWAYS = "Sí, y no volver a preguntar por «git log *» en este repo";
+test("command_permissions: «no volver a preguntar» guarda el prefijo del repo y deja de preguntar por sus variantes", async (t) => {
+	const f = await commandFixture(t, { value: block(["git *"]) }); let shown = "";
+	f.uiControl.select = (title, options) => { shown = title; assert.ok(options.includes(ALWAYS), JSON.stringify(options)); return ALWAYS; };
+	await f.check("git log --oneline -5");
+	assert.match(shown, /no volver a preguntar.*git log/s); assert.match(shown, /\/omi-permitidos/);
+	assert.deepEqual(f.executed, ["git log --oneline -5"]); assert.equal(authorizations(f).length, 1);
+	assert.deepEqual((await f.state()).grants ?? [], [], "no es un grant del trabajo: es del repo");
+	await f.check("git log"); await f.check("git log --stat");
+	assert.equal(authorizations(f).length, 1, "las variantes ya no preguntan");
+	choose(f, "no");
+	await assert.rejects(f.check("git status"), /no autorizado/i, "otro prefijo sigue preguntando");
+	await assert.rejects(f.check("git log | head"), /no autorizado/i, "lo compuesto sigue preguntando");
+	assert.deepEqual(f.executed, ["git log --oneline -5", "git log", "git log --stat"]);
+	assert.deepEqual(await readAllowedPrefixes(commandAllowDir(f.home), key(f)), ["git log"]);
+});
+test("command_permissions: un comando compuesto no ofrece «no volver a preguntar» y un no no guarda nada", async (t) => {
+	const f = await commandFixture(t, { value: block(["git *"]) }); const offered: string[][] = [];
+	f.uiControl.select = (_title, options) => { offered.push(options); return "No"; };
+	await assert.rejects(f.check("git log | head"), /no autorizado/i);
+	await assert.rejects(f.check("git log -5"), /no autorizado/i);
+	assert.deepEqual(offered, [["Sí", "No", "Editar reglas"], ["Sí", ALWAYS, "No", "Editar reglas"]]);
+	assert.deepEqual(await readAllowedPrefixes(commandAllowDir(f.home), key(f)), []); assert.deepEqual(f.executed, []);
+});
+test("command_permissions: /omi-permitidos lista los prefijos del repo y quita el elegido sólo con su sí", async (t) => {
+	const f = await commandFixture(t, { value: block(["git *"]) });
+	f.uiControl.select = (_title, options) => options.find((option) => option.startsWith("Sí, y no volver")) ?? "No";
+	await f.check("git log -5"); await f.check("git status");
+	const stored = () => readAllowedPrefixes(commandAllowDir(f.home), key(f));
+	assert.deepEqual(await stored(), ["git log", "git status"]);
+	const offered: string[][] = [];
+	f.uiControl.select = (_title, options) => { offered.push(options); return "git log *"; };
+	f.remote.confirmations = false;
+	assert.equal(await manageAllowedPrefixes(f.context, f.session.foundations), false);
+	assert.deepEqual(await stored(), ["git log", "git status"], "sin el sí no quita nada");
+	f.remote.confirmations = true;
+	assert.equal(await manageAllowedPrefixes(f.context, f.session.foundations), true);
+	assert.deepEqual(offered.at(-1), ["git log *", "git status *", "Cerrar"]);
+	assert.deepEqual(await stored(), ["git status"]);
+	choose(f, "no"); await assert.rejects(f.check("git log -5"), /no autorizado/i, "vuelve a preguntar");
+	f.uiControl.select = () => "Cerrar";
+	assert.equal(await manageAllowedPrefixes(f.context, f.session.foundations), false);
+	assert.deepEqual(await stored(), ["git status"], "cerrar no quita nada");
 });

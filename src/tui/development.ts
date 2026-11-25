@@ -21,6 +21,7 @@ import { restoreIssueTriage } from "./workspace/issue-triage.ts";
 import { IssuePreparationBusyError } from "./workspace/issue-registry.ts";
 import { effectivePolicy, foundationsLines } from "./development-foundations.ts";
 import { editFoundations } from "./development-foundations-setup.ts";
+import { manageAllowedPrefixes } from "./development-command-allow.ts";
 import { HeldLoadout } from "./development-loadout.ts";
 import { syncWorkStack } from "./development-stack.ts";
 import { adoptLifecycle, landLifecycle, LIFECYCLE_COMMANDS, LifecycleDeclined, reviewLifecycle } from "./development-lifecycle.ts";
@@ -188,6 +189,14 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 					if (!ctx.isIdle() || ctx.hasPendingMessages()) throw new Error("Esperá a que termine el turno antes de editar Foundations.");
 					if (await editFoundations(ctx, session, deps.kb)) config.update(ctx, { kind: "session" });
 				} catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "No se pudo editar Foundations", "warning"); }
+			},
+		});
+		// Pedido del dueño (2026-11-24): lo de «Sí, y no volver a preguntar» se ve en la pestaña OMI y se quita acá.
+		pi.registerCommand("omi-permitidos", {
+			description: "Ver y quitar los comandos que no vuelven a preguntar en este repo («Sí, y no volver a preguntar»)",
+			handler: async (_input, ctx) => {
+				try { if (await manageAllowedPrefixes(ctx, session.foundations)) config.update(ctx, { kind: "session" }); }
+				catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "No se pudieron revisar los comandos permitidos", "warning"); }
 			},
 		});
 		// Pi ya restauró las tools de la rama: con el harness activo, las restringidas.

@@ -2,13 +2,15 @@
 // queda fija toda la sesión, también a través de /reload y del cambio a la sesión del worktree. Sin KB, vale
 // la última v2 aceptada; sin ninguna, el default: nada pregunta. Un bloque inválido, ausente o v1 no vale.
 // Lecturas y editor nunca aceptan implícitamente. Sin imports runtime de Pi: development-begin también usa este módulo.
-import { resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Runner } from "../core/exec.ts";
 import type { Workflow } from "../harness/model.ts";
 import { ASK_HELP, AUTO_WARNINGS, checkBlock, DEFAULT_POLICY, foundationsDiff, foundationsHash, parseFoundations, POLICY_LABELS, visibleText, type FoundationsBlock, type FoundationsPolicy, type PolicyPoint } from "../harness/foundations.ts";
 import { readTrust, writeTrust, type TrustInspection, type TrustKey, type TrustRecord } from "../harness/foundations-trust.ts";
 import type { CommandPolicy } from "../harness/authorization.ts";
+import { prefixLabel } from "../harness/command-allow.ts";
+import { addAllowedPrefix, readAllowedPrefixes, removeAllowedPrefix } from "../harness/command-allow-store.ts";
 import type { KbClient, KbDoc } from "./kb-client.ts";
 import { HARNESS_KB_URL } from "./defaults.ts";
 import { DEFAULT_TRIAGE_POLICY, parseDevelopmentTriagePolicy, type TriagePolicyPin } from "../harness/triage-policy.ts";
@@ -131,8 +133,9 @@ export function foundationsLines(pin: FoundationsPin | undefined): string[] {
 		...(pin.notice ? [visibleText(`Aviso: ${pin.notice}`)] : []), "Editar: /omi-foundations",
 	];
 }
-/** Lo que la sesión leyó, para mostrar qué va a regir antes de fijar el pin. `motive`: por qué no vale una v2 de la KB. */
-export interface FoundationsPreview { reading: FoundationsReading; local: TrustInspection; motive: string | null }
+/** Lo que la sesión leyó, para mostrar qué va a regir antes de fijar el pin. `motive`: por qué no vale una v2 de la KB.
+ * `allowed`: los prefijos de «no volver a preguntar» del repo en esta máquina. */
+export interface FoundationsPreview { reading: FoundationsReading; local: TrustInspection; motive: string | null; allowed?: readonly string[] }
 /** Como decideFoundations, sin efectos: la v2 de la KB, si no la última aceptada en esta máquina, si no el default. */
 function previewPin({ reading, local }: FoundationsPreview): FoundationsPin {
 	if (reading.kind === "valid") return { version: 2, origin: "kb", block: reading.block, hash: reading.hash, docId: reading.perillas.id, author: reading.perillas.autor ?? "", date: reading.perillas.fecha ?? "", notice: "", reading };
@@ -154,6 +157,7 @@ export function foundationsDetail(pin: FoundationsPin | undefined, preview?: Fou
 		...(shown.notice ? [visibleText(`Aviso: ${shown.notice}`)] : []),
 		...(preview?.motive ? [visibleText(`Motivo: ${preview.motive}`)] : []),
 		...(latest ? [`En la KB hay otra revisión (${latest.slice(0, 8)}): vale desde la próxima sesión.`] : []),
+		...(preview?.allowed?.length ? ["No vuelven a preguntar en este repo, en esta máquina:", ...preview.allowed.map((prefix) => visibleText(`  ${prefixLabel(prefix)}`)), "Quitar: /omi-permitidos"] : []),
 	];
 }
 interface Entry { reading: Promise<FoundationsReading>; generation?: number; pin?: FoundationsPin | undefined; deciding?: Promise<FoundationsPin> | undefined; triage?: Promise<TriagePolicyPin> }
@@ -172,10 +176,12 @@ export function sessionFoundationsPin(sessionFile: string): FoundationsPin | und
 	return pin ? safePin(pin) : undefined;
 }
 
-export interface FoundationsGateDeps extends DecideDeps { kb: KbClient | undefined; runner: Runner }
+/** `allowDir`: los prefijos de «no volver a preguntar»; por defecto, junto al registro de Foundations. */
+export interface FoundationsGateDeps extends DecideDeps { kb: KbClient | undefined; runner: Runner; allowDir?: string }
 export class FoundationsGate {
 	private readonly deps: FoundationsGateDeps;
-	constructor(deps: FoundationsGateDeps) { this.deps = deps; }
+	private readonly allowDir: string;
+	constructor(deps: FoundationsGateDeps) { this.deps = deps; this.allowDir = deps.allowDir ?? join(dirname(deps.trustDir), "command-allow"); }
 	private file(ctx: ExtensionContext): string | undefined { const file = ctx.sessionManager.getSessionFile(); return file ? resolve(file) : undefined; }
 	load(ctx: ExtensionContext): void {
 		const file = this.file(ctx);
@@ -233,5 +239,27 @@ export class FoundationsGate {
 		const file = this.file(ctx); const entry = file && sessions.get(file);
 		if (entry) { entry.generation = (entry.generation ?? 0) + 1; entry.pin = safePin(pin); entry.reading = Promise.resolve(entry.pin.reading); }
 	}
-	async policy(ctx: ExtensionContext, state?: Workflow): Promise<ReturnType<typeof effectivePolicy>> { return effectivePolicy(await this.pin(ctx), state); }
+	/** Con una v2 aceptada, suma los prefijos que la persona eligió no volver a preguntar en este repo. */
+	async policy(ctx: ExtensionContext, state?: Workflow): Promise<ReturnType<typeof effectivePolicy>> {
+		const pin = await this.pin(ctx), policy = effectivePolicy(pin, state), key = pinKey(pin);
+		if (!policy.command.accepted || !key) return policy;
+		return { ...policy, command: { ...policy.command, allow: await readAllowedPrefixes(this.allowDir, key) } };
+	}
+	/** Los prefijos permitidos del repo de esta sesión. Sin repo conocido: undefined. No fija el pin. */
+	async allowed(ctx: ExtensionContext): Promise<{ key: TrustKey; prefixes: string[] } | undefined> {
+		const key = await this.repoKey(ctx);
+		return key ? { key, prefixes: await readAllowedPrefixes(this.allowDir, key) } : undefined;
+	}
+	/** Sólo tras el sí de la persona: «Sí, y no volver a preguntar por …» o quitarlo con /omi-permitidos. */
+	async allow(ctx: ExtensionContext, prefix: string): Promise<void> { await addAllowedPrefix(this.allowDir, await this.requireKey(ctx), prefix); }
+	async disallow(ctx: ExtensionContext, prefix: string): Promise<void> { await removeAllowedPrefix(this.allowDir, await this.requireKey(ctx), prefix); }
+	// El repo del pin, o el de la lectura de la sesión si el pin todavía no se fijó: es la misma identidad.
+	private async repoKey(ctx: ExtensionContext): Promise<TrustKey | undefined> { return readingKey(this.current(ctx)?.reading) ?? readingKey(await this.loaded(ctx)); }
+	private async requireKey(ctx: ExtensionContext): Promise<TrustKey> {
+		const key = await this.repoKey(ctx);
+		if (!key) throw new Error("No se sabe de qué repo es esta sesión (sin origin en github.com o sin producto en la KB); no se guardó nada.");
+		return key;
+	}
 }
+const readingKey = (reading: FoundationsReading | undefined): TrustKey | undefined => reading && reading.kind !== "none" ? reading.key : undefined;
+const pinKey = (pin: FoundationsPin | undefined): TrustKey | undefined => readingKey(pin?.reading);
