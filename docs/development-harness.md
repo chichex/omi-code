@@ -691,6 +691,8 @@ El [setup](#setup-de-lo-que-falta) ofrece el mismo wizard que `omi init --develo
 
 No aparece en consultas simples ni en needs-info, que siguen en el chat. Se ofrece una vez por revisión de la configuración y sesión.
 
+`/omi-setup` no repregunta lo que el bloque de la KB ya resuelve: por ejemplo, con Ship y continuidad configurados sólo propone la Review GHA. Sin bloque no hay nada resuelto: recorre todas las etapas, como `omi init --development`, haya o no recomendaciones.
+
 El wizard pregunta, en orden:
 
 1. **Ship.** Con una config válida, **Mantener Ship actual** va primero y conserva los destinos tal cual (rollback, probes, timeouts), sin reingresarlos. **Configurar ahora** propone destino, verificación y recuperación con lo detectado. **Más adelante** posterga esa revisión: no se vuelve a ofrecer hasta que cambie. **Este repo no necesita Ship** lo guarda como no-aplica.

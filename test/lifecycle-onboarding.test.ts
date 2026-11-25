@@ -8,7 +8,7 @@ import { memoryKb } from "./helpers/mock-kb.ts";
 import { acceptLifecycleConfig } from "./helpers/lifecycle.ts";
 import { batchProblem, type AskResult, type QuestionBatch } from "../src/tui/questions/batch.ts";
 import { detectLifecycle } from "../src/harness/lifecycle-detect.ts";
-import { lifecycleOnboardingStatus, runLifecycleOnboarding, shouldOfferLifecycleOnboarding } from "../src/harness/lifecycle-onboarding.ts";
+import { lifecycleOnboardingStatus, onboardingStages, runLifecycleOnboarding, shouldOfferLifecycleOnboarding } from "../src/harness/lifecycle-onboarding.ts";
 import { readLifecycle } from "../src/harness/lifecycle-kb.ts";
 import { defaultLifecycleConfig, defaultLifecycleTarget, lifecycleHash, renderLifecycleBlock, type LifecycleConfig } from "../src/harness/lifecycle-config.ts";
 import { lifecycleTrustDir, readLifecycleTrust, type LifecycleKey } from "../src/harness/lifecycle-trust.ts";
@@ -356,4 +356,25 @@ test("pendiente de aceptar se ofrece aunque no haya recomendaciones; en consulta
  assert.equal(pending.status, "pending"); assert.deepEqual(pending.recommendations, []);
  assert.equal(shouldOfferLifecycleOnboarding("harness", pending, local), true);
  assert.equal(shouldOfferLifecycleOnboarding("simple", pending, local), false); assert.equal(shouldOfferLifecycleOnboarding("needs-info", pending, local), false);
+});
+
+// Review de #93: sin bloque en la KB no hay nada resuelto. /omi-setup recorre todas las etapas, sin depender de las recomendaciones.
+test("etapas: /omi-setup sin bloque recorre Ship, Review y continuidad aunque no haya recomendaciones; con bloque resuelto, ninguna", () => {
+ const all = { ship: true, review: true, continuity: true };
+ assert.deepEqual(onboardingStages("missing", undefined, []), all, "sin bloque, nada está resuelto");
+ assert.deepEqual(onboardingStages(undefined, undefined, []), all, "omi init recorre todo");
+ const resolved = legacyBlock(b => { b.continuity = { entry: "ask", review: "ask", fix: "ask", land: "manual", ship: "manual" }; });
+ assert.deepEqual(onboardingStages("missing", resolved, []), { ship: false, review: false, continuity: false }, "con bloque resuelto no repregunta");
+});
+
+test("/omi-setup sin lifecycle en un repo sin workflow de Review GHA pregunta lo mismo que omi init: Ship, continuidad y resumen", async t => {
+ const f = await fixture(t), state = await f.status();
+ assert.equal(state.status, "unconfigured"); assert.ok(!state.recommendations.some(r => r.kind === "review-gha"), "sin workflow GHA no se recomienda Review");
+ const answers = () => [["Este repo no necesita Ship"], ["Mantener continuidad actual"], ["No guardar"]];
+ const focused = script(answers()), manual = script(answers());
+ assert.equal((await runLifecycleOnboarding({ ...f.deps(focused.ask), focus: "missing" })).kind, "declined");
+ assert.equal((await runLifecycleOnboarding(f.deps(manual.ask))).kind, "declined");
+ assert.deepEqual(focused.seen.map(b => b.title), ["Ship de acme/app", "Continuidad del lifecycle", "Resumen antes de guardar"]);
+ assert.deepEqual(focused.seen.map(b => b.title), manual.seen.map(b => b.title), "sin Review alternativa al revisor local, ninguno pregunta Review");
+ assert.ok(!f.kb.calls.some(c => c.tool === "guardar"));
 });

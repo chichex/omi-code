@@ -39,6 +39,17 @@ export interface LifecycleOnboardingDeps {
  /** Sólo para startup/new: reclama la revisión diagnosticada al llegar a la primera pregunta. */
  beforeSessionOffer?: (revision: string) => boolean;
 }
+export interface OnboardingStages { ship: boolean; review: boolean; continuity: boolean }
+/** Qué etapas recorre el wizard. A pedido (/omi-setup) no repregunta lo que ya está resuelto en el bloque de la KB.
+ * Sin bloque no hay nada resuelto: se recorren todas, sin depender de las recomendaciones (review de #93). */
+export function onboardingStages(focus: LifecycleOnboardingDeps["focus"], existing: LifecycleConfig | undefined, recommendations: readonly LifecycleRecommendation[]): OnboardingStages {
+ if (focus !== "missing" || !existing) return { ship: true, review: true, continuity: true };
+ return {
+  ship: existing.ship.status === "unconfigured",
+  review: recommendations.some(r => r.kind === "review-gha"),
+  continuity: recommendations.some(r => r.kind === "continuity"),
+ };
+}
 export type LifecycleOnboardingOutcome = { kind: "saved"; pin: LifecycleAcceptance } | { kind: "deferred"; revision: string } | { kind: "cancelled" } | { kind: "declined" } | { kind: "suppressed" } | { kind: "unavailable" | "invalid"; reason: string };
 const KEEP_SHIP = "Mantener Ship actual", CONFIGURE = "Configurar ahora", LATER = "Más adelante", NOT_APPLICABLE = "Este repo no necesita Ship", MANUAL = "Manual (sin destino verificable)", RECEIPT = "Recibo del proveedor", SAVE = "Guardar y aceptar", SKIP = "No guardar";
 const RECOVERY: Record<string, "stop" | "rollback" | "fix-forward"> = { "Detener (stop)": "stop", Rollback: "rollback", "Fix-forward": "fix-forward" };
@@ -114,10 +125,7 @@ export async function runLifecycleOnboarding(deps: LifecycleOnboardingDeps): Pro
   await writeLifecycleTrust(deps.trustDir, key, record?.revision, { version: 1, ...key, revision: record ? record.revision + 1 : 0, accepted: record?.accepted ?? null, deferred: { revision, at: deps.now() } });
   return { kind: "deferred", revision };
  };
- const focused = deps.focus === "missing";
- const ship = !focused || !existing || existing.ship.status === "unconfigured";
- const review = !focused || state.recommendations.some(r => r.kind === "review-gha");
- const continuity = !focused || state.recommendations.some(r => r.kind === "continuity");
+ const focused = deps.focus === "missing", { ship, review, continuity } = onboardingStages(deps.focus, existing, state.recommendations);
  // Si la KB cambió entre el diagnóstico de la TUI y esta lectura, no se reabre algo ya resuelto.
  if (!ship && !review && !continuity && state.status !== "pending") return { kind: "declined" };
  if (deps.beforeSessionOffer && (!state.revision || !shouldOfferLifecycleOnboarding("harness", state, local) || !deps.beforeSessionOffer(state.revision))) return { kind: "suppressed" };
