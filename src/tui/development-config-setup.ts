@@ -10,7 +10,7 @@ import { detectLifecycle, type LifecycleDetection } from "../harness/lifecycle-d
 import { runLifecycleOnboarding, type LifecycleOnboardingOutcome } from "../harness/lifecycle-onboarding.ts";
 import type { LifecycleConfig } from "../harness/lifecycle-schema.ts";
 import { lifecycleTrustDir } from "../harness/lifecycle-trust.ts";
-import { claimSetupOffer, type SetupOfferArea } from "../harness/setup-offers.ts";
+import { claimSetupOffer, type SetupOfferArea, type SetupOfferClaim } from "../harness/setup-offers.ts";
 import { askQuestions, canAsk } from "./questions/ask.ts";
 import type { ConfigState } from "./development-config-state.ts";
 import type { ConfigSnapshot } from "./development-config-view.ts";
@@ -21,7 +21,7 @@ export type SetupTrigger = "command" | "harness" | "session" | "publication";
 /** `background`: dónde corre la oferta de una sesión nueva, que espera la lectura de la KB sin frenar el arranque. */
 export interface ConfigSetupDeps { background?: (work: Promise<void>) => void }
 type Parts = Record<SetupOfferArea, SetupPart>;
-type Claim = (area: SetupOfferArea, revision: string) => boolean;
+type Claim = (area: SetupOfferArea, revision: string) => SetupOfferClaim | undefined;
 
 const READ_TIMEOUT_MS = 30_000;
 const NOW = "Configurar ahora", LATER = "Más adelante";
@@ -36,6 +36,17 @@ const LIFECYCLE: Record<Exclude<LifecycleOnboardingOutcome["kind"], "unavailable
 const revision = (part: SetupPart) => part.kind === "none" ? null : part.revision;
 /** Una sesión con mensajes ya no es nueva: la charla empezó. */
 const talking = (ctx: ExtensionContext) => ctx.sessionManager.getEntries().some((entry) => entry.type === "message");
+/** Una oferta de arranque: su marca se toma antes del diálogo y se consume al mostrarse la primera pregunta.
+ * `settle` la libera si no se mostró (un aborto o una excepción antes). Sin marca, `claim` no está. */
+interface Offer { claim: ((revision: string) => boolean) | undefined; shown: () => void; settle: () => void }
+function sessionOffer(claim: Claim | undefined, area: SetupOfferArea): Offer {
+	let held: SetupOfferClaim | undefined, shown = false;
+	return {
+		claim: claim && ((revision) => { held = claim(area, revision); return held !== undefined; }),
+		shown: () => { shown = true; },
+		settle: () => { if (!shown) held?.release(); },
+	};
+}
 const typingNotice = (parts: Parts) => {
 	const missing = [parts.foundations.kind !== "none" && "Foundations", parts.lifecycle.kind !== "none" && "el lifecycle"].filter(Boolean).join(" y ");
 	return `Falta configurar ${missing}. No abrí el setup porque estabas escribiendo. Cuando quieras: /omi-setup.`;
@@ -93,9 +104,8 @@ export class ConfigSetup {
 			// El modal toma el foco: lo que la persona tipea caería en sus opciones. Sólo se avisa.
 			if (trigger === "session" && ctx.ui.getEditorText().trim()) { ctx.ui.notify(typingNotice(parts), "info"); return; }
 			const { key } = snapshot;
-			const claim: Claim | undefined = trigger === "session" ? (area, revision) =>
-				key !== null && canOfferNow() && !ctx.ui.getEditorText().trim() && claimSetupOffer(session.io.homeDir, key, area, revision) : undefined;
-			await this.exclusive(() => this.run(ctx, snapshot, parts, trigger, claim));
+			const claim: Claim = (area, revision) => key !== null && canOfferNow() && !ctx.ui.getEditorText().trim() ? claimSetupOffer(session.io.homeDir, key, area, revision) : undefined;
+			await this.exclusive(() => this.run(ctx, snapshot, parts, trigger, trigger === "session" ? claim : undefined));
 		} catch (error) {
 			if (session.lifecycle.signal.aborted) return;
 			try { ctx.ui.notify(`No se pudo ofrecer la configuración: ${error instanceof Error ? error.message : "falló la lectura"}. Volvé con /omi-setup.`, "warning"); } catch { /* La sesión ya no está. */ }
@@ -138,30 +148,32 @@ export class ConfigSetup {
 		const { key } = snapshot;
 		if (!key) return;
 		if (trigger !== "session") for (const [name, part] of Object.entries(parts)) { const value = revision(part); if (value) this.offered.add(`${name}:${value}`); }
+		const offers = { foundations: sessionOffer(claim, "foundations"), lifecycle: sessionOffer(claim, "lifecycle") };
 		let saved = false;
 		try {
-			if (parts.foundations.kind !== "none" && (!claim || claim("foundations", parts.foundations.revision))) {
-				const result = await this.foundations(ctx, key, snapshot.diagnosis, parts.foundations.revision);
+			if (parts.foundations.kind !== "none" && (!offers.foundations.claim || offers.foundations.claim(parts.foundations.revision))) {
+				const result = await this.foundations(ctx, key, snapshot.diagnosis, parts.foundations.revision, offers.foundations.shown);
 				saved = result === "saved";
 				if (result === "cancelled") { ctx.ui.notify(CANCELLED, "info"); return; }
 			}
 			if (parts.lifecycle.kind !== "none") {
 				// El wizard vuelve a leer: si Foundations creó las perillas, cambió la revisión de ausencia del lifecycle.
-				const beforeOffer = claim && ((seen: string) => claim("lifecycle", seen));
-				saved = await this.lifecycle(ctx, key, snapshot.detection, trigger, beforeOffer) || saved;
+				saved = await this.lifecycle(ctx, key, snapshot.detection, trigger, offers.lifecycle) || saved;
 			}
 		} finally {
+			// Una oferta reclamada que nadie llegó a ver vuelve a estar libre para la próxima sesión nueva.
+			offers.foundations.settle(); offers.lifecycle.settle();
 			// Lo guardado se relee de la KB; un «Más adelante» sólo cambió la aceptación local.
 			this.config.update(ctx, saved ? { kind: "fresh" } : { kind: "reading", reading: snapshot.reading });
 		}
 	}
-	private async foundations(ctx: ExtensionContext, key: TrustKey, diagnosis: ConfigDiagnosis, deferral: string): Promise<"saved" | "deferred" | "cancelled" | "failed"> {
+	private async foundations(ctx: ExtensionContext, key: TrustKey, diagnosis: ConfigDiagnosis, deferral: string, shown: () => void): Promise<"saved" | "deferred" | "cancelled" | "failed"> {
 		const item = diagnosis.items.find((i) => i.id === "foundations");
 		const answer = await askQuestions(ctx, { title: `Foundations de ${key.repo}`, questions: [{
 			id: "foundations", header: "Foundations", question: "¿Configurás Foundations ahora?", ...(item ? { detail: `${item.message}\n${item.resolve}` } : {}),
 			options: [{ label: NOW, description: "Abre la guía de reglas y políticas; sólo Guardar escribe" }, { label: LATER, description: "No se vuelve a ofrecer solo hasta que cambie; /omi-setup lo retoma" }],
 			multiSelect: false, recommended: true, freeText: false,
-		}] }, { signal: this.session.lifecycle.signal });
+		}] }, { signal: this.session.lifecycle.signal, onShow: shown });
 		if (answer.status === "cancelled") return "cancelled";
 		const choice = answer.answers[0]?.options[0];
 		if (choice === LATER) {
@@ -175,12 +187,12 @@ export class ConfigSetup {
 		catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "No se pudo editar Foundations", "warning"); return "failed"; }
 	}
 	/** true si guardó en la KB. */
-	private async lifecycle(ctx: ExtensionContext, key: TrustKey, detection: LifecycleDetection | undefined, trigger: SetupTrigger, beforeOffer?: (revision: string) => boolean): Promise<boolean> {
+	private async lifecycle(ctx: ExtensionContext, key: TrustKey, detection: LifecycleDetection | undefined, trigger: SetupTrigger, offer: Offer): Promise<boolean> {
 		const session = this.session, signal = session.lifecycle.signal, base = await this.base(ctx);
 		if (!base) { ctx.ui.notify("Para configurar el lifecycle falta la rama base de origin: corré git remote set-head origin --auto y volvé con /omi-setup. No se guardó nada.", "warning"); return false; }
 		const outcome = await runLifecycleOnboarding({ kb: session.kb, key, cwd: ctx.cwd, base, trustDir: lifecycleTrustDir(session.io.homeDir), detection: detection ?? await detectLifecycle(ctx.cwd, signal),
-			ask: (batch) => askQuestions(ctx, batch, { signal }), now: session.now, signal, ...(trigger === "command" ? { focus: "missing" } : {}),
-			...(beforeOffer ? { beforeSessionOffer: beforeOffer } : {}) });
+			ask: (batch) => askQuestions(ctx, batch, { signal, onShow: offer.shown }), now: session.now, signal, ...(trigger === "command" ? { focus: "missing" } : {}),
+			...(offer.claim ? { beforeSessionOffer: offer.claim } : {}) });
 		if (outcome.kind === "suppressed") return false;
 		if (outcome.kind === "unavailable" || outcome.kind === "invalid") { ctx.ui.notify(`No se pudo configurar el lifecycle: ${outcome.reason}. No se guardó nada.`, "warning"); return false; }
 		ctx.ui.notify(LIFECYCLE[outcome.kind], "info");

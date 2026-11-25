@@ -192,6 +192,27 @@ test("config_setup: si el registro de arranque no se puede usar, f y s siguen di
 	await f.run("omi-setup"); assert.deepEqual(titles(f), ["Foundations de"]); assert.equal(saves(f.kb), 0);
 });
 
+// Review de #93: la marca de arranque se toma antes del diálogo. Si el diálogo no llega a mostrarse, la oferta no se pierde.
+test("config_setup: una oferta de arranque que no llegó a mostrarse vuelve en la próxima sesión nueva; mostrada y cerrada con Esc, no", async (t) => {
+	for (const [body, title] of [[null, "Foundations de"], [FOUNDATIONS, "Ship de"]] as const) {
+		// La UI falla antes de montar la primera pregunta.
+		const f = await fixture(t, { body }); f.uiControl.questions = () => [KEYS.esc];
+		const custom = f.context.ui.custom.bind(f.context.ui); let broken = true;
+		Reflect.set(f.context.ui, "custom", (...args: Parameters<typeof custom>) => { if (!broken) return custom(...args); broken = false; return Promise.reject(new Error("UI caída")); });
+		await f.session("startup"); assert.equal(f.asked.length, 0, `${title}: la pregunta no se mostró`);
+		assert.ok(f.messages.some((message) => /No se pudo ofrecer la configuración: UI caída/.test(message)));
+		await f.session("new"); assert.deepEqual(titles(f), [title], `${title}: la oferta no se consumió`);
+		await f.session("startup"); assert.equal(titles(f).filter((seen) => seen === title).length, 1, `${title}: mostrada y cerrada con Esc, no se repite`);
+		// La sesión se cierra antes de montar la primera pregunta.
+		const g = await fixture(t, { body }); g.uiControl.questions = () => [KEYS.esc];
+		const mount = g.context.ui.custom.bind(g.context.ui); let closing = true;
+		Reflect.set(g.context.ui, "custom", async (...args: Parameters<typeof mount>) => { if (closing) { closing = false; await g.emit("session_shutdown"); } return mount(...args); });
+		await g.session("startup"); const shown = g.asked.length;
+		await g.session("new"); assert.deepEqual(titles(g).slice(shown), [title], `${title}: un cierre antes de mostrarla no la consume`);
+		assert.equal(saves(f.kb) + saves(g.kb), 0);
+	}
+});
+
 test("config_setup: entrar al harness no queda limitado por una oferta de arranque", async (t) => {
 	const f = await fixture(t); f.uiControl.questions = () => [KEYS.esc];
 	await f.session("startup"); assert.deepEqual(titles(f), ["Foundations de"]);

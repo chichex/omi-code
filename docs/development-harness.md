@@ -644,6 +644,8 @@ Se dispara solo, sin apretar nada:
 
 Nunca offline, sin UI (print o RPC), con la KB no disponible, ni al restaurar, recargar (`/reload`), retomar (resume) o bifurcar (fork) una sesión. Una sesión que ya tiene mensajes no es nueva. Se ofrece una vez por revisión y sesión.
 
+Al abrir una sesión nueva, cada área deja una marca en `<OMI_HOME>/agent/setup-offers` justo antes de su primera pregunta. Así otra sesión u otro proceso no repite la oferta. Verla y cerrarla con Esc la consume. Si la pregunta no llegó a mostrarse, la marca se libera y la próxima sesión nueva la vuelve a ofrecer. Por ejemplo, si la sesión se cerró antes de montar la pregunta o la UI falló. Un error de disco al marcar o al liberar falla cerrado, por ejemplo con un home de sólo lectura. El costo: esa oferta automática se pierde sin aviso. `/omi-setup` y **f** siguen funcionando.
+
 Corre un setup a la vez. Si la persona lanza `/omi-setup` mientras la oferta de una sesión nueva todavía lee la KB, manda el comando y la oferta no abre nada. Si el setup ya está abierto, `/omi-setup` no abre otro: «Ya hay un setup abierto. Terminalo o cerralo con Esc, y volvé con /omi-setup. No se cambió nada.»
 
 El wizard del lifecycle necesita la rama base de `origin/HEAD`. Sin ella, el disparo automático lo omite sin avisar, y `/omi-setup` dice cómo resolverlo: «corré git remote set-head origin --auto y volvé con /omi-setup».
