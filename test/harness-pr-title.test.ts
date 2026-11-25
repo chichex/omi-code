@@ -61,3 +61,17 @@ test("el PR de un fix-forward siempre es fix: corrige un PR ya mergeado, sea cua
  assert.equal(pullRequestTitle(fixForward(workflow("Change", null))), "fix: Change");
  const original = fixForward(workflow("Change", "add")); assert.equal(pullRequestTitle({ ...original, checkout: workflow("Change", "add").checkout }), "feat: Change", "la publicación desde el checkout original no es el fix-forward");
 });
+
+test("el título nunca pasa los 256 caracteres de GitHub: se recorta el resumen y se conservan el tipo y el sufijo del stack", () => {
+ const exact = "a".repeat(256), chars = (text: string) => Array.from(text).length;
+ const single = pullRequestTitle(workflow(exact, "add"));
+ assert.equal(chars(single), 256); assert.ok(single.startsWith("feat: a"), single.slice(0, 10)); assert.ok(single.endsWith("a…"), "recorte visible");
+ assert.equal(pullRequestTitle(workflow("a".repeat(250), "add")), `feat: ${"a".repeat(250)}`, "si entra, queda entero");
+ const wide = pullRequestTitle(workflow("ñ".repeat(255), "fix"));
+ assert.equal(chars(wide), 256, "cuenta caracteres, no unidades UTF-16"); assert.ok(wide.startsWith("fix: ñ"));
+ const stack = pullRequestTitle(stacked(workflow("b".repeat(256), "add")), { index: 1 });
+ assert.equal(chars(stack), 256); assert.ok(stack.startsWith("feat: b")); assert.ok(stack.endsWith("b… · PR 2/2: Vista"), stack.slice(-25));
+ const forward = pullRequestTitle(fixForward(workflow(`feat: ${"c".repeat(250)}`, "add")));
+ assert.equal(forward, `fix: ${"c".repeat(250)}`, "el fix-forward cambia el tipo y entra justo");
+ assert.equal(chars(pullRequestTitle(fixForward(workflow("d".repeat(256), "add")))), 256);
+});

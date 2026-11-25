@@ -378,3 +378,19 @@ test("/omi-setup sin lifecycle en un repo sin workflow de Review GHA pregunta lo
  assert.deepEqual(focused.seen.map(b => b.title), manual.seen.map(b => b.title), "sin Review alternativa al revisor local, ninguno pregunta Review");
  assert.ok(!f.kb.calls.some(c => c.tool === "guardar"));
 });
+
+test("resumen: si la KB no tiene el lifecycle, la pregunta dice que Guardar lo crea, aunque haya una aceptación local (review de la rama)", async t => {
+ const f = await fixture(t);
+ await acceptLifecycleConfig(f.kb, f.home, f.root, defaultLifecycleConfig(key.repo, "main"));
+ const kept = script([["Mantener Ship actual"], ["Mantener continuidad actual"], ["No guardar"]]);
+ assert.equal((await runLifecycleOnboarding(f.deps(kept.ask))).kind, "declined");
+ assert.equal(kept.seen.at(-1)!.questions[0]!.question, "¿Guardar en la KB y aceptar esta configuración?", "con el bloque en la KB, la pregunta de siempre");
+ f.kb.perillas("app", "# Perillas de app\n\nSin bloque de lifecycle\n");
+ const lost = script([["Este repo no necesita Ship"], ["Mantener continuidad actual"], ["No guardar"]]);
+ assert.equal((await runLifecycleOnboarding(f.deps(lost.ask))).kind, "declined");
+ const summary = lost.seen.at(-1)!;
+ assert.equal(summary.title, "Resumen antes de guardar");
+ assert.equal(summary.questions[0]!.question, "La KB no tiene el lifecycle. ¿Lo creás con esta configuración y la aceptás?");
+ assert.match(summary.questions[0]!.detail ?? "", /^Antes: revisión aceptada/m, "el diff sigue contra lo aceptado en esta máquina");
+ assert.ok(!f.kb.calls.some(c => c.tool === "guardar" && /Sin bloque/.test(JSON.stringify(c))), "no guardar no escribe la KB");
+});

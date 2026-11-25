@@ -52,6 +52,8 @@ export function onboardingStages(focus: LifecycleOnboardingDeps["focus"], existi
 }
 export type LifecycleOnboardingOutcome = { kind: "saved"; pin: LifecycleAcceptance } | { kind: "deferred"; revision: string } | { kind: "cancelled" } | { kind: "declined" } | { kind: "suppressed" } | { kind: "unavailable" | "invalid"; reason: string };
 const KEEP_SHIP = "Mantener Ship actual", CONFIGURE = "Configurar ahora", LATER = "Más adelante", NOT_APPLICABLE = "Este repo no necesita Ship", MANUAL = "Manual (sin destino verificable)", RECEIPT = "Recibo del proveedor", SAVE = "Guardar y aceptar", SKIP = "No guardar";
+// Sin bloque en la KB, Guardar lo crea: el diff contra lo aceptado en esta máquina puede parecer «sin cambios».
+const SAVE_PROMPT = "¿Guardar en la KB y aceptar esta configuración?", CREATE_PROMPT = "La KB no tiene el lifecycle. ¿Lo creás con esta configuración y la aceptás?";
 const RECOVERY: Record<string, "stop" | "rollback" | "fix-forward"> = { "Detener (stop)": "stop", Rollback: "rollback", "Fix-forward": "fix-forward" };
 const MODES: Record<string, "ask" | "auto"> = { "Preguntar antes (ask)": "ask", "Automático (auto)": "auto" };
 const WORKFLOW = /^[A-Za-z0-9_][A-Za-z0-9_.-]*\.ya?ml$/, ENDPOINT = /^\/(?!\/)[A-Za-z0-9_./~-]*$/;
@@ -144,7 +146,7 @@ export async function runLifecycleOnboarding(deps: LifecycleOnboardingDeps): Pro
  const summary = `${lifecycleDiff(record?.accepted?.block, block, key)}\n${reviewProviderSummary(block.review.provider)}${pending}\n${CONTINUITY_NOTICE}`;
  const options: [string, string][] = [[SAVE, "Escribe perillas y aceptación local; no ejecuta nada"], [SKIP, "No escribe nada"]];
  if (focused && !ship) options.push([LATER, "Posterga la revisión sin escribir en la KB ni cambiar la aceptación"]);
- const accept = await deps.ask({ title: "Resumen antes de guardar", questions: [closed("accept", "Guardar", "¿Guardar en la KB y aceptar esta configuración?", options, false, { detail: summary })] });
+ const accept = await deps.ask({ title: "Resumen antes de guardar", questions: [closed("accept", "Guardar", reading.kind === "missing" ? CREATE_PROMPT : SAVE_PROMPT, options, false, { detail: summary })] });
  if (accept.status === "cancelled") return { kind: "declined" };
  const choice = chosen(accept.answers, "accept");
  if (choice === LATER && focused && !ship) return defer();

@@ -17,12 +17,21 @@ function conventionalTitle(w: Workflow): string {
 }
 /** Un fix-forward corrige un PR ya mergeado: siempre fix, sin el tipo, el scope ni el ! del título del issue. */
 const fixForwardTitle = (title: string): string => `fix: ${CONVENTIONAL.exec(title)?.[1] ?? title}`;
+// GitHub rechaza un título de más de 256 caracteres. El tipo de adelante puede pasar de ese límite a un título de
+// issue que sí entraba: se recorta el final del resumen, con «…», y se conservan el tipo y el sufijo del stack.
+const MAX_TITLE = 256;
+function fit(title: string, room = MAX_TITLE): string {
+	const chars = Array.from(title);
+	return chars.length <= room ? title : `${chars.slice(0, room - 1).join("")}…`;
+}
 
 /** Título del PR único o, con position, del PR de ese índice en el stack: el tipo va una vez, al principio. */
 export function pullRequestTitle(workflow: Workflow, position?: { index: number }): string {
 	// El fix-forward publica desde su checkout de recuperación, nunca desde el del trabajo.
-	if (currentRecoveryWorkspace(workflow)?.checkout.branch === workflow.checkout.branch) return fixForwardTitle(workflow.source.title);
+	if (currentRecoveryWorkspace(workflow)?.checkout.branch === workflow.checkout.branch) return fit(fixForwardTitle(workflow.source.title));
 	const title = conventionalTitle(workflow);
 	const pulls = position && workflow.publication.status !== "none" ? workflow.publication.stack : undefined;
-	return pulls && position ? stackTitle(title, pulls, position.index) : title;
+	if (!pulls || !position) return fit(title);
+	const suffix = Array.from(stackTitle("", pulls, position.index)).length;
+	return stackTitle(fit(title, MAX_TITLE - suffix), pulls, position.index);
 }

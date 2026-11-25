@@ -480,6 +480,7 @@ El título del PR es un commit convencional. Al mergear con squash, GitHub usa e
 - **Sin receta**, el título es el del issue, como antes.
 - **Stack:** el tipo va una vez, al principio del título completo (ver «Stack de PRs»).
 - **Fix-forward:** siempre `fix:`, porque corrige un PR ya mergeado. Se saca el tipo, el scope y el `!` del título del issue. Ejemplo: `feat(tienda)!: Cambio` abre `fix: Cambio`. El recibo del fix-forward sigue guardando el título del issue.
+- **Máximo 256 caracteres,** el límite de GitHub. Si el tipo lo pasa, se recorta el final del resumen con «…» y se conservan el tipo y, en un stack, ` · PR k/n: <grupo>`. Ejemplo: un issue de 256 caracteres con receta Fix abre `fix: ` más los primeros 250 y «…».
 - **Recuperar no compara títulos.** Un draft que abrió una versión anterior con el título del issue se recupera igual y no se renombra. En un stack a medias, sólo el PR que falta sale con el título nuevo.
 - **Límite:** con la opción de GitHub «título del commit o del PR» para el squash, un PR de un solo commit toma el asunto de ese commit, no el título del PR.
 
@@ -719,7 +720,7 @@ El wizard pregunta, en orden:
 
 `ref` es la base de Land, la rama de donde el runtime toma el workflow. El detector lee el checkout, así que la opción lo avisa: el workflow tiene que estar en esa rama, no sólo en la del trabajo. `model` y `effort` son opcionales y aceptan los valores del workflow (`claude-opus-5-5`, `claude-sonnet-5-5`, `claude-fable-5-1`, `claude-haiku-4-5`; `low` a `max`). Omitirlos no cambia el hash de una config existente. En `chichex/omi-code` el dispatch sigue pidiendo un sí, aunque `review.mode` sea `auto`.
 
-Guardar sin tomar una recomendación también posterga esa revisión: el harness no insiste. `omi init --development` y `/omi-setup` preguntan siempre. **Esc** cancela sin escribir, aceptar ni desactivar nada.
+Guardar sin tomar una recomendación también posterga esa revisión: el harness no insiste. Si la KB no tiene el bloque, el resumen pregunta «La KB no tiene el lifecycle. ¿Lo creás con esta configuración y la aceptás?», también con una aceptación anterior en esta máquina: el diff contra esa aceptación puede parecer «sin cambios» aunque Guardar cree el bloque. `omi init --development` y `/omi-setup` preguntan siempre. **Esc** cancela sin escribir, aceptar ni desactivar nada.
 
 ## `omi init --development`
 
