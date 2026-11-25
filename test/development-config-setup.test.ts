@@ -6,6 +6,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { agentDir } from "../src/core/paths.ts";
 import { FORMATO_ANTERIOR } from "../src/harness/config-doctor.ts";
 import { foundationsDir, readTrust, trustPath } from "../src/harness/foundations-trust.ts";
 import { DEFAULT_POLICY, parseFoundations, renderFoundationsBlock } from "../src/harness/foundations.ts";
@@ -134,8 +135,82 @@ test("config_setup: una sesión interactiva nueva lo ofrece sola; resume, reload
 	assert.equal(f.asked.length, 0, "abrir una sesión que ya tiene mensajes no es una sesión nueva");
 	for (const reason of ["resume", "reload", "fork"]) { await f.session(reason); assert.equal(f.asked.length, 0, reason); }
 	await f.session("startup"); assert.deepEqual(titles(f), ["Foundations de"], "arranque de una sesión nueva");
-	await f.session("new"); assert.deepEqual(titles(f), ["Foundations de", "Foundations de"], "/new también; Esc no posterga");
+	await f.session("new"); assert.deepEqual(titles(f), ["Foundations de", "Ship de"], "/new sólo ofrece el área que no se abrió antes");
+	await f.session("startup"); assert.deepEqual(titles(f), ["Foundations de", "Ship de"], "un tercer arranque no repite las ofertas");
 	assert.equal(saves(f.kb), 0); assert.equal(await readTrust(foundationsDir(f.home), trustKey(f.kb)), undefined);
+	assert.equal((await readLifecycleTrust(lifecycleTrustDir(f.home), trustKey(f.kb))).kind, "missing", "Esc no equivale a postergar ni aceptar");
+});
+
+test("config_setup: Más adelante al arrancar no repite las áreas y conserva la postergación; otra revisión sí se ofrece", async (t) => {
+	const f = await fixture(t); f.uiControl.questions = () => ["2"];
+	await f.session("startup"); await f.session("new");
+	assert.deepEqual(titles(f), ["Foundations de", "Ship de"]); assert.equal(saves(f.kb), 0);
+	const key = trustKey(f.kb), fd = await readTrust(foundationsDir(f.home), key), lc = await readLifecycleTrust(lifecycleTrustDir(f.home), key);
+	assert.ok(fd); assert.equal(fd.accepted, null); assert.equal(fd.deferred?.revision, "foundations:missing");
+	assert.equal(lc.kind, "valid"); assert.equal(lc.record.accepted, null); assert.match(lc.record.deferred?.revision ?? "", /^missing:/);
+	f.kb.perillas("repo", `\`\`\`omi-foundations\n{ "version": 2, "repo": "${REPO}" }\n\`\`\`\n`);
+	f.uiControl.questions = () => [KEYS.esc]; await f.session("startup");
+	assert.deepEqual(titles(f).slice(2), ["Foundations de"], "un bloque inválido nuevo es otra revisión de Foundations");
+});
+
+test("config_setup: al guardar Foundations en el arranque llega la oferta de lifecycle con la revisión nueva", async (t) => {
+	const f = await fixture(t); f.uiControl.foundations = keepAndSave;
+	f.uiControl.questions = (screen) => /Foundations de/.test(screen) ? ["1"] : [KEYS.esc];
+	await f.session("startup"); await f.session("new");
+	assert.deepEqual(titles(f), ["Foundations de", "Ship de"], "el arranque reclama la ausencia de lifecycle en las perillas recién guardadas");
+	assert.equal(saves(f.kb), 1);
+});
+
+test("config_setup: si el turno se ocupa antes del segundo diálogo, esa área sigue elegible", async (t) => {
+	const f = await fixture(t); let idle = true;
+	Reflect.set(f.context, "isIdle", () => idle);
+	f.uiControl.questions = (screen) => { if (/Foundations de/.test(screen)) { idle = false; return ["2"]; } return [KEYS.esc]; };
+	await f.session("startup"); assert.deepEqual(titles(f), ["Foundations de"]);
+	idle = true; await f.session("new"); assert.deepEqual(titles(f), ["Foundations de", "Ship de"]);
+});
+
+test("config_setup: otra escritura local no cambia la revisión de arranque del lifecycle; otro bloque sí", async (t) => {
+	const f = await fixture(t), block = configuredLifecycle();
+	const key = await acceptLifecycleConfig(f.kb, f.home, f.checkout.root, block), dir = lifecycleTrustDir(f.home);
+	// Otra revisión válida en la KB, todavía pendiente de aceptar.
+	const next = { ...block, ship: { status: "manual" as const, targets: [] } };
+	f.kb.perillas("repo", `${FOUNDATIONS}\n\n${renderLifecycleBlock(next)}`);
+	f.uiControl.questions = () => [KEYS.esc]; await f.session("startup");
+	const trust = await readLifecycleTrust(dir, key); assert.equal(trust.kind, "valid");
+	await writeLifecycleTrust(dir, key, trust.record.revision, { ...trust.record, revision: trust.record.revision + 1 });
+	await f.session("new"); assert.deepEqual(titles(f), ["Ship de"]);
+	f.kb.perillas("repo", `${FOUNDATIONS}\n\n${renderLifecycleBlock({ ...next, corrections: { ...next.corrections, maxRounds: 1 } })}`);
+	await f.session("startup"); assert.deepEqual(titles(f), ["Ship de", "Ship de"]);
+});
+
+test("config_setup: si el registro de arranque no se puede usar, f y s siguen disponibles", async (t) => {
+	const f = await fixture(t); const agent = agentDir(f.home);
+	await mkdir(agent, { recursive: true }); await writeFile(join(agent, "setup-offers"), "no es un directorio");
+	f.uiControl.questions = () => [KEYS.esc]; f.uiControl.foundations = () => [KEYS.esc];
+	await f.session("startup"); assert.deepEqual(titles(f), []);
+	await f.run("omi-foundations"); assert.match(f.foundationsScreens[0]?.[0] ?? "", /Guía Foundations/);
+	await f.run("omi-setup"); assert.deepEqual(titles(f), ["Foundations de"]); assert.equal(saves(f.kb), 0);
+});
+
+test("config_setup: entrar al harness no queda limitado por una oferta de arranque", async (t) => {
+	const f = await fixture(t); f.uiControl.questions = () => [KEYS.esc];
+	await f.session("startup"); assert.deepEqual(titles(f), ["Foundations de"]);
+	// La misma instancia de la extensión, pero se retoma el issue preparado.
+	Reflect.set(f.context, "sessionManager", f.manager); await f.start();
+	assert.deepEqual(titles(f), ["Foundations de", "Foundations de"]);
+});
+
+test("config_setup: publicar el draft no queda limitado por la marca de arranque del lifecycle", async (t) => {
+	const background: Promise<void>[] = [];
+	const { f, gh, kb } = await continuityFixture(t, { background: (work) => background.push(work) }); originHead(f.checkout.root);
+	const block = kb.documents.at(-1)?.cuerpo ?? "";
+	kb.perillas("app", `${renderFoundationsBlock({ version: 2, repo: "acme/app", confirmar: [], politica: { ...DEFAULT_POLICY } })}\n\n${block}`);
+	Reflect.set(f.context, "sessionManager", SessionManager.create(f.checkout.root, join(f.home, "fresh-before-draft")));
+	f.uiControl.questions = () => [KEYS.esc];
+	await f.attach(); await f.emit("session_start", { reason: "startup" }); await Promise.all(background);
+	assert.deepEqual(titles(f), ["Ship de"]);
+	Reflect.set(f.context, "sessionManager", f.manager); await f.attach(); await f.command("pr");
+	assert.deepEqual(titles(f), ["Ship de", "Ship de"]); assert.deepEqual(gh.mutations, []);
 });
 
 // El setup abre un modal que toma el foco: lo que la persona tipea caería en sus opciones («2» es Más adelante).

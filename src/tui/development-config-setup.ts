@@ -10,6 +10,7 @@ import { detectLifecycle, type LifecycleDetection } from "../harness/lifecycle-d
 import { runLifecycleOnboarding, type LifecycleOnboardingOutcome } from "../harness/lifecycle-onboarding.ts";
 import type { LifecycleConfig } from "../harness/lifecycle-schema.ts";
 import { lifecycleTrustDir } from "../harness/lifecycle-trust.ts";
+import { claimSetupOffer, type SetupOfferArea } from "../harness/setup-offers.ts";
 import { askQuestions, canAsk } from "./questions/ask.ts";
 import type { ConfigState } from "./development-config-state.ts";
 import type { ConfigSnapshot } from "./development-config-view.ts";
@@ -19,7 +20,8 @@ import type { DevelopmentSession } from "./development-session.ts";
 export type SetupTrigger = "command" | "harness" | "session" | "publication";
 /** `background`: dónde corre la oferta de una sesión nueva, que espera la lectura de la KB sin frenar el arranque. */
 export interface ConfigSetupDeps { background?: (work: Promise<void>) => void }
-type Parts = { foundations: SetupPart; lifecycle: SetupPart };
+type Parts = Record<SetupOfferArea, SetupPart>;
+type Claim = (area: SetupOfferArea, revision: string) => boolean;
 
 const READ_TIMEOUT_MS = 30_000;
 const NOW = "Configurar ahora", LATER = "Más adelante";
@@ -63,17 +65,20 @@ export class ConfigSetup {
 		if (state?.version !== 2 || state.publication.status !== "opened" || state.lifecycle.status !== "disabled") return;
 		await this.offer(ctx, "publication");
 	}
-	/** Disparo automático: una vez por revisión y sesión, con la lectura que la sesión ya hizo. Un fallo nunca frena nada. */
+	/** Arranque deduplica entre procesos; entrada al harness y publicación mantienen la deduplicación en memoria. */
 	async offer(ctx: ExtensionContext, trigger: Exclude<SetupTrigger, "command">): Promise<void> {
 		const session = this.session;
 		if (session.offline || !session.kb || !canAsk(ctx)) return;
+		const manager = ctx.sessionManager;
+		const canOfferNow = () => !session.lifecycle.signal.aborted && !session.state && !session.lockedReason &&
+			ctx.sessionManager === manager && canAsk(ctx) && ctx.isIdle() && !ctx.hasPendingMessages() && !talking(ctx);
 		try {
 			const reading = await session.foundations.loaded(ctx);
 			if (!reading || session.lifecycle.signal.aborted) return;
 			// La pestaña OMI ve lo mismo que decide el setup.
 			const snapshot = await this.config.snapshot(ctx, reading, trigger === "publication"); this.config.show(ctx, snapshot);
 			const { diagnosis } = snapshot;
-			const fresh = (name: string, part: SetupPart) => part.kind === "run" && !this.offered.has(`${name}:${part.revision}`);
+			const fresh = (name: SetupOfferArea, part: SetupPart) => part.kind === "run" && (trigger === "session" || !this.offered.has(`${name}:${part.revision}`));
 			const parts: Parts = {
 				foundations: trigger !== "publication" && fresh("foundations", diagnosis.foundations) ? diagnosis.foundations : { kind: "none" },
 				lifecycle: (trigger !== "publication" || stopsAtDraft(diagnosis)) && fresh("lifecycle", diagnosis.lifecycle) ? diagnosis.lifecycle : { kind: "none" },
@@ -84,10 +89,13 @@ export class ConfigSetup {
 			// Si la persona ya abrió /omi-setup mientras se leía, manda ése.
 			if (this.busy) return;
 			// Al abrir una sesión, no interrumpe un turno que ya empezó, una charla que empezó mientras leía ni una sesión que cambió.
-			if (trigger === "session" && (session.state || !ctx.isIdle() || ctx.hasPendingMessages() || talking(ctx))) return;
+			if (trigger === "session" && !canOfferNow()) return;
 			// El modal toma el foco: lo que la persona tipea caería en sus opciones. Sólo se avisa.
 			if (trigger === "session" && ctx.ui.getEditorText().trim()) { ctx.ui.notify(typingNotice(parts), "info"); return; }
-			await this.exclusive(() => this.run(ctx, snapshot, parts, trigger));
+			const { key } = snapshot;
+			const claim: Claim | undefined = trigger === "session" ? (area, revision) =>
+				key !== null && canOfferNow() && !ctx.ui.getEditorText().trim() && claimSetupOffer(session.io.homeDir, key, area, revision) : undefined;
+			await this.exclusive(() => this.run(ctx, snapshot, parts, trigger, claim));
 		} catch (error) {
 			if (session.lifecycle.signal.aborted) return;
 			try { ctx.ui.notify(`No se pudo ofrecer la configuración: ${error instanceof Error ? error.message : "falló la lectura"}. Volvé con /omi-setup.`, "warning"); } catch { /* La sesión ya no está. */ }
@@ -125,17 +133,23 @@ export class ConfigSetup {
 		this.busy = true;
 		try { await work(); } finally { this.busy = false; }
 	}
-	/** En orden: Foundations y después el lifecycle. Esc en cualquiera corta el resto. Lo ofrecido no vuelve solo en esta sesión. */
-	private async run(ctx: ExtensionContext, snapshot: ConfigSnapshot, parts: Parts, trigger: SetupTrigger): Promise<void> {
+	/** En orden: Foundations y después el lifecycle. Esc corta el resto, una marca existente sólo saltea su área. */
+	private async run(ctx: ExtensionContext, snapshot: ConfigSnapshot, parts: Parts, trigger: SetupTrigger, claim?: Claim): Promise<void> {
 		const { key } = snapshot;
 		if (!key) return;
-		for (const [name, part] of Object.entries(parts)) { const value = revision(part); if (value) this.offered.add(`${name}:${value}`); }
+		if (trigger !== "session") for (const [name, part] of Object.entries(parts)) { const value = revision(part); if (value) this.offered.add(`${name}:${value}`); }
 		let saved = false;
 		try {
-			const foundations = parts.foundations.kind === "none" ? "skipped" : await this.foundations(ctx, key, snapshot.diagnosis, parts.foundations.revision);
-			saved = foundations === "saved";
-			if (foundations === "cancelled") { ctx.ui.notify(CANCELLED, "info"); return; }
-			if (parts.lifecycle.kind !== "none") saved = await this.lifecycle(ctx, key, snapshot.detection, trigger) || saved;
+			if (parts.foundations.kind !== "none" && (!claim || claim("foundations", parts.foundations.revision))) {
+				const result = await this.foundations(ctx, key, snapshot.diagnosis, parts.foundations.revision);
+				saved = result === "saved";
+				if (result === "cancelled") { ctx.ui.notify(CANCELLED, "info"); return; }
+			}
+			if (parts.lifecycle.kind !== "none") {
+				// El wizard vuelve a leer: si Foundations creó las perillas, cambió la revisión de ausencia del lifecycle.
+				const beforeOffer = claim && ((seen: string) => claim("lifecycle", seen));
+				saved = await this.lifecycle(ctx, key, snapshot.detection, trigger, beforeOffer) || saved;
+			}
 		} finally {
 			// Lo guardado se relee de la KB; un «Más adelante» sólo cambió la aceptación local.
 			this.config.update(ctx, saved ? { kind: "fresh" } : { kind: "reading", reading: snapshot.reading });
@@ -161,11 +175,11 @@ export class ConfigSetup {
 		catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "No se pudo editar Foundations", "warning"); return "failed"; }
 	}
 	/** true si guardó en la KB. */
-	private async lifecycle(ctx: ExtensionContext, key: TrustKey, detection: LifecycleDetection | undefined, trigger: SetupTrigger): Promise<boolean> {
+	private async lifecycle(ctx: ExtensionContext, key: TrustKey, detection: LifecycleDetection | undefined, trigger: SetupTrigger, beforeOffer?: (revision: string) => boolean): Promise<boolean> {
 		const session = this.session, signal = session.lifecycle.signal, base = await this.base(ctx);
 		if (!base) { ctx.ui.notify("Para configurar el lifecycle falta la rama base de origin: corré git remote set-head origin --auto y volvé con /omi-setup. No se guardó nada.", "warning"); return false; }
 		const outcome = await runLifecycleOnboarding({ kb: session.kb, key, cwd: ctx.cwd, base, trustDir: lifecycleTrustDir(session.io.homeDir), detection: detection ?? await detectLifecycle(ctx.cwd, signal),
-			ask: (batch) => askQuestions(ctx, batch, { signal }), now: session.now, signal, ...(trigger === "command" ? { focus: "missing" } : {}) });
+			ask: (batch) => askQuestions(ctx, batch, { signal }), now: session.now, signal, ...(trigger === "command" ? { focus: "missing" } : {}), beforeSessionOffer: beforeOffer });
 		if (outcome.kind === "unavailable" || outcome.kind === "invalid") { ctx.ui.notify(`No se pudo configurar el lifecycle: ${outcome.reason}. No se guardó nada.`, "warning"); return false; }
 		ctx.ui.notify(LIFECYCLE[outcome.kind], "info");
 		if (outcome.kind === "saved" && trigger === "publication") this.adoptHint(ctx, outcome.pin.block);

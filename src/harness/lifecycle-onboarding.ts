@@ -36,8 +36,10 @@ export interface LifecycleOnboardingDeps {
  ask: (batch: QuestionBatch) => Promise<AskResult>; now: () => string; signal: AbortSignal;
  /** La TUI a pedido no repregunta etapas que ya están resueltas. */
  focus?: "missing";
+ /** Sólo para startup/new: reclama la revisión diagnosticada al llegar a la primera pregunta. */
+ beforeSessionOffer?: (revision: string) => boolean;
 }
-export type LifecycleOnboardingOutcome = { kind: "saved"; pin: LifecycleAcceptance } | { kind: "deferred"; revision: string } | { kind: "cancelled" } | { kind: "declined" } | { kind: "unavailable" | "invalid"; reason: string };
+export type LifecycleOnboardingOutcome = { kind: "saved"; pin: LifecycleAcceptance } | { kind: "deferred"; revision: string } | { kind: "cancelled" } | { kind: "declined" | "suppressed" } | { kind: "unavailable" | "invalid"; reason: string };
 const KEEP_SHIP = "Mantener Ship actual", CONFIGURE = "Configurar ahora", LATER = "Más adelante", NOT_APPLICABLE = "Este repo no necesita Ship", MANUAL = "Manual (sin destino verificable)", RECEIPT = "Recibo del proveedor", SAVE = "Guardar y aceptar", SKIP = "No guardar";
 const RECOVERY: Record<string, "stop" | "rollback" | "fix-forward"> = { "Detener (stop)": "stop", Rollback: "rollback", "Fix-forward": "fix-forward" };
 const MODES: Record<string, "ask" | "auto"> = { "Preguntar antes (ask)": "ask", "Automático (auto)": "auto" };
@@ -118,6 +120,7 @@ export async function runLifecycleOnboarding(deps: LifecycleOnboardingDeps): Pro
  const continuity = !focused || state.recommendations.some(r => r.kind === "continuity");
  // Si la KB cambió entre el diagnóstico de la TUI y esta lectura, no se reabre algo ya resuelto.
  if (!ship && !review && !continuity && state.status !== "pending") return { kind: "declined" };
+ if (deps.beforeSessionOffer && (!state.revision || !shouldOfferLifecycleOnboarding("harness", state, local) || !deps.beforeSessionOffer(state.revision))) return { kind: "suppressed" };
  const draft = ship || !existing ? await askShip(deps, existing, state.recommendations) : structuredClone(existing);
  if (draft === "deferred") return defer();
  if (draft === "cancelled") return { kind: "cancelled" };
