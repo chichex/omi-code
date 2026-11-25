@@ -1,12 +1,14 @@
 // fd y rg viajan dentro del runtime para que Pi no los baje de GitHub al arrancar. Versión, URL y
 // SHA-256 de cada plataforma están fijados en bundled-tools.json: un asset que no coincide corta el
-// build. Las descargas quedan en un cache por hash, así un rebuild no vuelve a la red.
+// build. Las descargas quedan en un cache por hash, así un rebuild no vuelve a la red. Un corte de red
+// pasajero se reintenta: no voltea un release.
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmod, cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { BUNDLED_TOOLS_DIR } from "../src/core/runtime.ts";
 import { PLATFORMS, type Platform } from "../src/upgrade/release.ts";
 import manifest from "./bundled-tools.json" with { type: "json" };
@@ -47,6 +49,9 @@ export interface FetchOptions {
 }
 
 const DOWNLOAD_TIMEOUT_MS = 120_000;
+/** Espera antes de cada reintento. Con tres, son 4 intentos y 7 s de espera como mucho. */
+const RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
+const DOWNLOAD_ATTEMPTS = RETRY_DELAYS_MS.length + 1;
 const ARCHIVE_SUFFIX = ".tar.gz";
 
 function sha256(content: Buffer): string {
@@ -57,11 +62,61 @@ export function defaultCacheDir(env: NodeJS.ProcessEnv = process.env): string {
 	return join(env.XDG_CACHE_HOME || join(homedir(), ".cache"), "omi-code", "tools");
 }
 
-const download: Download = async (url) => {
-	const response = await fetch(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
-	if (!response.ok) throw new Error(`download_failed: ${url} respondió ${response.status}`);
-	return Buffer.from(await response.arrayBuffer());
-};
+export interface DownloadDeps {
+	/** Por defecto, el fetch global. */
+	fetch?: (url: string, init: { signal: AbortSignal }) => Promise<Response>;
+	sleep?: (ms: number) => Promise<void>;
+	/** Una línea por reintento. Por defecto, a stderr. */
+	log?: (line: string) => void;
+	/** Vale para cada intento, no para la descarga entera. */
+	timeoutMs?: number;
+}
+
+class HttpStatusError extends Error {
+	readonly status: number;
+	constructor(status: number) {
+		super(`respondió ${status}`);
+		this.status = status;
+	}
+}
+
+/** Un 4xx que no es 408 ni 429 no cambia al reintentar: por ejemplo, un 404 por una URL mal fijada. */
+const isTransientStatus = (status: number): boolean => status === 408 || status === 429 || status >= 500;
+
+/** El mensaje y el de su causa, como `fetch failed (other side closed)`. */
+function reason(error: unknown): string {
+	if (!(error instanceof Error)) return String(error);
+	return error.cause instanceof Error ? `${error.message} (${error.cause.message})` : error.message;
+}
+
+/**
+ * Baja una URL con hasta DOWNLOAD_ATTEMPTS intentos. Reintenta lo que puede ser un corte pasajero: un fetch que
+ * rechaza, un timeout, un cuerpo cortado o un HTTP 408, 429 o 5xx. El hash se verifica afuera: no se reintenta.
+ */
+export function retryingDownload(deps: DownloadDeps = {}): Download {
+	const get = deps.fetch ?? fetch;
+	const sleep = deps.sleep ?? delay;
+	const log = deps.log ?? ((line: string) => { process.stderr.write(`${line}\n`); });
+	const timeoutMs = deps.timeoutMs ?? DOWNLOAD_TIMEOUT_MS;
+	return async (url) => {
+		for (let attempt = 1; ; attempt++) {
+			try {
+				// El mismo signal corta también la lectura del cuerpo.
+				const response = await get(url, { signal: AbortSignal.timeout(timeoutMs) });
+				if (!response.ok) throw new HttpStatusError(response.status);
+				return Buffer.from(await response.arrayBuffer());
+			} catch (error) {
+				if (error instanceof HttpStatusError && !isTransientStatus(error.status)) throw new Error(`download_failed: ${url} ${error.message}`, { cause: error });
+				const wait = RETRY_DELAYS_MS[attempt - 1];
+				if (wait === undefined) throw new Error(`download_failed: ${url} falló tras ${attempt} intentos: ${reason(error)}`, { cause: error });
+				log(`bundled_tools: reintento ${attempt + 1}/${DOWNLOAD_ATTEMPTS} de ${url}: ${reason(error)}`);
+				await sleep(wait);
+			}
+		}
+	};
+}
+
+const download = retryingDownload();
 
 /** Falla si falta una plataforma, si un asset no sale de las releases de su repo o si un hash no es SHA-256. */
 export function checkManifest(tools: ToolManifest): void {

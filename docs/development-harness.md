@@ -261,7 +261,7 @@ Sólo **Guardar explícitamente** desde el panel escribe una revisión de las pe
 
 - Se abre con **f** en la vista OMI (Ctrl 5), «Foundations» en la paleta (Ctrl K), `/omi-foundations`, `/omi-work foundations` o **Editar reglas** del permiso. No inicia ni retoma trabajo. Sin ninguna v2 aceptada, el [setup](#setup-de-lo-que-falta) lo ofrece solo al entrar al harness y al abrir una sesión interactiva nueva, con **Configurar ahora** o **Más adelante**; nunca al hacer reload, resume ni restore. Ofrecerlo no cambia las políticas: sin Foundations v2 nada pregunta.
 - Encabezado Foundations + repo, políticas en filas apiladas y editor amplio de una regla por línea, con foco evidente, wrap/scroll y colores del tema. Guardar/Cancelar quedan visibles. No es un wizard por pestañas, JSON ni una respuesta libre de `omi_ask`.
-- Entrar/reabrir precarga la v2 vigente sin aceptarla. Ausencia/v1 empieza con reglas vacías y las políticas del default (`auto`), nunca comandos anteriores ni sugerencias. La aceptación anterior y la precarga son datos separados en el diff.
+- Entrar/reabrir precarga la v2 vigente sin aceptarla. Si la KB no tiene el bloque, rige lo último aceptado en esta máquina y la guía parte de ahí, para no perderlo. Lo dice en la primera pregunta: «La KB no tiene Foundations. El borrador parte de lo que aceptaste antes en esta máquina (revisión 1a2b3c4d). Guardar lo crea en la KB.» El resumen pregunta «La KB no tiene Foundations. ¿Lo creás con estas reglas y políticas?», así no parece «sin cambios». Sin nada aceptado, o con v1, empieza con reglas vacías y las políticas del default (`auto`), nunca comandos de la v1 ni sugerencias. La aceptación anterior y la precarga son datos separados en el diff.
 - Tab/Shift+Tab cambia foco; Espacio/Enter alterna una política. En el editor, Enter o Ctrl+J agrega línea; líneas exactamente vacías se omiten, espacios al borde/duplicados no se recortan ni deduplican. Pegados largos quedan editables, no marcadores; controles/invisibles se rechazan sin normalizarlos a reglas válidas y se conserva el borrador previo.
 - Ctrl+S valida y abre revisión vertical; otro Ctrl+S guarda deliberadamente. Esc en revisión vuelve con el borrador; Esc en editor/Ctrl+C cancela. Los errores conservan texto, políticas y número original de línea. Las reglas largas en revisión usan marcadores de continuación y escapes para no perder espacios.
 - Usable en 80×24 y resize a 132×40, tema claro/oscuro. Un pane que no permite inspeccionar suspende Guardar, no la cancelación. Las pruebas de renderer no equivalen a una evaluación visual humana.
@@ -365,7 +365,7 @@ En `specified`, junto a los pasos, `stack` agrupa los pasos C en PRs:
 
 - Cada PR pasa las mismas validaciones que el PR único: aprobación vigente, HEAD verificado y limpio, repo y `origin`, pedido sin cambios, hash del recibo y recuperación sin duplicar. Antes de escribir se arman todos los cuerpos (si uno no entra en GitHub, no se abre ninguno) y se comprueba que cada commit esté debajo del de arriba.
 - Push normal del SHA de cada grupo a su rama, sin force ni tags. La rama del worktree no se sube.
-- Título: `<título del issue> · PR k/n: <título del grupo>`.
+- Título: `<título del PR> · PR k/n: <título del grupo>`, con el tipo una sola vez, al principio (ver «Título del PR draft»). Ejemplo: `feat: Trabajo grande · PR 1/2: Modelo`.
 - El cuerpo es el mismo Markdown del PR único (ver «Cuerpo del PR draft»), con su encabezado propio: `Refs #N` o `Closes #N` y la línea del stack. Ejemplo: ``Stack: PR 2 de 2 · pasos C3 · sobre #123 (rama `feat/issue-46-1`)``. El texto de cada PR dice si cierra el issue o no.
 - Sólo el último PR cierra el issue (`Closes #N`); los de abajo lo referencian (`Refs #N`). GitHub lo cierra cuando ese PR entra en `main`.
 - Si la publicación se corta a mitad, volver a publicar recupera los PRs ya abiertos (por rama, base, head y cuerpo exactos) y sigue con el que falta. Un PR ajeno en una rama del stack frena; los de abajo ya abiertos quedan.
@@ -469,6 +469,20 @@ El harness no crea comentarios en el issue. Su estado va en una **sección admin
 - **Comentarios viejos:** los que dejaron versiones anteriores quedan en GitHub; OMI no los borra ni los edita.
 
 El cuerpo de un issue admite 65.536 caracteres. Si el pedido más la sección no entran, la sección se resume y lo dice en un aviso al principio: primero la evidencia queda con la última prueba de cada caso y cada lente con su primer hallazgo; si tampoco entra, queda una sección mínima (ruta, etapa y veredictos de los lentes) que nombra lo que omite. Nada se corta en silencio y el pedido nunca se toca. Si ni la mínima entra, no se escribe y OMI avisa.
+
+### Título del PR draft
+
+El título del PR es un commit convencional. Al mergear con squash, GitHub usa el título del PR como asunto del commit en `main`. Un release continuo decide la versión por ese asunto. Ejemplo, en omi-code: `feat:` sube el minor y `fix:`, el patch.
+
+- **Tipo de la receta aprobada.** Va adelante del título del issue. Nueva capacidad y Mejora son `feat:`, porque cambian lo que se ve; Fix es `fix:` y Chore, `chore:`. Ejemplo: el issue «Guiar la configuración de Foundations y lifecycle en la TUI», con una receta de Nueva capacidad, abre `feat: Guiar la configuración de Foundations y lifecycle en la TUI`.
+- **Manda la receta, no la rama.** Es el tipo que aprobó la persona y el que muestra el cuerpo del PR. Ejemplo: una rama `feat/issue-46` cuya receta quedó como Fix abre `fix: …`.
+- **Un título que ya es convencional queda igual.** Vale con los tipos y el formato del gate de commits: `tipo(scope)?!?: resumen`, scope en minúsculas. Ejemplo: `fix(harness): PRs en Markdown` no cambia. `Fix: algo` no es convencional: con una receta de Fix abre `fix: Fix: algo`.
+- **Sin receta**, el título es el del issue, como antes.
+- **Stack:** el tipo va una vez, al principio del título completo (ver «Stack de PRs»).
+- **Fix-forward:** siempre `fix:`, porque corrige un PR ya mergeado. Se saca el tipo, el scope y el `!` del título del issue. Ejemplo: `feat(tienda)!: Cambio` abre `fix: Cambio`. El recibo del fix-forward sigue guardando el título del issue.
+- **Máximo 256 caracteres,** el límite de GitHub. Si el tipo lo pasa, se recorta el final del resumen con «…» y se conservan el tipo y, en un stack, ` · PR k/n: <grupo>`. Ejemplo: un issue de 256 caracteres con receta Fix abre `fix: ` más los primeros 250 y «…».
+- **Recuperar no compara títulos.** Un draft que abrió una versión anterior con el título del issue se recupera igual y no se renombra. En un stack a medias, sólo el PR que falta sale con el título nuevo.
+- **Límite:** con la opción de GitHub «título del commit o del PR» para el squash, un PR de un solo commit toma el asunto de ese commit, no el título del PR.
 
 ### Cuerpo del PR draft
 
@@ -644,6 +658,8 @@ Se dispara solo, sin apretar nada:
 
 Nunca offline, sin UI (print o RPC), con la KB no disponible, ni al restaurar, recargar (`/reload`), retomar (resume) o bifurcar (fork) una sesión. Una sesión que ya tiene mensajes no es nueva. Se ofrece una vez por revisión y sesión.
 
+Al abrir una sesión nueva, cada área deja una marca en `<OMI_HOME>/agent/setup-offers` justo antes de su primera pregunta. Así otra sesión u otro proceso no repite la oferta. Verla y cerrarla con Esc la consume. Si la pregunta no llegó a mostrarse, la marca se libera y la próxima sesión nueva la vuelve a ofrecer. Por ejemplo, si la sesión se cerró antes de montar la pregunta o la UI falló. Un error de disco al marcar o al liberar falla cerrado, por ejemplo con un home de sólo lectura. El costo: esa oferta automática se pierde sin aviso. `/omi-setup` y **f** siguen funcionando.
+
 Corre un setup a la vez. Si la persona lanza `/omi-setup` mientras la oferta de una sesión nueva todavía lee la KB, manda el comando y la oferta no abre nada. Si el setup ya está abierto, `/omi-setup` no abre otro: «Ya hay un setup abierto. Terminalo o cerralo con Esc, y volvé con /omi-setup. No se cambió nada.»
 
 El wizard del lifecycle necesita la rama base de `origin/HEAD`. Sin ella, el disparo automático lo omite sin avisar, y `/omi-setup` dice cómo resolverlo: «corré git remote set-head origin --auto y volvé con /omi-setup».
@@ -689,6 +705,8 @@ El [setup](#setup-de-lo-que-falta) ofrece el mismo wizard que `omi init --develo
 
 No aparece en consultas simples ni en needs-info, que siguen en el chat. Se ofrece una vez por revisión de la configuración y sesión.
 
+`/omi-setup` no repregunta lo que el bloque de la KB ya resuelve: por ejemplo, con Ship y continuidad configurados sólo propone la Review GHA. Sin bloque no hay nada resuelto: recorre todas las etapas, como `omi init --development`, haya o no recomendaciones.
+
 El wizard pregunta, en orden:
 
 1. **Ship.** Con una config válida, **Mantener Ship actual** va primero y conserva los destinos tal cual (rollback, probes, timeouts), sin reingresarlos. **Configurar ahora** propone destino, verificación y recuperación con lo detectado. **Más adelante** posterga esa revisión: no se vuelve a ofrecer hasta que cambie. **Este repo no necesita Ship** lo guarda como no-aplica.
@@ -702,7 +720,7 @@ El wizard pregunta, en orden:
 
 `ref` es la base de Land, la rama de donde el runtime toma el workflow. El detector lee el checkout, así que la opción lo avisa: el workflow tiene que estar en esa rama, no sólo en la del trabajo. `model` y `effort` son opcionales y aceptan los valores del workflow (`claude-opus-5-5`, `claude-sonnet-5-5`, `claude-fable-5-1`, `claude-haiku-4-5`; `low` a `max`). Omitirlos no cambia el hash de una config existente. En `chichex/omi-code` el dispatch sigue pidiendo un sí, aunque `review.mode` sea `auto`.
 
-Guardar sin tomar una recomendación también posterga esa revisión: el harness no insiste. `omi init --development` y `/omi-setup` preguntan siempre. **Esc** cancela sin escribir, aceptar ni desactivar nada.
+Guardar sin tomar una recomendación también posterga esa revisión: el harness no insiste. Si la KB no tiene el bloque, el resumen pregunta «La KB no tiene el lifecycle. ¿Lo creás con esta configuración y la aceptás?», también con una aceptación anterior en esta máquina: el diff contra esa aceptación puede parecer «sin cambios» aunque Guardar cree el bloque. `omi init --development` y `/omi-setup` preguntan siempre. **Esc** cancela sin escribir, aceptar ni desactivar nada.
 
 ## `omi init --development`
 

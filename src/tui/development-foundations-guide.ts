@@ -1,6 +1,6 @@
 // Preguntas de Foundations: construyen un borrador local; el guardado y sus guardas viven fuera de la guía.
 import {
-	ASK_HELP, AUTO_WARNINGS, DEFAULT_POLICY, MAX_RULES, foundationsDiff, ruleProblem, visibleText,
+	ASK_HELP, AUTO_WARNINGS, DEFAULT_POLICY, MAX_RULES, foundationsDiff, foundationsHash, ruleProblem, visibleText,
 	type FoundationsBlock, type PolicyMode, type PolicyPoint,
 } from "../harness/foundations.ts";
 import type { TrustKey } from "../harness/foundations-trust.ts";
@@ -13,6 +13,8 @@ const KEEP_RULES = "Conservar reglas", EDIT_RULES = "Cambiar reglas";
 const REVIEW = "Revisar borrador", ADD = "Agregar regla", REMOVE = "Quitar regla", BACK = "Volver a reglas";
 const SAVE = "Guardar", CANCEL = "No guardar";
 const ABOUT_RULES = "Un patrón coincidente pide tu sí antes del comando. No es una lista de permisos. Los comandos compuestos también piden el sí.";
+/** Una sola línea: el detalle del resumen pagina y no puede perder filas. */
+const SAVE_PROMPT = "¿Guardás estas reglas y políticas en la KB?", CREATE_PROMPT = "La KB no tiene Foundations. ¿Lo creás con estas reglas y políticas?";
 const SYNTAX = "Escribí un patrón para la línea completa. * = cualquier texto; ? = un carácter; \\*, \\? y \\\\ son literales.";
 
 function question(id: string, header: string, prompt: string, options: [string, string][], detail?: string): Question {
@@ -63,11 +65,16 @@ async function editRules(ask: Ask, rules: string[]): Promise<boolean> {
 	}
 }
 
-interface GuideInput { key: TrustKey; initial: FoundationsBlock | undefined; previousAccepted: FoundationsBlock | undefined; notice: string | undefined }
-export async function guideFoundations({ key, initial, previousAccepted, notice }: GuideInput, ask: Ask): Promise<FoundationsBlock | undefined> {
+/** `missing`: la KB no tiene el bloque. Guardar lo crea, y un `initial` es lo aceptado antes en esta máquina. */
+interface GuideInput { key: TrustKey; initial: FoundationsBlock | undefined; previousAccepted: FoundationsBlock | undefined; notice: string | undefined; missing: boolean }
+/** Precargar lo aceptado sin decirlo parecía la configuración de la KB (review de #93). */
+const restored = (block: FoundationsBlock) =>
+	`La KB no tiene Foundations. El borrador parte de lo que aceptaste antes en esta máquina (revisión ${foundationsHash(block).slice(0, 8)}). Guardar lo crea en la KB.`;
+export async function guideFoundations({ key, initial, previousAccepted, notice, missing }: GuideInput, ask: Ask): Promise<FoundationsBlock | undefined> {
 	const block: FoundationsBlock = initial ? structuredClone(initial) : { version: 2, repo: key.repo, confirmar: [], politica: { ...DEFAULT_POLICY } };
+	const intro = notice ?? (missing && initial ? restored(initial) : undefined);
 	const first = await ask({ title: `${GUIDE} · ${key.repo}`, questions: [
-		...POINTS.map(([point, label], i) => policyQuestion(point, label, block.politica[point], i === 0 ? notice : undefined)),
+		...POINTS.map(([point, label], i) => policyQuestion(point, label, block.politica[point], i === 0 ? intro : undefined)),
 		question("rules", "Reglas", "¿Conservás las reglas de comandos?", [[KEEP_RULES, "Deja los patrones como están"], [EDIT_RULES, "Permite agregar, cambiar o quitar una regla por vez"]],
 			`${ABOUT_RULES}\n${block.confirmar.length ? block.confirmar.map((rule) => `• ${visibleText(rule)}`).join("\n") : "Sin reglas vigentes."}`),
 	] });
@@ -78,7 +85,8 @@ export async function guideFoundations({ key, initial, previousAccepted, notice 
 		if (changeRules && !await editRules(ask, block.confirmar)) return undefined;
 		const detail = `${foundationsDiff(previousAccepted, block, key)}\nGuardar no ejecuta comandos ni concede grants. Las demás restricciones de OMI siguen vigentes.`;
 		const saveHint = block.confirmar.length ? "Guarda y acepta esta configuración" : "Lista vacía: ningún comando del proyecto pide confirmación por esta política";
-		const accept = { ...question("save", "Guardar", "¿Guardás estas reglas y políticas en la KB?", [[SAVE, saveHint], [BACK, "Vuelve al borrador sin guardar"], [CANCEL, "Sale sin guardar ni aceptar"]], detail), recommended: false };
+		// El diff es contra lo aceptado: sin bloque en la KB, la pregunta dice que Guardar lo crea. Si no, parecería «sin cambios».
+		const accept = { ...question("save", "Guardar", missing ? CREATE_PROMPT : SAVE_PROMPT, [[SAVE, saveHint], [BACK, "Vuelve al borrador sin guardar"], [CANCEL, "Sale sin guardar ni aceptar"]], detail), recommended: false };
 		const answer = await ask({ title: `${GUIDE} · Resumen`, questions: [accept] });
 		if (answer.status === "cancelled") return undefined;
 		const picked = choice(answer.answers, "save");
