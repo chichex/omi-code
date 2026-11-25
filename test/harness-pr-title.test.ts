@@ -67,8 +67,8 @@ test("el título nunca pasa los 256 caracteres de GitHub: se recorta el resumen 
  const single = pullRequestTitle(workflow(exact, "add"));
  assert.equal(chars(single), 256); assert.ok(single.startsWith("feat: a"), single.slice(0, 10)); assert.ok(single.endsWith("a…"), "recorte visible");
  assert.equal(pullRequestTitle(workflow("a".repeat(250), "add")), `feat: ${"a".repeat(250)}`, "si entra, queda entero");
- const wide = pullRequestTitle(workflow("ñ".repeat(255), "fix"));
- assert.equal(chars(wide), 256, "cuenta caracteres, no unidades UTF-16"); assert.ok(wide.startsWith("fix: ñ"));
+ const wide = pullRequestTitle(workflow("😀".repeat(255), "fix"));
+ assert.equal(chars(wide), 256, "cuenta caracteres, no unidades UTF-16"); assert.ok(wide.length > 256 && Array.from(wide).every(c => c.codePointAt(0)! < 0xd800 || c.codePointAt(0)! > 0xdfff), "sin cortar un par sustituto"); assert.ok(wide.startsWith("fix: 😀"));
  const stack = pullRequestTitle(stacked(workflow("b".repeat(256), "add")), { index: 1 });
  assert.equal(chars(stack), 256); assert.ok(stack.startsWith("feat: b")); assert.ok(stack.endsWith("b… · PR 2/2: Vista"), stack.slice(-25));
  const forward = pullRequestTitle(fixForward(workflow(`feat: ${"c".repeat(250)}`, "add")));
