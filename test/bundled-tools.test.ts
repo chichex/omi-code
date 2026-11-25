@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
-import { BUNDLED_TOOLS, checkManifest, fetchTools, fetchVerified, stageTools, type BundledTool, type ToolManifest } from "../scripts/bundled-tools.ts";
+import { BUNDLED_TOOLS, checkManifest, fetchTools, fetchVerified, retryingDownload, stageTools, type BundledTool, type ToolManifest } from "../scripts/bundled-tools.ts";
 import { buildRelease } from "../scripts/build-release.ts";
 import { PLATFORMS } from "../src/upgrade/release.ts";
 import { tempDir } from "./helpers/io.ts";
@@ -85,6 +87,128 @@ test("fetchVerified_un cache alterado se vuelve a bajar y se verifica", async (t
 	await assert.rejects(fetchVerified(ASSET, cache, async () => Buffer.from("también alterado")), /checksum_mismatch/);
 	assert.equal((await fetchVerified(ASSET, cache, async () => Buffer.from("bueno"))).toString(), "bueno");
 	assert.equal(await readFile(join(cache, cached), "utf8"), "bueno");
+});
+
+type Attempt = (signal: AbortSignal) => Response | Promise<Response>;
+
+/** Un fetch que contesta cada intento con el paso que le toca. Anota intentos, esperas y líneas de log. */
+function scriptedDownload(attempts: Attempt[], timeoutMs?: number) {
+	const seen = { calls: 0, abortedAtStart: [] as boolean[], sleeps: [] as number[], logs: [] as string[] };
+	const download = retryingDownload({
+		fetch: async (url, { signal }) => {
+			assert.equal(url, ASSET.url);
+			const attempt = attempts[seen.calls++];
+			if (attempt === undefined) throw new Error(`intento de más: ${seen.calls}`);
+			seen.abortedAtStart.push(signal.aborted);
+			return attempt(signal);
+		},
+		sleep: async (ms) => { seen.sleeps.push(ms); },
+		log: (line) => { seen.logs.push(line); },
+		...(timeoutMs === undefined ? {} : { timeoutMs }),
+	});
+	return { download, seen };
+}
+
+const ok: Attempt = () => new Response("bueno");
+const status = (code: number): Attempt => () => new Response("error", { status: code });
+// Lo que tira undici cuando GitHub corta el socket, como en el release del PR #94.
+const socketClosed: Attempt = () => { throw new TypeError("fetch failed", { cause: Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" }) }); };
+const bodyCut: Attempt = () => {
+	let pulls = 0;
+	return new Response(new ReadableStream({
+		pull(controller) {
+			if (pulls++ === 0) controller.enqueue(Buffer.from("bue"));
+			else controller.error(new TypeError("terminated", { cause: new Error("other side closed") }));
+		},
+	}));
+};
+// El timer de AbortSignal.timeout no retiene el event loop: el intervalo hace de socket abierto.
+const hangs: Attempt = (signal) => new Promise((_, reject) => {
+	const socket = setInterval(() => {}, 1_000);
+	signal.addEventListener("abort", () => { clearInterval(socket); reject(signal.reason); }, { once: true });
+});
+const retryLine = (attempt: number, reason: string) => `bundled_tools: reintento ${attempt}/4 de ${ASSET.url}: ${reason}`;
+
+test("retryingDownload_un corte de red se reintenta con espera exponencial y una línea por reintento", async () => {
+	const { download, seen } = scriptedDownload([socketClosed, socketClosed, ok]);
+	assert.equal((await download(ASSET.url)).toString(), "bueno");
+	assert.equal(seen.calls, 3);
+	assert.deepEqual(seen.sleeps, [1_000, 2_000]);
+	assert.deepEqual(seen.logs, [retryLine(2, "fetch failed (other side closed)"), retryLine(3, "fetch failed (other side closed)")]);
+});
+
+test("retryingDownload_HTTP 408, 429 y 5xx se reintentan", async () => {
+	for (const code of [408, 429, 500, 502, 503, 504]) {
+		const { download, seen } = scriptedDownload([status(code), ok]);
+		assert.equal((await download(ASSET.url)).toString(), "bueno", `${code}`);
+		assert.deepEqual(seen.logs, [retryLine(2, `respondió ${code}`)]);
+	}
+});
+
+test("retryingDownload_otro 4xx falla al primer intento, sin esperar", async () => {
+	for (const code of [400, 401, 403, 404, 410]) {
+		const { download, seen } = scriptedDownload([status(code), ok]);
+		await assert.rejects(download(ASSET.url), { message: `download_failed: ${ASSET.url} respondió ${code}` });
+		assert.deepEqual({ calls: seen.calls, sleeps: seen.sleeps, logs: seen.logs }, { calls: 1, sleeps: [], logs: [] }, `${code}`);
+	}
+});
+
+test("retryingDownload_un cuerpo que se corta a mitad se reintenta", async () => {
+	const { download, seen } = scriptedDownload([bodyCut, ok]);
+	assert.equal((await download(ASSET.url)).toString(), "bueno");
+	assert.deepEqual(seen.logs, [retryLine(2, "terminated (other side closed)")]);
+});
+
+test("retryingDownload_un intento que vence su timeout se reintenta con un timeout nuevo", async () => {
+	const { download, seen } = scriptedDownload([hangs, ok], 5);
+	assert.equal((await download(ASSET.url)).toString(), "bueno");
+	assert.deepEqual(seen.abortedAtStart, [false, false], "cada intento arranca con su propio timeout");
+	assert.equal(seen.logs.length, 1);
+	assert.match(seen.logs[0] ?? "", /^bundled_tools: reintento 2\/4 de https:\/\/github\.com\/.+: .*timeout/);
+});
+
+test("retryingDownload_se rinde tras 4 intentos, dice cuántos y conserva la causa", async () => {
+	const network = scriptedDownload([socketClosed, socketClosed, socketClosed, socketClosed]);
+	await assert.rejects(network.download(ASSET.url), (error: Error) => {
+		assert.equal(error.message, `download_failed: ${ASSET.url} falló tras 4 intentos: fetch failed (other side closed)`);
+		assert.ok(error.cause instanceof TypeError);
+		assert.equal(error.cause.message, "fetch failed");
+		assert.equal((error.cause.cause as Error).message, "other side closed");
+		return true;
+	});
+	assert.equal(network.seen.calls, 4);
+	assert.deepEqual(network.seen.sleeps, [1_000, 2_000, 4_000]);
+	assert.deepEqual(network.seen.logs.map((line) => line.split(":")[1]), [" reintento 2/4 de https", " reintento 3/4 de https", " reintento 4/4 de https"]);
+	const http = scriptedDownload([status(503), status(503), status(503), status(503)]);
+	await assert.rejects(http.download(ASSET.url), { message: `download_failed: ${ASSET.url} falló tras 4 intentos: respondió 503` });
+});
+
+test("fetchVerified_un SHA-256 que no coincide no se reintenta", async (t) => {
+	const { download, seen } = scriptedDownload([() => new Response("alterado"), ok]);
+	await assert.rejects(fetchVerified(ASSET, await tempDir(t), download), /checksum_mismatch/);
+	assert.deepEqual({ calls: seen.calls, logs: seen.logs }, { calls: 1, logs: [] });
+});
+
+test("retryingDownload_con el fetch real, un socket que se cierra antes de responder o a mitad del cuerpo se reintenta", async (t) => {
+	let requests = 0;
+	const server = createServer((request, response) => {
+		requests++;
+		if (requests === 1) { request.socket.destroy(); return; }
+		if (requests === 2) {
+			response.writeHead(200, { "content-length": "5" });
+			response.write("bue", () => request.socket.destroy());
+			return;
+		}
+		response.end("bueno");
+	});
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	t.after(() => { server.closeAllConnections(); server.close(); });
+	const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/fd.tar.gz`;
+	const logs: string[] = [];
+	const download = retryingDownload({ sleep: async () => {}, log: (line) => { logs.push(line); } });
+	assert.equal((await download(url)).toString(), "bueno");
+	assert.equal(requests, 3);
+	assert.deepEqual(logs, [`bundled_tools: reintento 2/4 de ${url}: fetch failed (other side closed)`, `bundled_tools: reintento 3/4 de ${url}: terminated (other side closed)`]);
 });
 
 test("buildRelease_un asset que no coincide con el manifiesto corta el build antes de compilar", async (t) => {
