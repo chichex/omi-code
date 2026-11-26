@@ -234,3 +234,42 @@ test("development_lenses un abort de la persona no reintenta: ni durante la llam
 	await f.invoke("omi_workflow_lens", { lens: "quality" }, during.signal);
 	assert.equal(f.modelCalls.length - before, 2, "un abort durante la llamada tampoco reintenta");
 });
+
+const isSecurity = (call: unknown) => /\bseguridad\b/.test((call as LensCall).systemPrompt) && !(call as LensCall).systemPrompt.includes("Evaluá cada caso D");
+const verifyStage = (f: Awaited<ReturnType<typeof verifying>>) => (f.progress.at(-1) as { progress: { stages: { id: string; status: string }[] } }).progress.stages.find((s) => s.id === "verify")?.status;
+
+test("development_lenses security con sólo avisos no frena Verificar: el progreso y el PR los muestran como aviso", async (t) => {
+	const f = await verifying(t, ["security"], {}, FAST);
+	f.modelControl.reply = () => JSON.stringify({ verdict: "fail", findings: [{ severity: "aviso", finding: "value.cjs:1 · el valor queda en el log" }] });
+	const result = await f.invoke("omi_workflow_lens", { lens: "security" });
+	const prompt = (f.modelCalls.at(-1) as LensCall).systemPrompt;
+	for (const pattern of [/un solo usuario/, /otros usuarios locales/, /KB compartida/, /salvaguardas que piden a una persona/, /"severity"/]) assert.match(prompt, pattern);
+	assert.equal(result.isError, false); assert.match(answer(result).notice ?? "", /no bloquea Verificar/);
+	assert.equal(verifyStage(f), "warning");
+	await f.action({ action: "verified" }); assert.equal((await f.state()).phase, "pr");
+	await f.action({ action: "publish" });
+	assert.match(f.remote.prBody, /^ {2}- \*\*Seguridad:\*\* ❌ fail\n {4}- aviso · value\.cjs:1 · el valor queda en el log$/m);
+});
+
+test("development_lenses security: un blocker o una severidad inválida frenan Verificar; los demás lentes piden el formato de siempre", async (t) => {
+	const f = await verifying(t, ["security", "compliance"], {}, FAST);
+	f.modelControl.reply = (input) => JSON.stringify(isSecurity(input) ? { verdict: "fail", findings: [{ severity: "aviso", finding: "value.cjs:1 · el log podría crecer" }, { severity: "alta", finding: "value.cjs:1 · manda el diff a un servidor que eligió la KB" }] } : { verdict: "pass", findings: [] });
+	const security = await f.invoke("omi_workflow_lens", { lens: "security" });
+	assert.equal(security.isError, true); assert.match(JSON.stringify(security.content), /blocker/);
+	assert.deepEqual((await f.state()).reviews.at(-1)?.findings, ["value.cjs:1 · manda el diff a un servidor que eligió la KB", "value.cjs:1 · el log podría crecer"], "el blocker va primero");
+	await f.invoke("omi_workflow_lens", { lens: "compliance" });
+	const compliance = (f.modelCalls.at(-1) as LensCall).systemPrompt;
+	assert.match(compliance, /"findings":\["archivo:línea · evidencia"\]/); assert.doesNotMatch(compliance, /severity|un solo usuario/);
+	await assert.rejects(f.action({ action: "verified" }), /seguridad/);
+	assert.equal(verifyStage(f), "failed");
+});
+
+test("development_lenses un blocker de security con una clave de más bloquea Verificar: no queda sin resultado", async (t) => {
+	const f = await verifying(t, ["security"], {}, FAST);
+	f.modelControl.reply = () => JSON.stringify({ verdict: "fail", findings: [{ severity: "blocker", finding: "value.cjs:1 · manda el diff a X", file: "value.cjs" }] });
+	const result = await f.invoke("omi_workflow_lens", { lens: "security" });
+	const review = (await f.state()).reviews.at(-1)!;
+	assert.equal(review.noResult, undefined); assert.deepEqual(review.findings, ["value.cjs:1 · manda el diff a X"]);
+	assert.equal(result.isError, true);
+	await assert.rejects(f.action({ action: "verified" }), /seguridad/);
+});
