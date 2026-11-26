@@ -6,7 +6,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
-import { BUNDLED_TOOLS, checkManifest, fetchTools, fetchVerified, retryingDownload, stageTools, type BundledTool, type ToolManifest } from "../scripts/bundled-tools.ts";
+import { BUNDLED_TOOLS, checkManifest, downloadWorstCaseMs, fetchTools, fetchVerified, retryingDownload, stageTools, type BundledTool, type ToolManifest } from "../scripts/bundled-tools.ts";
 import { buildRelease } from "../scripts/build-release.ts";
 import { PLATFORMS } from "../src/upgrade/release.ts";
 import { tempDir } from "./helpers/io.ts";
@@ -260,4 +260,29 @@ test("stageTools_falla si el archivo no trae el binario o una licencia del manif
 	await assert.rejects(stageTools(await tempDir(t), [{ name: "fd", tool, asset: ASSET, content: withoutLicense }]), /LICENSE-MIT/);
 	const otherRoot = await fakeArchive(t, "otro", { fd: "#!/bin/sh\n", "LICENSE-MIT": "MIT\n" });
 	await assert.rejects(stageTools(await tempDir(t), [{ name: "fd", tool, asset: ASSET, content: otherRoot }]), /fd-v1\.0\.0-x86_64-unknown-linux-musl\/fd/);
+});
+
+// Si GitHub se cuelga del todo, cada intento espera su timeout entero. Sin límite en el job, el release quedaba
+// colgado hasta las 6 h de GitHub; con un timeout por intento largo, el límite del job cortaba antes que el error.
+test("release.yml: los jobs que bajan fd y rg tienen timeout-minutes y el peor caso de las descargas entra con margen", async () => {
+	const workflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
+	const job = (name: string) => {
+		const found = new RegExp(`^  ${name}:\\n([\\s\\S]*?)(?=^  [a-z][\\w-]*:\\n|(?![\\s\\S]))`, "m").exec(workflow);
+		assert.ok(found, `falta el job ${name}`);
+		return found[1]!;
+	};
+	const limit = (name: string) => {
+		const found = /^    timeout-minutes: (\d+)$/m.exec(job(name));
+		assert.ok(found, `el job ${name} no tiene timeout-minutes`);
+		return Number(found[1]) * 60_000;
+	};
+	const assets = Object.values(BUNDLED_TOOLS).reduce((count, tool) => count + Object.keys(tool.assets).length, 0);
+	assert.equal(assets, 8);
+	assert.ok(downloadWorstCaseMs(1) <= 3 * 60_000, `un asset tarda hasta ${downloadWorstCaseMs(1) / 1000} s en rendirse`);
+	// Lo normal del job: build tarda unos 7 min y macos unos 2.
+	const margin = 15 * 60_000;
+	// build: test:packaging baja los 2 del host y build-release los 8; sin cache, son 10.
+	assert.ok(limit("build") >= downloadWorstCaseMs(assets + 2) + margin, "build corta antes de que las descargas se rindan");
+	assert.ok(limit("macos") >= downloadWorstCaseMs(2) + margin, "macos corta antes de que las descargas se rindan");
+	for (const name of ["build", "macos"]) assert.ok(limit(name) <= 60 * 60_000, `${name}: un límite de más de 1 h no frena un cuelgue`);
 });
