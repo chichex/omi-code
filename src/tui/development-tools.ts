@@ -162,7 +162,8 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 		async execute(_id, { lens }, signal, _update, ctx) {
 			const result = await runLens(session, lens, ctx, AbortSignal.any([signal ?? new AbortController().signal, session.lifecycle.signal]));
 			const blocking = !!session.state && unacceptedBlockers(session.state, result.review).length > 0;
-			const notice = result.review.verdict === "pass" ? undefined : blocking ? SECURITY_BLOCKER : result.review.noResult ? NO_RESULT : "Aviso: queda visible en el progreso y en el PR draft y no bloquea Verificar. No repitas el lente para borrarlo ni uses retry. Si vale la pena corregirlo, usá omi_workflow action:amend con el motivo: no gasta vuelta.";
+			const advice = result.review.verdict === "pass" ? undefined : blocking ? SECURITY_BLOCKER : result.review.noResult ? NO_RESULT : "Aviso: queda visible en el progreso y en el PR draft y no bloquea Verificar. No repitas el lente para borrarlo ni uses retry. Si vale la pena corregirlo, usá omi_workflow action:amend con el motivo: no gasta vuelta.";
+			const notice = advice && result.downgraded > 0 ? `${advice} ${result.downgraded} blocker(s) bajados a aviso: archivo sin cambios desde la revisión anterior de security.` : advice;
 			return { content: [{ type: "text", text: JSON.stringify({ ...result.review, ...(notice ? { notice } : {}), ...(result.error ? { error: result.error } : {}) }) }], details: result.review, usage: result.usage, isError: !!result.error || blocking };
 		},
 	});
