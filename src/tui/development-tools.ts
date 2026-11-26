@@ -11,6 +11,7 @@ import { gitRead, inspectCheckout, validateReferences } from "../harness/git.ts"
 import { approvalPreview, DevelopmentSession } from "./development-session.ts";
 import { referenceDigest } from "../harness/references.ts";
 import { executeCheck, commitStep } from "./development-execution.ts";
+import { MAX_CHECK_TIMEOUT_SECONDS } from "../harness/check-timing.ts";
 import { lensDiffParts, runLens } from "./development-review.ts";
 import { developmentInstructions } from "./development-view.ts";
 import { registerAgreement } from "./development-agreement.ts";
@@ -23,7 +24,7 @@ const ActionSchema = Type.Object({
 	id: Type.Optional(text(100)), cause: Type.Optional(text()), reproduction: Type.Optional(text(100)), size: Type.Optional(Type.Union([Type.Literal("small"), Type.Literal("large")])), reason: Type.Optional(text()),
 	quote: Type.Optional(text(2000)), agreement: Type.Optional(text(2000)), replan: Type.Optional(Type.Boolean()),
 }, { additionalProperties: false });
-const CheckSchema = Type.Object({ kind: Type.Union([Type.Literal("setup"), Type.Literal("reproduction"), Type.Literal("red"), Type.Literal("green"), Type.Literal("verification"), Type.Literal("gate")]), command: text(8192), stepId: Type.Optional(text(32)), caseId: Type.Optional(text(32)), timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 1800 })) }, { additionalProperties: false });
+const CheckSchema = Type.Object({ kind: Type.Union([Type.Literal("setup"), Type.Literal("reproduction"), Type.Literal("red"), Type.Literal("green"), Type.Literal("verification"), Type.Literal("gate")]), command: text(8192), stepId: Type.Optional(text(32)), caseId: Type.Optional(text(32)), timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_CHECK_TIMEOUT_SECONDS })) }, { additionalProperties: false });
 const CommitSchema = Type.Object({ stepId: text(32), message: text(300), paths: Type.Array(text(8192), { maxItems: 100 }) }, { additionalProperties: false });
 function checked<S extends TSchema>(schema: S, value: unknown): Static<S> {
 	if (!Value.Check(schema, value)) throw new Error("Faltan datos o no tienen el formato de esta acción del harness");
@@ -138,15 +139,16 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 	});
 	pi.registerTool({
 		name: "omi_workflow_check", label: "Desarrollo: ejecutar prueba", defaultActive: false, executionMode: "sequential", parameters: CheckSchema,
-		description: "Ejecuta un comando en el checkout del trabajo y registra salida/exit real para reproducción, rojo, verde o casos D. setup prepara el checkout (por ejemplo, instalar dependencias) en cualquier etapa activa hasta el PR draft y no acredita pruebas; después del PR, sólo corre durante una corrección en curso. Sin Foundations v2 aceptada, nada pregunta. Con v2, sólo las líneas simples que no coinciden con un patrón corren sin preguntar; patrones y sintaxis no soportada piden sí, salvo un grant humano exacto del trabajo/pedido. Aprobar la receta no dispensa esa confirmación. Salida limitada a 12.000 caracteres. No es sandbox.",
+		description: "Ejecuta un comando en el checkout del trabajo y registra salida/exit real para reproducción, rojo, verde o casos D. setup prepara el checkout (por ejemplo, instalar dependencias) en cualquier etapa activa hasta el PR draft y no acredita pruebas; después del PR, sólo corre durante una corrección en curso. Sin Foundations v2 aceptada, nada pregunta. Con v2, sólo las líneas simples que no coinciden con un patrón corren sin preguntar; patrones y sintaxis no soportada piden sí, salvo un grant humano exacto del trabajo/pedido. Aprobar la receta no dispensa esa confirmación. Un check pesado (un gate o un setup la primera vez, o un comando que ya tardó 30 s o más) espera su turno si otro worktree del repo corre uno; con 15 min de espera corre igual. Un timeoutSeconds menor que 1,5× la última corrida completa del mismo comando sube a ese piso, con tope de 1800; la salida dice ese ajuste, la espera y, si Pi lo cortó por tiempo, con cuánto volver a correrlo. Salida limitada a 12.000 caracteres. No es sandbox.",
 		async execute(_id, input, signal, _update, ctx) {
 			const observation = await executeCheck(session, input, ctx, AbortSignal.any([signal ?? new AbortController().signal, session.lifecycle.signal]));
-			if ("setup" in observation) return { content: [{ type: "text", text: `Comando auxiliar; no acredita pruebas ni casos.\n${JSON.stringify(observation.setup)}` }], details: { setup: observation.setup }, isError: observation.setup.interrupted || observation.setup.exitCode !== 0 };
-			const evidence = observation;
+			const notes = observation.notes.map((note) => ({ type: "text" as const, text: note }));
+			if ("setup" in observation) return { content: [{ type: "text", text: `Comando auxiliar; no acredita pruebas ni casos.\n${JSON.stringify(observation.setup)}` }, ...notes], details: { setup: observation.setup }, isError: observation.setup.interrupted || observation.setup.exitCode !== 0 };
+			const evidence = observation.evidence;
 			const success = evidence.kind === "red" ? expectedFailure(evidence) : evidence.kind === "reproduction" ? successful(evidence) || expectedFailure(evidence) : successful(evidence);
 			const content = [{ type: "text" as const, text: JSON.stringify(evidence) }];
 			if (evidence.kind === "gate" && missingCommand(evidence)) content.push({ type: "text", text: `El comando no existe o no es ejecutable (exit ${evidence.exitCode}): no cuenta como gate de la vuelta. Corregí el comando y correlo otra vez.` });
-			return { content, details: { evidence }, isError: !success };
+			return { content: [...content, ...notes], details: { evidence }, isError: !success };
 		},
 	});
 	pi.registerTool({

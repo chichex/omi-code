@@ -8,14 +8,18 @@ import type { Evidence, EvidenceKind, Workflow } from "../harness/model.ts";
 import { commandAuthorization } from "../harness/authorization.ts";
 import { afterDraftCheckError } from "../harness/after-draft-guide.ts";
 import { expectedFailure, isApproved, recipeApprovalHash, successful } from "../harness/state.ts";
-import { inspectCheckout, assertStepCommit } from "../harness/git.ts";
-import { runWorkflowCommand, type WorkflowCommandResult } from "../harness/commands.ts";
+import { inspectCheckout, assertStepCommit, type CheckoutSnapshot } from "../harness/git.ts";
+import { DEFAULT_COMMAND_TIMEOUT_SECONDS, runWorkflowCommand, type WorkflowCommandResult } from "../harness/commands.ts";
+import { takeCheckTurn, type CheckTurn } from "../harness/check-queue.ts";
+import { heavyCheck, lastCompleteMs, plannedTimeout, timeoutNote } from "../harness/check-timing.ts";
 import { workflowWritePath } from "../harness/permissions.ts";
 import { afterDraft, assertCorrectionHead, assertCorrectionExecution } from "../harness/execution-scope.ts";
 import type { DevelopmentSession } from "./development-session.ts";
 import { authorizeProjectCommand } from "./development-command-authorization.ts";
 
 export interface CheckInput { kind: EvidenceKind | "setup"; command: string; stepId?: string; caseId?: string; timeoutSeconds?: number }
+/** notes: lo que el host ajustó o vio al correrlo (turno de checks, timeout), para la salida de la tool. */
+export type CheckObservation = ({ evidence: Evidence } | { setup: WorkflowCommandResult }) & { notes: string[] };
 /** En qué etapa corre cada etiqueta. Setup no acredita nada: prepara el checkout en cualquier etapa activa hasta el PR
  * draft; después, sólo durante una corrección en curso. */
 function assertCheckPhase(state: Workflow, kind: CheckInput["kind"]): void {
@@ -32,7 +36,17 @@ function assertCheckPhase(state: Workflow, kind: CheckInput["kind"]): void {
 	if ((kind === "red" || kind === "green") && state.phase !== "implement") throw new Error("Ese comando corresponde a Implementar");
 	if ((kind === "verification" || kind === "gate") && state.phase !== "verify") throw new Error("Ese comando corresponde a Verificar");
 }
-export async function executeCheck(session: DevelopmentSession, input: CheckInput, ctx: ExtensionContext, signal: AbortSignal, run = runWorkflowCommand): Promise<Evidence | { setup: WorkflowCommandResult }> {
+// El progreso dice a quién se espera, sólo cuando cambia; al terminar la espera, deja de esperar.
+async function waitForCheckTurn(session: DevelopmentSession, state: Workflow, input: CheckInput, signal: AbortSignal): Promise<CheckTurn> {
+	let shown = "";
+	try {
+		return await takeCheckTurn(state.checkout, { kind: input.kind, command: input.command }, signal, session.checkTurn, (owner) => {
+			const activity = `Esperando turno de checks · ${owner}`;
+			if (activity !== shown) { shown = activity; session.emit(activity, true); }
+		});
+	} finally { if (shown) session.emit(); }
+}
+export async function executeCheck(session: DevelopmentSession, input: CheckInput, ctx: ExtensionContext, signal: AbortSignal, run = runWorkflowCommand): Promise<CheckObservation> {
 	signal = AbortSignal.any([signal, session.lifecycle.signal]);
 	signal.throwIfAborted();
 	const state = session.current(ctx);
@@ -47,12 +61,22 @@ export async function executeCheck(session: DevelopmentSession, input: CheckInpu
 	// La etiqueta y la receta no dispensan confirmaciones: decidir por v2 aceptada, sintaxis y grant exacto.
 	const authorized = commandAuthorization(state, input.command, (await session.foundations.policy(ctx, state)).command) === "ask"
 		? await authorizeProjectCommand(session, ctx, { state, command: input.command, kind: input.kind, signal }) : state;
-	const before = await inspectCheckout(state.checkout, session.runner, signal);
-	assertCorrectionHead(state, before.head);
-	await session.assertUnchanged(authorized, ctx);
-	signal.throwIfAborted();
-	const startedAt = session.now(); session.emit(`${input.kind} · ${input.caseId ?? input.stepId ?? "comando"} · ${input.command}`);
-	const result = await run(state.checkout, input.command, signal, input.timeoutSeconds);
+	const known = lastCompleteMs(state, input.command);
+	const timeout = plannedTimeout(input.timeoutSeconds ?? DEFAULT_COMMAND_TIMEOUT_SECONDS, known);
+	const notes = timeout.note ? [timeout.note] : [];
+	// Antes de la foto: una espera larga no invalida el fingerprint y startedAt cuenta desde que corre.
+	const turn = heavyCheck(state, input.kind, input.command) ? await waitForCheckTurn(session, state, input, signal) : undefined;
+	if (turn?.notice) notes.push(turn.notice);
+	let before: CheckoutSnapshot; let startedAt: string; let result: WorkflowCommandResult;
+	try {
+		before = await inspectCheckout(state.checkout, session.runner, signal);
+		assertCorrectionHead(state, before.head);
+		await session.assertUnchanged(authorized, ctx);
+		signal.throwIfAborted();
+		startedAt = session.now(); session.emit(`${input.kind} · ${input.caseId ?? input.stepId ?? "comando"} · ${input.command}`);
+		result = await run(state.checkout, input.command, signal, timeout.seconds);
+	} finally { await turn?.release(); }
+	if (result.timedOut) notes.push(timeoutNote(timeout.seconds, known));
 	const after = await inspectCheckout(state.checkout, session.runner, session.lifecycle.signal);
 	const current = session.current(ctx);
 	if (current.id !== state.id || current.source.hash !== state.source.hash || recipeApprovalHash(current) !== recipeApprovalHash(state)) throw new Error("El pedido o la receta cambió durante el comando; su resultado no acredita este trabajo");
@@ -61,7 +85,7 @@ export async function executeCheck(session: DevelopmentSession, input: CheckInpu
 		// Fuera de Implementar, un setup prepara lo que Git ignora (por ejemplo, node_modules). Es una detección con el
 		// fingerprint, no un sandbox: un comando autorizado todavía puede esconderle cambios a Git.
 		if (state.phase !== "implement" && (before.fingerprint !== after.fingerprint || before.head !== after.head)) throw new Error(`El setup cambió el checkout fuera de Implementar: modificó archivos versionados, no ignorados o HEAD. Setup no acredita nada y fuera de Implementar no debe escribir código; el cambio no se revirtió: revisalo con git status. Exit ${result.exitCode ?? "—"}.`);
-		return { setup: result };
+		return { setup: result, notes };
 	}
 	const interrupted = result.interrupted || signal.aborted || result.exitCode === null || result.exitCode >= 128 || before.fingerprint !== after.fingerprint || before.head !== after.head;
 	const evidence: Evidence = {
@@ -70,7 +94,7 @@ export async function executeCheck(session: DevelopmentSession, input: CheckInpu
 		output: result.output.slice(-12000), fingerprint: after.fingerprint, head: after.head, startedAt, finishedAt: session.now(),
 	};
 	const invalidAttempt = input.kind === "red" && !expectedFailure(evidence) || input.kind === "green" && !successful(evidence) || input.kind === "reproduction" && !successful(evidence) && !expectedFailure(evidence);
-	await session.apply({ type: invalidAttempt ? "check_failed" : "evidence", evidence }, ctx); return evidence;
+	await session.apply({ type: invalidAttempt ? "check_failed" : "evidence", evidence }, ctx); return { evidence, notes };
 }
 
 export async function commitStep(session: DevelopmentSession, input: { stepId: string; message: string; paths: string[] }, ctx: ExtensionContext, signal: AbortSignal): Promise<void> {
