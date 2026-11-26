@@ -1,4 +1,4 @@
-// Corrección liviana: un hallazgo de un lente que sólo avisa se corrige sin gastar una vuelta entera.
+// Corrección liviana: un D o un gate rojo, o un hallazgo de un lente que sólo avisa, se corrige sin gastar una vuelta entera.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createWorkflow, transition } from "../src/harness/state.ts";
@@ -42,7 +42,7 @@ const amend = (s: Workflow, fingerprint = "tree", reason = "Restaurar el assert"
 
 test("harness_amend retry no gasta una vuelta por avisos de lentes: apunta a amend", () => {
 	assert.throws(() => send(flagged(), { type: "retry", reason: "compliance encontró un assert débil" }), /amend/);
-	// Lo que bloquea sí pide una vuelta, aunque además haya avisos.
+	// Sin el contenido limpio observado, lo que bloquea sí puede pedir una vuelta, aunque además haya avisos.
 	const failedD = send(flagged(), { type: "evidence", evidence: evidence("verification", "tree", { exitCode: 1, outcome: "failed" }) });
 	assert.equal(send(failedD, { type: "retry", reason: "Falló D1" }).round, 1);
 	const failedGate = send(flagged(), { type: "evidence", evidence: evidence("gate", "tree", { command: "npm run typecheck", exitCode: 2, outcome: "failed" }) });
@@ -82,13 +82,14 @@ test("harness_amend sin corrección liviana, un pass de otro contenido no vale",
 	assert.throws(() => send(s, { type: "verified", fingerprint: "tree2" }), /lente quality/);
 });
 
-test("harness_amend sólo corrige avisos de un lente sobre este contenido", () => {
+test("harness_amend sólo corrige avisos o rojos sobre este contenido", () => {
 	let clean = verify(verifying(), "tree");
 	for (const r of [review("quality", "tree"), review("compliance", "tree"), review("security", "tree")]) clean = lens(clean, r);
 	assert.throws(() => amend(clean), /ningún hallazgo/);
 	assert.throws(() => amend(flagged(), "otro"), /ningún hallazgo/);
+	// Regla nueva (2026-11-26): un D rojo ya no pide retry, amend lo corrige (ver «un D rojo se corrige con amend»). Un blocker de security sí.
 	const failedD = send(flagged(), { type: "evidence", evidence: evidence("verification", "tree", { exitCode: 1, outcome: "failed" }) });
-	assert.throws(() => amend(failedD), /retry/);
+	assert.equal(amend(failedD).round, 0);
 	let security = lens(verify(verifying(), "tree"), review("compliance", "tree", "fail", ["aviso"]));
 	security = lens(security, review("security", "tree", "fail", ["secreto"]));
 	assert.throws(() => amend(security), /retry/);
@@ -159,4 +160,116 @@ test("harness_amend un lente sin resultado no es un hallazgo: no justifica amend
 	let judged = verify(verifying(), "tree");
 	for (const r of [review("quality", "tree", "unknown", ["src/a.ts:1 · no se puede juzgar el caso borde"]), review("compliance", "tree"), review("security", "tree")]) judged = lens(judged, r);
 	assert.equal(amend(judged).phase, "implement");
+});
+
+// Pedido del dueño (2026-11-26): un D o un gate rojo se corrige con amend, sin gastar vuelta. #99 gastó 2 de 3 retry así.
+const failedGate = (s: Workflow, fingerprint: string, command = "npm run typecheck", changes: Partial<Evidence> = {}) => send(s, { type: "evidence", evidence: evidence("gate", fingerprint, { command, exitCode: 2, outcome: "failed", ...changes }) });
+const passedGate = (s: Workflow, fingerprint: string, command = "npm run typecheck") => send(s, { type: "evidence", evidence: evidence("gate", fingerprint, { command }) });
+const failedD = (s: Workflow, fingerprint: string, changes: Partial<Evidence> = {}) => send(s, { type: "evidence", evidence: evidence("verification", fingerprint, { exitCode: 1, outcome: "failed", ...changes }) });
+/** Los tres lentes aprueban limpio sobre `fingerprint`. */
+function cleanLenses(s: Workflow, fingerprint = "tree"): Workflow {
+	for (const r of [review("quality", fingerprint), review("compliance", fingerprint), review("security", fingerprint)]) s = lens(s, r);
+	return s;
+}
+const verified = (s: Workflow, fingerprint: string) => send(s, { type: "verified", fingerprint });
+
+test("harness_amend un D rojo se corrige con amend sin gastar vuelta: después se repiten el D, security y el lente que avisó", () => {
+	const red = failedD(flagged(), "tree");
+	let s = amend(red, "tree", "D1 falla con el valor 0");
+	assert.equal(s.phase, "implement"); assert.equal(s.round, 0); assert.deepEqual(s.evidence, red.evidence); assert.deepEqual(s.reviews, red.reviews);
+	assert.deepEqual(s.steps.map((step) => [step.id, step.status]), [["C1", "done"], ["C2", "pending"]]);
+	assert.match(s.steps[1]!.title, /^Corrección liviana: D1 falla con el valor 0/);
+	// El paso nuevo exige su propio rojo, verde y commit.
+	assert.throws(() => send(s, { type: "step_completed", id: "C2", commit: "commit-C2", fingerprint: "tree2" }));
+	s = implement(s, "C2", "tree2");
+	assert.throws(() => verified(s, "tree2"), /caso D1/);
+	s = verify(s, "tree2");
+	assert.throws(() => verified(s, "tree2"), /lente compliance/);
+	s = lens(s, review("compliance", "tree2"));
+	assert.throws(() => verified(s, "tree2"), /lente security/);
+	assert.equal(verified(lens(s, review("security", "tree2")), "tree2").phase, "pr");
+});
+
+test("harness_amend un gate rojo se corrige con amend aunque ningún lente avise, y el gate se repite sobre el contenido corregido", () => {
+	const red = failedGate(cleanLenses(verify(verifying(), "tree")), "tree");
+	let s = amend(red, "tree", "typecheck: falta un tipo");
+	assert.equal(s.phase, "implement"); assert.equal(s.round, 0);
+	s = lens(verify(implement(s, "C2", "tree2"), "tree2"), review("security", "tree2"));
+	assert.throws(() => verified(s, "tree2"), /gate fallido: npm run typecheck/);
+	s = passedGate(s, "tree2");
+	assert.equal(verified(s, "tree2").phase, "pr");
+});
+
+test("harness_amend un D o gate interrumpido no es un rojo del cambio: se vuelve a correr", () => {
+	const gate = failedGate(cleanLenses(verify(verifying(), "tree")), "tree", "npm test", { exitCode: null, outcome: "interrupted" });
+	assert.throws(() => amend(gate), /interrump/);
+	assert.throws(() => verified(gate, "tree"), /gate fallido/);
+	assert.equal(verified(passedGate(gate, "tree", "npm test"), "tree").phase, "pr");
+	const d = failedD(cleanLenses(verify(verifying(), "tree")), "tree", { exitCode: null, outcome: "interrupted" });
+	assert.throws(() => amend(d), /interrump/);
+	assert.throws(() => verified(d, "tree"), /caso D1/);
+	assert.equal(verified(verify(d, "tree"), "tree").phase, "pr");
+});
+
+test("harness_retry con el contenido limpio, un D o gate rojo que amend corrige no gasta vuelta: retry apunta a amend", () => {
+	const retry = (s: Workflow, fingerprint?: string) => send(s, { type: "retry", reason: "Falló typecheck", ...(fingerprint ? { fingerprint } : {}) });
+	const red = failedGate(cleanLenses(verify(verifying(), "tree")), "tree");
+	assert.throws(() => retry(red, "tree"), /amend/);
+	assert.equal(amend(red).phase, "implement", "lo que retry rechaza, amend lo acepta con el mismo contenido");
+	const redD = failedD(cleanLenses(verify(verifying(), "tree")), "tree");
+	assert.throws(() => retry(redD, "tree"), /amend/);
+	// En la última vuelta, un rojo con amend disponible no agota las vueltas: apunta a amend.
+	const last = { ...red, round: 3 } as Workflow;
+	assert.throws(() => retry(last, "tree"), /amend/);
+	assert.equal(last.status, "active"); assert.equal(amend(last).round, 3);
+	// Sin contenido limpio observado (checkout sucio), amend no puede: retry sigue disponible.
+	assert.equal(retry(red).round, 1);
+	// Sin amends en la vuelta, el rojo vuelve a pedir retry.
+	let s = implement(amend(red), "C2", "tree2");
+	s = implement(amend(failedGate(lens(verify(s, "tree2"), review("security", "tree2")), "tree2"), "tree2"), "C3", "tree3");
+	s = failedGate(lens(verify(s, "tree3"), review("security", "tree3")), "tree3");
+	assert.throws(() => amend(s, "tree3"), /2 correcciones livianas/);
+	assert.equal(retry(s, "tree3").round, 1);
+	// Un blocker de security sigue pidiendo retry aunque además haya un D rojo: amend no lo corrige.
+	const blocker = lens(failedD(verify(verifying(), "tree"), "tree"), review("security", "tree", "fail", ["src/a.ts:1 · secreto"]));
+	assert.throws(() => amend(blocker), /blocker de security[^:]*: eso pide retry/);
+	assert.equal(retry(blocker, "tree").round, 1);
+});
+
+test("harness_amend verified: manda la última corrida de cada gate de la vuelta; un rojo de antes de un amend se repite y un pass de antes de un amend por aviso vale", () => {
+	// Un gate rojo sobre otro contenido de la vuelta, nunca repetido sobre el final, frena.
+	const other = cleanLenses(verify(failedGate(verifying(), "other", "npm test", { exitCode: 1 }), "tree"));
+	assert.throws(() => verified(other, "tree"), /gate fallido: npm test/);
+	assert.equal(verified(passedGate(other, "tree", "npm test"), "tree").phase, "pr");
+	// Manda la última corrida, no cualquier pass: pasó y después falló sobre tree; sin repetirlo sobre tree2, frena.
+	let flipped = failedGate(passedGate(flagged(), "tree"), "tree");
+	flipped = cleanLenses(verify(implement(amend(flipped), "C2", "tree2"), "tree2"), "tree2");
+	assert.throws(() => verified(flipped, "tree2"), /gate fallido: npm run typecheck/);
+	// Un gate que pasó antes de un amend por un aviso sigue valiendo, como el lente que aprobó limpio.
+	let carried = implement(amend(passedGate(flagged(), "tree")), "C2", "tree2");
+	carried = lens(lens(verify(carried, "tree2"), review("compliance", "tree2")), review("security", "tree2"));
+	assert.equal(verified(carried, "tree2").phase, "pr");
+	// Sobre este contenido manda su última corrida, aunque antes haya fallado.
+	assert.equal(verified(passedGate(failedGate(carried, "tree2"), "tree2"), "tree2").phase, "pr");
+});
+
+test("harness_amend un comando ausente (126/127) no cuenta como gate ni traba la vuelta; una interrumpida sólo cuenta sobre este contenido; amend lo explica", () => {
+	const missing = { exitCode: 127, outcome: "failed" } as const;
+	// (1) 127 sobre A y amend por un aviso: verified sobre B pasa sin ese gate.
+	let s = implement(amend(failedGate(flagged(), "tree", "omi-no-existe", missing)), "C2", "tree2");
+	s = lens(lens(verify(s, "tree2"), review("compliance", "tree2")), review("security", "tree2"));
+	assert.equal(verified(s, "tree2").phase, "pr");
+	// (2) 126 o 127 sobre B tampoco frena: el comando nunca corrió.
+	assert.equal(verified(failedGate(s, "tree2", "omi-no-existe", missing), "tree2").phase, "pr");
+	assert.equal(verified(failedGate(s, "tree2", "./no-ejecutable.sh", { exitCode: 126 }), "tree2").phase, "pr");
+	// (3) Una interrumpida sobre A que no se repitió no frena B.
+	let interrupted = implement(amend(failedGate(flagged(), "tree", "npm test", { exitCode: null, outcome: "interrupted" })), "C2", "tree2");
+	interrupted = lens(lens(verify(interrupted, "tree2"), review("compliance", "tree2")), review("security", "tree2"));
+	assert.equal(verified(interrupted, "tree2").phase, "pr");
+	// (4) Una interrumpida sobre B sí frena: tiene que pasar sobre este contenido.
+	assert.throws(() => verified(failedGate(interrupted, "tree2", "npm test", { exitCode: null, outcome: "interrupted" }), "tree2"), /gate fallido: npm test/);
+	// (5) Sin hallazgos y con sólo un comando ausente, amend dice por qué no corrige.
+	const onlyMissing = failedGate(cleanLenses(verify(verifying(), "tree")), "tree", "omi-no-existe", missing);
+	assert.throws(() => amend(onlyMissing), /no existe o no es ejecutable/);
+	assert.throws(() => amend(failedD(cleanLenses(verify(verifying(), "tree")), "tree", { exitCode: 126 })), /D de la receta, pausá/);
 });
