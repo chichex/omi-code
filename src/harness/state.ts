@@ -1,4 +1,4 @@
-import { artifactHash, MAX_AGREEMENTS, MAX_AMENDS, MAX_ATTEMPTS, MAX_EVIDENCE, MAX_GRANTS, MAX_HISTORY, MAX_REVIEWS, MAX_STEPS, parseWorkflow, sourceHash, type Workflow, type WorkflowV2, type Exploration, type InferenceInput, type Plan, type Spec, type Evidence, type Review, type Step, type StackPull } from "./model.ts";
+import { artifactHash, MAX_AGREEMENTS, MAX_AMENDS, MAX_ATTEMPTS, MAX_EVIDENCE, MAX_GRANTS, MAX_HISTORY, MAX_REVIEWS, MAX_ROUNDS, MAX_STEPS, parseWorkflow, sourceHash, type Workflow, type WorkflowV2, type Exploration, type InferenceInput, type Plan, type Spec, type Evidence, type Review, type Step, type StackPull } from "./model.ts";
 
 import { recipeNextPhase, recipeRoute } from "./phases.ts";
 import { executionEvidence, executionReviews, assertCorrectionExecution } from "./execution-scope.ts";
@@ -25,8 +25,9 @@ export type WorkflowEvent =
  | { type: "retry"; reason: string; fingerprint?: string }
  | { type: "amend"; reason: string; fingerprint: string }
  | { type: "pause"; reason: string }
- // Sólo el host, desde /omi-work accept-risk en la TUI: ninguna tool del modelo lo emite.
+ // Sólo el host, desde /omi-work accept-risk y extra-round en la TUI: ninguna tool del modelo los emite.
  | { type: "risk_accepted"; fingerprint: string; findings: string[]; reason: string }
+ | { type: "round_added"; reason: string }
  | { type: "resume" }
  | { type: "source_changed"; source: Workflow["source"] }
  | { type: "agreed"; quote: string; summary: string; replan: boolean; fingerprint?: string }
@@ -350,6 +351,16 @@ function agree(state: Workflow, event: Extract<WorkflowEvent, { type: "agreed" }
  state.approval = null; state.spec = null; state.steps = []; state.evidence = []; state.reviews = []; state.round = 0; clearRound(state);
  state.publication = { status: "none" }; state.phase = "recipe"; setBlock(state, "");
 }
+// Con 0 retry, una persona suma una vuelta sin perder receta, aprobación, pasos ni evidencia. No reanuda una pausa.
+function addRound(state: Workflow, reason: string): void {
+ requireCondition(state.version !== 2 || state.pullRequest?.ownership !== "adopted", "post-PR usa corrección propia; no suma vueltas");
+ requirePhase(state, "implement", "verify", "pr"); requireCondition(nonempty(reason), "falta el motivo de la vuelta extra");
+ requireCondition(state.round >= state.maxRounds, `todavía quedan ${state.maxRounds - state.round} retry: no hace falta otra vuelta`);
+ requireCondition(state.maxRounds < MAX_ROUNDS, `el tope es de ${MAX_ROUNDS} vueltas; para seguir, /omi-work refresh`);
+ const exhausted = retriesExhausted(state); state.maxRounds++; if (exhausted) releaseExhausted(state);
+}
+// Quita el bloqueo de vueltas agotadas sin reanudar una pausa: eso lo decide resume.
+function releaseExhausted(state: Workflow): void { if (state.status === "paused") state.blockedReason = ""; else setBlock(state, ""); }
 // El bloqueo de vueltas agotadas vive en el estado, no en el historial: el historial es una ventana acotada.
 function retriesExhausted(state: Workflow): boolean {
  return state.round >= state.maxRounds && state.blockedReason === EXHAUSTED;
@@ -369,7 +380,7 @@ function recordReview(state: Workflow, review: Review): void {
  requireCondition(!review.severities || (review.lens === "security" && !review.noResult && review.severities.length === review.findings.length), "las severidades son de security: una por hallazgo");
  state.reviews.push(review);
 }
-// La UI/adapter es la única autoridad que puede emitir approved, risk_accepted o autorizar una reproducción.
+// La UI/adapter es la única autoridad que puede emitir approved, risk_accepted, round_added o autorizar una reproducción.
 // Este reducer puro no ejecuta comandos, verifica Git ni obtiene consentimiento.
 export function transition(original: WorkflowV2, event: WorkflowEvent, at: string): WorkflowV2;
 export function transition(original: Workflow, event: WorkflowEvent, at: string): Workflow;
@@ -379,9 +390,9 @@ export function transition(original: Workflow, event: WorkflowEvent, at: string)
  // Un cierre sin cambio lo decide el modelo; volver a leer el pedido es la salida humana.
  // Un stack abierto se sigue actualizando: sus PRs cambian y se mergean después de terminar el trabajo.
  requireCondition(state.status !== "complete" || state.phase === "closed" && event.type === "source_changed" || state.phase === "done" && event.type === "stack_synced", "el trabajo ya está cerrado");
- // Una persona decide también con el trabajo pausado: aceptar un riesgo no lo reanuda.
- requireCondition(state.status !== "paused" || ["resume", "source_changed", "risk_accepted"].includes(event.type), "el trabajo está pausado");
- if (state.status === "waiting" && retriesExhausted(state)) requireCondition(["pause", "resume", "source_changed", "agreed", "command_granted", "risk_accepted"].includes(event.type), "se agotaron las vueltas");
+ // Una persona decide también con el trabajo pausado: aceptar un riesgo o sumar una vuelta no lo reanudan.
+ requireCondition(state.status !== "paused" || ["resume", "source_changed", "risk_accepted", "round_added"].includes(event.type), "el trabajo está pausado");
+ if (state.status === "waiting" && retriesExhausted(state)) requireCondition(["pause", "resume", "source_changed", "agreed", "command_granted", "risk_accepted", "round_added"].includes(event.type), "se agotaron las vueltas");
  applyEvent(state, event, at);
  state.revision++;
  state.activity = ("reason" in event ? `${event.type}: ${event.reason}` : event.type).slice(0, 4000);
@@ -440,11 +451,9 @@ function applyEvent(state: WorkflowV2, event: WorkflowEvent, at: string): void {
   case "verified": requirePhase(state, "verify"); verifiedEvidence(state, event.fingerprint); state.phase = "pr"; return;
   case "retry": retry(state, event.reason, event.fingerprint, at); return;
   case "amend": amend(state, event.reason, event.fingerprint, at); return;
-  case "risk_accepted":
-   // Con las vueltas agotadas sólo por este blocker, aceptarlo destraba; en pausa no reanuda: eso lo decide resume.
-   requirePhase(state, "verify"); recordAcceptedRisk(state, executionReviews(state), event, at);
-   if (retriesExhausted(state) && !contentBlocked(state, event.fingerprint)) { if (state.status === "paused") state.blockedReason = ""; else setBlock(state, ""); }
-   return;
+  // Con las vueltas agotadas sólo por este blocker, aceptarlo las destraba.
+  case "risk_accepted": requirePhase(state, "verify"); recordAcceptedRisk(state, executionReviews(state), event, at); if (retriesExhausted(state) && !contentBlocked(state, event.fingerprint)) releaseExhausted(state); return;
+  case "round_added": addRound(state, event.reason); return;
   case "pause":
    requireCondition(nonempty(event.reason), "falta motivo de pausa");
    // El motivo de pausa queda en activity/history; un bloqueo previo no debe perderse.
