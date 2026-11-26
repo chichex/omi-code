@@ -1,0 +1,96 @@
+// Convergencia del lente de seguridad entre revisiones del mismo pedido. Desde la segunda revisión, el host compara con
+// la anterior: un blocker nuevo de clase otro que cae en un archivo sin cambios desde ese contenido, y que no repite el
+// archivo de un blocker anterior, baja a aviso. Así cada vuelta revisa lo que cambió y no reabre lo que ya se juzgó.
+// El veredicto nunca cambia: sólo la severidad. Todo lo calcula el host con Git; no hay campo nuevo en el estado.
+// Falla cerrado: no baja nada si no se puede comparar, ni un secreto o una exfiltración, ni un hallazgo sin clase, con
+// una clase inválida, sin archivo o con un archivo que no está en HEAD, ni uno cuyo texto nombra un secreto.
+// Lo que una persona aceptó cuenta como blocker de la base: lo aceptado vale sólo para ese contenido.
+import type { Runner } from "../core/exec.ts";
+import type { Review, Workflow } from "./model.ts";
+import { changedPaths, treePaths, type CheckoutSnapshot } from "./git.ts";
+import { prefixed, type LensResult } from "./lenses.ts";
+import { securityBlockers, severitiesOf } from "./security-blockers.ts";
+
+export const SECURITY_DOWNGRADED = "bajado a aviso: archivo sin cambios desde la revisión anterior";
+export const SECURITY_PREVIOUS_NOTE = "previous es tu revisión de security anterior de este mismo trabajo, calculada por el harness: findings son tus hallazgos de entonces y changedFiles los archivos que cambiaron desde ese contenido. Decí primero si cada blocker anterior sigue. Un blocker nuevo de clase otro sólo bloquea si cae en un archivo de changedFiles o en el archivo de un blocker anterior; si no, el harness lo baja a aviso. Un secreto o una exfiltración bloquean siempre. Citá el archivo donde está el problema.";
+const NO_COMPARISON = "sin comparación con la revisión anterior: no se baja ningún blocker";
+const NO_BLOCKER_FILE = "sin comparación con la revisión anterior: un blocker anterior no cita su archivo; no se baja ningún blocker";
+// Sin \b: con \b no corta en «_» y no reconoce CLAUDE_CODE_OAUTH_TOKEN. Un falso positivo sólo deja el blocker como está.
+const SECRET = /secret|secreto|api[ _-]?key|password|contraseña|credencial|credential|private[ _-]?key|clave privada|token|bearer|auth\.json|oauth/i;
+const MAX_PREVIOUS_FINDINGS = 10; const MAX_PREVIOUS_TEXT = 500; const MAX_CHANGED_FILES = 200;
+
+/** La última revisión de security con veredicto de este pedido, también la archivada por retry. */
+export function securityBaseline(state: Workflow): Review | undefined {
+ const archived = (state.attempts ?? []).filter(a => a.sourceHash === state.source.hash).flatMap(a => a.reviews);
+ return [...archived, ...state.reviews].findLast(r => r.lens === "security" && !r.noResult && r.verdict !== "unknown");
+}
+/** El commit del paso cuyo verde acreditó ese contenido. */
+export function reviewedCommit(state: Workflow, fingerprint: string): string | undefined {
+ const evidence = [...(state.attempts ?? []).flatMap(a => a.evidence), ...state.evidence];
+ return state.steps.findLast(s => s.status === "done" && s.commit && evidence.some(e => e.id === s.green && e.fingerprint === fingerprint))?.commit ?? undefined;
+}
+/** El archivo del primer tramo «archivo:línea» del hallazgo, sin «./»; null si ningún tramo empieza así. */
+export function findingFile(text: string): string | null {
+ for (const part of text.split(" · ")) {
+  const match = /^[`"']?([^\s:`"'·]+):\d/.exec(part.trim());
+  if (match) return match[1]!.replace(/^\.\//, "");
+ }
+ return null;
+}
+
+export interface SecurityComparison { baseline: Review; changed: ReadonlySet<string>; tree: ReadonlySet<string>; blockerFiles: ReadonlySet<string> }
+/** Qué cambió desde la revisión anterior. Sin base no hay nada que comparar; si no se puede comparar, sólo una nota. */
+export async function securityComparison(state: Workflow, snapshot: Pick<CheckoutSnapshot, "head" | "fingerprint">, runner: Runner, signal?: AbortSignal): Promise<{ comparison?: SecurityComparison; note?: string }> {
+ const baseline = securityBaseline(state);
+ if (!baseline) return {};
+ // Todos los blockers de la base, también los que aceptó una persona.
+ const blockerFiles = new Set<string>();
+ for (const file of securityBlockers(baseline).map(findingFile)) { if (file === null) return { note: NO_BLOCKER_FILE }; blockerFiles.add(file); }
+ // Sobre el mismo contenido no cambió nada: no hace falta el commit ni el diff, pero sí el árbol de HEAD.
+ const same = baseline.fingerprint === snapshot.fingerprint;
+ const commit = same ? undefined : reviewedCommit(state, baseline.fingerprint);
+ if (!same && !commit) return { note: NO_COMPARISON };
+ try {
+  const changed = commit ? await changedPaths(state.checkout, commit, snapshot.head, runner, signal) : [];
+  const tree = await treePaths(state.checkout, snapshot.head, runner, signal);
+  return { comparison: { baseline, changed: new Set(changed), tree: new Set(tree), blockerFiles } };
+ } catch (error) {
+  if (signal?.aborted) throw error;
+  return { note: NO_COMPARISON };
+ }
+}
+const clip = (text: string): string => text.length <= MAX_PREVIOUS_TEXT ? text : `${text.slice(0, /[\ud800-\udbff]/.test(text[MAX_PREVIOUS_TEXT - 2] ?? "") ? MAX_PREVIOUS_TEXT - 2 : MAX_PREVIOUS_TEXT - 1)}…`;
+/** Lo que el lente ve de su revisión anterior: sus hallazgos, con los blockers primero, y los archivos cambiados. */
+export function previousMaterial(c: SecurityComparison) {
+ const severities = c.baseline.verdict === "fail" ? severitiesOf(c.baseline) : [];
+ const all = c.baseline.findings.map((text, i) => ({ blocker: severities[i] === "blocker", text: clip(text) }));
+ const findings = [...all.filter(f => f.blocker), ...all.filter(f => !f.blocker)];
+ const changedFiles = [...c.changed].sort();
+ return {
+  fingerprint: c.baseline.fingerprint, verdict: c.baseline.verdict,
+  findings: findings.slice(0, MAX_PREVIOUS_FINDINGS), ...(findings.length > MAX_PREVIOUS_FINDINGS ? { findingsOmitted: findings.length - MAX_PREVIOUS_FINDINGS } : {}),
+  changedFiles: changedFiles.slice(0, MAX_CHANGED_FILES), ...(changedFiles.length > MAX_CHANGED_FILES ? { changedFilesOmitted: changedFiles.length - MAX_CHANGED_FILES } : {}),
+ };
+}
+
+type Item = { text: string; blocker: boolean; downgradable: boolean };
+// Un hallazgo es blocker sólo en un fail: con la lista alineada lo dice su severidad; si no, lo es.
+function securityItems(result: LensResult): Item[] {
+ const aligned = result.severities?.length === result.findings.length;
+ return result.findings.map((text, i) => ({ text, blocker: result.verdict === "fail" && (aligned ? result.severities?.[i] === "blocker" : true), downgradable: result.downgradable?.[i] === true }));
+}
+function withSecurityItems(result: LensResult, items: Item[]): LensResult {
+ return result.verdict === "fail" ? { ...result, findings: items.map(i => i.text), severities: items.map(i => i.blocker ? "blocker" : "aviso") } : result;
+}
+/** Una parte del lente comparada con la revisión anterior: baja a aviso lo que la regla permite y cuenta cuántos. */
+export function convergeSecurity(result: LensResult, c: SecurityComparison): { result: LensResult; downgraded: number } {
+ let downgraded = 0;
+ const items = securityItems(result).map((item): Item => {
+  const file = findingFile(item.text);
+  const keep = !item.blocker || !item.downgradable || SECRET.test(item.text) || file === null || !c.tree.has(file) || c.changed.has(file) || c.blockerFiles.has(file);
+  if (keep) return item;
+  downgraded++;
+  return { ...item, blocker: false, text: prefixed(`${SECURITY_DOWNGRADED} · `, item.text) };
+ });
+ return { result: withSecurityItems(result, items), downgraded };
+}

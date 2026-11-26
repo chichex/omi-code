@@ -141,10 +141,11 @@ export function lensParts(files: string[], budget: number): string[] {
 }
 // Se corre el lente por parte y se combina: el peor veredicto gana y se juntan los hallazgos con su parte.
 // Queda sin resultado sólo si ninguna parte juzgó unknown: un unknown del modelo no se re-tira.
-export interface LensResult { verdict: Review["verdict"]; findings: string[]; noResult?: true; severities?: Severity[] }
+// downgradable: sólo en memoria, por parte: combineLensResults nunca lo copia y no se guarda.
+export interface LensResult { verdict: Review["verdict"]; findings: string[]; noResult?: true; severities?: Severity[]; downgradable?: boolean[] }
 const SEVERITY: Record<Review["verdict"], number> = { pass: 0, unknown: 1, fail: 2 };
 const MAX_FINDINGS = 100; const MAX_FINDING = 4000;
-const prefixed = (prefix: string, finding: string): string => {
+export const prefixed = (prefix: string, finding: string): string => {
 	const value = prefix + finding;
 	return value.length <= MAX_FINDING ? value : `${value.slice(0, cut(value, MAX_FINDING - 1))}…`;
 };

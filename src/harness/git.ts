@@ -115,6 +115,16 @@ export async function readWorkflowDiffFiles(checkout: Checkout, runner: Runner =
  }
  return files;
 }
+/** Los archivos que cambiaron entre dos commits. Con --no-renames, un renombre cuenta por sus dos lados. */
+export async function changedPaths(checkout: Checkout, from: string, to: string, runner: Runner = processRunner, signal?: AbortSignal): Promise<string[]> {
+ if (!sha.test(from) || !sha.test(to)) throw new Error("Commit inválido para comparar");
+ return paths(await gitRead(checkout, ["diff", ...diffFlags, "--name-only", "-z", from, to, "--"], runner, signal));
+}
+/** Todos los archivos del árbol de un commit, desde la raíz del repo. */
+export async function treePaths(checkout: Checkout, commit: string, runner: Runner = processRunner, signal?: AbortSignal): Promise<string[]> {
+ if (!sha.test(commit)) throw new Error("Commit inválido para listar");
+ return paths(await gitRead(checkout, ["ls-tree", "-r", "-z", "--name-only", "--full-tree", commit], runner, signal));
+}
 export async function assertStepCommit(checkout: Checkout, evidence: Evidence, commit: string, runner: Runner = processRunner, signal?: AbortSignal): Promise<void> {
  const snapshot = await inspectCheckout(checkout, runner, signal);
  if (!snapshot.clean || snapshot.head !== commit || commit === checkout.baseCommit || evidence.kind !== "green" || evidence.exitCode !== 0 || evidence.outcome !== "passed" || evidence.fingerprint !== snapshot.fingerprint) throw new Error("Commit sin evidencia verde vigente de un checkout limpio");
