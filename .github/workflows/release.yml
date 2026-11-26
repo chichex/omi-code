@@ -57,6 +57,8 @@ jobs:
     needs: plan
     if: needs.plan.outputs.version != ''
     runs-on: macos-latest
+    # Lo normal son ~2 min. Si GitHub se cuelga, las descargas de fd y rg se rinden antes (test en bundled-tools).
+    timeout-minutes: 20
     env:
       VERSION: ${{ needs.plan.outputs.version }}
     steps:
@@ -76,6 +78,8 @@ jobs:
     needs: [plan, macos]
     if: needs.plan.outputs.version != ''
     runs-on: ubuntu-latest
+    # Lo normal son ~7 min. Si GitHub se cuelga, las descargas de fd y rg se rinden antes (test en bundled-tools).
+    timeout-minutes: 40
     env:
       VERSION: ${{ needs.plan.outputs.version }}
     steps:

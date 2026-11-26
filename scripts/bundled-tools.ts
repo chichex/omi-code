@@ -48,10 +48,14 @@ export interface FetchOptions {
 	download?: Download;
 }
 
-const DOWNLOAD_TIMEOUT_MS = 120_000;
+// Cada asset pesa de 1,3 a 2,3 MB: 30 s alcanzan con 80 KB/s. Si GitHub se cuelga, se rinde en unos 2 min por asset.
+const DOWNLOAD_TIMEOUT_MS = 30_000;
 /** Espera antes de cada reintento. Con tres, son 4 intentos y 7 s de espera como mucho. */
 const RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
 const DOWNLOAD_ATTEMPTS = RETRY_DELAYS_MS.length + 1;
+/** Cuánto tardan `assets` descargas en rendirse si GitHub se cuelga del todo: todos los intentos vencen. */
+export const downloadWorstCaseMs = (assets: number): number =>
+	assets * (DOWNLOAD_ATTEMPTS * DOWNLOAD_TIMEOUT_MS + RETRY_DELAYS_MS.reduce((sum, wait) => sum + wait, 0));
 const ARCHIVE_SUFFIX = ".tar.gz";
 
 function sha256(content: Buffer): string {
