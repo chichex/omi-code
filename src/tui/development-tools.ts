@@ -5,7 +5,7 @@ import { Type, type Static, type TSchema } from "typebox";
 import { Value } from "typebox/value";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ExplorationSchema, InferenceInputSchema, LensSchema, PlanSchema, SpecSchema, text } from "../harness/model.ts";
-import { expectedFailure, successful, transition, type WorkflowEvent } from "../harness/state.ts";
+import { expectedFailure, missingCommand, successful, transition, type WorkflowEvent } from "../harness/state.ts";
 import { securityBlocks } from "../harness/security-blockers.ts";
 import { gitRead, inspectCheckout, validateReferences } from "../harness/git.ts";
 import { approvalPreview, DevelopmentSession } from "./development-session.ts";
@@ -60,7 +60,7 @@ async function currentExploration(session: DevelopmentSession, ctx: ExtensionCon
 export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentSession): void {
 	pi.registerTool({
 		name: "omi_workflow", label: "Desarrollo: flujo", defaultActive: false, exposure: "model-only", executionMode: "sequential", parameters: ActionSchema,
-		description: "Avanza el harness de desarrollo activo. Explorar, resolver inferencias, receta, diagnóstico/spec, aprobación (humana o de Foundations), pasos, verificar y PR draft. retry gasta una vuelta y es para un D o un gate fallados, o un blocker de security; amend corrige un aviso de cualquier lente sin gastar vuelta. No acepta evidencia ni aprobaciones declaradas por el modelo. status consulta; pause bloquea. stack actualiza un stack de PRs publicado (merge y push normal; pide el sí sólo con push_pr: ask). agreed registra un acuerdo de alcance dicho por la persona en el chat, con la cita textual de su mensaje (OMI la verifica). start/resume son comandos humanos /omi-work.",
+		description: "Avanza el harness de desarrollo activo. Explorar, resolver inferencias, receta, diagnóstico/spec, aprobación (humana o de Foundations), pasos, verificar y PR draft. amend corrige sin gastar vuelta un D o un gate rojo, o un hallazgo de un lente que sólo avisa (hasta 2 por vuelta); retry gasta una vuelta y es para un blocker de security, o para un rojo cuando ya no quedan amend. No acepta evidencia ni aprobaciones declaradas por el modelo. status consulta; pause bloquea. stack actualiza un stack de PRs publicado (merge y push normal; pide el sí sólo con push_pr: ask). agreed registra un acuerdo de alcance dicho por la persona en el chat, con la cita textual de su mensaje (OMI la verifica). start/resume son comandos humanos /omi-work.",
 		promptSnippet: "Registrar el trabajo de desarrollo y su receta; pedir decisiones y permisos humanos",
 		async execute(_id, input, signal, _onUpdate, ctx) {
 			if (input.action === "status") return result(session);
@@ -107,7 +107,11 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 					}
 					break;
 				}
-				case "retry": await session.apply({ type: "retry", reason: checked(text(), input.reason) }, ctx); break;
+				case "retry": {
+					// Con el contenido limpio, el reducer sabe si un amend alcanza. Sucio o ilegible, amend no puede: retry sigue disponible.
+					const snapshot = await inspectCheckout(session.current(ctx).checkout, session.runner, signal).catch(() => undefined); signal?.throwIfAborted();
+					await session.apply({ type: "retry", reason: checked(text(), input.reason), ...(snapshot?.clean ? { fingerprint: snapshot.fingerprint } : {}) }, ctx); break;
+				}
 				case "amend": {
 					const snapshot = await inspectCheckout(session.current(ctx).checkout, session.runner, signal);
 					if (!snapshot.clean) throw new Error("La corrección liviana parte del cambio commiteado y limpio");
@@ -139,7 +143,9 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 			if ("setup" in observation) return { content: [{ type: "text", text: `Comando auxiliar; no acredita pruebas ni casos.\n${JSON.stringify(observation.setup)}` }], details: { setup: observation.setup }, isError: observation.setup.interrupted || observation.setup.exitCode !== 0 };
 			const evidence = observation;
 			const success = evidence.kind === "red" ? expectedFailure(evidence) : evidence.kind === "reproduction" ? successful(evidence) || expectedFailure(evidence) : successful(evidence);
-			return { content: [{ type: "text", text: JSON.stringify(evidence) }], details: { evidence }, isError: !success };
+			const content = [{ type: "text" as const, text: JSON.stringify(evidence) }];
+			if (evidence.kind === "gate" && missingCommand(evidence)) content.push({ type: "text", text: `El comando no existe o no es ejecutable (exit ${evidence.exitCode}): no cuenta como gate de la vuelta. Corregí el comando y correlo otra vez.` });
+			return { content, details: { evidence }, isError: !success };
 		},
 	});
 	pi.registerTool({
