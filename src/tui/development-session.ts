@@ -30,6 +30,7 @@ import { FoundationsGate, foundationsLines } from "./development-foundations.ts"
 import { foundationsDir } from "../harness/foundations-trust.ts";
 import { showCommandChoices } from "./development-command-dialog.ts";
 import { lifecycleLines, lifecyclePauseLine } from "../harness/lifecycle-progress.ts";
+import { roundBudgetLine } from "../harness/rounds.ts";
 import { correctionPushGuide } from "../harness/after-draft-guide.ts";
 import type { LifecyclePorts } from "./development-lifecycle.ts";
 import { LifecycleContinuityHost } from "./development-lifecycle-continuity.ts";
@@ -378,5 +379,5 @@ export class DevelopmentSession {
 		this.state = undefined; this.lockedReason = ""; this.emit();
 	}
 	shutdown(): void { this.alive = false; this.epoch++; this.lifecycle.abort(); }
-	status(): string { return this.lockedReason || (this.state ? [`${PHASE_LABELS[this.state.phase]} · ${this.state.status}`, this.state.activity, this.state.blockedReason, lifecyclePauseLine(this.state), ...lifecycleLines(this.state), "Detalle: /omi-progress"].filter(Boolean).join("\n") : "Sin harness activo. Pedí un cambio en el chat o elegí un issue en Issues. /omi-work resume | approve | pause | refresh | pr | stop"); }
+	status(): string { return this.lockedReason || (this.state ? [`${PHASE_LABELS[this.state.phase]} · ${this.state.status}`, roundBudgetLine(this.state), this.state.activity, this.state.blockedReason, lifecyclePauseLine(this.state), ...lifecycleLines(this.state), "Detalle: /omi-progress"].filter(Boolean).join("\n") : "Sin harness activo. Pedí un cambio en el chat o elegí un issue en Issues. /omi-work resume | approve | pause | refresh | pr | stop"); }
 }

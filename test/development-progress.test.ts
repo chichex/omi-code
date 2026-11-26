@@ -110,3 +110,13 @@ test("waiting overlays target the current stage without changing durable executi
  assert.ok(events.some(e => e.progress?.status === "waiting" && e.progress.stages?.some(s => s.current && s.status === "waiting")));
  assert.equal((await f.state()).approval, null);
 });
+
+test("development_progress omi_workflow status y /omi-work status dicen la vuelta, los retry que quedan y los amends", async t => {
+ const f = await developmentFixture(t); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" });
+ const state = await f.state(); assert.equal(state.phase, "implement");
+ const status = await f.action({ action: "status" });
+ assert.match(JSON.stringify(status.content), /Presupuesto: vuelta 0 de 3 · quedan 3 retry · amends 0 de 2\./);
+ f.messages.length = 0; await f.command("status");
+ assert.ok(f.messages.some(m => /vuelta 0 de 3 · quedan 3 retry · amends 0 de 2/.test(m)), JSON.stringify(f.messages));
+ assert.ok(developmentProgress(state).details?.includes("Etapa: Implementar · active · vuelta 0 de 3 · quedan 3 retry · amends 0 de 2"), "el detalle de /omi-progress");
+});
