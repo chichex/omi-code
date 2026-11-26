@@ -6,7 +6,7 @@ import { Value } from "typebox/value";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ExplorationSchema, InferenceInputSchema, LensSchema, PlanSchema, SpecSchema, text } from "../harness/model.ts";
 import { expectedFailure, missingCommand, successful, transition, type WorkflowEvent } from "../harness/state.ts";
-import { securityBlocks } from "../harness/security-blockers.ts";
+import { unacceptedBlockers } from "../harness/security-blockers.ts";
 import { gitRead, inspectCheckout, validateReferences } from "../harness/git.ts";
 import { approvalPreview, DevelopmentSession } from "./development-session.ts";
 import { referenceDigest } from "../harness/references.ts";
@@ -31,6 +31,7 @@ function checked<S extends TSchema>(schema: S, value: unknown): Static<S> {
 }
 // Un unknown sin resultado no es un juicio del lente: repetirlo no re-tira un veredicto. La causa va en findings.
 const NO_RESULT = "Sin resultado: el lente no llegó a juzgar el cambio; la causa va en findings. Volvé a correr este lente antes de verified; no gasta veredictos. Si vuelve a quedar sin resultado, queda como aviso en el progreso y en el PR draft y no bloquea Verificar.";
+const SECURITY_BLOCKER = "Un hallazgo blocker de seguridad bloquea Verificar. Si es real, corregilo con retry. Si no aplica (preexistente en main, fuera del alcance o del modelo de amenazas), no gastes la vuelta: pausá con omi_workflow action:pause y el motivo. Sólo la persona puede aceptar el riesgo, con /omi-work accept-risk; ni el chat ni omi_ask lo aceptan.";
 const result = async (session: DevelopmentSession) => {
 	const state = session.state;
 	const text = state && !session.lockedReason ? developmentInstructions(state, [], false, await singlePrPlanning(session, state)) : session.status();
@@ -160,8 +161,8 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 		description: "Ejecuta un lente de Verificar en contexto aislado, sin tools ni conversación del implementador. Evalúa los casos D, la evidencia registrada por el harness y el diff completo, por partes si no entra en una llamada; registra verdict pass/fail/unknown ligado al contenido. Asesora: unknown y fail quedan como aviso y no bloquean verified; sólo un hallazgo blocker de security bloquea; sus avisos no. No es Review externa del PR. Conserva uso del modelo.",
 		async execute(_id, { lens }, signal, _update, ctx) {
 			const result = await runLens(session, lens, ctx, AbortSignal.any([signal ?? new AbortController().signal, session.lifecycle.signal]));
-			const blocking = securityBlocks(result.review);
-			const notice = result.review.verdict === "pass" ? undefined : blocking ? "Un hallazgo blocker de seguridad bloquea Verificar: corregí el cambio con retry." : result.review.noResult ? NO_RESULT : "Aviso: queda visible en el progreso y en el PR draft y no bloquea Verificar. No repitas el lente para borrarlo ni uses retry. Si vale la pena corregirlo, usá omi_workflow action:amend con el motivo: no gasta vuelta.";
+			const blocking = !!session.state && unacceptedBlockers(session.state, result.review).length > 0;
+			const notice = result.review.verdict === "pass" ? undefined : blocking ? SECURITY_BLOCKER : result.review.noResult ? NO_RESULT : "Aviso: queda visible en el progreso y en el PR draft y no bloquea Verificar. No repitas el lente para borrarlo ni uses retry. Si vale la pena corregirlo, usá omi_workflow action:amend con el motivo: no gasta vuelta.";
 			return { content: [{ type: "text", text: JSON.stringify({ ...result.review, ...(notice ? { notice } : {}), ...(result.error ? { error: result.error } : {}) }) }], details: result.review, usage: result.usage, isError: !!result.error || blocking };
 		},
 	});

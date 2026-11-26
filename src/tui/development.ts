@@ -32,9 +32,10 @@ import { ConfigState } from "./development-config-state.ts";
 import { sessionConfigView } from "./development-config-view.ts";
 import { configGuide } from "../harness/config-guide.ts";
 import { continueDevelopment } from "./development-continue.ts";
+import { acceptRisk } from "./development-accept-risk.ts";
 
 const KICKOFF = "Continuá el harness de desarrollo activo desde su etapa persistida. Respetá sus bloqueos y pedí los permisos pendientes; no saltees etapas.";
-const USAGE = "Uso: /omi-work resume | approve | pause | refresh | pr | stack | status | foundations | stop · después del PR draft: adopt | review | fix | land | ship";
+const USAGE = "Uso: /omi-work resume | approve | accept-risk | pause | refresh | pr | stack | status | foundations | stop · después del PR draft: adopt | review | fix | land | ship";
 // Otra ventana preparando el mismo issue es una espera, no un error; también envuelto en un aviso.
 const busy = (error: unknown): boolean => error instanceof IssuePreparationBusyError || (error instanceof Error && error.cause instanceof IssuePreparationBusyError);
 
@@ -132,7 +133,7 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 			pi.sendUserMessage(beginCommand(token), { expandPromptTemplates: true });
 		});
 		pi.registerCommand("omi-work", {
-			description: "Harness de desarrollo: resume, approve, pause, refresh, pr, stack, status, foundations, stop; y después del PR draft adopt, review, fix, land, ship",
+			description: "Harness de desarrollo: resume, approve, accept-risk (la persona acepta un blocker de seguridad), pause, refresh, pr, stack, status, foundations, stop; y después del PR draft adopt, review, fix, land, ship",
 			handler: async (input, ctx) => {
 				try {
 					const command = input.trim() || "status";
@@ -168,6 +169,8 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 						if (!session.offline && !(await session.fresh(ctx))) { loadout(); return; }
 						if (session.state?.status === "paused") await session.apply({ type: "resume" }, ctx);
 					} else if (command === "approve") { if (!(await session.approve(ctx))) { loadout(); ctx.ui.notify(session.status(), "info"); return; } }
+					// Sólo la persona, en la TUI: ninguna tool lo expone. Adopta el estado guardado sin reanudarlo.
+					else if (command === "accept-risk") { if (!(await acceptRisk(session, ctx))) { loadout(); ctx.ui.notify(session.status(), "info"); return; } }
 					else if (command === "pause") await session.apply({ type: "pause", reason: "Pausado por la persona" }, ctx);
 					else if (command === "refresh") await session.refresh(ctx);
 					else if (command === "pr") await session.publish(ctx);
@@ -175,7 +178,7 @@ export function developmentHarnessExtension(io: Io, args: readonly string[], dep
 					else if (command === "stop") await session.stop(ctx);
 					else throw new Error(USAGE);
 					loadout();
-					if (["resume", "approve", "refresh"].includes(command) || command === "pr" && session.state?.phase === "implement") proceed(ctx);
+					if (["resume", "approve", "accept-risk", "refresh"].includes(command) || command === "pr" && session.state?.phase === "implement") proceed(ctx);
 					else ctx.ui.notify(session.status(), "info");
 				} catch (error) { ctx.ui.notify(error instanceof Error ? error.message : "No se pudo ejecutar el harness", busy(error) ? "warning" : "error"); }
 			},
