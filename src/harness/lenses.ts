@@ -1,6 +1,6 @@
 // Material de los lentes de Verificar: hechos que registró el harness, nunca texto del implementador.
 import type { Evidence, Lens, Review, Severity, Workflow } from "./model.ts";
-import { FAIL_WITHOUT_FINDINGS, reviewFindings, securityBlocks, severitiesOf } from "./security-blockers.ts";
+import { FAIL_WITHOUT_FINDINGS, reviewFindings, riskAccepted, severitiesOf, unacceptedBlockers } from "./security-blockers.ts";
 
 type Recorded = Omit<Evidence, "id" | "stepId" | "caseId"> & { archived?: true };
 const recorded = ({ id: _id, stepId: _step, caseId: _case, ...e }: Evidence, archived = false): Recorded => (archived ? { ...e, archived: true } : e);
@@ -63,10 +63,11 @@ export function lensRequests(context: Record<string, unknown>, state: Workflow, 
 	return parts.map((diff, index) => JSON.stringify({ ...context, evidence, part: { index: index + 1, total: parts.length }, diff }));
 }
 
-// Los lentes asesoran: su fail/unknown es un aviso visible. Sólo un hallazgo blocker de seguridad bloquea.
+// Los lentes asesoran: su fail/unknown es un aviso visible. Sólo un blocker de seguridad que ninguna persona aceptó bloquea.
 // carried: el lente aprobó limpio el contenido del que partió una corrección liviana y no se repitió.
 // noResult: el unknown es falta de resultado (conexión, plazo, formato), no un juicio del lente.
-export interface LensStatus { lens: Lens; verdict: Review["verdict"] | "not-run"; findings: string[]; blocking: boolean; carried: boolean; noResult: boolean }
+// accepted: una persona aceptó todos sus bloqueos para este contenido.
+export interface LensStatus { lens: Lens; verdict: Review["verdict"] | "not-run"; findings: string[]; blocking: boolean; accepted: boolean; carried: boolean; noResult: boolean }
 /** La revisión que vale para un lente sobre este contenido. Tras una corrección liviana, el pass limpio del contenido
  * de partida sigue valiendo, salvo el de security: lo único que bloquea se revisa siempre sobre el contenido final. */
 export function lensReview(reviews: readonly Review[], lens: Lens, fingerprint: string | undefined, amends: readonly { from: string }[] = []): { review: Review; carried: boolean } | undefined {
@@ -84,13 +85,15 @@ export function lensStatuses(state: Workflow): LensStatus[] {
 	const fingerprint = reviewedFingerprint(state);
 	return (state.recipe?.lenses ?? []).map((lens) => {
 		const found = lensReview(state.reviews, lens, fingerprint, amendsOf(state)); const review = found?.review;
-		return { lens, verdict: review?.verdict ?? "not-run", findings: review ? reviewFindings(review) : [], blocking: securityBlocks(review), carried: found?.carried ?? false, noResult: review?.noResult === true };
+		return { lens, verdict: review?.verdict ?? "not-run", findings: review ? reviewFindings(review) : [], blocking: review !== undefined && unacceptedBlockers(state, review).length > 0,
+			accepted: riskAccepted(state, review), carried: found?.carried ?? false, noResult: review?.noResult === true };
 	});
 }
 export const lensWarnings = (state: Workflow): LensStatus[] => lensStatuses(state).filter((s) => s.verdict === "fail" || s.verdict === "unknown");
 export function lensWarningLine(s: LensStatus): string {
 	const more = s.findings.length > 1 ? ` (+${s.findings.length - 1} hallazgos)` : "";
-	return `Lente ${s.lens} · ${s.verdict}${s.noResult ? " · sin resultado" : ""}${s.blocking ? " · bloquea" : ""}${s.findings[0] ? ` · ${s.findings[0]}` : ""}${more}`;
+	const mark = s.blocking ? " · bloquea · la persona puede aceptarlo con /omi-work accept-risk" : s.accepted ? " · riesgo aceptado por una persona" : "";
+	return `Lente ${s.lens} · ${s.verdict}${s.noResult ? " · sin resultado" : ""}${mark}${s.findings[0] ? ` · ${s.findings[0]}` : ""}${more}`;
 }
 
 // Un diff que no entra en una llamada se reparte por archivo en partes de hasta `budget` caracteres, medidos

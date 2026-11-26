@@ -9,7 +9,7 @@ import { validateCorrectionWorkflow } from "./correction-invariants.ts";
 import { ContinuityPauseSchema } from "./continuity-pause.ts";
 
 // Topes compartidos por el esquema y el reducer: el reducer los respeta antes de validar.
-export const MAX_HISTORY = 1000; export const MAX_STEPS = 50; export const MAX_STACK = 10; export const MAX_ATTEMPTS = 100; export const MAX_EVIDENCE = 1000; export const MAX_REVIEWS = 100; export const MAX_AGREEMENTS = 50; export const MAX_GRANTS = 200; export const MAX_AMENDS = 2;
+export const MAX_HISTORY = 1000; export const MAX_STEPS = 50; export const MAX_STACK = 10; export const MAX_ATTEMPTS = 100; export const MAX_EVIDENCE = 1000; export const MAX_REVIEWS = 100; export const MAX_AGREEMENTS = 50; export const MAX_GRANTS = 200; export const MAX_AMENDS = 2; export const MAX_ACCEPTED_RISKS = 10;
 export const text = (maxLength = 4000) => Type.String({ minLength: 1, maxLength, pattern: "\\S" });
 const list = () => Type.Array(text(), { maxItems: 100 });
 const nullableText = () => Type.Union([text(8192), Type.Null()]);
@@ -76,6 +76,9 @@ export type Severity = Static<typeof SeveritySchema>;
 // severities: sólo en security, una por hallazgo y sólo si hay algún aviso. Sin la lista (estados anteriores), cada hallazgo es blocker.
 export const ReviewSchema = Type.Object({ lens: LensSchema, fingerprint: text(128), verdict: Type.Union([Type.Literal("pass"), Type.Literal("fail"), Type.Literal("unknown")]), findings: list(), severities: Type.Optional(Type.Array(SeveritySchema, { maxItems: 100 })), noResult: Type.Optional(Type.Literal(true)), at: text(100) }, { additionalProperties: false });
 export type Review = Static<typeof ReviewSchema>;
+// Hallazgos blocker de security que una persona aceptó para un contenido exacto, con su motivo. Sin autor: lo decide la TUI.
+export const AcceptedRiskSchema = Type.Object({ fingerprint: text(128), findings: Type.Array(text(), { minItems: 1, maxItems: 100 }), reason: text(2000), at: text(100) }, { additionalProperties: false });
+export type AcceptedRisk = Static<typeof AcceptedRiskSchema>;
 // Un acuerdo de alcance dicho por la persona en el chat: su cita textual (verificada por el host) y lo acordado.
 export const AgreementSchema = Type.Object({ quote: text(2000), summary: text(2000), replan: Type.Boolean(), phase: PhaseSchema, at: text(100) }, { additionalProperties: false });
 export type Agreement = Static<typeof AgreementSchema>;
@@ -122,6 +125,8 @@ export const WorkflowV2Schema = Type.Object({
  pullRequest: PullRequestSchema,
  // Correcciones livianas de la vuelta actual: el contenido del que partió cada una. Opcional para estados previos.
  amends: Type.Optional(Type.Array(Type.Object({ from: text(128), reason: text(), at: text(100) }, { additionalProperties: false }), { maxItems: MAX_AMENDS })),
+ // Riesgos de seguridad que una persona aceptó desde la TUI para un contenido exacto. Opcional para estados previos; retry, refresh y replan lo borran.
+ acceptedRisks: Type.Optional(Type.Array(AcceptedRiskSchema, { maxItems: MAX_ACCEPTED_RISKS })),
  // El renderer v1 permanece ligado al pending legacy y no se cambia al migrar/reanudar.
  publicationFormat: Type.Literal(1),
  // Por qué se detuvo la continuidad. Opcional para estados previos; las transiciones del reducer lo conservan.

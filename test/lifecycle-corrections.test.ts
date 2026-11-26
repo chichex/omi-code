@@ -165,6 +165,13 @@ test("tras el commit de la corrección, avisos de security no abren la salida de
  assert.equal(retry.phase, "review");
 });
 
+test("seguridad fallada y aceptada por una persona sobre el commit de corrección no es un fallo para retry post-PR", () => {
+ const flagged = (accepted: string) => { const r = committed(); r.reviews = [...r.reviews, { lens: "security", fingerprint: nextFingerprint, verdict: "fail", findings: ["app.ts:2 · manda el diff a otro servidor"], at }]; r.acceptedRisks = [{ fingerprint: accepted, findings: ["app.ts:2 · manda el diff a otro servidor"], reason: "Preexistente en main", at }]; return r; };
+ const observed = { head: nextHead, fingerprint: nextFingerprint, clean: true };
+ assert.throws(() => retryPostPrCorrection(flagged(nextFingerprint), "correction1", observed, "security marcó un blocker", at), /no hay fallo/);
+ assert.equal(retryPostPrCorrection(flagged(fingerprint), "correction1", observed, "security marcó un blocker", at).phase, "review", "lo aceptado sobre otro contenido no cuenta");
+});
+
 test("verified nativo no acredita D históricos fuera del ámbito de la corrección", () => {
  const r = verified(); assert.equal(r.lifecycle.status, "enabled"); if (r.lifecycle.status !== "enabled") return;
  const round = r.lifecycle.corrections?.[0]; assert.ok(round); round.evidenceOffset = r.evidence.length; r.phase = "verify";

@@ -196,6 +196,16 @@ test("riesgo alto con Seguridad en fail de sólo avisos sobre el contenido: auto
  assert.deepEqual(landReadiness(blocked, facts(), highWitness(blocked)).attention, ["Seguridad en fail en un cambio de riesgo alto: el merge pide tu sí"], "un blocker entre avisos sigue reteniendo el merge");
 });
 
+test("riesgo alto con Seguridad en fail aceptada por una persona sobre el contenido: sin hold y auto-Land no cambia; aceptada sobre otro contenido, el hold sigue", () => {
+ const risk = (fingerprint: string) => [{ fingerprint, findings: ["Falta revisar la entrada"], reason: "Preexistente en main", at }];
+ const r = highRisk(shipKnown(workflow("auto")), [security("fail")]); r.acceptedRisks = risk(fp);
+ const readiness = landReadiness(r, facts(), highWitness(r));
+ assert.equal(readiness.ready, true, readiness.reasons.join("; ")); assert.equal(readiness.auto, true); assert.deepEqual(readiness.attention, []);
+ const other = highRisk(shipKnown(workflow("auto")), [security("fail")]); other.acceptedRisks = risk("d".repeat(64));
+ const held = landReadiness(other, facts(), highWitness(other));
+ assert.equal(held.auto, false); assert.deepEqual(held.attention, ["Seguridad en fail en un cambio de riesgo alto: el merge pide tu sí"]);
+});
+
 test("riesgo alto con Seguridad pass sobre el contenido: auto-Land no cambia", () => {
  const r = highRisk(shipKnown(workflow("auto")), [security("pass")]), readiness = landReadiness(r, facts(), highWitness(r));
  assert.equal(readiness.ready, true, readiness.reasons.join("; ")); assert.equal(readiness.auto, true); assert.deepEqual(readiness.attention, []);
