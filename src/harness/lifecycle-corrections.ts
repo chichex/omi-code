@@ -4,6 +4,7 @@ import { Value } from "typebox/value";
 import { parseWorkflow, MAX_STEPS, MAX_HISTORY, type WorkflowV2 } from "./model.ts";
 import { isApproved, recipeApprovalHash, successful } from "./state.ts";
 import { lifecycleAssert } from "./lifecycle-invariants.ts";
+import { securityBlocks } from "./security-blockers.ts";
 import { initializeLifecycle, bindLifecycleSubject, confirmLifecycleOperation, registerLifecycleEvidence, disposeLifecycleFinding } from "./lifecycle-state.ts";
 import { SubjectSchema, AdoptionSchema, type EnabledLifecycle } from "./lifecycle-state-schema.ts";
 import { CorrectionProposalSchema, type CorrectionRound } from "./correction-schema.ts";
@@ -95,7 +96,7 @@ export function retryPostPrCorrection(original: unknown, operationId: string, ob
  const step = state.steps.find(s => s.id === round.stepId), op = lifecycle.operations.find(o => o.id === operationId);
  lifecycleAssert(step?.status === "done" && step.commit === observed.head && op?.status === "pending", "falta commit/reserva de la corrección");
  const checks = state.evidence.slice(round.evidenceOffset).filter(e => ["verification", "gate"].includes(e.kind) && e.head === observed.head && e.fingerprint === observed.fingerprint);
- const failed = checks.some(e => !successful(e)) || state.reviews.slice(round.reviewOffset).some(r => r.lens === "security" && r.verdict === "fail" && r.fingerprint === observed.fingerprint);
+ const failed = checks.some(e => !successful(e)) || state.reviews.slice(round.reviewOffset).some(r => r.fingerprint === observed.fingerprint && securityBlocks(r));
  lifecycleAssert(failed, "no hay fallo de D/gate/seguridad observado");
  let changed = confirmLifecycleOperation(lifecycle, { operationId, correlationId: op.correlationId, subjectId: op.subjectId, targetId: null, verifiedSubjectId: null, externalId: `verification-failed:${observed.head}`, outcome: "failed", at });
  lifecycleAssert(changed.corrections, "ronda perdida"); changed.corrections[index] = { ...round, status: "failed", failedHead: observed.head, failedFingerprint: observed.fingerprint, reason: reason.slice(0, 256) };

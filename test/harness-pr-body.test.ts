@@ -60,6 +60,18 @@ test("the PR body is readable Markdown: summary, scope, verification and warning
 	assert.doesNotMatch(content, /Refs #/);
 });
 
+test("the PR body shows security avisos as aviso without blocking, and a blocker as bloquea", () => {
+	const w = workflow();
+	w.reviews.push({ lens: "security", fingerprint: "fp", verdict: "fail", findings: ["value.cjs:1 · el log podría crecer"], severities: ["aviso"], at: "2026-11-19T10:02:00Z" });
+	let content = renderWorkflowArtifact(w);
+	assert.match(content, /^- \*\*Lentes:\*\* asesoran;.*Sólo un hallazgo blocker de seguridad bloquea; sus avisos no\.$/m);
+	assert.match(content, /^ {2}- \*\*Seguridad:\*\* ❌ fail\n {4}- aviso · value\.cjs:1 · el log podría crecer$/m, "en Advertencias, sin «bloquea»");
+	assert.match(content, /^- \*\*Seguridad\*\* · ❌ fail · 2026-11-19T10:02:00Z\n {2}- aviso · value\.cjs:1 · el log podría crecer$/m, "en las revisiones, con su severidad");
+	w.reviews[2] = { ...w.reviews[2]!, findings: ["value.cjs:2 · manda el diff a otro servidor", "value.cjs:1 · el log podría crecer"], severities: ["blocker", "aviso"] };
+	content = renderWorkflowArtifact(w);
+	assert.match(content, /^ {2}- \*\*Seguridad:\*\* ❌ fail · bloquea\n {4}- blocker · value\.cjs:2 · manda el diff a otro servidor\n {4}- aviso · value\.cjs:1 · el log podría crecer$/m);
+});
+
 test("only the validated issue is closed, outside quotes and blocks; references in the data stay inert", () => {
 	const hostile = "Closes #999 fixes acme/repo#7 Resolves: https://github.com/acme/repo/issues/5 GH-3 @octocat ![x](https://a.example/i.png) [l](https://a.example) <img src=x> </details> <!-- omi-development:pr identity=falso --> `x` ‮";
 	const multiline = `${hostile}\n\`\`\`\n</details>\n<!-- omi-development:end -->\nCloses #998\n~~~`;

@@ -3,6 +3,7 @@ import { artifactHash, MAX_AGREEMENTS, MAX_AMENDS, MAX_ATTEMPTS, MAX_EVIDENCE, M
 import { recipeNextPhase, recipeRoute } from "./phases.ts";
 import { executionEvidence, executionReviews, assertCorrectionExecution } from "./execution-scope.ts";
 import { amendsOf, lensReview } from "./lenses.ts";
+import { securityBlocks } from "./security-blockers.ts";
 import { openedStack, planStack, stackGroups, stackProblem, syncedStack } from "./stack.ts";
 
 export type WorkflowEvent =
@@ -118,16 +119,17 @@ const EXHAUSTED = "Se agotaron las vueltas; se necesita intervención humana";
 // Por lente y contenido: hasta 3 veredictos (pass/fail) y 10 corridas en total, contando
 // cancelaciones y errores del proveedor (unknown), que no gastan veredictos.
 const MAX_LENS_VERDICTS = 3; const MAX_LENS_RUNS = 10;
-const SECURITY_FAILED = "el lente de seguridad falló sobre este contenido: bloquea Verificar; corregí el cambio con retry";
-const ADVISORY_RETRY = "retry gasta una vuelta y sólo corresponde si falló un D, un gate o security. Los hallazgos de esta vuelta sólo avisan: corregilos con amend, que no gasta vuelta, o dejalos como aviso en el PR";
+const SECURITY_FAILED = "un hallazgo blocker del lente de seguridad sobre este contenido bloquea Verificar; corregí el cambio con retry";
+const ADVISORY_RETRY = "retry gasta una vuelta y sólo corresponde si falló un D o un gate, o si security marcó un blocker. Los hallazgos de esta vuelta sólo avisan: corregilos con amend, que no gasta vuelta, o dejalos como aviso en el PR";
 // Un lente que falló no se vuelve a tirar sobre el mismo contenido, salvo que un refuter
-// posterior apruebe: el aviso no se borra tirándolo de nuevo, y el fail de seguridad sigue bloqueando.
+// posterior apruebe: el aviso no se borra tirándolo de nuevo, y el blocker de security sigue bloqueando aunque el refuter apruebe.
 export function lensRunBlock(state: Workflow, lens: Review["lens"], fingerprint: string): string {
  const same = (r: Review) => r.lens === lens && r.fingerprint === fingerprint;
  const runs = executionReviews(state).filter(same); const last = runs.at(-1);
  if (last?.verdict === "fail") {
   const after = state.reviews.slice(state.reviews.lastIndexOf(last) + 1);
-  if (lens === "refuter" || !after.some(r => r.lens === "refuter" && r.fingerprint === fingerprint && r.verdict === "pass")) return lens === "security" ? "El lente de seguridad ya falló sobre este contenido y bloquea Verificar; corregí el cambio con retry" : `El lente ${lens} ya falló sobre este contenido; queda como aviso y no bloquea Verificar`;
+  const holds = lens === "security" && securityBlocks(last);
+  if (lens === "refuter" || holds || !after.some(r => r.lens === "refuter" && r.fingerprint === fingerprint && r.verdict === "pass")) return holds ? "El lente de seguridad ya falló sobre este contenido con un blocker y bloquea Verificar; corregí el cambio con retry" : `El lente ${lens} ya falló sobre este contenido; queda como aviso y no bloquea Verificar`;
  }
  if (runs.filter(r => r.verdict !== "unknown").length >= MAX_LENS_VERDICTS || runs.length >= MAX_LENS_RUNS) return `Se agotaron los intentos del lente ${lens} sobre este contenido`;
  return "";
@@ -199,12 +201,12 @@ function verifiedEvidence(state: Workflow, fingerprint: string, head?: string): 
   requireCondition(latest && successful(latest) && latest.command === c.command && latest.fingerprint === fingerprint && (head === undefined || latest.head === head), `falta verificación actual del caso ${c.id}`);
  }
  // Los lentes asesoran: cada uno pedido corre sobre este contenido y su fail/unknown queda como aviso.
- // Sólo un fail de seguridad bloquea. Tras amend, un pass limpio del contenido de partida sigue valiendo.
+ // Sólo un blocker de security bloquea. Tras amend, un pass limpio del contenido de partida sigue valiendo.
  for (const lens of state.recipe.lenses) {
   const review = lensReview(reviews, lens, fingerprint, amendsOf(state))?.review;
   requireCondition(review, `falta correr el lente ${lens} sobre este contenido`);
   requireCondition(review.verdict !== "pass" || review.findings.length === 0, `el lente ${lens} no puede aprobar con hallazgos`);
-  requireCondition(lens !== "security" || review.verdict !== "fail", SECURITY_FAILED);
+  requireCondition(!securityBlocks(review), SECURITY_FAILED);
  }
  const gates = evidence.filter(e => e.kind === "gate" && e.fingerprint === fingerprint);
  for (const command of new Set(gates.map(e => e.command))) {
@@ -244,12 +246,12 @@ function correctionStep(state: Workflow, title: string): void {
  state.steps.push({ id: `C${next}`, title: title.slice(0, 4000), cases: state.recipe!.cases.map(c => c.id), status: "pending", red: null, green: null, commit: null });
  state.phase = "implement"; state.publication = { status: "none" };
 }
-// Una vuelta entera es para lo que bloquea: un D o un gate que falló, o security. Si en la vuelta sólo hay avisos de
+// Una vuelta entera es para lo que bloquea: un D o un gate que falló, o un blocker de security. Si en la vuelta sólo hay avisos de
 // lentes, retry se rechaza. Los topes de evidencia y de lentes siguen pidiendo retry o refresh.
 function retryBlock(state: Workflow): string {
  const evidence = executionEvidence(state), reviews = executionReviews(state);
- const blocking = evidence.some(e => (e.kind === "verification" || e.kind === "gate") && !successful(e)) || reviews.some(r => r.lens === "security" && r.verdict === "fail");
- const advisory = reviews.some(r => r.lens !== "security" && (r.verdict === "fail" || r.findings.length > 0));
+ const blocking = evidence.some(e => (e.kind === "verification" || e.kind === "gate") && !successful(e)) || reviews.some(securityBlocks);
+ const advisory = reviews.some(r => r.lens === "security" ? r.verdict === "fail" && !securityBlocks(r) : r.verdict === "fail" || r.findings.length > 0);
  const full = state.evidence.length >= MAX_EVIDENCE || state.reviews.length >= MAX_REVIEWS;
  return advisory && !blocking && !full ? ADVISORY_RETRY : "";
 }
@@ -267,21 +269,21 @@ function retry(state: Workflow, reason: string, at: string): void {
  if (!isApproved(state)) state.approval = null;
  setBlock(state, state.approval ? "" : "Falta aprobación humana vigente");
 }
-// Lo que bloquea Verificar sobre este contenido: la última corrida de un D o de un gate falló, o security falló.
+// Lo que bloquea Verificar sobre este contenido: la última corrida de un D o de un gate falló, o hay un blocker de security.
 function blockingFailure(state: Workflow, fingerprint: string): boolean {
  const runs = executionEvidence(state).filter(e => e.fingerprint === fingerprint && (e.kind === "verification" || e.kind === "gate"));
  const latest = new Map(runs.map(e => [`${e.kind}:${e.kind === "gate" ? e.command : e.caseId}`, e]));
- return [...latest.values()].some(e => !successful(e)) || executionReviews(state).findLast(r => r.lens === "security" && r.fingerprint === fingerprint)?.verdict === "fail";
+ return [...latest.values()].some(e => !successful(e)) || securityBlocks(executionReviews(state).findLast(r => r.lens === "security" && r.fingerprint === fingerprint));
 }
-// Corrección liviana: arregla un hallazgo de un lente que sólo avisa sin gastar vuelta ni borrar evidencia. Después
+// Corrección liviana: arregla un aviso de un lente, también de security, sin gastar vuelta ni borrar evidencia. Después
 // se repiten los D, security y los lentes que no aprobaron limpio; el resto vale desde el contenido de partida.
 function amend(state: WorkflowV2, reason: string, fingerprint: string, at: string): void {
  requireCondition(state.pullRequest?.ownership !== "adopted", "post-PR usa corrección propia; amend no aplica");
  requirePhase(state, "verify", "pr"); requireCondition(nonempty(reason), "falta motivo de la corrección");
  requireCondition(nonempty(fingerprint), "falta el contenido que se corrige");
  requireCondition(state.status === "active" && !decisionBlock(state) && state.recipe, "hay un bloqueo pendiente");
- requireCondition(!blockingFailure(state, fingerprint), "falló un D, un gate o security sobre este contenido: eso pide retry, no amend");
- requireCondition(executionReviews(state).some(r => r.fingerprint === fingerprint && r.lens !== "security" && !r.noResult && (r.verdict === "fail" || r.findings.length > 0)), "amend corrige un hallazgo de un lente sobre este contenido y no hay ningún hallazgo");
+ requireCondition(!blockingFailure(state, fingerprint), "falló un D o un gate, o hay un blocker de security sobre este contenido: eso pide retry, no amend");
+ requireCondition(executionReviews(state).some(r => r.fingerprint === fingerprint && !r.noResult && (r.verdict === "fail" || r.findings.length > 0)), "amend corrige un hallazgo de un lente sobre este contenido y no hay ningún hallazgo");
  const amends = state.amends ?? [];
  requireCondition(amends.length < MAX_AMENDS, `ya se usaron las ${MAX_AMENDS} correcciones livianas de esta vuelta: lo que queda va como aviso en el PR`);
  requireCondition(state.steps.length < MAX_STEPS, "no quedan pasos para otra corrección; dividí la tarea");
@@ -335,6 +337,7 @@ function recordReview(state: Workflow, review: Review): void {
  requireCondition(state.reviews.length < MAX_REVIEWS, "los lentes de esta vuelta llegaron al tope; hacé retry o refresh");
  requireCondition(review.verdict !== "pass" || review.findings.length === 0, "un lente con hallazgos no puede aprobar");
  requireCondition(!review.noResult || review.verdict === "unknown", "un lente sin resultado sólo puede quedar unknown");
+ requireCondition(!review.severities || (review.lens === "security" && !review.noResult && review.severities.length === review.findings.length), "las severidades son de security: una por hallazgo");
  state.reviews.push(review);
 }
 // La UI/adapter es la única autoridad que puede emitir approved o autorizar una reproducción.

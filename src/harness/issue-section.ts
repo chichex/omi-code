@@ -107,7 +107,7 @@ function lenses(w: Workflow, detail: Detail | "verdicts"): string[] {
 	if (!statuses.length || (!w.reviews.length && !["verify", "pr", "done"].includes(w.phase))) return [];
 	const findings = (all: string[]) => detail === "verdicts" ? [] : detail === "full" || all.length <= 1 ? all.map((f) => `  - ${text(f)}`)
 		: [`  - ${text(all[0]!)}`, `  - _y ${all.length - 1} hallazgos más en OMI_`];
-	return ["", "### Avisos de los lentes", "Los lentes asesoran: unknown y fail quedan como aviso y no bloquean Verificar ni el PR draft. Sólo un fail de seguridad bloquea.",
+	return ["", "### Avisos de los lentes", "Los lentes asesoran: unknown y fail quedan como aviso y no bloquean Verificar ni el PR draft. Sólo un hallazgo blocker de seguridad bloquea; sus avisos no.",
 		...statuses.flatMap((st) => [`- **${LENSES[st.lens]}:** ${verdictLabel(st.verdict, st.noResult)}${st.blocking ? " · bloquea" : ""}${st.carried ? CARRIED : ""}`, ...findings(st.findings)])];
 }
 const FOOTER = "<sub>Sección administrada por OMI: se reescribe entera y lo que se edite acá se pierde. El pedido es el texto de arriba.</sub>";

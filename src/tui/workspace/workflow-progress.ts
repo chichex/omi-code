@@ -108,7 +108,7 @@ export function workflowProgressView(t: Theme, progress: WorkflowProgress | unde
   lines.push(` Issue #${p.issueNumber} · ${clean(p.routeLabel)}`, ` ${clean(p.activity)}`, ...(p.blockedReason ? [t.fg("warning", ` ! ${clean(p.blockedReason)}`)] : []), "");
   if (!p.stages) lines.push(" Etapas no informadas por este harness.");
   for (const s of p.stages ?? []) lines.push(t.fg(stageColor(s), ` ${s.current ? ">" : " "} ${symbols[s.status]} ${clean(s.label)} · ${stageLabels[s.status]}`), `    Previsto: ${plannedLabels[s.planned]}`, `    Real: ${modeLabels[s.observed]}`);
-  if (p.warnings?.length) lines.push("", t.fg("warning", t.bold(" Avisos de lentes · no bloquean, salvo un fail de seguridad")), ...p.warnings.map(w => t.fg("warning", ` △ ${clean(w)}`)));
+  if (p.warnings?.length) lines.push("", t.fg("warning", t.bold(" Avisos de lentes · no bloquean, salvo un blocker de seguridad")), ...p.warnings.map(w => t.fg("warning", ` △ ${clean(w)}`)));
   if (p.stack?.length) lines.push("", t.bold(" Stack de PRs"), ...p.stack.map(line => ` ${clean(line)}`));
   if (p.lifecycle?.length || p.lifecyclePause) lines.push("", t.bold(" Review · Land · Ship"), ...(p.lifecyclePause ? [t.fg("warning", ` ${symbols.paused} ${CONTINUITY_PAUSE_TITLE} · ${clean(p.lifecyclePause)}`)] : []),
    ...(p.lifecycle ?? []).map(line => t.fg(/^(Bloqueo|Lifecycle no habilitado)/.test(line) ? "warning" : "text", ` ${clean(line)}`)));
@@ -145,7 +145,7 @@ export function workflowProgressDetail(progress: WorkflowProgress | undefined): 
   field("Bloqueo", clean(p.blockedReason) || "sin bloqueo informado", tone(p)), "", section("Checkout"), field("Worktree", cleanIdentity(p.worktree)), field("Rama", cleanIdentity(p.branch)),
   "", notice("Sólo datos informados por el harness; este panel no ejecuta pasos ni checks."), section("Recorrido"),
   ...(p.stages ?? []).flatMap(s => [notice(`${s.current ? "> " : ""}${clean(s.label)} · ${stageLabels[s.status]}`, "text"), notice(`Previsto: ${plannedLabels[s.planned]} · Real: ${modeLabels[s.observed]}`)]),
-  ...(p.warnings?.length ? [section("Avisos de lentes (no bloquean, salvo un fail de seguridad)"), ...p.warnings.map((line) => notice(clean(line), "warning"))] : []),
+  ...(p.warnings?.length ? [section("Avisos de lentes (no bloquean, salvo un blocker de seguridad)"), ...p.warnings.map((line) => notice(clean(line), "warning"))] : []),
   ...(p.stack?.length ? [section("Stack de PRs"), ...p.stack.map((line) => notice(clean(line), "text"))] : []),
   ...(p.lifecycle?.length || p.lifecyclePause ? [section("Review · Land · Ship"), ...(p.lifecyclePause ? [notice(`${CONTINUITY_PAUSE_TITLE} · ${clean(p.lifecyclePause)}`, "warning")] : []),
    ...(p.lifecycle ?? []).map((line) => notice(clean(line), /^(Bloqueo|Lifecycle no habilitado)/.test(line) ? "warning" : "text"))] : []),

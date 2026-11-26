@@ -189,6 +189,13 @@ test("riesgo alto con Seguridad en fail sobre el contenido: el aviso no dice «s
  assert.equal(readiness.auto, false); assert.deepEqual(readiness.attention, ["Seguridad en fail en un cambio de riesgo alto: el merge pide tu sí"]);
 });
 
+test("riesgo alto con Seguridad en fail de sólo avisos sobre el contenido: auto-Land no cambia", () => {
+ const r = highRisk(shipKnown(workflow("auto")), [security("fail", { severities: ["aviso"] })]), readiness = landReadiness(r, facts(), highWitness(r));
+ assert.equal(readiness.ready, true, readiness.reasons.join("; ")); assert.equal(readiness.auto, true); assert.deepEqual(readiness.attention, []);
+ const blocked = highRisk(shipKnown(workflow("auto")), [security("fail", { findings: ["Manda el diff a otro servidor", "Falta revisar la entrada"], severities: ["blocker", "aviso"] })]);
+ assert.deepEqual(landReadiness(blocked, facts(), highWitness(blocked)).attention, ["Seguridad en fail en un cambio de riesgo alto: el merge pide tu sí"], "un blocker entre avisos sigue reteniendo el merge");
+});
+
 test("riesgo alto con Seguridad pass sobre el contenido: auto-Land no cambia", () => {
  const r = highRisk(shipKnown(workflow("auto")), [security("pass")]), readiness = landReadiness(r, facts(), highWitness(r));
  assert.equal(readiness.ready, true, readiness.reasons.join("; ")); assert.equal(readiness.auto, true); assert.deepEqual(readiness.attention, []);

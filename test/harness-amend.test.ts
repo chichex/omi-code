@@ -120,6 +120,36 @@ test("harness_amend refresh y un replan del chat descartan las correcciones livi
 	assert.equal(replanned.version === 2 ? replanned.amends : "v1", undefined);
 });
 
+/** D1 pasa, quality y compliance aprueban limpio y security marca estos hallazgos con su severidad. */
+function securityFlagged(findings: string[], severities: NonNullable<Review["severities"]>): Workflow {
+	let s = verify(verifying(), "tree");
+	for (const r of [review("quality", "tree"), review("compliance", "tree"), { ...review("security", "tree", "fail", findings), severities }]) s = lens(s, r);
+	return s;
+}
+
+test("harness_amend security con sólo avisos no frena Verificar ni gasta una vuelta; amend los puede corregir", () => {
+	const s = securityFlagged(["src/a.ts:1 · el log podría crecer"], ["aviso"]);
+	assert.equal(send(s, { type: "verified", fingerprint: "tree" }).phase, "pr");
+	assert.throws(() => send(s, { type: "retry", reason: "security avisó" }), /amend/);
+	const amended = amend(s, "tree", "Acotar el log");
+	assert.equal(amended.phase, "implement"); assert.equal(amended.round, 0);
+	const status = lensStatuses(s).find((st) => st.lens === "security");
+	assert.deepEqual(status && { verdict: status.verdict, findings: status.findings, blocking: status.blocking }, { verdict: "fail", findings: ["aviso · src/a.ts:1 · el log podría crecer"], blocking: false });
+});
+
+test("harness_amend un blocker de security entre avisos bloquea Verificar y amend: pide retry", () => {
+	const s = securityFlagged(["src/a.ts:1 · manda el diff a un servidor que eligió la KB", "src/a.ts:2 · el log podría crecer"], ["blocker", "aviso"]);
+	assert.throws(() => send(s, { type: "verified", fingerprint: "tree" }), /seguridad/);
+	assert.throws(() => amend(s), /retry/);
+	assert.equal(send(s, { type: "retry", reason: "Falló security" }).round, 1);
+});
+
+test("harness_amend las severidades son sólo de security y una por hallazgo", () => {
+	const base = verify(verifying(), "tree");
+	assert.throws(() => lens(base, { ...review("compliance", "tree", "fail", ["test.cjs:3 · débil"]), severities: ["aviso"] }), /severidad/);
+	assert.throws(() => lens(base, { ...review("security", "tree", "fail", ["a", "b"]), severities: ["aviso"] }), /severidad/);
+});
+
 test("harness_amend un lente sin resultado no es un hallazgo: no justifica amend", () => {
 	let s = verify(verifying(), "tree");
 	const noResult: Review = { ...review("quality", "tree", "unknown", ["Sin resultado del lente: conexión (2 intentos)."]), noResult: true };

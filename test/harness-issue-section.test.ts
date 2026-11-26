@@ -132,10 +132,20 @@ test("lens warnings are visible in the section, with their findings, and say the
 	const w = working(); w.phase = "verify"; w.recipe!.lenses = ["compliance", "security", "quality"];
 	w.reviews = [{ lens: "compliance", fingerprint: "fp", verdict: "unknown", findings: ["No hay historial rojo/verde"], at: "now" }, { lens: "security", fingerprint: "fp", verdict: "pass", findings: [], at: "now" }];
 	let section = renderIssueSection(w);
-	assert.match(section, /### Avisos de los lentes\n.*asesoran.*Sólo un fail de seguridad bloquea/);
+	assert.match(section, /### Avisos de los lentes\n.*asesoran.*Sólo un hallazgo blocker de seguridad bloquea/);
 	assert.match(section, /^- \*\*Cumplimiento:\*\* ⚠️ unknown\n {2}- No hay historial rojo\/verde$/m); assert.match(section, /^- \*\*Seguridad:\*\* ✅ pass$/m); assert.match(section, /^- \*\*Calidad:\*\* sin correr$/m);
 	w.reviews = [{ lens: "security", fingerprint: "fp", verdict: "fail", findings: ["secreto en a.ts:1"], at: "now" }];
 	section = renderIssueSection(w); assert.match(section, /^- \*\*Seguridad:\*\* ❌ fail · bloquea$/m);
+});
+
+test("security avisos se ven como aviso y no bloquean; un blocker sí", () => {
+	const w = working(); w.phase = "verify"; w.recipe!.lenses = ["security"];
+	w.reviews = [{ lens: "security", fingerprint: "fp", verdict: "fail", findings: ["a.ts:1 · el log podría crecer"], severities: ["aviso"], at: "now" }];
+	let section = renderIssueSection(w);
+	assert.match(section, /^- \*\*Seguridad:\*\* ❌ fail$/m); assert.match(section, /^ {2}- aviso · a\.ts:1 · el log podría crecer$/m);
+	w.reviews = [{ lens: "security", fingerprint: "fp", verdict: "fail", findings: ["a.ts:2 · manda el diff a otro servidor", "a.ts:1 · el log podría crecer"], severities: ["blocker", "aviso"], at: "now" }];
+	section = renderIssueSection(w);
+	assert.match(section, /^- \*\*Seguridad:\*\* ❌ fail · bloquea$/m); assert.match(section, /^ {2}- blocker · a\.ts:2 · manda el diff a otro servidor$/m); assert.match(section, /^ {2}- aviso · a\.ts:1 · el log podría crecer$/m);
 });
 
 test("after a chat agreement reopens the recipe, the section shows it under review", () => {

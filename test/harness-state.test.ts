@@ -315,6 +315,15 @@ test("a refuter pass lets a failed lens run again on the same content", () => {
  s = send(s, lens("refuter", "pass"));
  assert.equal(send(s, lens("quality", "pass")).reviews.at(-1)?.verdict, "pass");
 });
+test("un blocker de security no se reabre con un refuter que aprueba; un fail de sólo avisos sí", () => {
+ const withRefuter = { ...plan, lenses: ["security", "refuter"] as Plan["lenses"] };
+ let s = send(ready(withRefuter), { type: "approved" }); s = send(s, { type: "step_started", id: "C1" }); s = send(s, { type: "evidence", evidence: evidence("red") }); s = send(s, { type: "evidence", evidence: evidence("green") }); s = send(s, { type: "step_completed", id: "C1", commit: "head", fingerprint: "tree" });
+ const security = (verdict: "pass" | "fail", severities?: ("blocker" | "aviso")[]) => ({ type: "reviewed" as const, review: { lens: "security" as const, fingerprint: "tree", verdict, findings: verdict === "pass" ? [] : ["src/a.ts:1 · finding"], ...(severities ? { severities } : {}), at } });
+ const refuted = (first: ReturnType<typeof security>) => send(send(s, first), { type: "reviewed", review: { lens: "refuter", fingerprint: "tree", verdict: "pass", findings: [], at } });
+ assert.throws(() => send(refuted(security("fail")), security("pass")), /ya falló/, "un blocker de security sigue bloqueando aunque el refuter apruebe");
+ assert.throws(() => send(send(s, security("fail", ["aviso"])), security("pass")), /ya falló/, "sin refuter, un aviso tampoco se borra volviendo a tirar el lente");
+ assert.equal(send(refuted(security("fail", ["aviso"])), security("pass")).reviews.at(-1)?.verdict, "pass", "un refuter que aprueba reabre un fail de sólo avisos");
+});
 test("schema limits fail on the event with a clear message, never as a corrupt state", () => {
  assert.equal(send(fresh(), { type: "pause", reason: "x".repeat(4000) }).status, "paused");
  const full = activeStep(); full.evidence = Array.from({ length: 1000 }, (_, i) => evidence("reproduction", { id: `old${i}` }));

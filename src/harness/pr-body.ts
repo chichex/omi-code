@@ -6,6 +6,7 @@ import { artifactHash, issueRepository, type Evidence, type StackPull, type Work
 import { PHASE_LABELS } from "./phases.ts";
 import { stackBodyLine, stackIssueLine } from "./stack.ts";
 import { lensStatuses } from "./lenses.ts";
+import { reviewFindings } from "./security-blockers.ts";
 import { agreementLine, CARRIED, caseLines, cell, code, codeBlock, evidenceResult, LENSES, list, recipeApproval, ROUTES, text, TYPES, verdictLabel } from "./markdown.ts";
 
 /** Límite de GitHub para el cuerpo de un PR. Se mide en bytes UTF-8, que nunca cuentan menos que GitHub. */
@@ -81,7 +82,7 @@ function warnings(w: Workflow, budget: number): string[] {
 	return ["## Advertencias",
 		w.recipe?.classification.risk === "high" ? "- **Riesgo alto: revisión humana obligatoria antes de aprobar o mergear.**" : "- El PR draft requiere revisión y aprobación humana; nunca se mergea automáticamente.",
 		...(w.status === "waiting" ? [`- **En espera:** ${text(w.blockedReason || "intervención humana")}`] : w.status === "paused" ? ["- **Pausado.**"] : []),
-		statuses.length ? "- **Lentes:** asesoran; unknown y fail quedan como aviso y no bloquean Verificar ni este PR. Sólo un fail de seguridad bloquea." : "- **Lentes:** la receta no pidió lentes.",
+		statuses.length ? "- **Lentes:** asesoran; unknown y fail quedan como aviso y no bloquean Verificar ni este PR. Sólo un hallazgo blocker de seguridad bloquea; sus avisos no." : "- **Lentes:** la receta no pidió lentes.",
 		...kept, ...notice(kept.length, lenses.length, "líneas de avisos de los lentes")];
 }
 function recipeDetails(w: Workflow): string[] {
@@ -114,7 +115,7 @@ function evidenceDetails(w: Workflow, budget: number): string[] {
 }
 function reviewDetails(w: Workflow, budget: number): string[] {
 	if (!w.reviews.length) return [];
-	const lines = w.reviews.flatMap((r) => [`- **${LENSES[r.lens]}** · ${verdictLabel(r.verdict, r.noResult)} · ${text(r.at)}`, ...r.findings.map((f) => `  - ${text(f)}`)]);
+	const lines = w.reviews.flatMap((r) => [`- **${LENSES[r.lens]}** · ${verdictLabel(r.verdict, r.noResult)} · ${text(r.at)}`, ...reviewFindings(r).map((f) => `  - ${text(f)}`)]);
 	const kept = bounded(lines, budget);
 	return details(`Revisiones de los lentes (${w.reviews.length})`, [...kept, ...notice(kept.length, lines.length, "líneas de revisiones")]);
 }
