@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { Type, type Static, type TSchema } from "typebox";
 import { Value } from "typebox/value";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { ExplorationSchema, InferenceInputSchema, LensSchema, PlanSchema, SpecSchema, text } from "../harness/model.ts";
+import { ExplorationSchema, InferenceInputSchema, LensSchema, MAX_AMENDS, PlanSchema, SpecSchema, text } from "../harness/model.ts";
 import { expectedFailure, missingCommand, successful, transition, type WorkflowEvent } from "../harness/state.ts";
 import { unacceptedBlockers } from "../harness/security-blockers.ts";
 import { gitRead, inspectCheckout, validateReferences } from "../harness/git.ts";
@@ -33,6 +33,8 @@ function checked<S extends TSchema>(schema: S, value: unknown): Static<S> {
 // Un unknown sin resultado no es un juicio del lente: repetirlo no re-tira un veredicto. La causa va en findings.
 const NO_RESULT = "Sin resultado: el lente no llegó a juzgar el cambio; la causa va en findings. Volvé a correr este lente antes de verified; no gasta veredictos. Si vuelve a quedar sin resultado, queda como aviso en el progreso y en el PR draft y no bloquea Verificar.";
 const SECURITY_BLOCKER = "Un hallazgo blocker de seguridad bloquea Verificar. Si es real, corregilo con retry. Si no aplica (preexistente en main, fuera del alcance o del modelo de amenazas), no gastes la vuelta: pausá con omi_workflow action:pause y el motivo. Sólo la persona puede aceptar el riesgo, con /omi-work accept-risk; ni el chat ni omi_ask lo aceptan.";
+// Un aviso se corrige con amend sólo si el arreglo no contradice lo que el repo ya decidió (#98: un lente pidió lo que store.ts prohíbe).
+const ADVISORY = "Aviso: queda visible en el progreso y en el PR draft y no bloquea Verificar. No repitas el lente para borrarlo ni uses retry. Si vale la pena corregirlo y no contradice una decisión documentada (un comentario del código, AGENTS.md o docs/), usá omi_workflow action:amend con el motivo: no gasta vuelta. Si la contradice, dejalo como aviso.";
 const result = async (session: DevelopmentSession) => {
 	const state = session.state;
 	const text = state && !session.lockedReason ? developmentInstructions(state, [], false, await singlePrPlanning(session, state)) : session.status();
@@ -62,7 +64,7 @@ async function currentExploration(session: DevelopmentSession, ctx: ExtensionCon
 export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentSession): void {
 	pi.registerTool({
 		name: "omi_workflow", label: "Desarrollo: flujo", defaultActive: false, exposure: "model-only", executionMode: "sequential", parameters: ActionSchema,
-		description: "Avanza el harness de desarrollo activo. Explorar, resolver inferencias, receta, diagnóstico/spec, aprobación (humana o de Foundations), pasos, verificar y PR draft. amend corrige sin gastar vuelta un D o un gate rojo, o un hallazgo de un lente que sólo avisa (hasta 2 por vuelta); retry gasta una vuelta y es para un blocker de security, o para un rojo cuando ya no quedan amend. No acepta evidencia ni aprobaciones declaradas por el modelo. status consulta; pause bloquea. stack actualiza un stack de PRs publicado (merge y push normal; pide el sí sólo con push_pr: ask). agreed registra un acuerdo de alcance dicho por la persona en el chat, con la cita textual de su mensaje (OMI la verifica). start/resume son comandos humanos /omi-work.",
+		description: `Avanza el harness de desarrollo activo. Explorar, resolver inferencias, receta, diagnóstico/spec, aprobación (humana o de Foundations), pasos, verificar y PR draft. amend corrige sin gastar vuelta un D o un gate rojo, o un aviso de un lente (hasta ${MAX_AMENDS} por vuelta); retry abre otra vuelta y es para un blocker de security, o para un rojo cuando ya no quedan amend; el host frena solo al agotar los retry. No acepta evidencia ni aprobaciones declaradas por el modelo. status consulta y dice la vuelta, los retry que quedan y los amends. pause frena hasta una persona: es sólo para una decisión humana concreta que nombrás en reason, nunca por contar vueltas. stack actualiza un stack de PRs publicado (merge y push normal; pide el sí sólo con push_pr: ask). agreed registra un acuerdo de alcance dicho por la persona en el chat, con la cita textual de su mensaje (OMI la verifica). start/resume son comandos humanos /omi-work.`,
 		promptSnippet: "Registrar el trabajo de desarrollo y su receta; pedir decisiones y permisos humanos",
 		async execute(_id, input, signal, _onUpdate, ctx) {
 			if (input.action === "status") return result(session);
@@ -164,7 +166,7 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 		async execute(_id, { lens }, signal, _update, ctx) {
 			const result = await runLens(session, lens, ctx, AbortSignal.any([signal ?? new AbortController().signal, session.lifecycle.signal]));
 			const blocking = !!session.state && unacceptedBlockers(session.state, result.review).length > 0;
-			const advice = result.review.verdict === "pass" ? undefined : blocking ? SECURITY_BLOCKER : result.review.noResult ? NO_RESULT : "Aviso: queda visible en el progreso y en el PR draft y no bloquea Verificar. No repitas el lente para borrarlo ni uses retry. Si vale la pena corregirlo, usá omi_workflow action:amend con el motivo: no gasta vuelta.";
+			const advice = result.review.verdict === "pass" ? undefined : blocking ? SECURITY_BLOCKER : result.review.noResult ? NO_RESULT : ADVISORY;
 			const notice = advice && result.downgraded > 0 ? `${advice} ${result.downgraded} blocker(s) bajados a aviso: archivo sin cambios desde la revisión anterior de security.` : advice;
 			return { content: [{ type: "text", text: JSON.stringify({ ...result.review, ...(notice ? { notice } : {}), ...(result.error ? { error: result.error } : {}) }) }], details: result.review, usage: result.usage, isError: !!result.error || blocking };
 		},

@@ -147,6 +147,15 @@ test("development_lenses un aviso se corrige con amend sin gastar vuelta: se rep
 	assert.equal(f.modelCalls.filter(isQuality).length, 1);
 });
 
+test("development_lenses el aviso de un lente pide chequear decisiones documentadas antes de amend", async (t) => {
+	const f = await verifying(t, ["quality"]);
+	f.modelControl.reply = () => JSON.stringify({ verdict: "fail", findings: ["value.cjs:1 · recuperar locks huérfanos"] });
+	const notice = (JSON.parse((((await f.invoke("omi_workflow_lens", { lens: "quality" })).content[0]) as { text: string }).text) as { notice?: string }).notice ?? "";
+	assert.match(notice, /no contradice una decisión documentada \(un comentario del código, AGENTS\.md o docs\/\), usá omi_workflow action:amend/);
+	assert.match(notice, /Si la contradice, dejalo como aviso/);
+	assert.match(notice, /no gasta vuelta/);
+});
+
 // Reintento acotado por parte: plazos y backoff cortos para no esperar minutos en el test.
 const FAST = { deps: { lensCall: { timeoutMs: 200, baseDelayMs: 1, graceMs: 50 } } };
 const OFFLINE = "OAuth refresh failed for openai: Unable to connect. Is the computer able to access the url?";

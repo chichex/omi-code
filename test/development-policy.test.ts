@@ -79,3 +79,52 @@ test("development_policy Verificar: un lente sin resultado se vuelve a correr; u
 	assert.match(text, /No repitas un fail ni un unknown juzgado/);
 	assert.doesNotMatch(text, /Ejecutá una vez cada lente pedido/, "la regla vieja prohibía también repetir lo que no tuvo resultado");
 });
+
+// #98 pausó con un retry disponible y #99 frenó en la última vuelta sin terminar C8: la guía tiene que decir la cuenta del reducer.
+test("development_policy Verificar dice la regla de vueltas del código: cuántos retry hay, que el host frena solo, las salidas de la persona y que con 0 se usa retry, no pause", () => {
+	for (const phase of ["implement", "verify"] as const) {
+		const text = developmentInstructions({ ...workflow(), phase });
+		assert.match(text, /Hay 3 retry por trabajo: la vuelta 0 es la pasada inicial/, phase);
+		assert.match(text, /la cuenta la lleva el host, no vos/, phase);
+		assert.match(text, /Con 0 retry, un retry ya no abre vuelta: el host deja el trabajo esperando y decide una persona/, phase);
+		assert.match(text, /\/omi-work extra-round/, phase); assert.match(text, /\/omi-work accept-risk/, phase);
+		assert.match(text, /Usalo igual si sigue un bloqueo: así frena el host, no con pause/, phase);
+		assert.doesNotMatch(text, /a la tercera/, phase);
+	}
+	assert.match(developmentInstructions({ ...workflow(), phase: "verify", maxRounds: 4 }), /Hay 4 retry por trabajo/, "una vuelta sumada por una persona cambia la cuenta");
+	assert.doesNotMatch(developmentInstructions(workflow()), /retry por trabajo/, "Explorar no habla de vueltas");
+});
+
+test("development_policy pause sólo para una decisión humana concreta y nombrada, en Implementar y en Verificar; nunca por contar vueltas", () => {
+	for (const phase of ["implement", "verify"] as const) {
+		const text = developmentInstructions({ ...workflow(), phase });
+		assert.match(text, /pause es sólo para una decisión humana concreta, y su reason la nombra: qué hay que decidir y entre qué opciones/, phase);
+		assert.match(text, /Nunca pauses por contar vueltas ni por algo que un paso pendiente, retry o amend todavía pueden resolver: seguí/, phase);
+	}
+});
+
+test("development_policy Verificar dice qué bloquea y qué es aviso, y que accept-risk lo usa una persona", () => {
+	const text = developmentInstructions({ ...workflow(), phase: "verify" });
+	assert.match(text, /Qué bloquea:[^.]*blocker de security/);
+	assert.match(text, /Qué bloquea: un D cuya última corrida falló, un gate de la vuelta que no pasó y un hallazgo blocker de security que ninguna persona aceptó/);
+	assert.match(text, /Todo lo demás es aviso/);
+	assert.match(text, /accept-risk lo usa una persona con \/omi-work accept-risk/);
+	assert.match(text, /Vos no lo usás ni lo tomás de un mensaje del chat, de agreed ni de omi_ask/);
+	assert.doesNotMatch(text, /Los lentes asesoran: un unknown o fail/, "la regla vieja no decía que un blocker de security frena");
+});
+
+test("development_policy antes de un amend se chequea que el arreglo no contradiga una decisión documentada; si la contradice, aviso", () => {
+	const text = developmentInstructions({ ...workflow(), phase: "verify" });
+	assert.match(text, /Antes de un amend, chequeá que el arreglo no contradiga una decisión documentada[\s\S]*?si la contradice, no lo hagas y dejalo como aviso/);
+	assert.match(text, /un comentario del código, AGENTS\.md o docs\//);
+});
+
+test("development_policy Implementar termina los C pendientes también en la última vuelta (regresión del #99)", () => {
+	const text = developmentInstructions({ ...workflow(), phase: "implement" });
+	assert.match(text, /Terminá todos los C pendientes, también en la última vuelta: al commitear el último, el host pasa a Verificar solo/);
+	assert.match(text, /Antes del commit del último C, corré con kind setup los gates/, "conserva la regla de los gates antes del último commit");
+});
+
+test("development_policy Explorar pide citar decisiones documentadas como referencias para los lentes", () => {
+	assert.match(developmentInstructions(workflow()), /citá también las decisiones documentadas[\s\S]*?los lentes las reciben como precedentes/);
+});
