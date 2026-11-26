@@ -11,7 +11,7 @@ const MAX_BYTES = 8 * 1024 * 1024;
 export class WorkflowConflictError extends Error {
  constructor(message = "El workflow cambió o está bloqueado por otro proceso") { super(message); this.name = "WorkflowConflictError"; }
 }
-function codeIs(error: unknown, code: string): boolean { return error instanceof Error && "code" in error && error.code === code; }
+export function codeIs(error: unknown, code: string): boolean { return error instanceof Error && "code" in error && error.code === code; }
 function requireCondition(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(`Harness store: ${message}`); }
 export function workflowPath(checkout: Workflow["checkout"], issueNumber: number): string {
  requireCondition(Number.isSafeInteger(issueNumber) && issueNumber > 0, "número de issue inválido");
@@ -20,7 +20,7 @@ export function workflowPath(checkout: Workflow["checkout"], issueNumber: number
 }
 // No se siguen symlinks, ni en el archivo ni en sus directorios. Un lock abandonado
 // requiere intervención explícita: jamás se roba por su edad o por un PID remoto.
-async function directories(path: string, create: boolean): Promise<void> {
+export async function directories(path: string, create: boolean): Promise<void> {
  const root = parse(path).root;
  let current = root;
  for (const component of path.slice(root.length).split("/").filter(Boolean)) {
