@@ -115,7 +115,11 @@ const clip = (text: string): string => text.length <= MAX_PREVIOUS_TEXT ? text :
 /** Lo que el lente ve de su revisión anterior: sus hallazgos, con los blockers primero, y los archivos cambiados. */
 export function previousMaterial(c: SecurityComparison) {
  const severities = c.baseline.verdict === "fail" ? severitiesOf(c.baseline) : [];
- const all = c.baseline.findings.map((text, i) => ({ blocker: severities[i] === "blocker", ...(c.accepted.has(sameText(text)) ? { accepted: true } : {}), text: clip(text) }));
+ // Un texto aceptado va entero: el lente lo tiene que poder repetir exacto para que el host lo reconozca.
+ const all = c.baseline.findings.map((text, i) => {
+  const accepted = c.accepted.has(sameText(text));
+  return { blocker: severities[i] === "blocker", ...(accepted ? { accepted: true } : {}), text: accepted ? text : clip(text) };
+ });
  const findings = [...all.filter(f => f.blocker), ...all.filter(f => !f.blocker)];
  const changedFiles = [...c.changed].sort();
  return {
@@ -139,12 +143,14 @@ export function convergeSecurity(result: LensResult, c: SecurityComparison): { r
  let downgraded = 0;
  const items = securityItems(result).map((item): Item => {
   // Todo el texto, no sólo el primer tramo: el disparador puede estar en un archivo cambiado citado después.
-  const file = findingFile(item.text);
-  const unchanged = item.blocker && item.downgradable && !SECRET.test(item.text) && file !== null && c.tree.has(file) && !c.changed.has(file)
-   && !lineRefs(item.text).some(p => !c.tree.has(p)) && !cites(item.text, c.changed);
+  const file = findingFile(item.text), repeat = c.accepted.has(sameText(item.text));
+  // Un texto aceptado vale como lo escribió la persona: una ruta corta («store.ts:22») se resuelve contra el árbol.
+  const inTree = (path: string) => repeat ? [...c.tree].some(t => sameFile(t, path)) : c.tree.has(path);
+  const touched = (path: string) => repeat ? [...c.changed].some(t => sameFile(t, path)) : c.changed.has(path);
+  const unchanged = item.blocker && item.downgradable && !SECRET.test(item.text) && file !== null && inTree(file) && !touched(file)
+   && !lineRefs(item.text).some(p => !inTree(p)) && !cites(item.text, c.changed);
   if (!unchanged) return item;
   // El texto que aceptó una persona baja como repetido; cualquier otro en el archivo de un blocker anterior se mantiene (b).
-  const repeat = c.accepted.has(sameText(item.text));
   if (!repeat && (c.blockerFiles.has(file) || cites(item.text, c.blockerFiles))) return item;
   downgraded++;
   return { ...item, blocker: false, text: prefixed(`${repeat ? SECURITY_ACCEPTED_REPEAT : SECURITY_DOWNGRADED} · `, item.text) };

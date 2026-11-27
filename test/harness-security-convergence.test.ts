@@ -244,6 +244,34 @@ test("security_convergence un texto aceptado en una base por partes se reconoce 
 	assert.deepEqual(result.findings, [`${SECURITY_ACCEPTED_REPEAT} · ${accepted}`]);
 });
 
+// Review del incidente (ronda 3, replay-3-aceptado-largo-no-se-repite y replay-3-aceptado-largo-o-ruta-corta-reabre): previous
+// recortaba a 500 caracteres un texto aceptado, y el lente no podía repetirlo exacto; y un texto aceptado con una ruta corta
+// («store.ts:22») nunca era una repetición, porque el primer tramo no estaba literal en el árbol.
+async function acceptedOn(base: string, tree: string[], diff: string[]) {
+	let s = implement(approved(), "C1", "tree1", sha("1"));
+	s = send(s, { type: "reviewed", review: review("security", "tree1", "fail", [base]) });
+	s = send(s, { type: "risk_accepted", fingerprint: "tree1", findings: [base], reason: "Preexistente en main" });
+	s = send(s, { type: "evidence", evidence: evidence("gate", "tree1", { exitCode: 1, outcome: "failed" }) });
+	s = send(s, { type: "amend", reason: "Arreglar el gate", fingerprint: "tree1" });
+	s = implement(s, "C2", "tree2", sha("2"));
+	const { comparison: c } = await securityComparison(s, { fingerprint: "tree2", head: sha("2") }, git({ diff, tree }).runner);
+	assert.ok(c); return c;
+}
+test("security_convergence un texto aceptado largo llega entero al lente y un texto aceptado con ruta corta también se reconoce", async () => {
+	const long = `src/a.ts:1 · ${"el lock se roba con un PID ajeno; ".repeat(18)}`.trim();
+	assert.ok(long.length > 500);
+	const c = await acceptedOn(long, TREE, ["src/b.ts"]);
+	assert.deepEqual(previousMaterial(c).findings, [{ blocker: true, accepted: true, text: long }], "entero: el lente lo tiene que poder repetir");
+	assert.deepEqual(convergeSecurity(security([blocker(long, "otro")]), c).result.findings, [`${SECURITY_ACCEPTED_REPEAT} · ${long}`]);
+	const tree = ["src/harness/store.ts", "src/b.ts"];
+	const short = "store.ts:22 · el lock se roba con un PID ajeno";
+	const kept = await acceptedOn(short, tree, ["src/b.ts"]);
+	assert.deepEqual(convergeSecurity(security([blocker(short, "otro")]), kept).result.findings, [`${SECURITY_ACCEPTED_REPEAT} · ${short}`], "la ruta corta se resuelve contra el árbol");
+	const changed = await acceptedOn(short, tree, ["src/harness/store.ts"]);
+	assert.deepEqual(convergeSecurity(security([blocker(short, "otro")]), changed).result.severities, ["blocker"], "si su archivo cambió, vuelve a frenar");
+	assert.deepEqual(convergeSecurity(security([blocker("store.ts:30 · otro hallazgo en el mismo archivo", "otro")]), kept).result.severities, ["blocker"], "otro texto con ruta corta sigue blocker");
+});
+
 test("security_convergence lo aceptado vuelve a frenar si su archivo cambió o si un retry borró la aceptación", async () => {
 	const { accepted, c } = await acceptedThenAmended(["src/a.ts"]);
 	const changed = convergeSecurity(security([blocker(accepted, "otro")]), c);
