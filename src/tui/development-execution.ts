@@ -61,11 +61,12 @@ export async function executeCheck(session: DevelopmentSession, input: CheckInpu
 	// La etiqueta y la receta no dispensan confirmaciones: decidir por v2 aceptada, sintaxis y grant exacto.
 	const authorized = commandAuthorization(state, input.command, (await session.foundations.policy(ctx, state)).command) === "ask"
 		? await authorizeProjectCommand(session, ctx, { state, command: input.command, kind: input.kind, signal }) : state;
-	const known = lastCompleteMs(state, input.command);
+	// La suite corrida como setup antes del último C también da el piso y la sugerencia del gate de Verificar.
+	const setups = session.setups.of(state.id), known = lastCompleteMs(state, input.command, setups);
 	const timeout = plannedTimeout(input.timeoutSeconds ?? DEFAULT_COMMAND_TIMEOUT_SECONDS, known);
 	const notes = timeout.note ? [timeout.note] : [];
 	// Antes de la foto: una espera larga no invalida el fingerprint y startedAt cuenta desde que corre.
-	const turn = heavyCheck(state, input.kind, input.command, session.setups.of(state.id)) ? await waitForCheckTurn(session, state, input, signal) : undefined;
+	const turn = heavyCheck(state, input.kind, input.command, setups) ? await waitForCheckTurn(session, state, input, signal) : undefined;
 	if (turn?.notice) notes.push(turn.notice);
 	let before: CheckoutSnapshot; let startedAt: string; let result: WorkflowCommandResult;
 	try {

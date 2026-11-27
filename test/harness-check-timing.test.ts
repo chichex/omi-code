@@ -83,3 +83,17 @@ test("check_timing un setup con historia en la sesión sólo es pesado si alguna
  assert.equal(history.of("w1").length, 50, "con tope: guarda las últimas 50");
  assert.equal(history.of("w1").at(-1)?.command, "cmd 59");
 });
+
+// Review del incidente (2026-11-26, queue-1-Q3): el piso ignoraba la suite corrida como setup antes del último C. En
+// Verificar, el primer gate del mismo comando corría con el timeoutSeconds corto y se cortaba, y la sugerencia tampoco
+// usaba la duración medida.
+test("check_timing la última corrida completa de un setup de la sesión da el piso y la sugerencia del mismo comando", () => {
+ const empty = workflow([]);
+ assert.equal(lastCompleteMs(empty, "npm test", [setup("npm test", 230_489)]), 230_489);
+ assert.equal(plannedTimeout(240, lastCompleteMs(empty, "npm test", [setup("npm test", 230_489)])).seconds, 346, "el gate de Verificar sube a 1,5× el setup");
+ assert.equal(lastCompleteMs(empty, "npm test", [setup("npm test", 230_489, false)]), undefined, "un setup cortado no da la duración");
+ assert.equal(lastCompleteMs(empty, "npm test", [setup("npm test ", 230_489)]), undefined, "del mismo comando exacto");
+ const later = workflow([run("npm test", 200_000, "passed", T0)]);
+ assert.equal(lastCompleteMs(later, "npm test", [setup("npm test", 260_000, true, T0 + 1000_000)]), 260_000, "la más reciente gana, sea gate o setup");
+ assert.match(timeoutNote(240, lastCompleteMs(empty, "npm test", [setup("npm test", 400_000)])), /timeoutSeconds: 600\.$/, "la sugerencia tras un corte usa lo medido como setup");
+});

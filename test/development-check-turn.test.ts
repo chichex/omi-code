@@ -108,6 +108,19 @@ test("development_check_turn un timeoutSeconds corto se sube a 1,5× la última 
 	assert.deepEqual(texts(second).slice(1), ["timeoutSeconds 1 → 6: la última corrida completa de este comando tardó 4 s; el host deja 1,5× de margen."]);
 });
 
+// Review del incidente (2026-11-26, queue-1-Q3): la suite corrida como setup antes del último C no daba el piso al gate.
+test("development_check_turn un setup ya corrido da el piso del timeout al mismo comando con otra etiqueta", async (t) => {
+	let clock = Date.now();
+	const f = await developmentFixture(t, { deps: { checkTurn: FAST, now: () => new Date(clock += 4000).toISOString() } }); await f.start();
+	const slow = join(f.home, "slow");
+	const command = `node -e "setTimeout(() => {}, require('node:fs').existsSync('${slow}') ? 2000 : 0)"`;
+	assert.equal((await f.invoke("omi_workflow_check", { kind: "setup", command, timeoutSeconds: 1 })).isError, false);
+	await writeFile(slow, "");
+	const check = await f.invoke("omi_workflow_check", { kind: "reproduction", command, timeoutSeconds: 1 });
+	assert.equal(check.isError, false, `con 1 s lo habría cortado: ${JSON.stringify(texts(check))}`);
+	assert.deepEqual(texts(check).slice(1), ["timeoutSeconds 1 → 6: la última corrida completa de este comando tardó 4 s; el host deja 1,5× de margen."]);
+});
+
 test("development_check_turn un check cortado por tiempo lo dice y sugiere timeoutSeconds", async (t) => {
 	const f = await developmentFixture(t, { deps: { checkTurn: FAST } }); await f.start();
 	const command = `node -e "setTimeout(() => {}, 10000)"`;
