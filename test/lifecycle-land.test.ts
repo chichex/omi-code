@@ -196,6 +196,20 @@ test("riesgo alto con Seguridad en fail de sólo avisos sobre el contenido: auto
  assert.deepEqual(landReadiness(blocked, facts(), highWitness(blocked)).attention, ["Seguridad en fail en un cambio de riesgo alto: el merge pide tu sí"], "un blocker entre avisos sigue reteniendo el merge");
 });
 
+// Ronda 3 (land-3-partial-levanta-hold): un fail de sólo avisos con una parte unknown (partial) sacaba el hold, y el mismo
+// unknown en una sola parte lo mantenía. Una parte que nadie juzgó es «sin veredicto», salvo que una persona aceptó.
+test("riesgo alto con Seguridad en fail parcial de sólo avisos: el merge pide el sí como sin veredicto; con sus blockers aceptados, no", () => {
+ const r = highRisk(shipKnown(workflow("auto")), [security("fail", { findings: ["parte 1/2 · src/log.ts:3 · el log crece", "parte 2/2 · falta el módulo que arma el comando"], severities: ["aviso", "aviso"], partial: true })]);
+ const readiness = landReadiness(r, facts(), highWitness(r));
+ assert.equal(readiness.ready, true, readiness.reasons.join("; ")); assert.equal(readiness.auto, false);
+ assert.deepEqual(readiness.attention, [SECURITY_HOLD]);
+ const accepted = highRisk(shipKnown(workflow("auto")), [security("fail", { findings: ["parte 1/2 · Falta revisar la entrada", "parte 2/2 · Sin resultado del lente: conexión (3 intentos)"], severities: ["blocker", "aviso"], partial: true })]);
+ accepted.acceptedRisks = [{ fingerprint: fp, findings: ["parte 1/2 · Falta revisar la entrada"], reason: "La persona vio que era parcial", at }];
+ assert.deepEqual(landReadiness(accepted, facts(), highWitness(accepted)).attention, [], "la persona aceptó con la revisión parcial a la vista");
+ accepted.acceptedRisks = [];
+ assert.deepEqual(landReadiness(accepted, facts(), highWitness(accepted)).attention, ["Seguridad en fail en un cambio de riesgo alto: el merge pide tu sí"], "con un blocker sin aceptar dice «en fail»");
+});
+
 test("riesgo alto con Seguridad en fail aceptada por una persona sobre el contenido: sin hold y auto-Land no cambia; aceptada sobre otro contenido, el hold sigue", () => {
  const risk = (fingerprint: string) => [{ fingerprint, findings: ["Falta revisar la entrada"], reason: "Preexistente en main", at }];
  const r = highRisk(shipKnown(workflow("auto")), [security("fail")]); r.acceptedRisks = risk(fp);

@@ -655,7 +655,7 @@ Límites de este corte: no se adopta un stack de PRs (con la entrada encadenada 
 
 ### Seguridad en riesgo alto
 
-Un cambio de riesgo alto llega a Land sólo con `land.maxRisk: high`. Ahí, si el lente de Seguridad no tiene `pass` sobre el contenido que se mergea, el merge pide el sí de la persona aunque `land.mode` diga `auto`. Cuenta como sin `pass` un `unknown`, uno sin resultado, un lente sin correr, un `pass` de un contenido anterior y un `fail` con un blocker sin aceptar. Un `fail` de sólo avisos, o con todos sus blockers aceptados por una persona para ese contenido (`/omi-work accept-risk`), no saca el auto-Land. Riesgo alto es el de la receta o el del testigo de Land.
+Un cambio de riesgo alto llega a Land sólo con `land.maxRisk: high`. Ahí, si el lente de Seguridad no tiene `pass` sobre el contenido que se mergea, el merge pide el sí de la persona aunque `land.mode` diga `auto`. Cuenta como sin `pass` un `unknown`, uno sin resultado, un lente sin correr, un `pass` de un contenido anterior, un `fail` con un blocker sin aceptar y un `fail` parcial (alguna parte sin juicio) de sólo avisos, que dice «sin veredicto». Un `fail` de sólo avisos, o con todos sus blockers aceptados por una persona para ese contenido (`/omi-work accept-risk`), no saca el auto-Land. Riesgo alto es el de la receta o el del testigo de Land.
 
 - No bloquea: Verificar, el PR draft y listo para merge siguen igual. Sólo saca el auto-Land; una decisión por política se rechaza antes del merge.
 - Lo dice primero: la confirmación del merge y el resumen de listo para merge empiezan con «Seguridad sin veredicto en un cambio de riesgo alto: el merge pide tu sí». Con un blocker sin aceptar, dice «Seguridad en fail en un cambio de riesgo alto: el merge pide tu sí».
