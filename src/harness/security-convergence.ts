@@ -6,15 +6,18 @@
 // una clase inválida, sin archivo o con un archivo que no está en HEAD, ni uno cuyo texto nombra un secreto, ni uno que
 // cita en cualquier parte de su texto un archivo cambiado o el de un blocker anterior. Una base
 // parcial (alguna parte sin juicio) no compara: lo que no se revisó no es «lo que ya se juzgó».
-// Lo que una persona aceptó cuenta como blocker de la base: lo aceptado vale sólo para ese contenido.
+// Lo que una persona aceptó sobre la base no cuenta para la regla (b): repetido en su archivo sin cambios es el riesgo que
+// ya aceptó y baja a aviso, con su propio prefijo. Un archivo cambiado, un secreto o un retry (que borra la aceptación) lo
+// vuelven a frenar.
 import type { Runner } from "../core/exec.ts";
 import type { Review, Workflow } from "./model.ts";
 import { changedPaths, treePaths, type CheckoutSnapshot } from "./git.ts";
 import { prefixed, type LensResult } from "./lenses.ts";
-import { securityBlockers, severitiesOf } from "./security-blockers.ts";
+import { securityBlockers, severitiesOf, unacceptedBlockers } from "./security-blockers.ts";
 
 export const SECURITY_DOWNGRADED = "bajado a aviso: archivo sin cambios desde la revisión anterior";
-export const SECURITY_PREVIOUS_NOTE = "previous es tu revisión de security anterior de este mismo trabajo, calculada por el harness: findings son tus hallazgos de entonces y changedFiles los archivos que cambiaron desde ese contenido. Decí primero si cada blocker anterior sigue. Un blocker nuevo de clase otro sólo bloquea si cae en un archivo de changedFiles o en el archivo de un blocker anterior; si no, el harness lo baja a aviso. Un secreto o una exfiltración bloquean siempre. Citá con archivo:línea cada archivo del escenario: donde está el problema y donde se dispara.";
+export const SECURITY_ACCEPTED_REPEAT = "bajado a aviso: repite en un archivo sin cambios un riesgo que aceptó una persona";
+export const SECURITY_PREVIOUS_NOTE = "previous es tu revisión de security anterior de este mismo trabajo, calculada por el harness: findings son tus hallazgos de entonces y changedFiles los archivos que cambiaron desde ese contenido. Decí primero si cada blocker anterior sigue; accepted marca el que aceptó una persona. Un blocker nuevo de clase otro sólo bloquea si cae en un archivo de changedFiles o en el archivo de un blocker anterior; si no, el harness lo baja a aviso. Un secreto o una exfiltración bloquean siempre. Citá con archivo:línea cada archivo del escenario: donde está el problema y donde se dispara.";
 const NO_COMPARISON = "sin comparación con la revisión anterior: no se baja ningún blocker";
 const NO_BLOCKER_FILE = "sin comparación con la revisión anterior: un blocker anterior no cita su archivo; no se baja ningún blocker";
 const NO_BLOCKER_IN_TREE = "sin comparación con la revisión anterior: un blocker anterior cita un archivo que no está en el árbol; no se baja ningún blocker";
@@ -68,14 +71,15 @@ function resolvedFiles(blockers: readonly string[], known: readonly string[]): S
  return files;
 }
 
-export interface SecurityComparison { baseline: Review; changed: ReadonlySet<string>; tree: ReadonlySet<string>; blockerFiles: ReadonlySet<string> }
+// accepted: los blockers de la base que aceptó una persona; acceptedFiles, sus archivos. blockerFiles, los de los demás.
+export interface SecurityComparison { baseline: Review; changed: ReadonlySet<string>; tree: ReadonlySet<string>; blockerFiles: ReadonlySet<string>; accepted: ReadonlySet<string>; acceptedFiles: ReadonlySet<string> }
 /** Qué cambió desde la revisión anterior. Sin base no hay nada que comparar; si no se puede comparar, sólo una nota. */
 export async function securityComparison(state: Workflow, snapshot: Pick<CheckoutSnapshot, "head" | "fingerprint">, runner: Runner, signal?: AbortSignal): Promise<{ comparison?: SecurityComparison; note?: string }> {
  const baseline = securityBaseline(state);
  if (!baseline) return {};
  if (baseline.partial) return { note: PARTIAL_BASELINE };
- // Todos los blockers de la base, también los que aceptó una persona.
- const blockers = securityBlockers(baseline);
+ // Todos los blockers de la base, también los que aceptó una persona: los dos tienen que citar su archivo.
+ const blockers = securityBlockers(baseline), pending = new Set(unacceptedBlockers(state, baseline));
  if (blockers.some(text => findingFile(text) === null)) return { note: NO_BLOCKER_FILE };
  // Sobre el mismo contenido no cambió nada: no hace falta el commit ni el diff, pero sí el árbol de HEAD.
  const same = baseline.fingerprint === snapshot.fingerprint;
@@ -84,9 +88,10 @@ export async function securityComparison(state: Workflow, snapshot: Pick<Checkou
  try {
   const changed = commit ? await changedPaths(state.checkout, commit, snapshot.head, runner, signal) : [];
   const tree = await treePaths(state.checkout, snapshot.head, runner, signal);
-  const blockerFiles = resolvedFiles(blockers, [...tree, ...changed]);
-  if (!blockerFiles) return { note: NO_BLOCKER_IN_TREE };
-  return { comparison: { baseline, changed: new Set(changed), tree: new Set(tree), blockerFiles } };
+  const accepted = blockers.filter(text => !pending.has(text)), known = [...tree, ...changed];
+  const blockerFiles = resolvedFiles([...pending], known), acceptedFiles = resolvedFiles(accepted, known);
+  if (!blockerFiles || !acceptedFiles) return { note: NO_BLOCKER_IN_TREE };
+  return { comparison: { baseline, changed: new Set(changed), tree: new Set(tree), blockerFiles, accepted: new Set(accepted), acceptedFiles } };
  } catch (error) {
   if (signal?.aborted) throw error;
   return { note: NO_COMPARISON };
@@ -96,7 +101,7 @@ const clip = (text: string): string => text.length <= MAX_PREVIOUS_TEXT ? text :
 /** Lo que el lente ve de su revisión anterior: sus hallazgos, con los blockers primero, y los archivos cambiados. */
 export function previousMaterial(c: SecurityComparison) {
  const severities = c.baseline.verdict === "fail" ? severitiesOf(c.baseline) : [];
- const all = c.baseline.findings.map((text, i) => ({ blocker: severities[i] === "blocker", text: clip(text) }));
+ const all = c.baseline.findings.map((text, i) => ({ blocker: severities[i] === "blocker", ...(c.accepted.has(text) ? { accepted: true } : {}), text: clip(text) }));
  const findings = [...all.filter(f => f.blocker), ...all.filter(f => !f.blocker)];
  const changedFiles = [...c.changed].sort();
  return {
@@ -125,7 +130,7 @@ export function convergeSecurity(result: LensResult, c: SecurityComparison): { r
    || paths.some(p => p.line && !c.tree.has(p.path)) || cites(paths, c.changed) || cites(paths, c.blockerFiles);
   if (keep) return item;
   downgraded++;
-  return { ...item, blocker: false, text: prefixed(`${SECURITY_DOWNGRADED} · `, item.text) };
+  return { ...item, blocker: false, text: prefixed(`${cites(paths, c.acceptedFiles) ? SECURITY_ACCEPTED_REPEAT : SECURITY_DOWNGRADED} · `, item.text) };
  });
  return { result: withSecurityItems(result, items), downgraded };
 }

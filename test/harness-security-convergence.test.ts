@@ -5,7 +5,7 @@ import { test } from "node:test";
 import type { Runner } from "../src/core/exec.ts";
 import { createWorkflow, transition } from "../src/harness/state.ts";
 import { FAIL_WITHOUT_FINDINGS, securityBlocks } from "../src/harness/security-blockers.ts";
-import { convergeSecurity, findingFile, findingPaths, previousMaterial, reviewedCommit, SECURITY_DOWNGRADED, securityBaseline, securityComparison, type SecurityComparison } from "../src/harness/security-convergence.ts";
+import { convergeSecurity, findingFile, findingPaths, previousMaterial, reviewedCommit, SECURITY_ACCEPTED_REPEAT, SECURITY_DOWNGRADED, securityBaseline, securityComparison, type SecurityComparison } from "../src/harness/security-convergence.ts";
 import { parseSecurityResult } from "../src/tui/development-review.ts";
 import { sourceHash, type Evidence, type Exploration, type Lens, type Plan, type Review, type Workflow } from "../src/harness/model.ts";
 
@@ -54,7 +54,7 @@ function git(answers: { diff?: string[]; tree?: string[]; code?: number } = {}) 
 }
 const TREE = ["src/a.ts", "src/b.ts", "src/c.ts"];
 // Base: un blocker en src/a.ts; desde entonces sólo cambió src/b.ts.
-const comparison = (changes: Partial<SecurityComparison> = {}): SecurityComparison => ({ baseline: review("security", "tree1", "fail", ["src/a.ts:1 · permiso abierto"]), changed: new Set(["src/b.ts"]), tree: new Set(TREE), blockerFiles: new Set(["src/a.ts"]), ...changes });
+const comparison = (changes: Partial<SecurityComparison> = {}): SecurityComparison => ({ baseline: review("security", "tree1", "fail", ["src/a.ts:1 · permiso abierto"]), changed: new Set(["src/b.ts"]), tree: new Set(TREE), blockerFiles: new Set(["src/a.ts"]), accepted: new Set(), acceptedFiles: new Set(), ...changes });
 const security = (findings: unknown[]) => parseSecurityResult(JSON.stringify({ verdict: "fail", findings }));
 const blocker = (finding: string, clase?: unknown) => ({ severity: "blocker", ...(clase === undefined ? {} : { clase }), finding });
 const asReview = (r: { verdict: Review["verdict"]; findings: string[]; severities?: Review["severities"] }): Review => ({ lens: "security", fingerprint: "tree2", verdict: r.verdict, findings: r.findings, ...(r.severities ? { severities: r.severities } : {}), at });
@@ -147,7 +147,11 @@ test("security_convergence normaliza las rutas de los blockers anteriores contra
 	assert.ok(gone.comparison?.blockerFiles.has("src/old.ts"), "un archivo borrado desde la base está entre los cambios");
 });
 
-test("security_convergence un blocker que una persona aceptó en la base sigue contando para la regla (b): repetido en su archivo sin cambios, vuelve a bloquear", async () => {
+// Review del incidente (2026-11-26, replay-riesgo-aceptado-reabre): la persona aceptaba un blocker sobre X, un gate rojo
+// obligaba a un amend (retry se rechaza con AMEND_FIRST) y, sobre Y, el mismo hallazgo en el mismo archivo sin cambios
+// volvía a frenar: lo aceptado contaba como blocker de la base. Ahora repetido en su archivo sin cambios baja a aviso y
+// lo dice; un archivo cambiado, un secreto o un retry (que borra la aceptación) lo vuelven a frenar.
+async function acceptedThenAmended(diff: string[]) {
 	const accepted = "src/a.ts:1 · permiso abierto";
 	let s = implement(approved(), "C1", "tree1", sha("1"));
 	s = send(s, { type: "reviewed", review: review("security", "tree1", "fail", [accepted]) });
@@ -156,14 +160,41 @@ test("security_convergence un blocker que una persona aceptó en la base sigue c
 	s = send(s, { type: "amend", reason: "Arreglar el gate", fingerprint: "tree1" });
 	s = implement(s, "C2", "tree2", sha("2"));
 	assert.deepEqual(s.version === 2 ? s.acceptedRisks?.map((a) => a.fingerprint) : [], ["tree1"], "la aceptación es de la base");
-	const { runner } = git({ diff: ["src/b.ts"], tree: TREE });
-	const { comparison: c } = await securityComparison(s, { fingerprint: "tree2", head: sha("2") }, runner);
+	const { comparison: c } = await securityComparison(s, { fingerprint: "tree2", head: sha("2") }, git({ diff, tree: TREE }).runner);
 	assert.ok(c, "hay comparación");
-	assert.deepEqual([...c.blockerFiles], ["src/a.ts"]);
-	assert.deepEqual(previousMaterial(c).findings, [{ blocker: true, text: accepted }]);
+	return { accepted, c };
+}
+test("security_convergence un blocker que una persona aceptó en la base, repetido tras un amend en su archivo sin cambios, baja a aviso y lo dice", async () => {
+	const { accepted, c } = await acceptedThenAmended(["src/b.ts"]);
+	assert.deepEqual([...c.blockerFiles], [], "lo aceptado no cuenta para la regla (b)");
+	assert.deepEqual([...c.acceptedFiles], ["src/a.ts"]);
+	assert.deepEqual(previousMaterial(c).findings, [{ blocker: true, accepted: true, text: accepted }], "el lente sabe que una persona lo aceptó");
 	const { result, downgraded } = convergeSecurity(security([blocker(accepted, "otro"), blocker("src/c.ts:1 · permiso abierto", "otro")]), c);
-	assert.equal(downgraded, 1);
-	assert.deepEqual(result.severities, ["blocker", "aviso"], "lo aceptado no pasa a otro contenido");
+	assert.equal(downgraded, 2);
+	assert.deepEqual(result.findings, [`${SECURITY_ACCEPTED_REPEAT} · ${accepted}`, `${SECURITY_DOWNGRADED} · src/c.ts:1 · permiso abierto`]);
+	assert.deepEqual(result.severities, ["aviso", "aviso"]);
+	assert.equal(result.verdict, "fail", "el veredicto no cambia");
+	const secret = convergeSecurity(security([blocker("src/a.ts:1 · deja el token en el log", "secreto")]), c);
+	assert.deepEqual([secret.downgraded, secret.result.severities], [0, ["blocker"]], "un secreto en un archivo aceptado se vuelve a aceptar");
+});
+
+test("security_convergence lo aceptado vuelve a frenar si su archivo cambió o si un retry borró la aceptación", async () => {
+	const { accepted, c } = await acceptedThenAmended(["src/a.ts"]);
+	const changed = convergeSecurity(security([blocker(accepted, "otro")]), c);
+	assert.deepEqual([changed.downgraded, changed.result.severities], [0, ["blocker"]], "el archivo aceptado cambió: la persona lo vuelve a mirar");
+	let s = implement(approved(), "C1", "tree1", sha("1"));
+	s = send(s, { type: "reviewed", review: review("security", "tree1", "fail", [accepted]) });
+	s = send(s, { type: "risk_accepted", fingerprint: "tree1", findings: [accepted], reason: "Preexistente en main" });
+	// Un gate rojo sin amends disponibles: el único retry que se acepta con el riesgo aceptado.
+	s = send(s, { type: "evidence", evidence: evidence("gate", "tree1", { exitCode: 1, outcome: "failed" }) });
+	s = { ...s, amends: [{ from: "tree0", reason: "uno", at }, { from: "tree0", reason: "dos", at }] } as Workflow;
+	s = send(s, { type: "retry", reason: "Rehacer el permiso", fingerprint: "tree1" });
+	assert.deepEqual(s.version === 2 ? s.acceptedRisks ?? [] : [], [], "retry borra la aceptación");
+	s = implement(s, "C2", "tree2", sha("2"));
+	const { comparison: retried } = await securityComparison(s, { fingerprint: "tree2", head: sha("2") }, git({ diff: ["src/b.ts"], tree: TREE }).runner);
+	assert.ok(retried);
+	assert.deepEqual([...retried.blockerFiles], ["src/a.ts"], "sin la aceptación, vuelve a ser blocker de la base");
+	assert.deepEqual(convergeSecurity(security([blocker(accepted, "otro")]), retried).result.severities, ["blocker"]);
 });
 
 test("security_convergence falla cerrado: sin archivo, con un path que no está en HEAD, con un blocker anterior sin archivo o si Git no encuentra el commit anterior, no baja nada", async () => {
@@ -243,7 +274,7 @@ test("security_convergence previous acota lo que manda: hasta 10 hallazgos con l
 	const findings = [...Array.from({ length: 8 }, (_, i) => `src/a.ts:${i + 1} · aviso ${i}`), ...Array.from({ length: 4 }, (_, i) => `src/b.ts:${i + 1} · blocker ${i} ${"x".repeat(600)}`)];
 	const baseline = review("security", "tree1", "fail", findings, { severities: [...findings.slice(0, 8).map(() => "aviso" as const), ...findings.slice(8).map(() => "blocker" as const)] });
 	const changed = new Set(Array.from({ length: 205 }, (_, i) => `f${String(i).padStart(3, "0")}.ts`).reverse());
-	const material = previousMaterial({ baseline, changed, tree: new Set(), blockerFiles: new Set(["src/b.ts"]) });
+	const material = previousMaterial({ baseline, changed, tree: new Set(), blockerFiles: new Set(["src/b.ts"]), accepted: new Set(), acceptedFiles: new Set() });
 	assert.equal(material.findings.length, 10); assert.equal(material.findingsOmitted, 2);
 	assert.deepEqual(material.findings.map((f) => f.blocker), [true, true, true, true, false, false, false, false, false, false]);
 	assert.ok(material.findings.every((f) => f.text.length <= 500));
