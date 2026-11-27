@@ -66,13 +66,29 @@ test("combine en security: severidades por parte, blocker primero, sin avisos no
 	s.recipe = { route: "direct", classification: { type: "add", size: "small", risk: "low", riskAreas: [], causeKnown: true }, objective: "o", approach: "a", scope: ["s"], outOfScope: [], cases: [{ id: "D1", description: "d", command: "npm test" }], lenses: ["security"], executor: { mode: "inline", writers: 0 } };
 	const recorded = transition(s, { type: "reviewed", review: { lens: "security", fingerprint: "fp", ...pending, at: "now" } }, "now");
 	assert.equal(lensRunBlock(recorded, "security", "fp"), "", "se vuelve a correr sin gastar veredictos");
-	assert.deepEqual(combineLensResults([blocker, missing], true), { verdict: "fail", findings: ["parte 1/2 · y", "parte 2/2 · Sin resultado del lente: conexión (3 intentos)"], severities: ["blocker", "aviso"] }, "con un blocker juzgado bloquea por ese blocker, no por la parte que faltó");
+	assert.deepEqual(combineLensResults([blocker, missing], true), { verdict: "fail", findings: ["parte 1/2 · y", "parte 2/2 · Sin resultado del lente: conexión (3 intentos)"], severities: ["blocker", "aviso"], partial: true }, "con un blocker juzgado bloquea por ese blocker, no por la parte que faltó, y queda marcada parcial");
 	const many = combineLensResults([{ verdict: "fail", findings: Array.from({ length: 50 }, (_, i) => `a${i}`), severities: Array.from({ length: 50 }, () => "aviso" as const) }, { verdict: "fail", findings: Array.from({ length: 50 }, (_, i) => `b${i}`), severities: Array.from({ length: 50 }, () => "aviso" as const) }, blocker], true);
 	assert.equal(many.findings.length, 100); assert.equal(many.findings[0], "parte 3/3 · y"); assert.match(many.findings.at(-1)!, /^… y 2 hallazgos más de las partes no entran/);
 	assert.deepEqual(many.severities, ["blocker", ...Array.from({ length: 99 }, () => "aviso")], "la línea de los omitidos es aviso si ninguno era blocker");
 	const hidden = combineLensResults([{ verdict: "fail", findings: Array.from({ length: 100 }, (_, i) => `c${i}`) }, aviso], true);
 	assert.equal(hidden.findings.length, 100); assert.match(hidden.findings.at(-1)!, /^… y 2 hallazgos más/); assert.equal(hidden.severities, undefined, "un blocker omitido hace blocker a la línea que lo cuenta");
 	assert.deepEqual(combineLensResults([{ verdict: "fail", findings: [] }, aviso], true), { verdict: "fail", findings: ["parte 1/2 · El lente de seguridad falló sin detallar hallazgos", "parte 2/2 · x"], severities: ["blocker", "aviso"] }, "un fail sin hallazgos de una parte es blocker: los avisos de otra no lo tapan");
+});
+
+// Review del incidente (2026-11-26, bypass-1): un fail con una parte sin juicio servía de base para la convergencia, y en la
+// vuelta siguiente un blocker nuevo en un archivo de esa parte bajaba a aviso sin que nadie lo hubiera revisado.
+test("combine en security: un fail con alguna parte sin juicio (sin resultado, unknown o un unknown vuelto fail) queda partial; uno completo no", () => {
+	const blocker = { verdict: "fail" as const, findings: ["src/a.ts:1 · y"], severities: ["blocker" as const] };
+	const missing = { verdict: "unknown" as const, findings: ["Sin resultado del lente: conexión (3 intentos)"], noResult: true as const };
+	assert.equal(combineLensResults([blocker, missing], true).partial, true, "una parte sin resultado");
+	assert.equal(combineLensResults([blocker, { verdict: "unknown", findings: [] }], true).partial, true, "una parte unknown juzgada, aunque no tenga hallazgos");
+	assert.equal(combineLensResults([{ verdict: "fail", findings: ["src/b.ts:1 · x"], severities: ["aviso"] }, { verdict: "unknown", findings: ["falta contexto"] }], true).partial, true, "un fail de sólo avisos con una parte unknown");
+	assert.equal(combineLensResults([{ ...blocker, unjudged: true }], true).partial, true, "una sola parte: el lente dijo unknown y un blocker marcado la volvió fail");
+	assert.equal(combineLensResults([{ verdict: "pass", findings: [] }, blocker], true).partial, undefined, "todas las partes juzgadas: no se marca");
+	assert.equal(combineLensResults([blocker], true).partial, undefined);
+	assert.equal(combineLensResults([{ verdict: "pass", findings: [] }, missing], true).partial, undefined, "sin resultado y sin blocker queda unknown: nunca es base");
+	assert.equal("unjudged" in combineLensResults([{ ...blocker, unjudged: true }], true), false, "la marca de la parte no se guarda");
+	assert.equal(combineLensResults([blocker, missing]).partial, undefined, "sólo security");
 });
 
 // El escenario medido en la review: 5 pasos con rojo y verde, un caso D y 2 gates × 3 vueltas, todo con

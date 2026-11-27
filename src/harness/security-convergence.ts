@@ -3,7 +3,8 @@
 // archivo de un blocker anterior, baja a aviso. Así cada vuelta revisa lo que cambió y no reabre lo que ya se juzgó.
 // El veredicto nunca cambia: sólo la severidad. Todo lo calcula el host con Git; no hay campo nuevo en el estado.
 // Falla cerrado: no baja nada si no se puede comparar, ni un secreto o una exfiltración, ni un hallazgo sin clase, con
-// una clase inválida, sin archivo o con un archivo que no está en HEAD, ni uno cuyo texto nombra un secreto.
+// una clase inválida, sin archivo o con un archivo que no está en HEAD, ni uno cuyo texto nombra un secreto. Una base
+// parcial (alguna parte sin juicio) no compara: lo que no se revisó no es «lo que ya se juzgó».
 // Lo que una persona aceptó cuenta como blocker de la base: lo aceptado vale sólo para ese contenido.
 import type { Runner } from "../core/exec.ts";
 import type { Review, Workflow } from "./model.ts";
@@ -15,6 +16,7 @@ export const SECURITY_DOWNGRADED = "bajado a aviso: archivo sin cambios desde la
 export const SECURITY_PREVIOUS_NOTE = "previous es tu revisión de security anterior de este mismo trabajo, calculada por el harness: findings son tus hallazgos de entonces y changedFiles los archivos que cambiaron desde ese contenido. Decí primero si cada blocker anterior sigue. Un blocker nuevo de clase otro sólo bloquea si cae en un archivo de changedFiles o en el archivo de un blocker anterior; si no, el harness lo baja a aviso. Un secreto o una exfiltración bloquean siempre. Citá el archivo donde está el problema.";
 const NO_COMPARISON = "sin comparación con la revisión anterior: no se baja ningún blocker";
 const NO_BLOCKER_FILE = "sin comparación con la revisión anterior: un blocker anterior no cita su archivo; no se baja ningún blocker";
+const PARTIAL_BASELINE = "sin comparación con la revisión anterior: no revisó todas las partes del cambio; no se baja ningún blocker";
 // Sin \b: con \b no corta en «_» y no reconoce CLAUDE_CODE_OAUTH_TOKEN. Un falso positivo sólo deja el blocker como está.
 const SECRET = /secret|secreto|api[ _-]?key|password|contraseña|credencial|credential|private[ _-]?key|clave privada|token|bearer|auth\.json|oauth/i;
 const MAX_PREVIOUS_FINDINGS = 10; const MAX_PREVIOUS_TEXT = 500; const MAX_CHANGED_FILES = 200;
@@ -43,6 +45,7 @@ export interface SecurityComparison { baseline: Review; changed: ReadonlySet<str
 export async function securityComparison(state: Workflow, snapshot: Pick<CheckoutSnapshot, "head" | "fingerprint">, runner: Runner, signal?: AbortSignal): Promise<{ comparison?: SecurityComparison; note?: string }> {
  const baseline = securityBaseline(state);
  if (!baseline) return {};
+ if (baseline.partial) return { note: PARTIAL_BASELINE };
  // Todos los blockers de la base, también los que aceptó una persona.
  const blockerFiles = new Set<string>();
  for (const file of securityBlockers(baseline).map(findingFile)) { if (file === null) return { note: NO_BLOCKER_FILE }; blockerFiles.add(file); }

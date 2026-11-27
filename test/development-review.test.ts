@@ -34,7 +34,7 @@ test("development_lenses security: la clase sólo permite bajar con otro exacto 
 test("development_lenses security: un unknown con un hallazgo marcado blocker es fail, con una parte y con varias; un texto suelto o un aviso en un unknown siguen siendo unknown", () => {
 	const secret = { severity: "blocker", clase: "secreto", finding: "src/a.ts:1 · imprime el token" };
 	const one = parseSecurityResult(JSON.stringify({ verdict: "unknown", findings: [secret, { severity: "aviso", finding: "src/a.ts:2 · falta el módulo de rutas" }] }));
-	assert.deepEqual(one, { verdict: "fail", findings: ["src/a.ts:1 · imprime el token", "src/a.ts:2 · falta el módulo de rutas"], severities: ["blocker", "aviso"], downgradable: [false, false] });
+	assert.deepEqual(one, { verdict: "fail", findings: ["src/a.ts:1 · imprime el token", "src/a.ts:2 · falta el módulo de rutas"], severities: ["blocker", "aviso"], downgradable: [false, false], unjudged: true });
 	const review = (r: { verdict: Review["verdict"]; findings: string[]; severities?: Review["severities"] }): Review => ({ lens: "security", fingerprint: "tree", at: "now", verdict: r.verdict, findings: r.findings, ...(r.severities ? { severities: r.severities } : {}) });
 	assert.deepEqual(securityBlockers(review(one)), ["src/a.ts:1 · imprime el token"], "con una parte, bloquea verified");
 	const first = parseSecurityResult(JSON.stringify({ verdict: "fail", findings: [{ severity: "aviso", finding: "src/b.ts:1 · el log crece" }] }));

@@ -155,6 +155,20 @@ test("security_convergence falla cerrado: sin archivo, con un path que no está 
 	await assert.rejects(securityComparison(afterRetry(["src/a.ts:1 · permiso abierto"]), { fingerprint: "tree2", head: sha("2") }, git({ diff: [], tree: TREE }).runner, aborted.signal), { name: "AbortError" }, "una cancelación no se vuelve una nota");
 });
 
+// Review del incidente (2026-11-26, bypass-1): una revisión con una parte sin juicio no revisó todo el cambio. Si fuera la
+// base, un blocker nuevo en un archivo de esa parte bajaría a aviso sin que nadie lo hubiera mirado.
+test("security_convergence una base parcial (alguna parte sin juicio) no compara: no consulta Git y no baja nada", async () => {
+	const partial = afterRetry(["parte 1/2 · src/a.ts:1 · permiso abierto", "parte 2/2 · Sin resultado del lente: conexión (3 intentos)"], { severities: ["blocker", "aviso"], partial: true });
+	assert.equal(securityBaseline(partial)?.partial, true, "sigue siendo la última review con veredicto");
+	const stub = git({ diff: ["src/b.ts"], tree: TREE });
+	const out = await securityComparison(partial, { fingerprint: "tree2", head: sha("2") }, stub.runner);
+	assert.equal(out.comparison, undefined);
+	assert.equal(out.note, "sin comparación con la revisión anterior: no revisó todas las partes del cambio; no se baja ningún blocker");
+	assert.deepEqual(stub.calls, [], "ni siquiera consulta Git");
+	const complete = afterRetry(["parte 1/2 · src/a.ts:1 · permiso abierto", "parte 2/2 · src/c.ts:2 · el log crece"], { severities: ["blocker", "aviso"] });
+	assert.ok((await securityComparison(complete, { fingerprint: "tree2", head: sha("2") }, git({ diff: ["src/b.ts"], tree: TREE }).runner)).comparison, "el control completo sí compara");
+});
+
 test("security_convergence la base es la última review de security con veredicto de este pedido, también la archivada por retry, y su commit sale del paso cuyo verde acreditó ese contenido", async () => {
 	// La forma de 98.json: un fail legacy sin severidades, por partes.
 	const legacy = [

@@ -31,14 +31,16 @@ export function parseLensResult(raw: string): Static<typeof ResultSchema> {
  * severidad distinta de "aviso" o ninguna son blocker. Con algún hallazgo no hay pass, y un unknown con un severity
  * "blocker" explícito es fail: lo demás de un unknown avisa (#89). Sólo la clase "otro" exacta deja que el host baje el
  * hallazgo (downgradable); la clase no se guarda. */
-export function parseSecurityResult(raw: string): { verdict: Review["verdict"]; findings: string[]; severities: Severity[]; downgradable: boolean[] } {
+export function parseSecurityResult(raw: string): { verdict: Review["verdict"]; findings: string[]; severities: Severity[]; downgradable: boolean[]; unjudged?: true } {
 	const value = lensJson(raw);
 	if (!Value.Check(SecurityResultSchema, value)) throw new Error(FORMAT_ERROR);
 	const findings = value.findings.map((f) => typeof f === "string" ? f : f.finding);
 	const severities = value.findings.map((f): Severity => typeof f !== "string" && f.severity === "aviso" ? "aviso" : "blocker");
 	const downgradable = value.findings.map((f) => typeof f !== "string" && f.clase === "otro");
 	const marked = value.findings.some((f) => typeof f !== "string" && f.severity === "blocker");
-	return { verdict: value.verdict === "pass" && findings.length || value.verdict === "unknown" && marked ? "fail" : value.verdict, findings, severities, downgradable };
+	// El unknown vuelto fail sigue sin juicio completo: no sirve de base para la convergencia (unjudged).
+	const unjudged = value.verdict === "unknown" && marked;
+	return { verdict: value.verdict === "pass" && findings.length || unjudged ? "fail" : value.verdict, findings, severities, downgradable, ...(unjudged ? { unjudged: true as const } : {}) };
 }
 // El modelo de amenazas es fijo y no se lee de la KB: la KB compartida está dentro del modelo como contenido no confiable.
 const SECURITY_INSTRUCTIONS = "Buscá riesgos de seguridad que introduce este diff: secretos, permisos, inyección y exposición o envío de datos. Modelo de amenazas fijo: la máquina de un desarrollador con un solo usuario. Dentro del modelo: el contenido no confiable (issues, PRs, comentarios, la KB compartida, la salida de comandos y las dependencias), la red y las salvaguardas que piden a una persona (aprobar la receta, aceptar un riesgo, push, merge y permisos de comandos): un diff que le deja al modelo o a un dato no confiable saltear una de ellas es blocker. Ejemplo: agregarle a omi_workflow una acción que acepta un riesgo o aprueba la receta sin la persona. Fuera del modelo: otros usuarios locales, root y el propio agente con bash fuera del harness, un riesgo aceptado. Cada hallazgo lleva severidad. blocker: un escenario concreto de explotación, dentro del modelo, que este diff introduce y que no existía en la base; decí quién controla la entrada, por dónde entra y qué daño hace. aviso: todo lo demás. Por ejemplo, lo que ya estaba en la base (las líneas de contexto y el código que el diff no cambia), lo que necesita otro usuario local o root (ACL, permisos de directorios ajenos, espacios de PID), lo hipotético sin un camino concreto y lo que no es de seguridad (un test que falla, el estilo). Si no podés describir el escenario concreto, es aviso. Si este diff expone un secreto o manda código o datos a un destino que nadie autorizó, es blocker aunque quien lo dispare quede fuera del modelo. Ejemplo: un valor leído de la KB compartida o de un issue elige a qué servidor se manda el código. Hallazgos con archivo:línea y evidencia. Si falta código esencial para evaluar el riesgo, unknown.";

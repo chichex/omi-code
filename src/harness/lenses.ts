@@ -155,8 +155,9 @@ export function lensParts(files: string[], budget: number): string[] {
 }
 // Se corre el lente por parte y se combina: el peor veredicto gana y se juntan los hallazgos con su parte.
 // Queda sin resultado sólo si ninguna parte juzgó unknown: un unknown del modelo no se re-tira.
-// downgradable: sólo en memoria, por parte: combineLensResults nunca lo copia y no se guarda.
-export interface LensResult { verdict: Review["verdict"]; findings: string[]; noResult?: true; severities?: Severity[]; downgradable?: boolean[] }
+// downgradable y unjudged: sólo en memoria, por parte: combineLensResults nunca los copia y no se guardan. unjudged: el
+// lente dijo unknown y un blocker marcado lo volvió fail. partial: un fail de security con alguna parte sin juicio.
+export interface LensResult { verdict: Review["verdict"]; findings: string[]; noResult?: true; severities?: Severity[]; downgradable?: boolean[]; unjudged?: true; partial?: true }
 const SEVERITY: Record<Review["verdict"], number> = { pass: 0, unknown: 1, fail: 2 };
 const MAX_FINDINGS = 100; const MAX_FINDING = 4000;
 export const prefixed = (prefix: string, finding: string): string => {
@@ -191,6 +192,8 @@ function combineSecurity(results: LensResult[], verdict: Review["verdict"], labe
 	const entries: Entry[] = sorted.length <= MAX_FINDINGS ? sorted : [...sorted.slice(0, MAX_FINDINGS - 1), { finding: more(omitted.length), severity: omitted.some((e) => e.severity === "blocker") ? "blocker" : "aviso" }];
 	const findings = entries.map((e) => e.finding); const severities = entries.map((e) => e.severity);
 	if (results.some((r) => r.noResult) && !severities.includes("blocker")) return { verdict: "unknown", noResult: true, findings };
+	// Un fail con una parte que nadie juzgó del todo bloquea igual, pero no sirve de base para comparar la vuelta siguiente.
+	const partial = verdict === "fail" && results.some((r) => r.verdict === "unknown" || r.unjudged);
 	// La lista sólo cuenta en un fail y sólo se guarda con algún aviso: así un binario viejo sigue leyendo el resto.
-	return { verdict, findings, ...(verdict === "fail" && severities.includes("aviso") ? { severities } : {}) };
+	return { verdict, findings, ...(verdict === "fail" && severities.includes("aviso") ? { severities } : {}), ...(partial ? { partial: true as const } : {}) };
 }
