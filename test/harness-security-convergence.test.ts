@@ -308,6 +308,18 @@ test("security_convergence lo aceptado sigue contando en el segundo amend: se re
 	assert.deepEqual([again.findings, again.severities], [["src/c.ts:9 · nadie lo aceptó"], ["blocker"]], "no baja: su archivo es el de un blocker anterior");
 });
 
+// Ronda 4 (replay-4-aceptado-fuera-del-tope-de-previous, correctness-4-previous-tope-oculta-aceptados): previous cortaba en 10
+// con los blockers primero, y un aceptado que la base guardó como aviso detrás de otros 10 avisos quedaba afuera. El lente no
+// podía repetir su texto exacto y Verificar volvía a frenar hasta otra aceptación.
+test("security_convergence previous manda primero lo aceptado: no lo deja afuera del tope de 10", async () => {
+	const others = Array.from({ length: 10 }, (_, i) => `parte 1/2 · src/c.ts:${i + 1} · aviso ${i}`);
+	const { accepted, c } = await twoAmends([...others, `parte 2/2 · ${SECURITY_ACCEPTED_REPEAT} · src/a.ts:1 · permiso abierto`]);
+	const previous = previousMaterial(c);
+	assert.deepEqual(previous.findings[0], { blocker: false, accepted: true, text: accepted });
+	assert.equal(previous.findings.length, 10);
+	assert.equal(previous.findingsOmitted, 1);
+});
+
 test("security_convergence lo aceptado vuelve a frenar si su archivo cambió o si un retry borró la aceptación", async () => {
 	const { accepted, c } = await acceptedThenAmended(["src/a.ts"]);
 	const changed = convergeSecurity(security([blocker(accepted, "otro")]), c);

@@ -120,7 +120,7 @@ export async function securityComparison(state: Workflow, snapshot: Pick<Checkou
  }
 }
 const clip = (text: string): string => text.length <= MAX_PREVIOUS_TEXT ? text : `${text.slice(0, /[\ud800-\udbff]/.test(text[MAX_PREVIOUS_TEXT - 2] ?? "") ? MAX_PREVIOUS_TEXT - 2 : MAX_PREVIOUS_TEXT - 1)}…`;
-/** Lo que el lente ve de su revisión anterior: sus hallazgos, con los blockers primero, y los archivos cambiados. */
+/** Lo que el lente ve de su revisión anterior: sus hallazgos, con lo aceptado y los blockers primero, y los archivos cambiados. */
 export function previousMaterial(c: SecurityComparison) {
  const severities = c.baseline.verdict === "fail" ? severitiesOf(c.baseline) : [];
  // Un texto aceptado va entero y sin los prefijos del host: el lente lo tiene que poder repetir exacto.
@@ -128,7 +128,8 @@ export function previousMaterial(c: SecurityComparison) {
   const accepted = c.accepted.has(acceptedText(text));
   return { blocker: severities[i] === "blocker", ...(accepted ? { accepted: true } : {}), text: accepted ? acceptedText(text) : clip(text) };
  });
- const findings = [...all.filter(f => f.blocker), ...all.filter(f => !f.blocker)];
+ // Primero lo aceptado, después los blockers y después los avisos: el tope de 10 no puede dejar afuera un texto aceptado.
+ const findings = [...all.filter(f => f.accepted), ...all.filter(f => !f.accepted && f.blocker), ...all.filter(f => !f.accepted && !f.blocker)];
  const changedFiles = [...c.changed].sort();
  return {
   fingerprint: c.baseline.fingerprint, verdict: c.baseline.verdict,
