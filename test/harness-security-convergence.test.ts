@@ -160,6 +160,27 @@ test("security_convergence reconoce un archivo cambiado o el de un blocker anter
 	assert.ok(d?.blockerFiles.has("src/acción.ts"), JSON.stringify([...d?.blockerFiles ?? []]));
 });
 
+// Review del incidente (ronda 3, bypass-3-ruta-con-comillas-o-negrita, bypass-3-ruta-envuelta-sin-linea y
+// rules-3-convergencia-comillas-tipograficas): cortar en palabras dejaba pegadas «», “”, **, #L12, !, ? o una flecha, y una
+// ruta con espacios se partía. Ahora cada archivo conocido se busca como subcadena, con límites de ruta.
+test("security_convergence reconoce un archivo nombrado entre comillas tipográficas, en negrita, con #L, puntuación o espacios", async () => {
+	const tree = [...TREE, "src/cli.ts", "src/run task.ts", "src/store.ts", "src/lib.ts", "src/b.ts.bak"];
+	const wraps = ["«src/b.ts»", "“src/b.ts”", "**src/b.ts**", "src/b.ts#L12", "src/b.ts!", "¿src/b.ts?", "src/b.ts—el handler", "src/b.ts->exec", "‘src/b.ts’", "b.ts», que cambió"];
+	for (const wrap of wraps) {
+		const a = convergeSecurity(security([blocker(`src/c.ts:4 · execSync interpola el título del issue, que llega desde ${wrap}`, "otro")]), comparison({ tree: new Set(tree) }));
+		assert.equal(a.downgraded, 0, `regla (a): ${wrap}`);
+		const b = convergeSecurity(security([blocker(`src/c.ts:4 · arma la ruta del lock de ${wrap.replaceAll("src/b.ts", "src/store.ts").replace("b.ts»", "store.ts»")} con el título del issue`, "otro")]), comparison({ tree: new Set(tree), changed: new Set(), blockerFiles: new Set(["src/store.ts"]) }));
+		assert.equal(b.downgraded, 0, `regla (b): ${wrap}`);
+	}
+	assert.equal(convergeSecurity(security([blocker("src/c.ts:4 · lo dispara «src/run task.ts»", "otro")]), comparison({ tree: new Set(tree), changed: new Set(["src/run task.ts"]) })).downgraded, 0, "una ruta con espacios");
+	// Controles: otra palabra que contiene el nombre no lo nombra.
+	for (const text of ["src/c.ts:4 · como en src/lib.ts", "src/c.ts:4 · como en src/b.ts.bak", "src/c.ts:4 · como en xb.ts"]) assert.equal(convergeSecurity(security([blocker(text, "otro")]), comparison({ tree: new Set(tree) })).downgraded, 1, text);
+	// De punta a punta: la base nombra «src/cli.ts» sin línea y ese archivo protege la regla (b).
+	const s = afterRetry(["src/c.ts:4 · execSync interpola el título que llega desde «src/cli.ts»"]);
+	const { comparison: c } = await securityComparison(s, { fingerprint: "tree2", head: sha("2") }, git({ diff: ["src/b.ts"], tree }).runner);
+	assert.ok(c?.blockerFiles.has("src/cli.ts"), JSON.stringify([...c?.blockerFiles ?? []]));
+});
+
 // Review del incidente (2026-11-26, bypass-5): las rutas de los blockers anteriores no se normalizaban ni se validaban.
 // Si la base citaba «store.ts:22» y ahora el lente cita la ruta completa, la regla (b) no lo reconocía y bajaba.
 test("security_convergence normaliza las rutas de los blockers anteriores contra el árbol; una que no está en el árbol ni entre los cambios no compara", async () => {

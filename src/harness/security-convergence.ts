@@ -45,25 +45,31 @@ export function findingFile(text: string): string | null {
  return null;
 }
 
-// Qué archivos nombra un hallazgo, sin adivinar la forma de una ruta (Makefile, «acción.ts», «a=b.ts», «posts.$id.tsx»):
-// se compara contra los archivos que el host conoce. Las palabras se cortan en espacios, comillas, paréntesis, separadores
-// y flechas; cada una vale también por sus finales después de una «/». Nombrar de más sólo deja un blocker como está.
-const SEPARATORS = /[\s`"'()[\]{}<>,;·|:←→⇐⇒]+/u;
+// Qué archivos nombra un hallazgo, sin adivinar la forma de una ruta (Makefile, «acción.ts», «run task.ts», entre «» o **,
+// con #L12 o una flecha pegada): cada archivo conocido se busca como subcadena del texto, completo o por sus finales después
+// de una «/», con límites de ruta a los dos lados. Nombrar de más sólo deja un blocker como está.
+const WORD = /[\p{L}\p{N}_]/u;
 const tails = (path: string): string[] => path.split("/").map((_, i, parts) => parts.slice(i).join("/")).filter(Boolean);
-function said(text: string): Set<string> {
- const words = new Set<string>();
- for (const raw of text.split(SEPARATORS)) for (const tail of tails(raw.replace(/^\.\//, "").replace(/\.+$/, ""))) words.add(tail);
- return words;
+// La ruta sigue con una letra, un número o «_», o con «-» o «.» pegados a otra letra: «b.ts.bak» y «x-b.ts» son otros
+// archivos; «b.ts.» al cerrar una oración o «b.ts->exec», no.
+const joins = (char: string | undefined, next: string | undefined): boolean => WORD.test(char ?? "") || (char === "-" || char === ".") && WORD.test(next ?? "");
+const bounded = (text: string, at: number, end: number): boolean => !joins(text[at - 1], text[at - 2]) && !joins(text[end], text[end + 1]);
+function mentions(text: string, file: string): boolean {
+ if (!text.includes(file.slice(file.lastIndexOf("/") + 1))) return false;
+ // Un final corto («a») nombraría a cualquier palabra: cuenta si tiene extensión o 4 caracteres o más.
+ return tails(file).some((tail, i) => {
+  if (i > 0 && tail.length < 4 && !tail.includes(".")) return false;
+  for (let at = text.indexOf(tail); at !== -1; at = text.indexOf(tail, at + 1)) if (bounded(text, at, at + tail.length)) return true;
+  return false;
+ });
 }
-// Un final corto («a») nombraría a cualquier palabra: un final cuenta si tiene extensión o 4 caracteres o más.
-const named = (words: ReadonlySet<string>, file: string): boolean => tails(file).some((tail, i) => words.has(tail) && (i === 0 || tail.length >= 4 || tail.includes(".")));
 /** Lo que el hallazgo cita con «archivo:línea» en cualquier parte del texto, sin «./». */
 export function lineRefs(text: string): string[] {
  return [...text.matchAll(/([^\s`"'()[\]{}<>,;·|:←→⇐⇒]+):\d/gu)].map(m => m[1]!.replace(/^\.\//, ""));
 }
 /** La misma ruta escrita completa o corta: «store.ts» es «src/harness/store.ts». */
 const sameFile = (a: string, b: string): boolean => a === b || a.endsWith(`/${b}`) || b.endsWith(`/${a}`);
-const cites = (text: string, files: Iterable<string>): boolean => { const words = said(text); return [...files].some(f => named(words, f)); };
+const cites = (text: string, files: Iterable<string>): boolean => [...files].some(f => mentions(text, f));
 
 // Las rutas de los blockers anteriores, como están en el árbol de HEAD o entre los cambios (un archivo borrado): una ruta
 // corta vale por todas las que terminan así. Si el primer tramo no está en ninguno, no se sabe qué archivo era: undefined.
@@ -72,8 +78,7 @@ function resolvedFiles(blockers: readonly string[], known: readonly string[]): S
  for (const text of blockers) {
   const anchor = known.filter(k => sameFile(k, findingFile(text)!));
   if (!anchor.length) return undefined;
-  const words = said(text);
-  for (const k of [...anchor, ...known.filter(k => named(words, k))]) files.add(k);
+  for (const k of [...anchor, ...known.filter(k => mentions(text, k))]) files.add(k);
  }
  return files;
 }
