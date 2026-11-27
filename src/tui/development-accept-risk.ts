@@ -1,10 +1,10 @@
 // /omi-work accept-risk: una persona acepta, en la TUI, los blockers de security que no aplican al contenido actual.
 // Ninguna tool lo expone: ni el agente, ni el chat, ni un cliente RPC aceptan un riesgo. Retry, refresh y replan lo borran.
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { Workflow } from "../harness/model.ts";
+import type { Review, Workflow } from "../harness/model.ts";
 import { executionReviews } from "../harness/execution-scope.ts";
 import { inspectCheckout } from "../harness/git.ts";
-import { latestSecurity, unacceptedBlockers } from "../harness/security-blockers.ts";
+import { latestSecurity, reviewFindings, securityBlockers, unacceptedBlockers } from "../harness/security-blockers.ts";
 import type { ApprovalDocument, ApprovalLine } from "./development-approval.ts";
 import { showApprovalReview } from "./development-approval-view.ts";
 import { updateIssueSection } from "./development-issue.ts";
@@ -14,10 +14,20 @@ const TITLE = "Aceptar riesgo de seguridad";
 const MAX_REASON = 2000;
 const line = (text: string): ApprovalLine => ({ kind: "text", text });
 
-/** Lo que la persona revisa antes de aceptar: los hallazgos, qué implica y el contenido exacto. */
-export function acceptRiskDocument(state: Workflow, head: string, fingerprint: string, findings: string[]): ApprovalDocument {
+// Una revisión parcial no juzgó alguna parte y security no se repite sobre este contenido: aceptar la deja sin revisar.
+function partialSection(review: Review | undefined): ApprovalDocument["sections"] {
+	if (!review?.partial) return [];
+	const blockers = new Set(securityBlockers(review));
+	const avisos = reviewFindings(review).filter((_, i) => !blockers.has(review.findings[i]!));
+	return [{ id: "partial", title: "Revisión parcial", lines: [
+		line("Seguridad no juzgó todas las partes del cambio: alguna quedó sin resultado o unknown. Aceptar no las revisa, y sobre este contenido seguridad no se vuelve a correr. Para que se revisen, no aceptes: el agente usa retry."),
+		...avisos.map((f) => line(`• ${f}`))] }];
+}
+/** Lo que la persona revisa antes de aceptar: los hallazgos, si la revisión fue parcial, qué implica y el contenido exacto. */
+export function acceptRiskDocument(state: Workflow, head: string, fingerprint: string, findings: string[], review?: Review): ApprovalDocument {
 	return { title: TITLE, sections: [
 		{ id: "findings", title: "Hallazgos que bloquean", lines: findings.map((f) => line(`• ${f}`)) },
+		...partialSection(review),
 		{ id: "meaning", title: "Qué implica", lines: [
 			line("Deja de frenar Verificar y Land (también el merge automático) sólo para este contenido. Si el código cambia, seguridad se vuelve a evaluar."),
 			line("No corrige nada ni autoriza push, merge, comandos ni workflows."),
@@ -35,13 +45,13 @@ export async function acceptRisk(session: DevelopmentSession, ctx: ExtensionCont
 	if (state.phase !== "verify") throw new Error(`${TITLE}: sólo en Verificar; el trabajo está en ${state.phase}.`);
 	const snapshot = await inspectCheckout(state.checkout, session.runner, session.lifecycle.signal);
 	if (!snapshot.clean) throw new Error(`${TITLE}: hay cambios sin commitear; el riesgo se acepta sobre el contenido commiteado.`);
-	const findings = unacceptedBlockers(state, latestSecurity(executionReviews(state), snapshot.fingerprint));
+	const review = latestSecurity(executionReviews(state), snapshot.fingerprint), findings = unacceptedBlockers(state, review);
 	if (!findings.length) throw new Error("No hay hallazgos de seguridad sin aceptar sobre el contenido actual.");
 	const cancellation = AbortSignal.any([session.lifecycle.signal, ...(ctx.signal ? [ctx.signal] : [])]);
 	session.emit(`Esperando revisión · ${TITLE}`, true);
 	let reason: string | undefined;
 	try {
-		if (!(await showApprovalReview(ctx, acceptRiskDocument(state, snapshot.head, snapshot.fingerprint, findings), cancellation))) return false;
+		if (!(await showApprovalReview(ctx, acceptRiskDocument(state, snapshot.head, snapshot.fingerprint, findings, review), cancellation))) return false;
 		reason = (await ctx.ui.input(`${TITLE} · motivo`, "Por qué es aceptable (por ejemplo: preexistente en main, se sigue en #N)", { signal: cancellation }))?.trim();
 	} finally { session.emit(); }
 	if (!reason) return false;

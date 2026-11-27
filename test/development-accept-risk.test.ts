@@ -6,6 +6,9 @@ import { Value } from "typebox/value";
 import type { Plan, Workflow } from "../src/harness/model.ts";
 import { updateWorkflow } from "../src/harness/store.ts";
 import { developmentFixture } from "./helpers/development.ts";
+import { acceptRiskDocument } from "../src/tui/development-accept-risk.ts";
+import { createWorkflow } from "../src/harness/state.ts";
+import { sourceHash, type Review } from "../src/harness/model.ts";
 
 const SECRET = "value.cjs:1 · expone un secreto";
 const KICKOFF = /Continuá el harness de desarrollo activo/;
@@ -101,4 +104,19 @@ test("development_accept_risk el agente no puede aceptar riesgos ni sumar vuelta
 	for (const action of ["accept-risk", "risk_accepted", "extra-round", "round_added"]) assert.equal(Value.Check(workflow.parameters, { action }), false, action);
 	await assert.rejects(f.action({ action: "risk_accepted", fingerprint: "x", findings: [SECRET], reason: "el agente" }), /inválidos/);
 	assert.equal(accepted(await f.state()), undefined);
+});
+
+// Review del incidente (ronda 2, accept-risk-partial-sin-revisar): con una revisión partial, aceptar los blockers dejaba sin
+// revisar para siempre la parte que quedó sin resultado (security no se repite sobre ese contenido), y la pantalla no lo decía.
+test("development_accept_risk con una revisión de security parcial, la pantalla dice qué parte nadie juzgó y que aceptar no la revisa", () => {
+	const state = createWorkflow({ number: 7, title: "Change", body: "Details", url: "https://example.test/7", hash: sourceHash("Change", "Details") }, { root: "/repo", commonDir: "/repo/.git", branch: "work", baseCommit: "base" }, "id", "now");
+	const blocker = "parte 1/2 · src/a.ts:1 · permiso abierto";
+	const partial: Review = { lens: "security", fingerprint: "tree", verdict: "fail", findings: [blocker, "parte 2/2 · Sin resultado del lente: conexión (3 intentos)"], severities: ["blocker", "aviso"], partial: true, at: "now" };
+	const text = (r: Review) => acceptRiskDocument(state, "head", "tree", [blocker], r).sections.flatMap((s) => [s.title, ...s.lines.map((l) => l.kind === "text" ? l.text : "")]).join("\n");
+	const shown = text(partial);
+	assert.match(shown, /Revisión parcial/);
+	assert.match(shown, /no juzgó todas las partes del cambio/);
+	assert.match(shown, /Aceptar no las revisa/);
+	assert.match(shown, /• aviso · parte 2\/2 · Sin resultado del lente: conexión \(3 intentos\)/);
+	assert.doesNotMatch(text({ lens: "security", fingerprint: "tree", verdict: "fail", findings: [blocker], at: "now" }), /Revisión parcial/, "una revisión completa no lo dice");
 });
