@@ -328,4 +328,7 @@ test("development_lenses todo lente usa los precedentes como vara: no exigir má
 	assert.match(LENS_PRECEDENT_NOTE, /Un hallazgo que pide más que el repo sin un precedente visible que lo respalde es aviso/);
 	assert.match(LENS_PRECEDENT_NOTE, /exponer un secreto o mandar código o datos a un destino que nadie autorizó sigue siendo blocker/, "la vara no baja un secreto ni una exfiltración");
 	assert.doesNotMatch(LENS_PRECEDENT_NOTE, /\bseguridad\b/, "los tests distinguen el prompt de security por esa palabra");
+	// Ronda 3 (prompt-3-vara-de-precedentes-baja-inyeccion): la vara sólo salvaba secreto y exfiltración, y el agente elige qué
+	// precedentes cita. Una inyección desde contenido no confiable o saltear una salvaguarda siguen siendo blocker.
+	assert.match(LENS_PRECEDENT_NOTE, /sigue siendo blocker, y también una inyección desde contenido no confiable o saltear una salvaguarda que pide a una persona: la vara no baja un escenario concreto de explotación que el diff introduce, aunque el repo haga algo parecido en otro lado\./);
 });
