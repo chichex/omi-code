@@ -120,7 +120,7 @@ const EXHAUSTED = "Se agotaron las vueltas; se necesita intervención humana";
 // cancelaciones y errores del proveedor (unknown), que no gastan veredictos.
 const MAX_LENS_VERDICTS = 3; const MAX_LENS_RUNS = 10;
 const SECURITY_FAILED = "un hallazgo blocker del lente de seguridad sobre este contenido bloquea Verificar; corregí el cambio con retry. Si no aplica, pausá con el motivo: sólo una persona acepta el riesgo, con /omi-work accept-risk";
-const RISK_ACCEPTED_KEEP = "una persona aceptó el riesgo de seguridad de este contenido: seguí con verified. Corregir un aviso ahora cambiaría el contenido y su aceptación dejaría de valer; lo que queda va como aviso en el PR. Un D o un gate rojo sí se corrige con amend";
+const RISK_ACCEPTED_KEEP = "una persona aceptó el riesgo de seguridad de este contenido: seguí con verified. Corregir un aviso ahora cambiaría el contenido y seguridad lo tendría que volver a evaluar; lo que queda va como aviso en el PR. Un D o un gate rojo sí se corrige con amend";
 const ADVISORY_RETRY = "retry gasta una vuelta y sólo corresponde si security marcó un blocker, o si falló un D o un gate y ya no quedan amend. Los hallazgos de esta vuelta sólo avisan: corregilos con amend, que no gasta vuelta, o dejalos como aviso en el PR";
 const AMEND_FIRST = "un D o un gate rojo sobre este contenido se corrige con amend, que no gasta vuelta: agrega un paso con rojo, verde y commit. retry queda para un blocker de security o para cuando ya no quedan amend en la vuelta";
 // Un lente que falló no se vuelve a tirar sobre el mismo contenido, salvo que un refuter

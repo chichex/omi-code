@@ -29,7 +29,7 @@ export function acceptRiskDocument(state: Workflow, head: string, fingerprint: s
 		{ id: "findings", title: "Hallazgos que bloquean", lines: findings.map((f) => line(`• ${f}`)) },
 		...partialSection(review),
 		{ id: "meaning", title: "Qué implica", lines: [
-			line("Deja de frenar Verificar y Land (también el merge automático) sólo para este contenido. Si el código cambia, seguridad se vuelve a evaluar."),
+			line("Deja de frenar Verificar y Land (también el merge automático) para este contenido. Si un amend no toca su archivo y seguridad repite el mismo texto, sigue sin frenar, salvo un secreto o una exfiltración. Si su archivo cambia, o después de un retry, seguridad lo vuelve a evaluar."),
 			line("No corrige nada ni autoriza push, merge, comandos ni workflows."),
 			line("Queda en el estado del trabajo, en la sección del issue y en el PR draft."),
 			line("Después de Ctrl+S se pide el motivo. Esc o un motivo vacío no aceptan nada.")] },
@@ -63,6 +63,6 @@ export async function acceptRisk(session: DevelopmentSession, ctx: ExtensionCont
 	cancellation.throwIfAborted();
 	const accepted = await session.apply({ type: "risk_accepted", fingerprint: snapshot.fingerprint, findings, reason }, ctx);
 	await updateIssueSection(session, ctx);
-	ctx.ui.notify(`Riesgo aceptado sobre ${snapshot.fingerprint.slice(0, 12)}: ${findings.length} hallazgo(s) dejan de frenar Verificar y Land sólo para este contenido.${accepted.status === "paused" ? " Seguí con /omi-work resume." : ""}`, "info");
+	ctx.ui.notify(`Riesgo aceptado sobre ${snapshot.fingerprint.slice(0, 12)}: ${findings.length} hallazgo(s) dejan de frenar Verificar y Land para este contenido y, repetidos tras un amend que no toca su archivo, para el siguiente.${accepted.status === "paused" ? " Seguí con /omi-work resume." : ""}`, "info");
 	return true;
 }
