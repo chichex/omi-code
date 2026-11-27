@@ -503,7 +503,7 @@ El esquema del estado no admite campos desconocidos. Un estado escrito por esta 
 |---|---|
 | Una review de Seguridad con `severities` (un `fail` con algún aviso, también uno bajado por convergencia) | No lo abre. Tampoco después de un `retry`: la review pasa al archivo de intentos con su lista |
 | Una review de Seguridad con `partial` (un `fail` con alguna parte sin juicio) | No lo abre, igual que con `severities`. Casi siempre trae `severities`: una parte sin resultado deja su aviso. Llega sin `severities` en dos casos: una parte `unknown` sin hallazgos junto a blockers, o un `unknown` que un blocker marcado volvió `fail` y que sólo trae blockers |
-| `acceptedRisks` (una persona aceptó un riesgo en esta vuelta) | No lo abre. Después de un `retry`, `refresh` o `replan` el campo desaparece y vuelve a abrir, si ninguna review tiene `severities` |
+| `acceptedRisks` (una persona aceptó un riesgo en esta vuelta) | No lo abre. Después de un `retry`, `refresh` o `replan` el campo desaparece y vuelve a abrir, si ninguna review tiene `severities` ni `partial` |
 | `maxRounds` sumado con `/omi-work extra-round` | Lo abre: no hay campo nuevo |
 | Un amend por un D o un gate rojo | Lo abre: la entrada de `amends` tiene la misma forma |
 | El turno de checks (`check-turn.lock`) | No lo conoce: corre sin turno |
