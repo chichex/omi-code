@@ -175,6 +175,10 @@ test("harness_accept_risk el PR draft y la sección del issue muestran «Riesgos
 	const s = send(accept(before, findings), { type: "verified", fingerprint: "tree" });
 	const pr = renderWorkflowArtifact(s);
 	assert.match(pr, /^## Riesgos aceptados por una persona\nHallazgos de seguridad que bloqueaban Verificar y una persona aceptó con `\/omi-work accept-risk` desde la TUI de OMI\./m);
+	// Ronda 3 (rules-3-pr-nota-riesgo-aceptado): la nota decía que con otro contenido la persona los acepta otra vez, pero el host
+	// baja solo el mismo texto en archivos sin cambios.
+	assert.match(pr, /Valen para ese contenido\. Si cambia, el mismo hallazgo en archivos sin cambios queda como aviso; si su archivo cambió, seguridad lo vuelve a evaluar y la persona lo acepta otra vez si sigue\./);
+	assert.doesNotMatch(pr, /si cambia, seguridad se vuelve a evaluar y la persona los acepta otra vez si siguen/);
 	assert.match(pr, /^- \*\*Contenido `tree`\*\* · 2026-01-01T00:00:00Z · \*\*Motivo:\*\* Preexistente en main; se sigue en otro issue\n {2}- src\/a\.ts:1 · secreto en el log\n {2}- src\/a\.ts:2 · token en la URL$/m);
 	assert.match(pr, /^ {2}- \*\*Seguridad:\*\* ❌ fail · riesgo aceptado por una persona$/m);
 	assert.ok(pr.indexOf("## Advertencias") < pr.indexOf("## Riesgos aceptados"), "va después de las advertencias");

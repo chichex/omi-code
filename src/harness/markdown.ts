@@ -42,7 +42,7 @@ export const CARRIED = " · revisado antes de la corrección liviana";
 export const verdictLabel = (verdict: keyof typeof VERDICTS, noResult: boolean | undefined): string => `${VERDICTS[verdict]}${noResult ? " · sin resultado" : ""}`;
 // Riesgos de seguridad que una persona aceptó desde la TUI: van aparte y cada lente lo marca.
 export const ACCEPTED_RISKS_TITLE = "Riesgos aceptados por una persona";
-export const ACCEPTED_RISKS_NOTE = "Hallazgos de seguridad que bloqueaban Verificar y una persona aceptó con `/omi-work accept-risk` desde la TUI de OMI. Valen sólo para ese contenido: si cambia, seguridad se vuelve a evaluar y la persona los acepta otra vez si siguen.";
+export const ACCEPTED_RISKS_NOTE = "Hallazgos de seguridad que bloqueaban Verificar y una persona aceptó con `/omi-work accept-risk` desde la TUI de OMI. Valen para ese contenido. Si cambia, el mismo hallazgo en archivos sin cambios queda como aviso; si su archivo cambió, seguridad lo vuelve a evaluar y la persona lo acepta otra vez si sigue.";
 export const ACCEPTED_MARK = " · riesgo aceptado por una persona";
 export const acceptedRiskLine = (a: AcceptedRisk): string => `- **Contenido ${code(a.fingerprint.slice(0, 12))}** · ${text(a.at)} · **Motivo:** ${text(a.reason)}`;
 export function evidenceResult(e: Evidence): string {
