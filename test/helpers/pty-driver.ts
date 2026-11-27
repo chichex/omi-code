@@ -1,6 +1,7 @@
 // Guion de PTY para la TUI real: cada paso espera lo que pintó la TUI (o un archivo marcador) desde la
-// tecla que lo causa, nunca un reloj fijo. El plazo es por avance: una fase sin progreso en `stallSeconds`
-// corta con su nombre; `totalSeconds` es sólo un tope. Bajo carga el guion tarda más, no pierde teclas.
+// tecla que lo causa, nunca un reloj fijo. El plazo es por fase: una fase que no llega a lo que espera en
+// `stallSeconds`, contados desde que empieza, corta con su nombre aunque la TUI siga pintando; `totalSeconds`
+// es sólo un tope. Bajo carga el guion tarda más, no pierde teclas.
 // Regla de las marcas: `m = mark()` se toma antes de mandar la tecla, nunca al ver un archivo (la TUI pudo
 // pintar antes de que el guion lo viera). Lee el PTY hasta el final: en macOS un hijo que muere con salida
 // sin leer queda trabado en exit (estado E). Al terminar mata el grupo y espera con límite.
