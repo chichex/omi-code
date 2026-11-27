@@ -28,11 +28,12 @@ export function lastCompleteMs(state: Workflow, command: string, setups: readonl
  return runsOf(state, command, setups).filter((r) => r.complete)
   .reduce<Run | undefined>((last, r) => !last || r.finishedAt >= last.finishedAt ? r : last, undefined)?.ms;
 }
-/** Sin historia, es pesado un gate o un setup; con historia, si alguna corrida tardó 30 s o más, también una interrumpida. */
+/** Pesado si alguna corrida tardó 30 s o más, también una interrumpida. Sólo una corrida completa prueba que es liviano:
+ * sin ninguna (sin historia o sólo cortes), es pesado un gate o un setup. */
 export function heavyCheck(state: Workflow, kind: EvidenceKind | "setup", command: string, setups: readonly SetupRun[] = []): boolean {
  const runs = runsOf(state, command, setups);
- if (!runs.length) return kind === "gate" || kind === "setup";
- return runs.reduce((max, r) => Math.max(max, r.ms), 0) >= HEAVY_CHECK_MS;
+ if (runs.some((r) => r.ms >= HEAVY_CHECK_MS)) return true;
+ return !runs.some((r) => r.complete) && (kind === "gate" || kind === "setup");
 }
 const margin = (knownMs: number) => Math.min(MAX_CHECK_TIMEOUT_SECONDS, Math.ceil(knownMs * 1.5 / 1000));
 /** Un timeout menor que 1,5× la última corrida completa sube a ese piso, con tope de 1800 s, y lo dice. */

@@ -97,3 +97,13 @@ test("check_timing la última corrida completa de un setup de la sesión da el p
  assert.equal(lastCompleteMs(later, "npm test", [setup("npm test", 260_000, true, T0 + 1000_000)]), 260_000, "la más reciente gana, sea gate o setup");
  assert.match(timeoutNote(240, lastCompleteMs(empty, "npm test", [setup("npm test", 400_000)])), /timeoutSeconds: 600\.$/, "la sugerencia tras un corte usa lo medido como setup");
 });
+
+// Review del incidente (ronda 2, queue-2-interrumpida-corta-vuelve-liviano): una corrida interrumpida corta (un Esc a los 5 s,
+// un timeoutSeconds de 20) no dice cuánto tarda el comando, pero lo volvía liviano y npm test dejaba de esperar turno.
+test("check_timing sólo una corrida completa prueba que un comando es liviano; una interrumpida corta no", () => {
+ assert.equal(heavyCheck(workflow([run("npm test", 5000, "interrupted")]), "gate", "npm test"), true, "un gate interrumpido a los 5 s sigue pesado");
+ assert.equal(heavyCheck(workflow([]), "setup", "npm test", [setup("npm test", 20_000, false)]), true, "un setup cortado a los 20 s también");
+ assert.equal(heavyCheck(workflow([run("npm test", 5000, "interrupted")]), "verification", "npm test"), false, "sin corrida completa vale la regla sin historia");
+ assert.equal(heavyCheck(workflow([run("npm test", 5000, "interrupted"), run("npm test", 8000, "passed")]), "gate", "npm test"), false, "con una completa corta, liviano");
+ assert.equal(heavyCheck(workflow([run("npm test", 5000, "passed"), run("npm test", 40_000, "interrupted")]), "gate", "npm test"), true, "una interrumpida de 30 s o más sigue contando");
+});
