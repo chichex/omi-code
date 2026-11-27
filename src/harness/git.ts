@@ -14,9 +14,9 @@ const diffFlags = ["--no-ext-diff", "--no-textconv", "--no-renames", "--color=ne
 const GIT_ENV = { GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat" };
 const BASE_FILE_BYTES = 1024 * 1024;
 
-export async function gitRead(checkout: Checkout, args: string[], runner: Runner, signal?: AbortSignal): Promise<string> {
+export async function gitRead(checkout: Checkout, args: string[], runner: Runner, signal?: AbortSignal, config: readonly string[] = []): Promise<string> {
  signal?.throwIfAborted();
- const result = await runner.run("git", ["-c", "core.fsmonitor=false", "-C", checkout.root, ...args], {
+ const result = await runner.run("git", ["-c", "core.fsmonitor=false", ...config.flatMap(c => ["-c", c]), "-C", checkout.root, ...args], {
   env: GIT_ENV, ...(signal ? { signal } : {}),
  });
  signal?.throwIfAborted();
@@ -109,7 +109,8 @@ export async function validateReferences(checkout: Checkout, references: Explora
 // " ", "+", "-", una barra invertida o "@", así que "diff --git " sólo puede abrir el encabezado de un archivo.
 export async function readWorkflowDiffFiles(checkout: Checkout, runner: Runner = processRunner, signal?: AbortSignal): Promise<string[]> {
  await inspectCheckout(checkout, runner, signal);
- const files = (await gitRead(checkout, ["diff", ...diffFlags, checkout.baseCommit, "--"], runner, signal)).split(/^(?=diff --git )/m).filter(Boolean);
+ // Con core.quotePath=false, el lente ve las rutas crudas, como las compara la convergencia (changedPaths y treePaths).
+ const files = (await gitRead(checkout, ["diff", ...diffFlags, checkout.baseCommit, "--"], runner, signal, ["core.quotePath=false"])).split(/^(?=diff --git )/m).filter(Boolean);
  const root = await realpath(checkout.root);
  for (const path of paths(await gitRead(checkout, ["ls-files", "--others", "--exclude-standard", "-z"], runner, signal)).sort()) {
   const target = await localPath(root, path); const entry = await lstat(target);
