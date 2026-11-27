@@ -13,7 +13,7 @@ import type { Runner } from "../core/exec.ts";
 import type { Review, Workflow } from "./model.ts";
 import { changedPaths, treePaths, type CheckoutSnapshot } from "./git.ts";
 import { prefixed, type LensResult } from "./lenses.ts";
-import { securityBlockers, severitiesOf, unacceptedBlockers } from "./security-blockers.ts";
+import { acceptedRisksOf, securityBlockers, severitiesOf, unacceptedBlockers } from "./security-blockers.ts";
 
 export const SECURITY_DOWNGRADED = "bajado a aviso: archivo sin cambios desde la revisión anterior";
 export const SECURITY_ACCEPTED_REPEAT = "bajado a aviso: repite en un archivo sin cambios un riesgo que aceptó una persona";
@@ -87,13 +87,22 @@ function resolvedFiles(blockers: readonly string[], known: readonly string[]): S
 // de parte ni espacios de más.
 export interface SecurityComparison { baseline: Review; changed: ReadonlySet<string>; tree: ReadonlySet<string>; blockerFiles: ReadonlySet<string>; accepted: ReadonlySet<string> }
 const sameText = (text: string): string => text.replace(/^\s*parte \d+\/\d+ · /, "").replace(/\s+/g, " ").trim();
+// El texto que aceptó una persona, sin los prefijos que pone el host: el de parte y el de repetido.
+const REPEAT_PREFIX = `${SECURITY_ACCEPTED_REPEAT} · `;
+const acceptedText = (text: string): string => { const same = sameText(text); return same.startsWith(REPEAT_PREFIX) ? sameText(same.slice(REPEAT_PREFIX.length)) : same; };
+// Los textos aceptados que la base ya bajó como repetidos: su prefijo lo pone el host y el texto lo aceptó una persona.
+function carriedAccepted(state: Workflow, baseline: Review): string[] {
+ const accepted = new Set(acceptedRisksOf(state).flatMap(a => a.findings).map(sameText));
+ return baseline.findings.filter(f => sameText(f).startsWith(REPEAT_PREFIX)).map(acceptedText).filter(f => accepted.has(f));
+}
 /** Qué cambió desde la revisión anterior. Sin base no hay nada que comparar; si no se puede comparar, sólo una nota. */
 export async function securityComparison(state: Workflow, snapshot: Pick<CheckoutSnapshot, "head" | "fingerprint">, runner: Runner, signal?: AbortSignal): Promise<{ comparison?: SecurityComparison; note?: string }> {
  const baseline = securityBaseline(state);
  if (!baseline) return {};
  if (baseline.partial) return { note: PARTIAL_BASELINE };
- // Todos los blockers de la base, también los que aceptó una persona: los dos tienen que citar su archivo.
- const blockers = securityBlockers(baseline), pending = new Set(unacceptedBlockers(state, baseline));
+ // Todos los blockers de la base, también los que aceptó una persona: los dos tienen que citar su archivo. Lo aceptado que ya
+ // bajó como repetido en la base (un aviso con ese prefijo) sigue contando si una persona aceptó ese texto en esta vuelta.
+ const blockers = [...securityBlockers(baseline), ...carriedAccepted(state, baseline)], pending = new Set(unacceptedBlockers(state, baseline));
  if (blockers.some(text => findingFile(text) === null)) return { note: NO_BLOCKER_FILE };
  // Sobre el mismo contenido no cambió nada: no hace falta el commit ni el diff, pero sí el árbol de HEAD.
  const same = baseline.fingerprint === snapshot.fingerprint;
@@ -115,10 +124,10 @@ const clip = (text: string): string => text.length <= MAX_PREVIOUS_TEXT ? text :
 /** Lo que el lente ve de su revisión anterior: sus hallazgos, con los blockers primero, y los archivos cambiados. */
 export function previousMaterial(c: SecurityComparison) {
  const severities = c.baseline.verdict === "fail" ? severitiesOf(c.baseline) : [];
- // Un texto aceptado va entero: el lente lo tiene que poder repetir exacto para que el host lo reconozca.
+ // Un texto aceptado va entero y sin los prefijos del host: el lente lo tiene que poder repetir exacto.
  const all = c.baseline.findings.map((text, i) => {
-  const accepted = c.accepted.has(sameText(text));
-  return { blocker: severities[i] === "blocker", ...(accepted ? { accepted: true } : {}), text: accepted ? text : clip(text) };
+  const accepted = c.accepted.has(acceptedText(text));
+  return { blocker: severities[i] === "blocker", ...(accepted ? { accepted: true } : {}), text: accepted ? acceptedText(text) : clip(text) };
  });
  const findings = [...all.filter(f => f.blocker), ...all.filter(f => !f.blocker)];
  const changedFiles = [...c.changed].sort();
@@ -143,7 +152,7 @@ export function convergeSecurity(result: LensResult, c: SecurityComparison): { r
  let downgraded = 0;
  const items = securityItems(result).map((item): Item => {
   // Todo el texto, no sólo el primer tramo: el disparador puede estar en un archivo cambiado citado después.
-  const file = findingFile(item.text), repeat = c.accepted.has(sameText(item.text));
+  const file = findingFile(item.text), repeat = c.accepted.has(acceptedText(item.text));
   // Un texto aceptado vale como lo escribió la persona: una ruta corta («store.ts:22») se resuelve contra el árbol.
   const inTree = (path: string) => repeat ? [...c.tree].some(t => sameFile(t, path)) : c.tree.has(path);
   const touched = (path: string) => repeat ? [...c.changed].some(t => sameFile(t, path)) : c.changed.has(path);
