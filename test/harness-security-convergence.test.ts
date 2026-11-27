@@ -5,7 +5,7 @@ import { test } from "node:test";
 import type { Runner } from "../src/core/exec.ts";
 import { createWorkflow, transition } from "../src/harness/state.ts";
 import { FAIL_WITHOUT_FINDINGS, securityBlocks } from "../src/harness/security-blockers.ts";
-import { convergeSecurity, findingFile, previousMaterial, reviewedCommit, SECURITY_DOWNGRADED, securityBaseline, securityComparison, type SecurityComparison } from "../src/harness/security-convergence.ts";
+import { convergeSecurity, findingFile, findingPaths, previousMaterial, reviewedCommit, SECURITY_DOWNGRADED, securityBaseline, securityComparison, type SecurityComparison } from "../src/harness/security-convergence.ts";
 import { parseSecurityResult } from "../src/tui/development-review.ts";
 import { sourceHash, type Evidence, type Exploration, type Lens, type Plan, type Review, type Workflow } from "../src/harness/model.ts";
 
@@ -110,6 +110,23 @@ test("security_convergence se mantiene el blocker en un archivo cambiado (a) o e
 	assert.equal(downgraded, 1);
 	assert.deepEqual(result.severities, ["blocker", "blocker", "aviso"]);
 	assert.deepEqual(result.findings.slice(0, 2), ["src/b.ts:1 · permiso nuevo", "`src/a.ts:9` · el permiso sigue abierto"]);
+});
+
+// Review del incidente (2026-11-26, bypass-2): la convergencia miraba sólo el primer archivo:línea. Con el sumidero en un
+// archivo sin cambios citado primero y el disparador en un archivo cambiado, el blocker bajaba a aviso.
+test("security_convergence mira todas las rutas que cita el hallazgo: si alguna cambió, es la de un blocker anterior o una con línea no está en HEAD, no baja", () => {
+	const kept = [
+		blocker("src/c.ts:4 · el sumidero ejecuta lo que recibe; lo dispara src/b.ts:10 con datos del issue", "otro"),
+		blocker("src/c.ts:5 · el sumidero ejecuta lo que recibe; lo llama el handler nuevo de `src/b.ts`", "otro"),
+		blocker("src/c.ts:6 · el mismo permiso abierto que en src/a.ts", "otro"),
+		blocker("src/c.ts:7 · igual que vendor/x.js:3, que no está en el repo", "otro"),
+		blocker("src/c.ts:8 · lo usa (b.ts)", "otro"),
+	];
+	const control = blocker("src/c.ts:9 · el directorio queda abierto, también en src/c.ts:20", "otro");
+	const { result, downgraded } = convergeSecurity(security([...kept, control]), comparison());
+	assert.equal(downgraded, 1, "el control con rutas sólo sin cambios sí baja");
+	assert.deepEqual(result.severities, [...kept.map(() => "blocker"), "aviso"]);
+	assert.deepEqual(findingPaths("parte 1/2 · `src/a.ts:12–14` · lo dispara ./src/b.ts:3, ver (docs/x.md) y src/c.ts."), [{ path: "src/a.ts", line: true }, { path: "src/b.ts", line: true }, { path: "docs/x.md", line: false }, { path: "src/c.ts", line: false }]);
 });
 
 test("security_convergence un blocker que una persona aceptó en la base sigue contando para la regla (b): repetido en su archivo sin cambios, vuelve a bloquear", async () => {

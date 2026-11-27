@@ -3,7 +3,8 @@
 // archivo de un blocker anterior, baja a aviso. Así cada vuelta revisa lo que cambió y no reabre lo que ya se juzgó.
 // El veredicto nunca cambia: sólo la severidad. Todo lo calcula el host con Git; no hay campo nuevo en el estado.
 // Falla cerrado: no baja nada si no se puede comparar, ni un secreto o una exfiltración, ni un hallazgo sin clase, con
-// una clase inválida, sin archivo o con un archivo que no está en HEAD, ni uno cuyo texto nombra un secreto. Una base
+// una clase inválida, sin archivo o con un archivo que no está en HEAD, ni uno cuyo texto nombra un secreto, ni uno que
+// cita en cualquier parte de su texto un archivo cambiado o el de un blocker anterior. Una base
 // parcial (alguna parte sin juicio) no compara: lo que no se revisó no es «lo que ya se juzgó».
 // Lo que una persona aceptó cuenta como blocker de la base: lo aceptado vale sólo para ese contenido.
 import type { Runner } from "../core/exec.ts";
@@ -13,7 +14,7 @@ import { prefixed, type LensResult } from "./lenses.ts";
 import { securityBlockers, severitiesOf } from "./security-blockers.ts";
 
 export const SECURITY_DOWNGRADED = "bajado a aviso: archivo sin cambios desde la revisión anterior";
-export const SECURITY_PREVIOUS_NOTE = "previous es tu revisión de security anterior de este mismo trabajo, calculada por el harness: findings son tus hallazgos de entonces y changedFiles los archivos que cambiaron desde ese contenido. Decí primero si cada blocker anterior sigue. Un blocker nuevo de clase otro sólo bloquea si cae en un archivo de changedFiles o en el archivo de un blocker anterior; si no, el harness lo baja a aviso. Un secreto o una exfiltración bloquean siempre. Citá el archivo donde está el problema.";
+export const SECURITY_PREVIOUS_NOTE = "previous es tu revisión de security anterior de este mismo trabajo, calculada por el harness: findings son tus hallazgos de entonces y changedFiles los archivos que cambiaron desde ese contenido. Decí primero si cada blocker anterior sigue. Un blocker nuevo de clase otro sólo bloquea si cae en un archivo de changedFiles o en el archivo de un blocker anterior; si no, el harness lo baja a aviso. Un secreto o una exfiltración bloquean siempre. Citá con archivo:línea cada archivo del escenario: donde está el problema y donde se dispara.";
 const NO_COMPARISON = "sin comparación con la revisión anterior: no se baja ningún blocker";
 const NO_BLOCKER_FILE = "sin comparación con la revisión anterior: un blocker anterior no cita su archivo; no se baja ningún blocker";
 const PARTIAL_BASELINE = "sin comparación con la revisión anterior: no revisó todas las partes del cambio; no se baja ningún blocker";
@@ -39,6 +40,20 @@ export function findingFile(text: string): string | null {
  }
  return null;
 }
+
+/** Las rutas que cita el hallazgo en todo su texto: cada «archivo:línea» (line) y cada palabra con forma de ruta. */
+export function findingPaths(text: string): { path: string; line: boolean }[] {
+ const paths: { path: string; line: boolean }[] = [];
+ for (const word of text.split(/[\s`"'()[\]{}<>,;·]+/)) {
+  const match = /^(?:\.\/)?([^:]+?)(:\d.*)?[.:]*$/.exec(word);
+  const path = match?.[1];
+  if (path && /^[\w@~+./-]+$/.test(path) && /[A-Za-z]/.test(path) && (path.includes("/") || /\.[A-Za-z0-9]+$/.test(path))) paths.push({ path, line: match[2] !== undefined });
+ }
+ return paths;
+}
+/** La misma ruta escrita completa o corta: «store.ts» es «src/harness/store.ts». */
+const sameFile = (a: string, b: string): boolean => a === b || a.endsWith(`/${b}`) || b.endsWith(`/${a}`);
+const cites = (paths: readonly { path: string }[], files: ReadonlySet<string>): boolean => paths.some(p => [...files].some(f => sameFile(p.path, f)));
 
 export interface SecurityComparison { baseline: Review; changed: ReadonlySet<string>; tree: ReadonlySet<string>; blockerFiles: ReadonlySet<string> }
 /** Qué cambió desde la revisión anterior. Sin base no hay nada que comparar; si no se puede comparar, sólo una nota. */
@@ -89,8 +104,10 @@ function withSecurityItems(result: LensResult, items: Item[]): LensResult {
 export function convergeSecurity(result: LensResult, c: SecurityComparison): { result: LensResult; downgraded: number } {
  let downgraded = 0;
  const items = securityItems(result).map((item): Item => {
-  const file = findingFile(item.text);
-  const keep = !item.blocker || !item.downgradable || SECRET.test(item.text) || file === null || !c.tree.has(file) || c.changed.has(file) || c.blockerFiles.has(file);
+  // Todas las rutas del texto, no sólo la primera: el disparador puede estar en un archivo cambiado citado después.
+  const file = findingFile(item.text), paths = findingPaths(item.text);
+  const keep = !item.blocker || !item.downgradable || SECRET.test(item.text) || file === null || !c.tree.has(file)
+   || paths.some(p => p.line && !c.tree.has(p.path)) || cites(paths, c.changed) || cites(paths, c.blockerFiles);
   if (keep) return item;
   downgraded++;
   return { ...item, blocker: false, text: prefixed(`${SECURITY_DOWNGRADED} · `, item.text) };
