@@ -17,11 +17,22 @@ export function latestChecks(state: Workflow, fingerprint: string): Evidence[] {
  return [...new Map(runs.map(e => [`${e.kind}:${e.kind === "gate" ? e.command : e.caseId}`, e])).values()];
 }
 const MISSING_COMMAND = "el comando no existe o no es ejecutable (exit 126 o 127): no es un rojo del cambio. Si es un gate, corregí el comando (ese no cuenta como gate); si es un D de la receta, pausá con el motivo: hay que corregir la receta";
+const CAPPED = "el D o el gate se cortó con el tope del host (1800 s): más tiempo no hay y cuenta como rojo. amend no lo corrige: usá retry. Si es un gate, partí el comando en partes más chicas; si es un D, el comando lo fija la receta: si no entra en el tope, pausá con el motivo";
 const RERUN = "el D o el gate quedó interrumpido (sin código, por señal o por timeout): no es un rojo del cambio; volvé a correrlo con el timeoutSeconds que sugiere OMI. Si vuelve a morir por la misma señal (exit 128 o más) sobre este contenido, es un crash del cambio y cuenta como rojo";
 // Comando ausente o interrumpido no es un rojo, igual en amend y retry; roundRed sí: con el tope del host no hay más tiempo
 // y un crash que se repite da lo mismo cada vez.
-export const notRedReason = (pending: readonly Evidence[]): string => pending.some(missingCommand) ? MISSING_COMMAND : RERUN;
-export const roundRed = (state: Workflow, e: Evidence): boolean => correctable(state, e) || e.outcome === "interrupted" && e.exitCode === null && Date.parse(e.finishedAt) - Date.parse(e.startedAt) >= MAX_CHECK_TIMEOUT_SECONDS * 1000;
+export const notRedReason = (pending: readonly Evidence[]): string => pending.some(cappedTimeout) ? CAPPED : pending.some(missingCommand) ? MISSING_COMMAND : RERUN;
+export const roundRed = (state: Workflow, e: Evidence): boolean => correctable(state, e) || cappedTimeout(e);
+// La salida que guarda el host termina con esta marca sólo si Pi lo cortó con el tope: la duración sola no alcanza, porque
+// un Esc o una laptop suspendida también dejan 1800 s de reloj sin código.
+const CAPPED_MARK = `\n[OMI: cortado por el tope del host de ${MAX_CHECK_TIMEOUT_SECONDS} s]`;
+const MAX_OUTPUT = 12_000;
+/** La salida que se guarda: sus últimos 12.000 caracteres y, si Pi lo cortó con el tope, la marca al final. */
+export function recordedOutput(result: { output: string; timedOut?: true }, seconds: number): string {
+ const mark = result.timedOut && seconds >= MAX_CHECK_TIMEOUT_SECONDS ? CAPPED_MARK : "";
+ return result.output.slice(-(MAX_OUTPUT - mark.length)) + mark;
+}
+const cappedTimeout = (e: Evidence): boolean => e.outcome === "interrupted" && e.exitCode === null && e.output.endsWith(CAPPED_MARK) && Date.parse(e.finishedAt) - Date.parse(e.startedAt) >= MAX_CHECK_TIMEOUT_SECONDS * 1000;
 /** Un crash del cambio: el D o el gate murió por la misma señal (exit 128 o más) las dos últimas veces sobre este contenido. */
 export function repeatedCrash(state: Workflow, e: Evidence): boolean {
  if (e.outcome !== "interrupted" || e.exitCode === null || e.exitCode < 128) return false;

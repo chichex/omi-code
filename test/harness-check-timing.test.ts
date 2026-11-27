@@ -46,7 +46,11 @@ test("check_timing al cortarse por tiempo sugiere el doble del usado o 1,5× lo 
  assert.match(timeoutNote(240, 400_000), /timeoutSeconds: 600\.$/, "1,5× lo conocido si supera el doble");
  assert.match(timeoutNote(240, 100_000), /timeoutSeconds: 480\.$/, "el doble si supera 1,5× lo conocido");
  assert.match(timeoutNote(1200, undefined), /timeoutSeconds: 1800\.$/, "con tope de 1800");
- assert.equal(timeoutNote(1800, 1_500_000), "Se cortó por tiempo a los 1800 s, el tope del host. No cuenta como corrida completa: quedó interrumpida. Partí el comando en partes más chicas.");
+ // Ronda 3 (queue-3-tope-1800-instrucciones-cruzadas): con el tope ya usado, la nota dice lo mismo que el reducer y amend.
+ assert.equal(timeoutNote(1800, 1_500_000), "Se cortó por tiempo a los 1800 s, el tope del host: más tiempo no hay. Partí el comando en partes más chicas.");
+ assert.equal(timeoutNote(1800, 1_500_000, "gate"), "Se cortó por tiempo a los 1800 s, el tope del host: más tiempo no hay. Cuenta como rojo y pide retry. Partí el comando en partes más chicas.");
+ assert.equal(timeoutNote(1800, undefined, "verification"), "Se cortó por tiempo a los 1800 s, el tope del host: más tiempo no hay. Cuenta como rojo y pide retry. El comando lo fija la receta: si no entra en el tope, pausá con el motivo.");
+ assert.doesNotMatch(timeoutNote(1800, undefined, "gate"), /No cuenta|volvé a correrlo/i);
 });
 
 test("check_timing es pesado un gate o un setup sin historia, o cualquier comando que alguna vez tardó 30 s o más", () => {

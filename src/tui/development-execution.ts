@@ -8,6 +8,7 @@ import type { Evidence, EvidenceKind, Workflow } from "../harness/model.ts";
 import { commandAuthorization } from "../harness/authorization.ts";
 import { afterDraftCheckError } from "../harness/after-draft-guide.ts";
 import { expectedFailure, isApproved, recipeApprovalHash, successful } from "../harness/state.ts";
+import { recordedOutput } from "../harness/check-reds.ts";
 import { inspectCheckout, assertStepCommit, type CheckoutSnapshot } from "../harness/git.ts";
 import { DEFAULT_COMMAND_TIMEOUT_SECONDS, runWorkflowCommand, type WorkflowCommandResult } from "../harness/commands.ts";
 import { takeCheckTurn, type CheckTurn } from "../harness/check-queue.ts";
@@ -77,7 +78,7 @@ export async function executeCheck(session: DevelopmentSession, input: CheckInpu
 		startedAt = session.now(); session.emit(`${input.kind} · ${input.caseId ?? input.stepId ?? "comando"} · ${input.command}`);
 		result = await run(state.checkout, input.command, signal, timeout.seconds);
 	} finally { await turn?.release(); }
-	if (result.timedOut) notes.push(timeoutNote(timeout.seconds, known));
+	if (result.timedOut) notes.push(timeoutNote(timeout.seconds, known, input.kind));
 	if (input.kind === "setup") {
 		const finishedAt = Date.parse(session.now()), ms = finishedAt - Date.parse(startedAt);
 		session.setups.record(state.id, { command: input.command, ms, finishedAt, complete: !result.timedOut && !result.interrupted && !signal.aborted && result.exitCode !== null && result.exitCode < 128 });
@@ -96,7 +97,7 @@ export async function executeCheck(session: DevelopmentSession, input: CheckInpu
 	const evidence: Evidence = {
 		id: randomUUID(), kind: input.kind, command: input.command, stepId: input.stepId ?? null, caseId: input.caseId ?? null,
 		exitCode: result.exitCode, outcome: interrupted ? "interrupted" : result.exitCode === 0 ? "passed" : "failed",
-		output: result.output.slice(-12000), fingerprint: after.fingerprint, head: after.head, startedAt, finishedAt: session.now(),
+		output: recordedOutput(result, timeout.seconds), fingerprint: after.fingerprint, head: after.head, startedAt, finishedAt: session.now(),
 	};
 	const invalidAttempt = input.kind === "red" && !expectedFailure(evidence) || input.kind === "green" && !successful(evidence) || input.kind === "reproduction" && !successful(evidence) && !expectedFailure(evidence);
 	await session.apply({ type: invalidAttempt ? "check_failed" : "evidence", evidence }, ctx); return { evidence, notes };

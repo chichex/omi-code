@@ -42,10 +42,15 @@ export function plannedTimeout(requested: number, knownMs: number | undefined): 
  const seconds = margin(knownMs); const cap = seconds === MAX_CHECK_TIMEOUT_SECONDS ? `, con tope de ${MAX_CHECK_TIMEOUT_SECONDS} s` : "";
  return { seconds, note: `timeoutSeconds ${requested} → ${seconds}: la última corrida completa de este comando tardó ${Math.round(knownMs / 1000)} s; el host deja 1,5× de margen${cap}.` };
 }
-/** Qué decir de un check que Pi cortó por tiempo: el doble del usado o 1,5× lo conocido, con tope de 1800 s. */
-export function timeoutNote(used: number, knownMs: number | undefined): string {
+/** Qué decir de un check que Pi cortó por tiempo: el doble del usado o 1,5× lo conocido, con tope de 1800 s. Con el tope ya
+ * usado, un D o un gate cuentan como rojo y piden retry, como dice el reducer (check-reds). */
+export function timeoutNote(used: number, knownMs: number | undefined, kind?: EvidenceKind | "setup"): string {
  const cut = "No cuenta como corrida completa: quedó interrumpida.";
- if (used >= MAX_CHECK_TIMEOUT_SECONDS) return `Se cortó por tiempo a los ${used} s, el tope del host. ${cut} Partí el comando en partes más chicas.`;
+ if (used >= MAX_CHECK_TIMEOUT_SECONDS) {
+  const red = kind === "gate" || kind === "verification" ? " Cuenta como rojo y pide retry." : "";
+  const next = kind === "verification" ? "El comando lo fija la receta: si no entra en el tope, pausá con el motivo." : "Partí el comando en partes más chicas.";
+  return `Se cortó por tiempo a los ${used} s, el tope del host: más tiempo no hay.${red} ${next}`;
+ }
  const next = Math.min(MAX_CHECK_TIMEOUT_SECONDS, Math.max(used * 2, knownMs === undefined ? 0 : margin(knownMs)));
  return `Se cortó por tiempo a los ${used} s. ${cut} Volvé a correrlo con timeoutSeconds: ${next}.`;
 }

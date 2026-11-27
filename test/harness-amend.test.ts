@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { createWorkflow, transition } from "../src/harness/state.ts";
 import { lensStatuses } from "../src/harness/lenses.ts";
 import { renderIssueSection } from "../src/harness/issue-section.ts";
+import { recordedOutput } from "../src/harness/check-reds.ts";
 import { sourceHash, type Evidence, type Exploration, type Lens, type Plan, type Review, type Workflow } from "../src/harness/model.ts";
 
 const at = "2026-01-01T00:00:00Z";
@@ -306,7 +307,8 @@ test("harness_retry un D o un gate interrumpido o con comando ausente se vuelve 
 	const blocker = lens(failedD(verify(verifying(), "tree"), "tree", interrupted), review("security", "tree", "fail", ["src/a.ts:1 · secreto"]));
 	assert.equal(retryOn(blocker, "tree").round, 1);
 	// Cortado con el tope del host (1800 s), volver a correrlo no le da más tiempo: cuenta como rojo y retry sigue.
-	const capped = failedGate(cleanLenses(verify(verifying(), "tree")), "tree", "npm test", { ...interrupted, startedAt: "2026-01-01T00:00:00Z", finishedAt: "2026-01-01T00:30:01Z" });
+	// La salida es la que guarda el host cuando Pi lo cortó con el tope (ronda 3: la marca reemplaza adivinar por la duración).
+	const capped = failedGate(cleanLenses(verify(verifying(), "tree")), "tree", "npm test", { ...interrupted, output: recordedOutput({ output: "out", timedOut: true }, 1800), startedAt: "2026-01-01T00:00:00Z", finishedAt: "2026-01-01T00:30:01Z" });
 	assert.equal(retryOn(capped, "tree").round, 1);
 	// Sin el contenido limpio (checkout sucio), retry no puede saber qué vale y sigue la regla de toda la vuelta.
 	assert.equal(send(gate, { type: "retry", reason: "checkout sucio" }).round, 1);
@@ -342,4 +344,20 @@ test("harness_amend tras un amend por un crash repetido, verified exige repetir 
 	const fixed = lens(verify(implement(amend(twice, "tree", "Arreglar el crash"), "C2", "tree2"), "tree2"), review("security", "tree2"));
 	assert.throws(() => verified(fixed, "tree2"), /gate fallido: npm run test:native/, "el crash de tree manda mientras no se repita");
 	assert.equal(verified(passedGate(fixed, "tree2", "npm run test:native"), "tree2").phase, "pr", "repetido y verde, sigue");
+});
+
+// Review del incidente (ronda 3, queue-3-tope-por-reloj-de-pared y queue-3-tope-1800-instrucciones-cruzadas): el tope se
+// deducía por 1800 s de reloj de pared, así que un Esc o una laptop suspendida contaban como rojo. Y con un corte de verdad,
+// amend decía «volvé a correrlo con el timeoutSeconds que sugiere OMI», la nota «partí el comando» y el reducer abría retry.
+test("harness_retry sólo un corte que el host marcó con el tope cuenta como rojo, y amend dice lo mismo que el reducer", () => {
+	const interrupted = { exitCode: null, outcome: "interrupted", startedAt: "2026-01-01T00:00:00Z", finishedAt: "2026-01-01T00:40:00Z" } as const;
+	const suspended = failedGate(cleanLenses(verify(verifying(), "tree")), "tree", "npm test", { ...interrupted, output: recordedOutput({ output: "out" }, 600) });
+	assert.throws(() => retryOn(suspended, "tree"), /interrumpido[^:]*: no es un rojo del cambio; volvé a correrlo/, "40 min de reloj sin la marca del host: se vuelve a correr");
+	const capped = failedGate(cleanLenses(verify(verifying(), "tree")), "tree", "npm test", { ...interrupted, output: recordedOutput({ output: "out", timedOut: true }, 1800) });
+	assert.equal(retryOn(capped, "tree").round, 1, "con la marca, cuenta como rojo");
+	assert.throws(() => amend(capped), /se cortó con el tope del host \(1800 s\): más tiempo no hay y cuenta como rojo\. amend no lo corrige: usá retry/);
+	assert.throws(() => amend(capped), (error: Error) => !/volvé a correrlo/.test(error.message), "no manda a volver a correrlo");
+	assert.ok(!recordedOutput({ output: "x", timedOut: true }, 600).includes("tope del host"), "un corte con un timeout menor no lleva la marca");
+	const long = recordedOutput({ output: "y".repeat(20_000), timedOut: true }, 1800);
+	assert.equal(long.length, 12_000, "la salida guardada sigue con su tope"); assert.match(long, /tope del host de 1800 s\]$/);
 });
