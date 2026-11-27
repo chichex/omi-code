@@ -36,6 +36,7 @@ import type { LifecyclePorts } from "./development-lifecycle.ts";
 import { LifecycleContinuityHost } from "./development-lifecycle-continuity.ts";
 import { LENS_CALL_POLICY, type LensCallPolicy } from "./development-lens-call.ts";
 import { CHECK_TURN_POLICY, type CheckTurnPolicy } from "../harness/check-queue.ts";
+import { SetupHistory } from "../harness/check-timing.ts";
 
 export const DEVELOPMENT_ANCHOR = "omi-development-workflow";
 const AnchorSchema = Type.Object({ id: Type.String(), root: Type.String(), issue: Type.Integer({ minimum: 1 }), revision: Type.Integer({ minimum: 0 }), disabled: Type.Optional(Type.Boolean()) });
@@ -51,6 +52,8 @@ export class DevelopmentSession {
 	/** Una tool del harness cerró el turno a propósito (pausa, PR, un no de la persona): no se retoma solo. */
 	turnYielded = false;
 	readonly reads = new Map<string, ReadReceipt>();
+	/** Lo que tardó cada setup de la sesión: el estado no lo guarda y lo usan la cola de checks y el piso de timeout. */
+	readonly setups = new SetupHistory();
 	readonly runner: Runner;
 	readonly now: () => string;
 	/** Espera con Esc para cancelar: clasificar un pedido o leer la KB. */

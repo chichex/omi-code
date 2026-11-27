@@ -74,6 +74,24 @@ test("development_check_turn Esc mientras espera turno no corre el comando, no r
 	await other.release();
 });
 
+// Review del incidente (2026-11-26, queue-1-Q1): un setup nunca tenía historia y siempre esperaba turno, también un
+// npm ci de 5 s detrás de la suite de otro worktree. Sólo el primero de un comando espera; si fue rápido, el siguiente no.
+test("development_check_turn un setup espera el turno la primera vez; ya corrido y rápido, el siguiente no espera", async (t) => {
+	const f = await developmentFixture(t, { deps: { checkTurn: FAST } }); await f.start();
+	const command = "node -e 0";
+	let other = await otherWorktree(f);
+	const first = f.invoke("omi_workflow_check", { kind: "setup", command });
+	await until(() => waitingEvents(f).length > 0, "sin historia, el setup espera");
+	await other.release();
+	assert.equal((await first).isError, false);
+	other = await otherWorktree(f);
+	const before = waitingEvents(f).length;
+	const second = await Promise.race([f.invoke("omi_workflow_check", { kind: "setup", command }), sleep(3000).then(() => "esperó el turno")]);
+	await other.release();
+	assert.notEqual(second, "esperó el turno", "ya corrido y rápido, no espera");
+	assert.equal(waitingEvents(f).length, before, "no mostró espera");
+});
+
 test("development_check_turn un timeoutSeconds corto se sube a 1,5× la última corrida completa del mismo comando y la salida lo dice", async (t) => {
 	// Cada lectura del reloj del harness avanza 4 s: cada check registrado dura 4 s.
 	let clock = Date.now();

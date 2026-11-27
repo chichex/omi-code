@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { sourceHash, type Evidence, type Workflow } from "../src/harness/model.ts";
 import { createWorkflow } from "../src/harness/state.ts";
-import { heavyCheck, HEAVY_CHECK_MS, lastCompleteMs, MAX_CHECK_TIMEOUT_SECONDS, plannedTimeout, timeoutNote } from "../src/harness/check-timing.ts";
+import { heavyCheck, HEAVY_CHECK_MS, lastCompleteMs, MAX_CHECK_TIMEOUT_SECONDS, plannedTimeout, SetupHistory, type SetupRun, timeoutNote } from "../src/harness/check-timing.ts";
 
 const T0 = Date.parse("2026-11-26T03:00:00.000Z");
 let id = 0;
@@ -61,4 +61,25 @@ test("check_timing es pesado un gate o un setup sin historia, o cualquier comand
  assert.equal(heavyCheck(history, "verification", "npm run test:packaging"), true);
  assert.equal(heavyCheck(workflow([run("npm test", HEAVY_CHECK_MS - 1, "passed")]), "gate", "npm test"), false, "justo bajo 30 s");
  assert.equal(heavyCheck(workflow([run("npm test", 1000, "passed"), run("npm test", HEAVY_CHECK_MS, "passed")]), "gate", "npm test"), true, "alguna vez 30 s o más");
+});
+
+// Review del incidente (2026-11-26, queue-1-Q1): setup nunca se guarda como evidencia, así que nunca tenía historia y
+// siempre esperaba turno. Un npm ci de 5 s esperaba entero el npm test de otro worktree. Ahora el host recuerda en memoria
+// cada setup de la sesión: sólo el primero de un comando espera; después, si tardó menos de 30 s, ya no.
+const setup = (command: string, ms: number, complete = true, at = T0 + ++id * 1000_000): SetupRun => ({ command, ms, finishedAt: at + ms, complete });
+test("check_timing un setup con historia en la sesión sólo es pesado si alguna corrida tardó 30 s o más", () => {
+ const empty = workflow([]);
+ assert.equal(heavyCheck(empty, "setup", "npm ci", [setup("npm ci", 5000)]), false, "un npm ci rápido ya corrido no espera turno");
+ assert.equal(heavyCheck(empty, "setup", "npm ci", [setup("npm install", 5000)]), true, "la historia es del comando exacto");
+ assert.equal(heavyCheck(empty, "setup", "npm test", [setup("npm test", 230_000)]), true, "la suite como setup sigue siendo pesada");
+ assert.equal(heavyCheck(empty, "setup", "npm ci", [setup("npm ci", 40_000, false)]), true, "una interrumpida que ya tardó 40 s cuenta");
+ assert.equal(heavyCheck(empty, "gate", "npm test", [setup("npm test", 200_000)]), true, "y le sirve a un gate del mismo comando");
+ assert.equal(heavyCheck(empty, "gate", "npm run typecheck", [setup("npm run typecheck", 1500)]), false);
+ const history = new SetupHistory();
+ history.record("w1", setup("npm ci", 5000));
+ assert.deepEqual(history.of("w1").map((r) => r.command), ["npm ci"]);
+ assert.deepEqual(history.of("w2"), [], "por trabajo");
+ for (let i = 0; i < 60; i++) history.record("w1", setup(`cmd ${i}`, 10));
+ assert.equal(history.of("w1").length, 50, "con tope: guarda las últimas 50");
+ assert.equal(history.of("w1").at(-1)?.command, "cmd 59");
 });

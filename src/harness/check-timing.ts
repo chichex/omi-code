@@ -1,27 +1,36 @@
 // Cuánto tarda un check: sale de finishedAt − startedAt de la evidencia guardada, sin campos nuevos en el estado.
-// Un setup no se guarda: su duración se conoce sólo si el mismo comando corrió con otra etiqueta.
+// Un setup no se guarda en el estado: el host recuerda sus corridas en memoria, por trabajo, mientras dura la sesión
+// (SetupHistory). Al reabrir OMI se pierden, y el primer setup de cada comando vuelve a esperar turno.
 import type { EvidenceKind, Workflow } from "./model.ts";
 
 export const MAX_CHECK_TIMEOUT_SECONDS = 1800;
 /** Un comando que alguna vez tardó esto o más espera turno en la cola de checks del repo. */
 export const HEAVY_CHECK_MS = 30_000;
 interface Run { ms: number; finishedAt: number; complete: boolean }
+/** Una corrida de setup de esta sesión: complete si terminó sola, sin corte, señal ni cancelación. */
+export interface SetupRun extends Run { command: string }
+const MAX_SETUP_RUNS = 50;
+/** Las corridas de setup por trabajo, sólo en memoria y con tope: el estado no las guarda. */
+export class SetupHistory {
+ readonly #runs = new Map<string, readonly SetupRun[]>();
+ of(workflowId: string): readonly SetupRun[] { return this.#runs.get(workflowId) ?? []; }
+ record(workflowId: string, run: SetupRun): void { this.#runs.set(workflowId, [...this.of(workflowId), run].slice(-MAX_SETUP_RUNS)); }
+}
 
-// De cualquier vuelta, también las archivadas, y del mismo comando exacto.
-function runsOf(state: Workflow, command: string): Run[] {
- return [...(state.attempts ?? []).flatMap((a) => a.evidence), ...state.evidence]
-  .filter((e) => e.command === command)
-  .map((e) => ({ ms: Date.parse(e.finishedAt) - Date.parse(e.startedAt), finishedAt: Date.parse(e.finishedAt), complete: e.outcome !== "interrupted" }))
-  .filter((r) => Number.isFinite(r.ms) && r.ms >= 0);
+// De cualquier vuelta, también las archivadas, y de los setup de la sesión, siempre del mismo comando exacto.
+function runsOf(state: Workflow, command: string, setups: readonly SetupRun[]): Run[] {
+ const evidence = [...(state.attempts ?? []).flatMap((a) => a.evidence), ...state.evidence].filter((e) => e.command === command)
+  .map((e) => ({ ms: Date.parse(e.finishedAt) - Date.parse(e.startedAt), finishedAt: Date.parse(e.finishedAt), complete: e.outcome !== "interrupted" }));
+ return [...evidence, ...setups.filter((r) => r.command === command)].filter((r) => Number.isFinite(r.ms) && r.ms >= 0);
 }
 /** La duración de la última corrida que terminó sola (pasó o falló); nunca la de una interrumpida. */
-export function lastCompleteMs(state: Workflow, command: string): number | undefined {
- return runsOf(state, command).filter((r) => r.complete)
+export function lastCompleteMs(state: Workflow, command: string, setups: readonly SetupRun[] = []): number | undefined {
+ return runsOf(state, command, setups).filter((r) => r.complete)
   .reduce<Run | undefined>((last, r) => !last || r.finishedAt >= last.finishedAt ? r : last, undefined)?.ms;
 }
 /** Sin historia, es pesado un gate o un setup; con historia, si alguna corrida tardó 30 s o más, también una interrumpida. */
-export function heavyCheck(state: Workflow, kind: EvidenceKind | "setup", command: string): boolean {
- const runs = runsOf(state, command);
+export function heavyCheck(state: Workflow, kind: EvidenceKind | "setup", command: string, setups: readonly SetupRun[] = []): boolean {
+ const runs = runsOf(state, command, setups);
  if (!runs.length) return kind === "gate" || kind === "setup";
  return runs.reduce((max, r) => Math.max(max, r.ms), 0) >= HEAVY_CHECK_MS;
 }

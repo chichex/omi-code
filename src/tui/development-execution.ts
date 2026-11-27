@@ -65,7 +65,7 @@ export async function executeCheck(session: DevelopmentSession, input: CheckInpu
 	const timeout = plannedTimeout(input.timeoutSeconds ?? DEFAULT_COMMAND_TIMEOUT_SECONDS, known);
 	const notes = timeout.note ? [timeout.note] : [];
 	// Antes de la foto: una espera larga no invalida el fingerprint y startedAt cuenta desde que corre.
-	const turn = heavyCheck(state, input.kind, input.command) ? await waitForCheckTurn(session, state, input, signal) : undefined;
+	const turn = heavyCheck(state, input.kind, input.command, session.setups.of(state.id)) ? await waitForCheckTurn(session, state, input, signal) : undefined;
 	if (turn?.notice) notes.push(turn.notice);
 	let before: CheckoutSnapshot; let startedAt: string; let result: WorkflowCommandResult;
 	try {
@@ -77,6 +77,10 @@ export async function executeCheck(session: DevelopmentSession, input: CheckInpu
 		result = await run(state.checkout, input.command, signal, timeout.seconds);
 	} finally { await turn?.release(); }
 	if (result.timedOut) notes.push(timeoutNote(timeout.seconds, known));
+	if (input.kind === "setup") {
+		const finishedAt = Date.parse(session.now()), ms = finishedAt - Date.parse(startedAt);
+		session.setups.record(state.id, { command: input.command, ms, finishedAt, complete: !result.timedOut && !result.interrupted && !signal.aborted && result.exitCode !== null && result.exitCode < 128 });
+	}
 	const after = await inspectCheckout(state.checkout, session.runner, session.lifecycle.signal);
 	const current = session.current(ctx);
 	if (current.id !== state.id || current.source.hash !== state.source.hash || recipeApprovalHash(current) !== recipeApprovalHash(state)) throw new Error("El pedido o la receta cambió durante el comando; su resultado no acredita este trabajo");
