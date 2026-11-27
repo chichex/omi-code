@@ -90,19 +90,18 @@ const sameText = (text: string): string => text.replace(/^\s*parte \d+\/\d+ · /
 // El texto que aceptó una persona, sin los prefijos que pone el host: el de parte y el de repetido.
 const REPEAT_PREFIX = `${SECURITY_ACCEPTED_REPEAT} · `;
 const acceptedText = (text: string): string => { const same = sameText(text); return same.startsWith(REPEAT_PREFIX) ? sameText(same.slice(REPEAT_PREFIX.length)) : same; };
-// Los textos aceptados que la base ya bajó como repetidos: su prefijo lo pone el host y el texto lo aceptó una persona.
-function carriedAccepted(state: Workflow, baseline: Review): string[] {
- const accepted = new Set(acceptedRisksOf(state).flatMap(a => a.findings).map(sameText));
- return baseline.findings.filter(f => sameText(f).startsWith(REPEAT_PREFIX)).map(acceptedText).filter(f => accepted.has(f));
-}
+// Lo aceptado que la base ya bajó como repetido (un aviso con el prefijo del host), sin los prefijos.
+const repeatedInBaseline = (baseline: Review): string[] => baseline.findings.filter(f => sameText(f).startsWith(REPEAT_PREFIX)).map(acceptedText);
 /** Qué cambió desde la revisión anterior. Sin base no hay nada que comparar; si no se puede comparar, sólo una nota. */
 export async function securityComparison(state: Workflow, snapshot: Pick<CheckoutSnapshot, "head" | "fingerprint">, runner: Runner, signal?: AbortSignal): Promise<{ comparison?: SecurityComparison; note?: string }> {
  const baseline = securityBaseline(state);
  if (!baseline) return {};
  if (baseline.partial) return { note: PARTIAL_BASELINE };
- // Todos los blockers de la base, también los que aceptó una persona: los dos tienen que citar su archivo. Lo aceptado que ya
- // bajó como repetido en la base (un aviso con ese prefijo) sigue contando si una persona aceptó ese texto en esta vuelta.
- const blockers = [...securityBlockers(baseline), ...carriedAccepted(state, baseline)], pending = new Set(unacceptedBlockers(state, baseline));
+ // Todos los blockers de la base, también los que aceptó una persona: los dos tienen que citar su archivo. Lo que ya bajó como
+ // repetido en la base cuenta siempre como blocker anterior, para la regla (b); como aceptado, sólo si una persona aceptó ese
+ // texto en esta vuelta (un retry borra la aceptación). Un prefijo falso sólo suma un archivo protegido: falla cerrado.
+ const repeated = repeatedInBaseline(baseline), acceptedNow = new Set(acceptedRisksOf(state).flatMap(a => a.findings).map(sameText));
+ const blockers = [...securityBlockers(baseline), ...repeated], pending = new Set(unacceptedBlockers(state, baseline));
  if (blockers.some(text => findingFile(text) === null)) return { note: NO_BLOCKER_FILE };
  // Sobre el mismo contenido no cambió nada: no hace falta el commit ni el diff, pero sí el árbol de HEAD.
  const same = baseline.fingerprint === snapshot.fingerprint;
@@ -113,7 +112,7 @@ export async function securityComparison(state: Workflow, snapshot: Pick<Checkou
   const tree = await treePaths(state.checkout, snapshot.head, runner, signal);
   const blockerFiles = resolvedFiles(blockers, [...tree, ...changed]);
   if (!blockerFiles) return { note: NO_BLOCKER_IN_TREE };
-  const accepted = new Set(blockers.filter(text => !pending.has(text)).map(sameText));
+  const accepted = new Set([...securityBlockers(baseline).filter(text => !pending.has(text)), ...repeated.filter(text => acceptedNow.has(text))].map(sameText));
   return { comparison: { baseline, changed: new Set(changed), tree: new Set(tree), blockerFiles, accepted } };
  } catch (error) {
   if (signal?.aborted) throw error;

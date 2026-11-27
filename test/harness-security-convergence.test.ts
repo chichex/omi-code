@@ -299,10 +299,13 @@ test("security_convergence lo aceptado sigue contando en el segundo amend: se re
 	assert.deepEqual(result.severities, ["aviso", "blocker"]);
 	assert.equal(result.findings[0], `${SECURITY_ACCEPTED_REPEAT} · ${accepted}`, "el texto aceptado se sigue reconociendo");
 	assert.deepEqual(previousMaterial(c).findings, [{ blocker: false, accepted: true, text: accepted }], "sin los prefijos del host");
-	// Un aviso con el prefijo cuyo texto ninguna persona aceptó en esta vuelta no cuenta como aceptado ni protege su archivo.
+	// Un aviso con el prefijo cuyo texto ninguna persona aceptó en esta vuelta no cuenta como aceptado. Ronda 4: sí cuenta como
+	// blocker anterior y protege su archivo (falla cerrado), así que el mismo texto sigue blocker y sin el rótulo de aceptado.
 	const forged = await twoAmends([`${SECURITY_ACCEPTED_REPEAT} · src/c.ts:9 · nadie lo aceptó`]);
-	assert.equal(forged.c.blockerFiles.has("src/c.ts"), false);
-	assert.deepEqual(convergeSecurity(security([blocker("src/c.ts:9 · nadie lo aceptó", "otro")]), forged.c).result.findings, [`${SECURITY_DOWNGRADED} · src/c.ts:9 · nadie lo aceptó`], "baja por la regla general, sin el rótulo de aceptado");
+	assert.equal(forged.c.accepted.size, 0);
+	assert.equal(forged.c.blockerFiles.has("src/c.ts"), true);
+	const again = convergeSecurity(security([blocker("src/c.ts:9 · nadie lo aceptó", "otro")]), forged.c).result;
+	assert.deepEqual([again.findings, again.severities], [["src/c.ts:9 · nadie lo aceptó"], ["blocker"]], "no baja: su archivo es el de un blocker anterior");
 });
 
 test("security_convergence lo aceptado vuelve a frenar si su archivo cambió o si un retry borró la aceptación", async () => {
@@ -322,6 +325,30 @@ test("security_convergence lo aceptado vuelve a frenar si su archivo cambió o s
 	assert.ok(retried);
 	assert.deepEqual([...retried.blockerFiles], ["src/a.ts"], "sin la aceptación, vuelve a ser blocker de la base");
 	assert.deepEqual(convergeSecurity(security([blocker(accepted, "otro")]), retried).result.severities, ["blocker"]);
+});
+
+// Ronda 4 (bypass-4-retry-tras-repetido-aceptado-pierde-regla-b, correctness-4-aceptado-tras-retry-desde-amend-baja-sin-persona):
+// tras el amend, Y guardó lo aceptado como aviso repetido. Un retry desde Y borraba la aceptación y, sobre Z, ese aviso ya no era
+// un blocker de la base: lo aceptado repetido y otro blocker en su archivo bajaban a aviso sin una persona.
+test("security_convergence tras un retry desde el contenido del amend, lo aceptado repetido vuelve a frenar y su archivo protege la regla (b)", async () => {
+	const accepted = "src/a.ts:1 · permiso abierto";
+	let s = implement(approved(), "C1", "tree1", sha("1"));
+	s = send(s, { type: "reviewed", review: review("security", "tree1", "fail", [accepted]) });
+	s = send(s, { type: "risk_accepted", fingerprint: "tree1", findings: [accepted], reason: "Preexistente en main" });
+	s = send(s, { type: "evidence", evidence: evidence("gate", "tree1", { exitCode: 1, outcome: "failed" }) });
+	s = send(s, { type: "amend", reason: "Arreglar el gate", fingerprint: "tree1" });
+	s = implement(s, "C2", "tree2", sha("2"));
+	s = send(s, { type: "reviewed", review: review("security", "tree2", "fail", ["src/b.ts:3 · ejecuta el body del issue", `${SECURITY_ACCEPTED_REPEAT} · ${accepted}`], { severities: ["blocker", "aviso"] }) });
+	s = send(s, { type: "retry", reason: "Cerrar el body", fingerprint: "tree2" });
+	assert.equal(s.round, 1, "el retry se aceptó");
+	assert.deepEqual(s.version === 2 ? s.acceptedRisks ?? [] : [], [], "retry borra la aceptación");
+	s = implement(s, "C3", "tree3", sha("3"));
+	const { comparison: c } = await securityComparison(s, { fingerprint: "tree3", head: sha("3") }, git({ diff: ["src/b.ts"], tree: TREE }).runner);
+	assert.ok(c); assert.equal(c.baseline.fingerprint, "tree2");
+	assert.deepEqual([...c.blockerFiles].sort(), ["src/a.ts", "src/b.ts"], "lo aceptado que bajó como repetido sigue siendo un blocker de la base");
+	assert.deepEqual([...c.accepted], [], "nadie lo aceptó en esta vuelta");
+	const { result, downgraded } = convergeSecurity(security([blocker(accepted, "otro"), blocker("src/a.ts:40 · arma un comando de shell con el título del issue", "otro")]), c);
+	assert.deepEqual([downgraded, result.severities], [0, ["blocker", "blocker"]]);
 });
 
 test("security_convergence falla cerrado: sin archivo, con un path que no está en HEAD, con un blocker anterior sin archivo o si Git no encuentra el commit anterior, no baja nada", async () => {
