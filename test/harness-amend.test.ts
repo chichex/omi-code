@@ -361,3 +361,19 @@ test("harness_retry sólo un corte que el host marcó con el tope cuenta como ro
 	const long = recordedOutput({ output: "y".repeat(20_000), timedOut: true }, 1800);
 	assert.equal(long.length, 12_000, "la salida guardada sigue con su tope"); assert.match(long, /tope del host de 1800 s\]$/);
 });
+
+// Review del incidente (ronda 4, replay-4-verified-repetilo-con-tope): verified decía «repetilo» para todo gate que no pasó.
+// Con el tope, repetirlo da el mismo corte después de otros 30 minutos; con un rojo o un crash repetido, lo corrige amend.
+test("harness_verified dice qué hacer con el gate según lo que fue: tope, rojo o interrumpido", () => {
+	const interrupted = { exitCode: null, outcome: "interrupted", startedAt: "2026-01-01T00:00:00Z", finishedAt: "2026-01-01T00:40:00Z" } as const;
+	const capped = failedGate(cleanLenses(verify(verifying(), "tree")), "tree", "npm test", { ...interrupted, output: recordedOutput({ output: "out", timedOut: true }, 1800) });
+	assert.throws(() => verified(capped, "tree"), /gate fallido: npm test: .*tope del host \(1800 s\).*usá retry/);
+	assert.throws(() => verified(capped, "tree"), (error: Error) => !/repetilo/.test(error.message), "no manda a repetir el corte");
+	const red = failedGate(cleanLenses(verify(verifying(), "tree")), "tree");
+	assert.throws(() => verified(red, "tree"), /gate fallido: npm run typecheck: .*corregilo con amend/);
+	const crash = { exitCode: 139, outcome: "interrupted" } as const;
+	const twice = failedGate(failedGate(cleanLenses(verify(verifying(), "tree")), "tree", "npm test", crash), "tree", "npm test", crash);
+	assert.throws(() => verified(twice, "tree"), /gate fallido: npm test: .*corregilo con amend/);
+	const once = failedGate(cleanLenses(verify(verifying(), "tree")), "tree", "npm test", { ...interrupted, output: recordedOutput({ output: "out" }, 600) });
+	assert.throws(() => verified(once, "tree"), /gate fallido: npm test: .*repetilo sobre este contenido/);
+});

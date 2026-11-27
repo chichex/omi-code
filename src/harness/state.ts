@@ -5,7 +5,7 @@ import { executionEvidence, executionReviews, assertCorrectionExecution } from "
 import { amendsOf, lensReview } from "./lenses.ts";
 import { acceptedRisksOf, contentSecurityBlocks, recordAcceptedRisk, riskAccepted, securityBlocks, unacceptedBlockers } from "./security-blockers.ts";
 import { openedStack, planStack, stackGroups, stackProblem, syncedStack } from "./stack.ts";
-import { correctable, expectedFailure, latestChecks, missingCommand, notRedReason, roundRed, successful } from "./check-reds.ts";
+import { correctable, expectedFailure, gateFailureAction, latestChecks, missingCommand, notRedReason, roundRed, successful } from "./check-reds.ts";
 export { expectedFailure, missingCommand, successful } from "./check-reds.ts";
 
 export type WorkflowEvent =
@@ -216,7 +216,7 @@ function verifiedEvidence(state: Workflow, fingerprint: string, head?: string): 
  const gates = evidence.filter(e => e.kind === "gate" && !missingCommand(e));
  for (const command of new Set(gates.map(e => e.command))) {
   const latest = gates.findLast(e => e.command === command && e.fingerprint === fingerprint) ?? gates.findLast(e => e.command === command && (successful(e) || roundRed(state, e)));
-  requireCondition(!latest || successful(latest), `gate fallido: ${command.slice(0, 200)}: su última corrida de esta vuelta falló; repetilo sobre este contenido`);
+  requireCondition(!latest || successful(latest), `gate fallido: ${command.slice(0, 200)}: su última corrida de esta vuelta falló; ${latest ? gateFailureAction(state, latest, fingerprint) : ""}`);
  }
 }
 function startStep(state: Workflow, id: string): void {

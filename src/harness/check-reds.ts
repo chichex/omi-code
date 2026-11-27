@@ -42,3 +42,9 @@ export function repeatedCrash(state: Workflow, e: Evidence): boolean {
 }
 /** Lo que amend corrige: un rojo (exit 1 a 125) o un crash que se repite. Sin amends, retry. */
 export const correctable = (state: Workflow, e: Evidence): boolean => expectedFailure(e) || repeatedCrash(state, e);
+/** Qué hacer en verified con un gate que no pasó: sobre este contenido, un rojo o un crash repetido se corrige con amend y un
+ * corte en el tope pide retry; otra interrumpida, o lo que vino de un contenido anterior, se repite sobre este contenido. */
+export function gateFailureAction(state: Workflow, e: Evidence, fingerprint: string): string {
+ if (e.fingerprint !== fingerprint || !roundRed(state, e)) return "repetilo sobre este contenido";
+ return cappedTimeout(e) ? "se cortó con el tope del host (1800 s) y cuenta como rojo; amend no lo corrige: usá retry" : "es un rojo sobre este contenido: corregilo con amend (sin amends, retry), o repetilo si no se reproduce";
+}
