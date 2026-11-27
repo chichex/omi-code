@@ -5,7 +5,7 @@ import { test } from "node:test";
 import type { Runner } from "../src/core/exec.ts";
 import { createWorkflow, transition } from "../src/harness/state.ts";
 import { FAIL_WITHOUT_FINDINGS, securityBlocks } from "../src/harness/security-blockers.ts";
-import { convergeSecurity, findingFile, findingPaths, previousMaterial, reviewedCommit, SECURITY_ACCEPTED_REPEAT, SECURITY_DOWNGRADED, securityBaseline, securityComparison, type SecurityComparison } from "../src/harness/security-convergence.ts";
+import { convergeSecurity, findingFile, previousMaterial, reviewedCommit, SECURITY_ACCEPTED_REPEAT, SECURITY_DOWNGRADED, securityBaseline, securityComparison, type SecurityComparison } from "../src/harness/security-convergence.ts";
 import { parseSecurityResult } from "../src/tui/development-review.ts";
 import { sourceHash, type Evidence, type Exploration, type Lens, type Plan, type Review, type Workflow } from "../src/harness/model.ts";
 
@@ -126,7 +126,38 @@ test("security_convergence mira todas las rutas que cita el hallazgo: si alguna 
 	const { result, downgraded } = convergeSecurity(security([...kept, control]), comparison());
 	assert.equal(downgraded, 1, "el control con rutas sólo sin cambios sí baja");
 	assert.deepEqual(result.severities, [...kept.map(() => "blocker"), "aviso"]);
-	assert.deepEqual(findingPaths("parte 1/2 · `src/a.ts:12–14` · lo dispara ./src/b.ts:3, ver (docs/x.md) y src/c.ts."), [{ path: "src/a.ts", line: true }, { path: "src/b.ts", line: true }, { path: "docs/x.md", line: false }, { path: "src/c.ts", line: false }]);
+	// Cada forma de citar una ruta cambiada mantiene el blocker: entre backticks, con «./», entre paréntesis o al final de una oración.
+	const forms = ["lo dispara `src/b.ts:12–14`", "lo dispara ./src/b.ts:3", "ver (src/b.ts)", "y src/b.ts."];
+	for (const form of forms) assert.equal(convergeSecurity(security([blocker(`src/c.ts:4 · el sumidero; ${form}`, "otro")]), comparison()).downgraded, 0, form);
+});
+
+// Review del incidente (ronda 2, bypass-2-ruta-ancla-sin-forma y bypass-2-rutas-encadenadas-o-con-simbolos): findingPaths sólo
+// reconocía rutas ASCII con extensión o «/». Un Makefile cambiado, un archivo con tilde, ñ, =, # o $, o rutas encadenadas con
+// flechas bajaban a aviso aunque fueran de un archivo cambiado o del blocker anterior. El agente elige el nombre de sus archivos.
+test("security_convergence reconoce un archivo cambiado o el de un blocker anterior con cualquier forma de ruta, también encadenado sin espacios", async () => {
+	const shapes = ["Makefile", "Dockerfile", "src/acción.ts", "src/añadir.ts", "src/a=b.ts", "src/v2#x.ts", "app/routes/posts.$postId.tsx", "src/a%20b.ts"];
+	const tree = [...TREE, ...shapes, "src/exec.ts", "src/run.ts", "src/cli.ts"];
+	for (const file of shapes) {
+		const changed = convergeSecurity(security([blocker(`${file}:2 · interpola el título del issue en un comando`, "otro")]), comparison({ changed: new Set([file]), tree: new Set(tree) }));
+		assert.equal(changed.downgraded, 0, `regla (a): ${file} cambió`);
+		const repeated = convergeSecurity(security([blocker(`${file}:2 · interpola el título del issue en un comando`, "otro")]), comparison({ tree: new Set(tree), blockerFiles: new Set([file]) }));
+		assert.equal(repeated.downgraded, 0, `regla (b): ${file} es el de un blocker anterior`);
+		const cited = convergeSecurity(security([blocker(`src/c.ts:4 · el sumidero; lo dispara ${file}:20`, "otro")]), comparison({ changed: new Set([file]), tree: new Set(tree) }));
+		assert.equal(cited.downgraded, 0, `${file} citado después del primer tramo`);
+	}
+	const chain = convergeSecurity(security([blocker("src/exec.ts:88 · el título del issue llega a execSync: src/exec.ts:88←src/run.ts:40←src/cli.ts:12", "otro")]), comparison({ changed: new Set(["src/cli.ts"]), tree: new Set(tree) }));
+	assert.equal(chain.downgraded, 0, "una cadena con flechas sin espacios");
+	const control = convergeSecurity(security([blocker("src/exec.ts:88 · el título del issue llega a execSync: src/exec.ts:88←src/run.ts:40", "otro")]), comparison({ changed: new Set(["src/cli.ts"]), tree: new Set(tree) }));
+	assert.equal(control.downgraded, 1, "el control sin archivos cambiados sí baja");
+	// De punta a punta: la base cita un Makefile y Seguridad lo repite tras el retry sin que cambie.
+	const s = afterRetry(["Makefile:2 · interpola el título del issue en un comando de shell"]);
+	const { comparison: c } = await securityComparison(s, { fingerprint: "tree2", head: sha("2") }, git({ diff: ["extra.test.cjs"], tree: [...tree, "extra.test.cjs"] }).runner);
+	assert.ok(c); assert.ok(c.blockerFiles.has("Makefile"));
+	assert.equal(convergeSecurity(security([blocker("Makefile:2 · interpola el título del issue en un comando de shell", "otro")]), c).downgraded, 0);
+	// Las otras rutas de un blocker anterior también cuentan, con cualquier forma.
+	const chained = afterRetry(["src/exec.ts:88 · llega a execSync: src/exec.ts:88←src/acción.ts:40"]);
+	const { comparison: d } = await securityComparison(chained, { fingerprint: "tree2", head: sha("2") }, git({ diff: ["src/b.ts"], tree }).runner);
+	assert.ok(d?.blockerFiles.has("src/acción.ts"), JSON.stringify([...d?.blockerFiles ?? []]));
 });
 
 // Review del incidente (2026-11-26, bypass-5): las rutas de los blockers anteriores no se normalizaban ni se validaban.

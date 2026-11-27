@@ -45,19 +45,25 @@ export function findingFile(text: string): string | null {
  return null;
 }
 
-/** Las rutas que cita el hallazgo en todo su texto: cada «archivo:línea» (line) y cada palabra con forma de ruta. */
-export function findingPaths(text: string): { path: string; line: boolean }[] {
- const paths: { path: string; line: boolean }[] = [];
- for (const word of text.split(/[\s`"'()[\]{}<>,;·]+/)) {
-  const match = /^(?:\.\/)?([^:]+?)(:\d.*)?[.:]*$/.exec(word);
-  const path = match?.[1];
-  if (path && /^[\w@~+./-]+$/.test(path) && /[A-Za-z]/.test(path) && (path.includes("/") || /\.[A-Za-z0-9]+$/.test(path))) paths.push({ path, line: match[2] !== undefined });
- }
- return paths;
+// Qué archivos nombra un hallazgo, sin adivinar la forma de una ruta (Makefile, «acción.ts», «a=b.ts», «posts.$id.tsx»):
+// se compara contra los archivos que el host conoce. Las palabras se cortan en espacios, comillas, paréntesis, separadores
+// y flechas; cada una vale también por sus finales después de una «/». Nombrar de más sólo deja un blocker como está.
+const SEPARATORS = /[\s`"'()[\]{}<>,;·|:←→⇐⇒]+/u;
+const tails = (path: string): string[] => path.split("/").map((_, i, parts) => parts.slice(i).join("/")).filter(Boolean);
+function said(text: string): Set<string> {
+ const words = new Set<string>();
+ for (const raw of text.split(SEPARATORS)) for (const tail of tails(raw.replace(/^\.\//, "").replace(/\.+$/, ""))) words.add(tail);
+ return words;
+}
+// Un final corto («a») nombraría a cualquier palabra: un final cuenta si tiene extensión o 4 caracteres o más.
+const named = (words: ReadonlySet<string>, file: string): boolean => tails(file).some((tail, i) => words.has(tail) && (i === 0 || tail.length >= 4 || tail.includes(".")));
+/** Lo que el hallazgo cita con «archivo:línea» en cualquier parte del texto, sin «./». */
+export function lineRefs(text: string): string[] {
+ return [...text.matchAll(/([^\s`"'()[\]{}<>,;·|:←→⇐⇒]+):\d/gu)].map(m => m[1]!.replace(/^\.\//, ""));
 }
 /** La misma ruta escrita completa o corta: «store.ts» es «src/harness/store.ts». */
 const sameFile = (a: string, b: string): boolean => a === b || a.endsWith(`/${b}`) || b.endsWith(`/${a}`);
-const cites = (paths: readonly { path: string }[], files: ReadonlySet<string>): boolean => paths.some(p => [...files].some(f => sameFile(p.path, f)));
+const cites = (text: string, files: Iterable<string>): boolean => { const words = said(text); return [...files].some(f => named(words, f)); };
 
 // Las rutas de los blockers anteriores, como están en el árbol de HEAD o entre los cambios (un archivo borrado): una ruta
 // corta vale por todas las que terminan así. Si el primer tramo no está en ninguno, no se sabe qué archivo era: undefined.
@@ -66,7 +72,8 @@ function resolvedFiles(blockers: readonly string[], known: readonly string[]): S
  for (const text of blockers) {
   const anchor = known.filter(k => sameFile(k, findingFile(text)!));
   if (!anchor.length) return undefined;
-  for (const k of [...anchor, ...findingPaths(text).flatMap(p => known.filter(k => sameFile(k, p.path)))]) files.add(k);
+  const words = said(text);
+  for (const k of [...anchor, ...known.filter(k => named(words, k))]) files.add(k);
  }
  return files;
 }
@@ -124,13 +131,13 @@ function withSecurityItems(result: LensResult, items: Item[]): LensResult {
 export function convergeSecurity(result: LensResult, c: SecurityComparison): { result: LensResult; downgraded: number } {
  let downgraded = 0;
  const items = securityItems(result).map((item): Item => {
-  // Todas las rutas del texto, no sólo la primera: el disparador puede estar en un archivo cambiado citado después.
-  const file = findingFile(item.text), paths = findingPaths(item.text);
-  const keep = !item.blocker || !item.downgradable || SECRET.test(item.text) || file === null || !c.tree.has(file)
-   || paths.some(p => p.line && !c.tree.has(p.path)) || cites(paths, c.changed) || cites(paths, c.blockerFiles);
+  // Todo el texto, no sólo el primer tramo: el disparador puede estar en un archivo cambiado citado después.
+  const file = findingFile(item.text);
+  const keep = !item.blocker || !item.downgradable || SECRET.test(item.text) || file === null || !c.tree.has(file) || c.changed.has(file) || c.blockerFiles.has(file)
+   || lineRefs(item.text).some(p => !c.tree.has(p)) || cites(item.text, c.changed) || cites(item.text, c.blockerFiles);
   if (keep) return item;
   downgraded++;
-  return { ...item, blocker: false, text: prefixed(`${cites(paths, c.acceptedFiles) ? SECURITY_ACCEPTED_REPEAT : SECURITY_DOWNGRADED} · `, item.text) };
+  return { ...item, blocker: false, text: prefixed(`${cites(item.text, c.acceptedFiles) ? SECURITY_ACCEPTED_REPEAT : SECURITY_DOWNGRADED} · `, item.text) };
  });
  return { result: withSecurityItems(result, items), downgraded };
 }
