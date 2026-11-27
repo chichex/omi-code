@@ -17,7 +17,17 @@ export function latestChecks(state: Workflow, fingerprint: string): Evidence[] {
  return [...new Map(runs.map(e => [`${e.kind}:${e.kind === "gate" ? e.command : e.caseId}`, e])).values()];
 }
 const MISSING_COMMAND = "el comando no existe o no es ejecutable (exit 126 o 127): no es un rojo del cambio. Si es un gate, corregí el comando (ese no cuenta como gate); si es un D de la receta, pausá con el motivo: hay que corregir la receta";
-const RERUN = "el D o el gate quedó interrumpido (sin código, por señal o por timeout): no es un rojo del cambio; volvé a correrlo con el timeoutSeconds que sugiere OMI";
-// Comando ausente o interrumpido no es un rojo, igual en amend y retry; roundRed sí: con el tope del host no hay más tiempo.
+const RERUN = "el D o el gate quedó interrumpido (sin código, por señal o por timeout): no es un rojo del cambio; volvé a correrlo con el timeoutSeconds que sugiere OMI. Si vuelve a morir por la misma señal (exit 128 o más) sobre este contenido, es un crash del cambio y cuenta como rojo";
+// Comando ausente o interrumpido no es un rojo, igual en amend y retry; roundRed sí: con el tope del host no hay más tiempo
+// y un crash que se repite da lo mismo cada vez.
 export const notRedReason = (pending: readonly Evidence[]): string => pending.some(missingCommand) ? MISSING_COMMAND : RERUN;
-export const roundRed = (e: Evidence): boolean => expectedFailure(e) || e.outcome === "interrupted" && e.exitCode === null && Date.parse(e.finishedAt) - Date.parse(e.startedAt) >= MAX_CHECK_TIMEOUT_SECONDS * 1000;
+export const roundRed = (state: Workflow, e: Evidence): boolean => correctable(state, e) || e.outcome === "interrupted" && e.exitCode === null && Date.parse(e.finishedAt) - Date.parse(e.startedAt) >= MAX_CHECK_TIMEOUT_SECONDS * 1000;
+/** Un crash del cambio: el D o el gate murió por la misma señal (exit 128 o más) las dos últimas veces sobre este contenido. */
+export function repeatedCrash(state: Workflow, e: Evidence): boolean {
+ if (e.outcome !== "interrupted" || e.exitCode === null || e.exitCode < 128) return false;
+ const runs = executionEvidence(state).filter(r => r.fingerprint === e.fingerprint && r.kind === e.kind && (e.kind === "gate" ? r.command === e.command : r.caseId === e.caseId));
+ const previous = runs[runs.indexOf(e) - 1];
+ return previous?.outcome === "interrupted" && previous.exitCode === e.exitCode;
+}
+/** Lo que amend corrige: un rojo (exit 1 a 125) o un crash que se repite. Sin amends, retry. */
+export const correctable = (state: Workflow, e: Evidence): boolean => expectedFailure(e) || repeatedCrash(state, e);

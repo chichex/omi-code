@@ -143,6 +143,7 @@ test("autonomía: un D o gate rojo se corrige con amend; retry queda para securi
 	assert.match(verify, /interrupted[^.]*no es un rojo/);
 	assert.match(verify, /OMI rechaza amend y retry por eso\. Cortado con el tope de 1800 s, más tiempo no hay: ahí cuenta como rojo y pide retry/, "la regla de retry del reducer");
 	assert.match(verify, /vale la última corrida de cada check sobre este contenido: no hace falta amend ni retry/);
+	assert.match(verify, /dos veces seguidas por la misma señal \(exit 128 o más\) sobre este contenido, es un crash del cambio: cuenta como rojo y se corrige con amend/, "un crash repetido, como en el reducer");
 	assert.match(developmentInstructions({ ...state, phase: "implement" }), /Antes del commit del último C, corré con kind setup los gates/);
 });
 

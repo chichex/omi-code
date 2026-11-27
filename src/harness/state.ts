@@ -5,7 +5,7 @@ import { executionEvidence, executionReviews, assertCorrectionExecution } from "
 import { amendsOf, lensReview } from "./lenses.ts";
 import { acceptedRisksOf, contentSecurityBlocks, recordAcceptedRisk, riskAccepted, securityBlocks, unacceptedBlockers } from "./security-blockers.ts";
 import { openedStack, planStack, stackGroups, stackProblem, syncedStack } from "./stack.ts";
-import { expectedFailure, latestChecks, missingCommand, notRedReason, roundRed, successful } from "./check-reds.ts";
+import { correctable, expectedFailure, latestChecks, missingCommand, notRedReason, roundRed, successful } from "./check-reds.ts";
 export { expectedFailure, missingCommand, successful } from "./check-reds.ts";
 
 export type WorkflowEvent =
@@ -261,8 +261,8 @@ function retryBlock(state: WorkflowV2, fingerprint: string | undefined): string 
  let red = evidence.some(e => (e.kind === "verification" || e.kind === "gate") && !successful(e));
  if (fingerprint) {
   const latest = latestChecks(state, fingerprint), pending = latest.filter(e => !successful(e));
-  if (latest.some(expectedFailure) && !amendBlock(state, fingerprint)) return AMEND_FIRST;
-  red = latest.some(roundRed);
+  if (latest.some(e => correctable(state, e)) && !amendBlock(state, fingerprint)) return AMEND_FIRST;
+  red = latest.some(e => roundRed(state, e));
   if (pending.length && !red && !blocker && !roundFull(state)) return notRedReason(pending);
  }
  // Con el riesgo aceptado, una vuelta entera borraría esa decisión de la persona.
@@ -291,10 +291,11 @@ function amendBlock(state: WorkflowV2, fingerprint: string): string {
  if (contentSecurityBlocks(state, executionReviews(state), fingerprint)) return "hay un blocker de security sobre este contenido: eso pide retry, no amend";
  const red = latestChecks(state, fingerprint).filter(e => !successful(e));
  const finding = executionReviews(state).some(r => r.fingerprint === fingerprint && !r.noResult && (r.verdict === "fail" || r.findings.length > 0));
- if (!finding && !red.some(expectedFailure)) {
+ const fixable = red.some(e => correctable(state, e));
+ if (!finding && !fixable) {
   return red.length ? notRedReason(red) : "sobre este contenido no hay ningún hallazgo de un lente ni un D o un gate rojo que corregir con amend";
  }
- if (acceptedRisksOf(state).some(a => a.fingerprint === fingerprint) && !red.some(expectedFailure)) return RISK_ACCEPTED_KEEP;
+ if (acceptedRisksOf(state).some(a => a.fingerprint === fingerprint) && !fixable) return RISK_ACCEPTED_KEEP;
  if ((state.amends ?? []).length >= MAX_AMENDS) return `ya se usaron las ${MAX_AMENDS} correcciones livianas de esta vuelta: un aviso queda en el PR y un D o un gate rojo pide retry`;
  if (roundFull(state)) return "la evidencia o los lentes de esta vuelta llegaron al tope: usá retry";
  return state.steps.length < MAX_STEPS ? "" : "no quedan pasos para otra corrección; dividí la tarea";
@@ -314,7 +315,7 @@ function amend(state: WorkflowV2, reason: string, fingerprint: string, at: strin
 function clearRound(state: Workflow): void { if (state.version === 2) { delete state.amends; delete state.acceptedRisks; } }
 // Lo que frena este contenido aunque una persona acepte el riesgo: un rojo (no un interrumpido) o un blocker sin aceptar.
 function contentBlocked(state: Workflow, fingerprint: string): boolean {
- return latestChecks(state, fingerprint).some(roundRed) || contentSecurityBlocks(state, executionReviews(state), fingerprint);
+ return latestChecks(state, fingerprint).some(e => roundRed(state, e)) || contentSecurityBlocks(state, executionReviews(state), fingerprint);
 }
 function sourceChanged(state: Workflow, source: Workflow["source"], at: string): void {
  requireCondition(source.number === state.source.number && source.url === state.source.url, "no se puede cambiar la identidad del issue");

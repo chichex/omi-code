@@ -311,3 +311,24 @@ test("harness_retry un D o un gate interrumpido o con comando ausente se vuelve 
 	// Sin el contenido limpio (checkout sucio), retry no puede saber qué vale y sigue la regla de toda la vuelta.
 	assert.equal(send(gate, { type: "retry", reason: "checkout sucio" }).round, 1);
 });
+
+// Review del incidente (ronda 2, correctness-2-senal-sin-salida y queue-2-retry-senal-sin-salida): un D o un gate que el cambio
+// mata por señal (exit 128 o más: SIGSEGV 139, OOM 137, abort 134) quedaba interrumpido para siempre. retry, amend y verified
+// lo rechazaban, y volver a correrlo daba lo mismo. En main, retry lo aceptaba.
+test("harness_retry un crash que se repite (misma señal, exit 128 o más) sobre este contenido es un rojo: amend lo corrige y, sin amends, retry abre vuelta", () => {
+	const crash = { exitCode: 139, outcome: "interrupted" } as const;
+	const once = failedGate(cleanLenses(verify(verifying(), "tree")), "tree", "npm run test:native", crash);
+	assert.throws(() => retryOn(once, "tree"), /interrumpido[^:]*: no es un rojo del cambio; volvé a correrlo/, "una sola vez se vuelve a correr");
+	assert.throws(() => amend(once), /interrumpido/);
+	const twice = failedGate(once, "tree", "npm run test:native", crash);
+	assert.throws(() => retryOn(twice, "tree"), /amend/, "un crash repetido se corrige con amend: retry apunta a amend");
+	assert.equal(amend(twice).round, 0, "amend lo corrige sin gastar vuelta");
+	assert.throws(() => verified(twice, "tree"), /gate fallido/, "verified sigue frenado");
+	const spent = { ...twice, amends: [{ from: "x", reason: "uno", at }, { from: "y", reason: "dos", at }] } as Workflow;
+	assert.equal(retryOn(spent, "tree").round, 1, "sin amends, retry abre la vuelta");
+	assert.throws(() => retryOn(failedGate(once, "tree", "npm run test:native", { exitCode: 137, outcome: "interrupted" }), "tree"), /interrumpido/, "otra señal no es el mismo crash");
+	assert.throws(() => retryOn(failedGate(failedGate(cleanLenses(verify(verifying(), "tree")), "old", "npm run test:native", crash), "tree", "npm run test:native", crash), "tree"), /interrumpido/, "un crash sobre otro contenido no cuenta");
+	assert.throws(() => retryOn(failedGate(failedGate(cleanLenses(verify(verifying(), "tree")), "tree", "npm run test:native", { exitCode: null, outcome: "interrupted" }), "tree", "npm run test:native", { exitCode: null, outcome: "interrupted" }), "tree"), /interrumpido/, "dos cortes sin código no son un crash");
+	const d = failedD(failedD(cleanLenses(verify(verifying(), "tree")), "tree", crash), "tree", crash);
+	assert.equal(amend(d).round, 0, "un D que crashea igual dos veces también se corrige con amend");
+});
