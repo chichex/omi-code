@@ -17,6 +17,7 @@ export const SECURITY_DOWNGRADED = "bajado a aviso: archivo sin cambios desde la
 export const SECURITY_PREVIOUS_NOTE = "previous es tu revisión de security anterior de este mismo trabajo, calculada por el harness: findings son tus hallazgos de entonces y changedFiles los archivos que cambiaron desde ese contenido. Decí primero si cada blocker anterior sigue. Un blocker nuevo de clase otro sólo bloquea si cae en un archivo de changedFiles o en el archivo de un blocker anterior; si no, el harness lo baja a aviso. Un secreto o una exfiltración bloquean siempre. Citá con archivo:línea cada archivo del escenario: donde está el problema y donde se dispara.";
 const NO_COMPARISON = "sin comparación con la revisión anterior: no se baja ningún blocker";
 const NO_BLOCKER_FILE = "sin comparación con la revisión anterior: un blocker anterior no cita su archivo; no se baja ningún blocker";
+const NO_BLOCKER_IN_TREE = "sin comparación con la revisión anterior: un blocker anterior cita un archivo que no está en el árbol; no se baja ningún blocker";
 const PARTIAL_BASELINE = "sin comparación con la revisión anterior: no revisó todas las partes del cambio; no se baja ningún blocker";
 // Sin \b: con \b no corta en «_» y no reconoce CLAUDE_CODE_OAUTH_TOKEN. Un falso positivo sólo deja el blocker como está.
 const SECRET = /secret|secreto|api[ _-]?key|password|contraseña|credencial|credential|private[ _-]?key|clave privada|token|bearer|auth\.json|oauth/i;
@@ -55,6 +56,18 @@ export function findingPaths(text: string): { path: string; line: boolean }[] {
 const sameFile = (a: string, b: string): boolean => a === b || a.endsWith(`/${b}`) || b.endsWith(`/${a}`);
 const cites = (paths: readonly { path: string }[], files: ReadonlySet<string>): boolean => paths.some(p => [...files].some(f => sameFile(p.path, f)));
 
+// Las rutas de los blockers anteriores, como están en el árbol de HEAD o entre los cambios (un archivo borrado): una ruta
+// corta vale por todas las que terminan así. Si el primer tramo no está en ninguno, no se sabe qué archivo era: undefined.
+function resolvedFiles(blockers: readonly string[], known: readonly string[]): Set<string> | undefined {
+ const files = new Set<string>();
+ for (const text of blockers) {
+  const anchor = known.filter(k => sameFile(k, findingFile(text)!));
+  if (!anchor.length) return undefined;
+  for (const k of [...anchor, ...findingPaths(text).flatMap(p => known.filter(k => sameFile(k, p.path)))]) files.add(k);
+ }
+ return files;
+}
+
 export interface SecurityComparison { baseline: Review; changed: ReadonlySet<string>; tree: ReadonlySet<string>; blockerFiles: ReadonlySet<string> }
 /** Qué cambió desde la revisión anterior. Sin base no hay nada que comparar; si no se puede comparar, sólo una nota. */
 export async function securityComparison(state: Workflow, snapshot: Pick<CheckoutSnapshot, "head" | "fingerprint">, runner: Runner, signal?: AbortSignal): Promise<{ comparison?: SecurityComparison; note?: string }> {
@@ -62,8 +75,8 @@ export async function securityComparison(state: Workflow, snapshot: Pick<Checkou
  if (!baseline) return {};
  if (baseline.partial) return { note: PARTIAL_BASELINE };
  // Todos los blockers de la base, también los que aceptó una persona.
- const blockerFiles = new Set<string>();
- for (const file of securityBlockers(baseline).map(findingFile)) { if (file === null) return { note: NO_BLOCKER_FILE }; blockerFiles.add(file); }
+ const blockers = securityBlockers(baseline);
+ if (blockers.some(text => findingFile(text) === null)) return { note: NO_BLOCKER_FILE };
  // Sobre el mismo contenido no cambió nada: no hace falta el commit ni el diff, pero sí el árbol de HEAD.
  const same = baseline.fingerprint === snapshot.fingerprint;
  const commit = same ? undefined : reviewedCommit(state, baseline.fingerprint);
@@ -71,6 +84,8 @@ export async function securityComparison(state: Workflow, snapshot: Pick<Checkou
  try {
   const changed = commit ? await changedPaths(state.checkout, commit, snapshot.head, runner, signal) : [];
   const tree = await treePaths(state.checkout, snapshot.head, runner, signal);
+  const blockerFiles = resolvedFiles(blockers, [...tree, ...changed]);
+  if (!blockerFiles) return { note: NO_BLOCKER_IN_TREE };
   return { comparison: { baseline, changed: new Set(changed), tree: new Set(tree), blockerFiles } };
  } catch (error) {
   if (signal?.aborted) throw error;

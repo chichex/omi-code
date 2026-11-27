@@ -129,6 +129,24 @@ test("security_convergence mira todas las rutas que cita el hallazgo: si alguna 
 	assert.deepEqual(findingPaths("parte 1/2 · `src/a.ts:12–14` · lo dispara ./src/b.ts:3, ver (docs/x.md) y src/c.ts."), [{ path: "src/a.ts", line: true }, { path: "src/b.ts", line: true }, { path: "docs/x.md", line: false }, { path: "src/c.ts", line: false }]);
 });
 
+// Review del incidente (2026-11-26, bypass-5): las rutas de los blockers anteriores no se normalizaban ni se validaban.
+// Si la base citaba «store.ts:22» y ahora el lente cita la ruta completa, la regla (b) no lo reconocía y bajaba.
+test("security_convergence normaliza las rutas de los blockers anteriores contra el árbol; una que no está en el árbol ni entre los cambios no compara", async () => {
+	const tree = ["src/harness/store.ts", "src/c.ts", "src/b.ts"];
+	const short = afterRetry(["store.ts:22 · el lock ajeno se roba"]);
+	const { comparison: c } = await securityComparison(short, { fingerprint: "tree2", head: sha("2") }, git({ diff: ["src/b.ts"], tree }).runner);
+	assert.ok(c);
+	assert.ok(c.blockerFiles.has("src/harness/store.ts"), "la ruta corta se resuelve a la del árbol");
+	const { result, downgraded } = convergeSecurity(security([blocker("src/harness/store.ts:30 · el lock ajeno se sigue robando", "otro"), blocker("src/c.ts:1 · permiso abierto", "otro")]), c);
+	assert.equal(downgraded, 1);
+	assert.deepEqual(result.severities, ["blocker", "aviso"], "repite el archivo del blocker anterior aunque lo cite con otra ruta");
+	const unknown = afterRetry(["harness/nope.ts:1 · el lock ajeno se roba"]);
+	assert.deepEqual(await securityComparison(unknown, { fingerprint: "tree2", head: sha("2") }, git({ diff: ["src/b.ts"], tree }).runner), { note: "sin comparación con la revisión anterior: un blocker anterior cita un archivo que no está en el árbol; no se baja ningún blocker" });
+	const deleted = afterRetry(["src/old.ts:1 · permiso abierto"]);
+	const gone = await securityComparison(deleted, { fingerprint: "tree2", head: sha("2") }, git({ diff: ["src/old.ts"], tree }).runner);
+	assert.ok(gone.comparison?.blockerFiles.has("src/old.ts"), "un archivo borrado desde la base está entre los cambios");
+});
+
 test("security_convergence un blocker que una persona aceptó en la base sigue contando para la regla (b): repetido en su archivo sin cambios, vuelve a bloquear", async () => {
 	const accepted = "src/a.ts:1 · permiso abierto";
 	let s = implement(approved(), "C1", "tree1", sha("1"));
