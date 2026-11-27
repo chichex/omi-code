@@ -74,8 +74,8 @@ export const SeveritySchema = Type.Union([Type.Literal("blocker"), Type.Literal(
 export type Severity = Static<typeof SeveritySchema>;
 // noResult: el lente no llegó a juzgar (conexión, plazo, formato, cancelado); sin la marca, un unknown es del modelo.
 // severities: sólo en security, una por hallazgo y sólo si hay algún aviso. Sin la lista (estados anteriores), cada hallazgo es blocker.
-// partial: sólo en un fail de security con alguna parte sin juicio (unknown o sin resultado). Bloquea igual, pero no
-// revisó todo el cambio: no sirve de base para la convergencia.
+// partial: sólo en un fail de security con alguna parte sin juicio (unknown o sin resultado). No cambia si frena (sólo un
+// blocker frena), pero no revisó todo el cambio: no sirve de base para la convergencia.
 export const ReviewSchema = Type.Object({ lens: LensSchema, fingerprint: text(128), verdict: Type.Union([Type.Literal("pass"), Type.Literal("fail"), Type.Literal("unknown")]), findings: list(), severities: Type.Optional(Type.Array(SeveritySchema, { maxItems: 100 })), noResult: Type.Optional(Type.Literal(true)), partial: Type.Optional(Type.Literal(true)), at: text(100) }, { additionalProperties: false });
 export type Review = Static<typeof ReviewSchema>;
 // Hallazgos blocker de security que una persona aceptó para un contenido exacto, con su motivo. Sin autor: lo decide la TUI.
