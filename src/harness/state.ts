@@ -211,11 +211,11 @@ function verifiedEvidence(state: Workflow, fingerprint: string, head?: string): 
   requireCondition(lens !== "security" || !unacceptedBlockers(state, review).length, SECURITY_FAILED);
  }
  // Gates de la vuelta: vale su última corrida sobre este contenido o, si no se repitió después de un amend, la última que
- // juzgó (pasó o falló de verdad). Un comando ausente (126/127) nunca corrió y no cuenta; una interrumpida sólo cuenta
- // sobre este contenido. La guía de Verificar dice esta misma regla.
+ // juzgó (pasó o fue un rojo de check-reds, también un crash repetido o un corte en el tope). Un comando ausente (126/127)
+ // nunca corrió y no cuenta; otra interrumpida sólo cuenta sobre este contenido. La guía de Verificar dice esta misma regla.
  const gates = evidence.filter(e => e.kind === "gate" && !missingCommand(e));
  for (const command of new Set(gates.map(e => e.command))) {
-  const latest = gates.findLast(e => e.command === command && e.fingerprint === fingerprint) ?? gates.findLast(e => e.command === command && (successful(e) || expectedFailure(e)));
+  const latest = gates.findLast(e => e.command === command && e.fingerprint === fingerprint) ?? gates.findLast(e => e.command === command && (successful(e) || roundRed(state, e)));
   requireCondition(!latest || successful(latest), `gate fallido: ${command.slice(0, 200)}: su última corrida de esta vuelta falló; repetilo sobre este contenido`);
  }
 }

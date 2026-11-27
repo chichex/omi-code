@@ -332,3 +332,14 @@ test("harness_retry un crash que se repite (misma señal, exit 128 o más) sobre
 	const d = failedD(failedD(cleanLenses(verify(verifying(), "tree")), "tree", crash), "tree", crash);
 	assert.equal(amend(d).round, 0, "un D que crashea igual dos veces también se corrige con amend");
 });
+
+// Review del incidente (ronda 3, correctness-3-crash-amend-salta-gate): tras un amend, verified buscaba la última corrida que
+// «juzgó» un gate sólo entre pass y exit 1 a 125. Un crash repetido (que amend corrige) quedaba afuera y el gate pasaba sin
+// repetirse sobre el contenido nuevo.
+test("harness_amend tras un amend por un crash repetido, verified exige repetir el gate sobre el contenido nuevo", () => {
+	const crash = { exitCode: 139, outcome: "interrupted" } as const;
+	const twice = failedGate(failedGate(cleanLenses(verify(verifying(), "tree")), "tree", "npm run test:native", crash), "tree", "npm run test:native", crash);
+	const fixed = lens(verify(implement(amend(twice, "tree", "Arreglar el crash"), "C2", "tree2"), "tree2"), review("security", "tree2"));
+	assert.throws(() => verified(fixed, "tree2"), /gate fallido: npm run test:native/, "el crash de tree manda mientras no se repita");
+	assert.equal(verified(passedGate(fixed, "tree2", "npm run test:native"), "tree2").phase, "pr", "repetido y verde, sigue");
+});
