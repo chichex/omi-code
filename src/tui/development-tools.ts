@@ -162,7 +162,7 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 	});
 	pi.registerTool({
 		name: "omi_workflow_lens", label: "Desarrollo: lente de verificación", defaultActive: false, exposure: "model-only", executionMode: "sequential", parameters: Type.Object({ lens: LensSchema }, { additionalProperties: false }),
-		description: "Ejecuta un lente de Verificar en contexto aislado, sin tools ni conversación del implementador. Evalúa los casos D, la evidencia registrada por el harness y el diff completo, por partes si no entra en una llamada; registra verdict pass/fail/unknown ligado al contenido. Asesora: unknown y fail quedan como aviso y no bloquean verified; sólo un hallazgo blocker de security bloquea; sus avisos no. No es Review externa del PR. Conserva uso del modelo.",
+		description: "Ejecuta un lente de Verificar en contexto aislado, sin tools ni conversación del implementador. Evalúa los casos D, la evidencia registrada por el harness, los precedentes de Explorar leídos de la base (security, sin la nota del implementador) y el diff completo, por partes si no entra en una llamada; registra verdict pass/fail/unknown ligado al contenido. Asesora: unknown y fail quedan como aviso y no bloquean verified; sólo un hallazgo blocker de security bloquea; sus avisos no. No es Review externa del PR. Conserva uso del modelo.",
 		async execute(_id, { lens }, signal, _update, ctx) {
 			const result = await runLens(session, lens, ctx, AbortSignal.any([signal ?? new AbortController().signal, session.lifecycle.signal]));
 			const blocking = !!session.state && unacceptedBlockers(session.state, result.review).length > 0;

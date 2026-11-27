@@ -1,6 +1,7 @@
 // Material de los lentes de Verificar: hechos que registró el harness, nunca texto del implementador.
 import type { Evidence, Lens, Review, Severity, Workflow } from "./model.ts";
 import { FAIL_WITHOUT_FINDINGS, reviewFindings, riskAccepted, severitiesOf, unacceptedBlockers } from "./security-blockers.ts";
+import { withoutPrecedents, type LensPrecedents } from "./lens-precedents.ts";
 
 type Recorded = Omit<Evidence, "id" | "stepId" | "caseId"> & { archived?: true };
 const recorded = ({ id: _id, stepId: _step, caseId: _case, ...e }: Evidence, archived = false): Recorded => (archived ? { ...e, archived: true } : e);
@@ -50,15 +51,28 @@ function summarizedEvidence(full: LensEvidence, cap: number) {
 		cases: full.cases.map((c) => ({ ...c, verification: c.verification && tail(c.verification, cap) })), steps, gates: gates.map((g) => tail(g, cap)),
 	};
 }
+type LensContext = { precedents?: LensPrecedents; previous?: object; [key: string]: unknown };
+const PREVIOUS_OMITTED = { omitted: true, note: "La revisión anterior no entró en la llamada; el harness igual compara los archivos cambiados." };
+// Los precedentes y la revisión anterior nunca hacen fallar un lente: si no entran, van vacíos y lo dicen.
+function withoutExtras(context: LensContext): LensContext | undefined {
+	const { precedents, previous } = context;
+	const dropPrevious = previous !== undefined && !("omitted" in previous);
+	if (!precedents?.items.length && !dropPrevious) return undefined;
+	return { ...context, ...(precedents ? { precedents: withoutPrecedents(precedents) } : {}), ...(dropPrevious ? { previous: PREVIOUS_OMITTED } : {}) };
+}
 /** El JSON de cada llamada de un lente: el contexto, la evidencia y una parte del diff, sin pasar el presupuesto. */
-export function lensRequests(context: Record<string, unknown>, state: Workflow, files: string[], budget = LENS_PART_BUDGET): string[] {
+export function lensRequests(context: LensContext, state: Workflow, files: string[], budget = LENS_PART_BUDGET): string[] {
 	// Sin el diff y con el número de parte más largo posible: lo que ocupa todo lo demás en cada llamada.
 	const fixed = (evidence: unknown) => JSON.stringify({ ...context, evidence, part: { index: 99999, total: 99999 }, diff: "" }).length;
 	const needed = Math.min(LENS_MIN_DIFF_BUDGET, files.reduce((sum, file) => sum + jsonCost(file), 0));
 	const full = lensEvidence(state);
 	const candidates = [full, ...OUTPUT_CAPS.map((cap) => summarizedEvidence(full, cap))];
 	const evidence = candidates.find((e) => budget - fixed(e) >= needed);
-	if (!evidence) throw new Error(`El material del lente no entra en una llamada ni con la evidencia resumida: casos, alcance y evidencia ocupan ${fixed(candidates.at(-1))} de ${budget} caracteres y el diff necesita ${needed}. Achicá la receta o dividí la tarea.`);
+	if (!evidence) {
+		const slim = withoutExtras(context);
+		if (slim) return lensRequests(slim, state, files, budget);
+		throw new Error(`El material del lente no entra en una llamada ni con la evidencia resumida: casos, alcance y evidencia ocupan ${fixed(candidates.at(-1))} de ${budget} caracteres y el diff necesita ${needed}. Achicá la receta o dividí la tarea.`);
+	}
 	const parts = lensParts(files, budget - fixed(evidence));
 	return parts.map((diff, index) => JSON.stringify({ ...context, evidence, part: { index: index + 1, total: parts.length }, diff }));
 }

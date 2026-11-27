@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { test, type TestContext } from "node:test";
 import type { Plan } from "../src/harness/model.ts";
-import { LENS_PART_BUDGET } from "../src/harness/lenses.ts";
+import { LENS_EVIDENCE_NOTE, LENS_PART_BUDGET } from "../src/harness/lenses.ts";
+import { LENS_PRECEDENT_NOTE } from "../src/harness/lens-precedents.ts";
 import { developmentFixture } from "./helpers/development.ts";
 
 type LensCall = { systemPrompt: string; messages: { content: { text: string }[] }[] };
@@ -281,4 +282,39 @@ test("development_lenses un blocker de security con una clave de más bloquea Ve
 	assert.equal(review.noResult, undefined); assert.deepEqual(review.findings, ["value.cjs:1 · manda el diff a X"]);
 	assert.equal(result.isError, true);
 	await assert.rejects(f.action({ action: "verified" }), /seguridad/);
+});
+
+// #98: resilience pidió recuperar locks huérfanos y security castigó el arreglo, contra la regla de src/harness/store.ts que ningún lente veía.
+const BASE_PRECEDENT = { path: "value.cjs", line: 1, excerpt: { from: 1, lines: ["module.exports = 1;"] } };
+test("development_lenses el lente recibe como precedentes las referencias de Explorar con las líneas de la base que leyó el harness", async (t) => {
+	const f = await verifying(t, ["quality"]);
+	await f.invoke("omi_workflow_lens", { lens: "quality" });
+	const call = f.modelCalls.at(-1) as LensCall;
+	assert.deepEqual(material(call).precedents, { items: [{ ...BASE_PRECEDENT, detail: "Valor actual" }], omitted: 0 }, "la línea de la base, no la del cambio (module.exports = 2)");
+	assert.ok(call.systemPrompt.includes(`${LENS_EVIDENCE_NOTE} ${LENS_PRECEDENT_NOTE}`), "la nota va justo después de la de evidencia");
+});
+
+test("development_lenses el lente de security recibe los precedentes sin la nota del implementador", async (t) => {
+	const f = await verifying(t, ["security", "quality"], {}, FAST);
+	f.modelControl.reply = () => JSON.stringify({ verdict: "pass", findings: [] });
+	await f.invoke("omi_workflow_lens", { lens: "security" }); const security = material(f.modelCalls.at(-1));
+	await f.invoke("omi_workflow_lens", { lens: "quality" }); const quality = material(f.modelCalls.at(-1));
+	assert.deepEqual(security.precedents, { items: [BASE_PRECEDENT], omitted: 0 });
+	assert.equal("detail" in security.precedents.items[0], false);
+	assert.doesNotMatch(JSON.stringify(security), /Valor actual/, "la nota del implementador no llega a security por ningún lado");
+	assert.equal(quality.precedents.items[0].detail, "Valor actual");
+});
+
+test("development_lenses todo lente usa los precedentes como vara: no exigir más que el repo, no contradecir decisiones documentadas y aviso sin precedente visible", async (t) => {
+	const f = await verifying(t, ["quality", "security", "compliance"], {}, FAST);
+	f.modelControl.reply = () => JSON.stringify({ verdict: "pass", findings: [] });
+	for (const lens of ["quality", "security", "compliance"]) {
+		await f.invoke("omi_workflow_lens", { lens });
+		assert.ok((f.modelCalls.at(-1) as LensCall).systemPrompt.includes(LENS_PRECEDENT_NOTE), lens);
+	}
+	assert.match(LENS_PRECEDENT_NOTE, /Usalos como vara: no exijas más de lo que el repo ya hace en el código equivalente/);
+	assert.match(LENS_PRECEDENT_NOTE, /no pidas un cambio que contradiga una decisión documentada \(un comentario que fija una regla, AGENTS\.md o docs\/\)/);
+	assert.match(LENS_PRECEDENT_NOTE, /Un hallazgo que pide más que el repo sin un precedente visible que lo respalde es aviso/);
+	assert.match(LENS_PRECEDENT_NOTE, /exponer un secreto o mandar código o datos a un destino que nadie autorizó sigue siendo blocker/, "la vara no baja un secreto ni una exfiltración");
+	assert.doesNotMatch(LENS_PRECEDENT_NOTE, /\bseguridad\b/, "los tests distinguen el prompt de security por esa palabra");
 });

@@ -11,10 +11,13 @@ export interface CheckoutSnapshot { root: string; branch: string; head: string; 
 const sha = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/;
 const diffFlags = ["--no-ext-diff", "--no-textconv", "--no-renames", "--color=never"];
 
+const GIT_ENV = { GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat" };
+const BASE_FILE_BYTES = 1024 * 1024;
+
 export async function gitRead(checkout: Checkout, args: string[], runner: Runner, signal?: AbortSignal): Promise<string> {
  signal?.throwIfAborted();
  const result = await runner.run("git", ["-c", "core.fsmonitor=false", "-C", checkout.root, ...args], {
-  env: { GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat" }, ...(signal ? { signal } : {}),
+  env: GIT_ENV, ...(signal ? { signal } : {}),
  });
  signal?.throwIfAborted();
  if (result.code !== 0) throw new Error(`No se pudo verificar Git (${args[0]}); no se considera limpio`);
@@ -124,6 +127,22 @@ export async function changedPaths(checkout: Checkout, from: string, to: string,
 export async function treePaths(checkout: Checkout, commit: string, runner: Runner = processRunner, signal?: AbortSignal): Promise<string[]> {
  if (!sha.test(commit)) throw new Error("Commit inválido para listar");
  return paths(await gitRead(checkout, ["ls-tree", "-r", "-z", "--name-only", "--full-tree", commit], runner, signal));
+}
+/** Cada archivo como está en la base del trabajo, en el orden pedido y leído una vez por path. Sólo lectura.
+ * null si no está en la base, es binario, pasa de 1 MiB o no se pudo leer: un precedente nunca hace fallar un lente. */
+export async function readBaseFiles(checkout: Checkout, files: readonly string[], runner: Runner = processRunner, signal?: AbortSignal): Promise<(string | null)[]> {
+ signal?.throwIfAborted();
+ if (!sha.test(checkout.baseCommit)) return files.map(() => null);
+ const read = new Map<string, string | null>();
+ for (const path of files) {
+  if (read.has(path)) continue;
+  try {
+   const result = await runner.run("git", ["-c", "core.fsmonitor=false", "-C", checkout.root, "cat-file", "blob", `${checkout.baseCommit}:${path}`], { env: GIT_ENV, maxOutputBytes: BASE_FILE_BYTES, ...(signal ? { signal } : {}) });
+   read.set(path, result.code === 0 && !result.stdout.includes("\0") ? result.stdout : null);
+  } catch (error) { if (signal?.aborted) throw error; read.set(path, null); }
+ }
+ signal?.throwIfAborted();
+ return files.map((path) => read.get(path) ?? null);
 }
 export async function assertStepCommit(checkout: Checkout, evidence: Evidence, commit: string, runner: Runner = processRunner, signal?: AbortSignal): Promise<void> {
  const snapshot = await inspectCheckout(checkout, runner, signal);

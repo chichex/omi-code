@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { combineLensResults, LENS_PART_BUDGET, lensEvidence, lensParts, lensRequests } from "../src/harness/lenses.ts";
 import { createWorkflow, lensRunBlock, transition } from "../src/harness/state.ts";
+import { withoutPrecedents } from "../src/harness/lens-precedents.ts";
 import type { Evidence, Workflow } from "../src/harness/model.ts";
 
 const file = (name: string, lines: number, width = 40) => `diff --git a/${name} b/${name}\n--- a/${name}\n+++ b/${name}\n@@ -0,0 +1,${lines} @@\n` + `+${"x".repeat(width)}\n`.repeat(lines);
@@ -127,4 +128,24 @@ test("lens requests: evidence that fits travels whole, and a small diff fits wit
 test("lens requests: material that does not fit even summarized fails explicitly instead of sending it", () => {
 	const w = heavy();
 	assert.throws(() => lensRequests({ cases: Array.from({ length: 30 }, (_, i) => ({ id: `D${i}`, description: "x".repeat(4000), command: "npm test" })) }, w, diffFiles()), /no entra en una llamada/);
+});
+
+test("lens requests: si con los precedentes o la revisión anterior no entra, van vacíos y lo dicen, en vez de fallar", () => {
+	const w = heavy(); w.evidence = w.evidence.slice(0, 2).map((e) => ({ ...e, output: "corto" }));
+	const precedents = { items: Array.from({ length: 30 }, (_, i) => ({ path: `src/f${i}.ts`, line: 1, detail: "regla", excerpt: { from: 1, lines: ["x".repeat(1500)] } })), omitted: 0 };
+	const previous = { fingerprint: "f".repeat(64), verdict: "fail", findings: [{ blocker: true, text: "src/a.ts:1 · y" }], changedFiles: ["src/a.ts"] };
+	assert.ok(JSON.stringify(precedents).length > 45_000, `${JSON.stringify(precedents).length}`);
+	const files = [file("a.ts", 200)]; const budget = 40_000;
+	const texts = lensRequests({ cases: w.recipe!.cases, precedents, previous }, w, files, budget);
+	for (const text of texts) assert.ok(text.length <= budget, `${text.length} > ${budget}`);
+	const sent = texts.map((t) => JSON.parse(t));
+	for (const m of sent) {
+		assert.deepEqual(m.precedents.items, []); assert.equal(m.precedents.omitted, 30); assert.match(m.precedents.note, /no entraron en la llamada/);
+		assert.deepEqual(m.previous, { omitted: true, note: "La revisión anterior no entró en la llamada; el harness igual compara los archivos cambiados." });
+	}
+	assert.equal(unlabeledDiff(texts), files.join(""), "el diff llega entero");
+	const roomy = JSON.parse(lensRequests({ cases: w.recipe!.cases, precedents, previous }, w, files)[0]!);
+	assert.deepEqual(roomy.precedents, precedents, "con lugar, viajan enteros"); assert.deepEqual(roomy.previous, previous);
+	const cases = Array.from({ length: 30 }, (_, i) => ({ id: `D${i}`, description: "x".repeat(4000), command: "npm test" }));
+	assert.throws(() => lensRequests({ cases, precedents: withoutPrecedents(precedents) }, heavy(), diffFiles()), /no entra en una llamada/, "sin nada que vaciar, el error de siempre");
 });
