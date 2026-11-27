@@ -134,6 +134,20 @@ test("harness_accept_risk pausado o con las vueltas agotadas por seguridad, acep
 	const resumed = send(red, { type: "resume" }); assert.equal(resumed.status, "waiting"); assert.match(resumed.blockedReason, /agotaron las vueltas/);
 });
 
+// Review del incidente (2026-11-26): un D interrumpido no es un rojo. Contarlo dejaba el trabajo agotado después de aceptar,
+// y con las vueltas agotadas el reducer ni siquiera deja volver a correr el D.
+test("harness_accept_risk con un D o un gate interrumpido, aceptar destraba las vueltas agotadas y el check se vuelve a correr", () => {
+	const interrupted = { exitCode: null, outcome: "interrupted" } as const;
+	const exhausted = (s: Workflow) => send({ ...s, round: 3 }, { type: "retry", reason: "Falló security", fingerprint: "tree" });
+	const d = exhausted(verify(insecure(), "tree", interrupted));
+	assert.match(d.blockedReason, /agotaron las vueltas/);
+	const accepted = accept(d);
+	assert.equal(accepted.status, "active"); assert.equal(accepted.blockedReason, "");
+	assert.equal(send(verify(accepted, "tree"), { type: "verified", fingerprint: "tree" }).phase, "pr", "el D se vuelve a correr y verified sigue");
+	const gate = accept(exhausted(send(insecure(), { type: "evidence", evidence: evidence("gate", "tree", interrupted) })));
+	assert.equal(gate.status, "active");
+});
+
 test("harness_accept_risk un blocker aceptado no se reabre con otra corrida de security sobre el mismo contenido; uno sin aceptar tampoco, aunque un refuter apruebe", () => {
 	const lenses: Plan["lenses"] = ["quality", "compliance", "security", "refuter"];
 	const accepted = accept(insecure([SECRET], lenses));

@@ -268,7 +268,7 @@ function retryBlock(state: WorkflowV2, fingerprint: string | undefined): string 
  if (fingerprint) {
   const latest = latestChecks(state, fingerprint), pending = latest.filter(e => !successful(e));
   if (latest.some(expectedFailure) && !amendBlock(state, fingerprint)) return AMEND_FIRST;
-  red = latest.some(e => expectedFailure(e) || cappedTimeout(e));
+  red = latest.some(roundRed);
   if (pending.length && !red && !blocker && !roundFull(state)) return notRedReason(pending);
  }
  // Con el riesgo aceptado, una vuelta entera borraría esa decisión de la persona.
@@ -298,9 +298,9 @@ function latestChecks(state: Workflow, fingerprint: string): Evidence[] {
 const roundFull = (state: Workflow): boolean => state.evidence.length >= MAX_EVIDENCE || state.reviews.length >= MAX_REVIEWS;
 const MISSING_COMMAND = "el comando no existe o no es ejecutable (exit 126 o 127): no es un rojo del cambio. Si es un gate, corregí el comando (ese no cuenta como gate); si es un D de la receta, pausá con el motivo: hay que corregir la receta";
 const RERUN = "el D o el gate quedó interrumpido (sin código, por señal o por timeout): no es un rojo del cambio; volvé a correrlo con el timeoutSeconds que sugiere OMI";
-// Lo que no pasó sin ser un rojo (comando ausente o interrumpido), igual en amend y retry; con el tope, más tiempo no hay.
+// Comando ausente o interrumpido no es un rojo, igual en amend y retry; roundRed sí: con el tope del host no hay más tiempo.
 const notRedReason = (pending: readonly Evidence[]): string => pending.some(missingCommand) ? MISSING_COMMAND : RERUN;
-const cappedTimeout = (e: Evidence): boolean => e.outcome === "interrupted" && e.exitCode === null && Date.parse(e.finishedAt) - Date.parse(e.startedAt) >= MAX_CHECK_TIMEOUT_SECONDS * 1000;
+const roundRed = (e: Evidence): boolean => expectedFailure(e) || e.outcome === "interrupted" && e.exitCode === null && Date.parse(e.finishedAt) - Date.parse(e.startedAt) >= MAX_CHECK_TIMEOUT_SECONDS * 1000;
 // Por qué amend no corre sobre este contenido, o "" si corre.
 function amendBlock(state: WorkflowV2, fingerprint: string): string {
  if (state.status !== "active" || decisionBlock(state) || !state.recipe) return "hay un bloqueo pendiente";
@@ -328,9 +328,9 @@ function amend(state: WorkflowV2, reason: string, fingerprint: string, at: strin
 }
 // Lo que vale sólo para esta vuelta: las correcciones livianas y los riesgos aceptados. Sin ellos, el campo no queda.
 function clearRound(state: Workflow): void { if (state.version === 2) { delete state.amends; delete state.acceptedRisks; } }
-// Lo que frena este contenido aunque una persona acepte el riesgo: un D o un gate rojo, o un blocker sin aceptar.
+// Lo que frena este contenido aunque una persona acepte el riesgo: un rojo (no un interrumpido) o un blocker sin aceptar.
 function contentBlocked(state: Workflow, fingerprint: string): boolean {
- return latestChecks(state, fingerprint).some(e => !successful(e) && !missingCommand(e)) || contentSecurityBlocks(state, executionReviews(state), fingerprint);
+ return latestChecks(state, fingerprint).some(roundRed) || contentSecurityBlocks(state, executionReviews(state), fingerprint);
 }
 function sourceChanged(state: Workflow, source: Workflow["source"], at: string): void {
  requireCondition(source.number === state.source.number && source.url === state.source.url, "no se puede cambiar la identidad del issue");
