@@ -77,11 +77,15 @@ async function readHolder(path: string): Promise<Holder | "unsafe" | undefined> 
   return { dev: entry.dev, ino: entry.ino, mtimeMs: entry.mtimeMs, pid: owner, text: ownerText(value) };
  } finally { await file.close(); }
 }
+// El archivo que se leyó. dev e ino no alcanzan: el inodo se reusa enseguida (ext4, tmpfs) y un turno nuevo creado por otro
+// proceso puede tener el mismo; su mtime es posterior al que se leyó.
+export const sameHolder = (current: Pick<Holder, "dev" | "ino" | "mtimeMs">, holder: Pick<Holder, "dev" | "ino" | "mtimeMs">): boolean =>
+ current.dev === holder.dev && current.ino === holder.ino && current.mtimeMs === holder.mtimeMs;
 // Retira sólo el archivo que se leyó: si otro ya lo reemplazó, no lo toca.
 async function retire(path: string, holder: Holder): Promise<void> {
  try {
   const current = await lstat(path);
-  if (current.dev === holder.dev && current.ino === holder.ino && !current.isSymbolicLink()) await unlink(path);
+  if (sameHolder(current, holder) && !current.isSymbolicLink()) await unlink(path);
  } catch (error) { if (!codeIs(error, "ENOENT")) throw error; }
 }
 // Como releaseLock de store.ts, pero sin fallar: un turno que no se pudo borrar lo retira el próximo por su edad.

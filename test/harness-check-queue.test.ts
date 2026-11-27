@@ -5,7 +5,7 @@ import { link, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, 
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { checkTurnPath, takeCheckTurn, type CheckTurn } from "../src/harness/check-queue.ts";
+import { checkTurnPath, sameHolder, takeCheckTurn, type CheckTurn } from "../src/harness/check-queue.ts";
 
 const FAST = { pollMs: 10, limitMs: 60_000 };
 const CONTROL = /\p{Cc}/u;
@@ -153,4 +153,14 @@ test("check_queue datos ajenos del turno: un PID inválido no se juzga ni se usa
  const turn = await takeCheckTurn(f.b, { kind: "gate", command: "npm test" }, new AbortController().signal, FAST);
  assert.equal(turn.notice, "Se retiró el turno de checks del repo que tenía npm test ]0;pwn --x en issue- [31m98: llevaba 1 min o más sin liberarse.", "el texto se limpia pero sigue diciendo de quién era");
  await turn.release();
+});
+
+// Review de Sonnet en #100 (check-queue.ts:84): retire comparaba sólo dev e ino, y el inodo se reusa enseguida (ext4, tmpfs).
+// Con tres procesos, el segundo que retiraba un turno muerto podía borrar el turno vivo que el primero acababa de crear.
+test("check_queue retira sólo el archivo que leyó: un turno nuevo con el mismo inodo pero otro mtime no se toca", () => {
+ const read = { dev: 1, ino: 8059486, mtimeMs: 1000.25 };
+ assert.equal(sameHolder({ dev: 1, ino: 8059486, mtimeMs: 1000.25 }, read), true, "el mismo archivo");
+ assert.equal(sameHolder({ dev: 1, ino: 8059486, mtimeMs: 1003.5 }, read), false, "inodo reusado por un turno nuevo");
+ assert.equal(sameHolder({ dev: 2, ino: 8059486, mtimeMs: 1000.25 }, read), false);
+ assert.equal(sameHolder({ dev: 1, ino: 1, mtimeMs: 1000.25 }, read), false);
 });
