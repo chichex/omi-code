@@ -5,6 +5,7 @@ import { executionEvidence, executionReviews, assertCorrectionExecution } from "
 import { amendsOf, lensReview } from "./lenses.ts";
 import { acceptedRisksOf, contentSecurityBlocks, recordAcceptedRisk, riskAccepted, securityBlocks, unacceptedBlockers } from "./security-blockers.ts";
 import { openedStack, planStack, stackGroups, stackProblem, syncedStack } from "./stack.ts";
+import { MAX_CHECK_TIMEOUT_SECONDS } from "./check-timing.ts";
 
 export type WorkflowEvent =
  | { type: "explored"; exploration: Exploration }
@@ -257,16 +258,23 @@ function correctionStep(state: Workflow, title: string): void {
  state.phase = "implement"; state.publication = { status: "none" };
 }
 // Una vuelta entera es para lo que amend no corrige: un blocker de security, o un D o un gate rojo sin amend en la vuelta.
-// retry se rechaza si sólo hay avisos, o si sobre el contenido limpio hay un rojo que amend acepta: lo que retry rechaza,
-// amend lo acepta. Sin fingerprint (checkout sucio), amend no puede y retry sigue. Los topes siguen pidiendo retry o refresh.
+// Con el contenido limpio vale la última corrida de cada check, como en amend: retry se rechaza con sólo avisos, si un amend
+// alcanza o si lo que no pasó se vuelve a correr (interrumpido o comando ausente); cortado con el tope del host, cuenta como
+// rojo. Sin fingerprint (checkout sucio), amend no puede y vale toda la vuelta. Los topes siguen pidiendo retry o refresh.
 function retryBlock(state: WorkflowV2, fingerprint: string | undefined): string {
- if (fingerprint && latestChecks(state, fingerprint).some(expectedFailure) && !amendBlock(state, fingerprint)) return AMEND_FIRST;
  const evidence = executionEvidence(state), reviews = executionReviews(state);
- const blocking = evidence.some(e => (e.kind === "verification" || e.kind === "gate") && !successful(e)) || reviews.some(r => unacceptedBlockers(state, r).length > 0);
+ const blocker = reviews.some(r => unacceptedBlockers(state, r).length > 0);
+ let red = evidence.some(e => (e.kind === "verification" || e.kind === "gate") && !successful(e));
+ if (fingerprint) {
+  const latest = latestChecks(state, fingerprint), pending = latest.filter(e => !successful(e));
+  if (latest.some(expectedFailure) && !amendBlock(state, fingerprint)) return AMEND_FIRST;
+  red = latest.some(e => expectedFailure(e) || cappedTimeout(e));
+  if (pending.length && !red && !blocker && !roundFull(state)) return notRedReason(pending);
+ }
  // Con el riesgo aceptado, una vuelta entera borraría esa decisión de la persona.
  const accepted = reviews.some(r => riskAccepted(state, r));
  const advisory = accepted || reviews.some(r => r.lens === "security" ? r.verdict === "fail" && !securityBlocks(r) : r.verdict === "fail" || r.findings.length > 0);
- return advisory && !blocking && !roundFull(state) ? (accepted ? RISK_ACCEPTED_KEEP : ADVISORY_RETRY) : "";
+ return advisory && !red && !blocker && !roundFull(state) ? (accepted ? RISK_ACCEPTED_KEEP : ADVISORY_RETRY) : "";
 }
 function retry(state: WorkflowV2, reason: string, fingerprint: string | undefined, at: string): void {
  requireCondition(state.version !== 2 || state.pullRequest?.ownership !== "adopted", "post-PR usa corrección propia; retry no puede borrar publication ni presupuesto");
@@ -289,6 +297,10 @@ function latestChecks(state: Workflow, fingerprint: string): Evidence[] {
 }
 const roundFull = (state: Workflow): boolean => state.evidence.length >= MAX_EVIDENCE || state.reviews.length >= MAX_REVIEWS;
 const MISSING_COMMAND = "el comando no existe o no es ejecutable (exit 126 o 127): no es un rojo del cambio. Si es un gate, corregí el comando (ese no cuenta como gate); si es un D de la receta, pausá con el motivo: hay que corregir la receta";
+const RERUN = "el D o el gate quedó interrumpido (sin código, por señal o por timeout): no es un rojo del cambio; volvé a correrlo con el timeoutSeconds que sugiere OMI";
+// Lo que no pasó sin ser un rojo (comando ausente o interrumpido), igual en amend y retry; con el tope, más tiempo no hay.
+const notRedReason = (pending: readonly Evidence[]): string => pending.some(missingCommand) ? MISSING_COMMAND : RERUN;
+const cappedTimeout = (e: Evidence): boolean => e.outcome === "interrupted" && e.exitCode === null && Date.parse(e.finishedAt) - Date.parse(e.startedAt) >= MAX_CHECK_TIMEOUT_SECONDS * 1000;
 // Por qué amend no corre sobre este contenido, o "" si corre.
 function amendBlock(state: WorkflowV2, fingerprint: string): string {
  if (state.status !== "active" || decisionBlock(state) || !state.recipe) return "hay un bloqueo pendiente";
@@ -296,8 +308,7 @@ function amendBlock(state: WorkflowV2, fingerprint: string): string {
  const red = latestChecks(state, fingerprint).filter(e => !successful(e));
  const finding = executionReviews(state).some(r => r.fingerprint === fingerprint && !r.noResult && (r.verdict === "fail" || r.findings.length > 0));
  if (!finding && !red.some(expectedFailure)) {
-  if (red.some(missingCommand)) return MISSING_COMMAND;
-  return red.length ? "el D o el gate quedó interrumpido (sin código, por señal o por timeout): no es un rojo del cambio; volvé a correrlo" : "sobre este contenido no hay ningún hallazgo de un lente ni un D o un gate rojo que corregir con amend";
+  return red.length ? notRedReason(red) : "sobre este contenido no hay ningún hallazgo de un lente ni un D o un gate rojo que corregir con amend";
  }
  if (acceptedRisksOf(state).some(a => a.fingerprint === fingerprint) && !red.some(expectedFailure)) return RISK_ACCEPTED_KEEP;
  if ((state.amends ?? []).length >= MAX_AMENDS) return `ya se usaron las ${MAX_AMENDS} correcciones livianas de esta vuelta: un aviso queda en el PR y un D o un gate rojo pide retry`;

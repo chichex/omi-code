@@ -273,3 +273,41 @@ test("harness_amend un comando ausente (126/127) no cuenta como gate ni traba la
 	assert.throws(() => amend(onlyMissing), /no existe o no es ejecutable/);
 	assert.throws(() => amend(failedD(cleanLenses(verify(verifying(), "tree")), "tree", { exitCode: 126 })), /D de la receta, pausá/);
 });
+
+// Review del incidente (2026-11-26): retry juzgaba toda la evidencia de la vuelta. Un rojo ya corregido o que no se
+// reprodujo, un corte por tiempo o un comando ausente gastaban una vuelta y, en la última, frenaban el trabajo.
+const retryOn = (s: Workflow, fingerprint: string) => send(s, { type: "retry", reason: "Falló npm test", fingerprint });
+
+test("harness_retry vale la última corrida de cada check sobre este contenido: un rojo corregido o que no se reprodujo no pide vuelta", () => {
+	// Rojo sobre tree, amend y C2 en tree2: sobre tree2 todo pasa y compliance sólo avisa.
+	let s = implement(amend(failedGate(flagged(), "tree", "npm test", { exitCode: 1 })), "C2", "tree2");
+	s = passedGate(lens(lens(verify(s, "tree2"), review("security", "tree2")), review("compliance", "tree2", "fail", ["test.cjs:3 · sigue débil"])), "tree2", "npm test");
+	assert.equal(verified(s, "tree2").phase, "pr");
+	assert.throws(() => retryOn(s, "tree2"), /sólo avisan/);
+	// Un gate flaky: falló y después pasó sobre el mismo contenido, con sólo avisos.
+	const flaky = passedGate(failedGate(flagged(), "tree", "npm test", { exitCode: 1 }), "tree", "npm test");
+	assert.throws(() => retryOn(flaky, "tree"), /sólo avisan/);
+	// Un D que falló y después pasó, igual.
+	assert.throws(() => retryOn(verify(failedD(flagged(), "tree"), "tree"), "tree"), /sólo avisan/);
+});
+
+test("harness_retry un D o un gate interrumpido o con comando ausente se vuelve a correr: retry no gasta la vuelta ni agota la última", () => {
+	const interrupted = { exitCode: null, outcome: "interrupted" } as const;
+	const gate = failedGate(cleanLenses(verify(verifying(), "tree")), "tree", "npm test", interrupted);
+	assert.throws(() => retryOn(gate, "tree"), /interrumpido[^:]*: no es un rojo del cambio; volvé a correrlo con el timeoutSeconds que sugiere OMI/);
+	assert.equal(retryOn(passedGate(gate, "tree", "npm test"), "tree").round, 1, "repetido y verde, nada lo frena: los topes y los lentes agotados siguen pidiendo retry");
+	// En la última vuelta, un D interrumpido no deja el trabajo esperando con las vueltas agotadas.
+	const last = { ...failedD(cleanLenses(verify(verifying(), "tree")), "tree", interrupted), round: 3 } as Workflow;
+	assert.throws(() => retryOn(last, "tree"), /interrumpido/);
+	assert.equal(verified(verify(last, "tree"), "tree").phase, "pr", "volver a correrlo lo resuelve");
+	// Un gate con un comando que no existe, con un aviso de por medio.
+	assert.throws(() => retryOn(failedGate(flagged(), "tree", "nmp test", { exitCode: 127 }), "tree"), /no existe o no es ejecutable/);
+	// Con un rojo de verdad o un blocker de security, el interrumpido no cambia nada: retry sigue.
+	const blocker = lens(failedD(verify(verifying(), "tree"), "tree", interrupted), review("security", "tree", "fail", ["src/a.ts:1 · secreto"]));
+	assert.equal(retryOn(blocker, "tree").round, 1);
+	// Cortado con el tope del host (1800 s), volver a correrlo no le da más tiempo: cuenta como rojo y retry sigue.
+	const capped = failedGate(cleanLenses(verify(verifying(), "tree")), "tree", "npm test", { ...interrupted, startedAt: "2026-01-01T00:00:00Z", finishedAt: "2026-01-01T00:30:01Z" });
+	assert.equal(retryOn(capped, "tree").round, 1);
+	// Sin el contenido limpio (checkout sucio), retry no puede saber qué vale y sigue la regla de toda la vuelta.
+	assert.equal(send(gate, { type: "retry", reason: "checkout sucio" }).round, 1);
+});
