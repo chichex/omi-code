@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { sourceHash, type Evidence, type Workflow } from "../src/harness/model.ts";
 import { createWorkflow } from "../src/harness/state.ts";
-import { heavyCheck, HEAVY_CHECK_MS, lastCompleteMs, MAX_CHECK_TIMEOUT_SECONDS, plannedTimeout, SetupHistory, type SetupRun, timeoutNote } from "../src/harness/check-timing.ts";
+import { heavyCheck, HEAVY_CHECK_MS, lastCompleteMs, MAX_CHECK_TIMEOUT_SECONDS, plannedTimeout, provesDuration, SetupHistory, type SetupRun, timeoutNote } from "../src/harness/check-timing.ts";
 
 const T0 = Date.parse("2026-11-26T03:00:00.000Z");
 let id = 0;
@@ -110,4 +110,17 @@ test("check_timing sólo una corrida completa prueba que un comando es liviano; 
  assert.equal(heavyCheck(workflow([run("npm test", 5000, "interrupted")]), "verification", "npm test"), false, "sin corrida completa vale la regla sin historia");
  assert.equal(heavyCheck(workflow([run("npm test", 5000, "interrupted"), run("npm test", 8000, "passed")]), "gate", "npm test"), false, "con una completa corta, liviano");
  assert.equal(heavyCheck(workflow([run("npm test", 5000, "passed"), run("npm test", 40_000, "interrupted")]), "gate", "npm test"), true, "una interrumpida de 30 s o más sigue contando");
+});
+
+// Review de Sonnet en #100 (check-timing.ts:36): una corrida que falló a los 4 s (un import roto) contaba como completa. El
+// gate quedaba liviano, la corrida siguiente de 4 min no esperaba turno y el piso de timeout de una corrida larga se perdía.
+test("check_timing una falla rápida no prueba cuánto tarda el comando: ni lo vuelve liviano ni baja el piso", () => {
+ assert.equal(heavyCheck(workflow([run("npm test", 4000, "failed")]), "gate", "npm test"), true, "un gate que falló a los 4 s sigue pesado");
+ assert.equal(lastCompleteMs(workflow([run("npm test", 4000, "failed")]), "npm test"), undefined);
+ assert.equal(lastCompleteMs(workflow([run("npm test", 230_000, "passed"), run("npm test", 4000, "failed")]), "npm test"), 230_000, "la falla rápida posterior no tapa la corrida larga");
+ assert.equal(lastCompleteMs(workflow([run("npm test", 240_000, "failed")]), "npm test"), 240_000, "una falla después de 30 s o más sí llegó lejos y cuenta");
+ assert.equal(heavyCheck(workflow([run("npm run lint", 2000, "passed")]), "gate", "npm run lint"), false, "un pase rápido sigue probando que es liviano");
+ assert.equal(provesDuration(false, 4000), false);
+ assert.equal(provesDuration(false, HEAVY_CHECK_MS), true);
+ assert.equal(provesDuration(true, 2000), true);
 });

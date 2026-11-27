@@ -6,8 +6,11 @@ import type { EvidenceKind, Workflow } from "./model.ts";
 export const MAX_CHECK_TIMEOUT_SECONDS = 1800;
 /** Un comando que alguna vez tardó esto o más espera turno en la cola de checks del repo. */
 export const HEAVY_CHECK_MS = 30_000;
+/** Una corrida que terminó sola prueba cuánto tarda el comando si pasó, o si falló después de 30 s o más: una falla rápida
+ * (un import roto, un error de sintaxis) no llegó al final, y no lo vuelve liviano ni baja el piso de timeout. */
+export const provesDuration = (passed: boolean, ms: number): boolean => passed || ms >= HEAVY_CHECK_MS;
 interface Run { ms: number; finishedAt: number; complete: boolean }
-/** Una corrida de setup de esta sesión: complete si terminó sola, sin corte, señal ni cancelación. */
+/** Una corrida de setup de esta sesión: complete si terminó sola, sin corte, señal ni cancelación, y provesDuration. */
 export interface SetupRun extends Run { command: string }
 const MAX_SETUP_RUNS = 50;
 /** Las corridas de setup por trabajo, sólo en memoria y con tope: el estado no las guarda. */
@@ -20,10 +23,10 @@ export class SetupHistory {
 // De cualquier vuelta, también las archivadas, y de los setup de la sesión, siempre del mismo comando exacto.
 function runsOf(state: Workflow, command: string, setups: readonly SetupRun[]): Run[] {
  const evidence = [...(state.attempts ?? []).flatMap((a) => a.evidence), ...state.evidence].filter((e) => e.command === command)
-  .map((e) => ({ ms: Date.parse(e.finishedAt) - Date.parse(e.startedAt), finishedAt: Date.parse(e.finishedAt), complete: e.outcome !== "interrupted" }));
+  .map((e) => { const ms = Date.parse(e.finishedAt) - Date.parse(e.startedAt); return { ms, finishedAt: Date.parse(e.finishedAt), complete: e.outcome !== "interrupted" && provesDuration(e.outcome === "passed", ms) }; });
  return [...evidence, ...setups.filter((r) => r.command === command)].filter((r) => Number.isFinite(r.ms) && r.ms >= 0);
 }
-/** La duración de la última corrida que terminó sola (pasó o falló); nunca la de una interrumpida. */
+/** La duración de la última corrida completa (pasó, o falló tras 30 s o más); nunca la de una interrumpida. */
 export function lastCompleteMs(state: Workflow, command: string, setups: readonly SetupRun[] = []): number | undefined {
  return runsOf(state, command, setups).filter((r) => r.complete)
   .reduce<Run | undefined>((last, r) => !last || r.finishedAt >= last.finishedAt ? r : last, undefined)?.ms;

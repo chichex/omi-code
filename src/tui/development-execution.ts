@@ -12,7 +12,7 @@ import { recordedOutput } from "../harness/check-reds.ts";
 import { inspectCheckout, assertStepCommit, type CheckoutSnapshot } from "../harness/git.ts";
 import { DEFAULT_COMMAND_TIMEOUT_SECONDS, runWorkflowCommand, type WorkflowCommandResult } from "../harness/commands.ts";
 import { takeCheckTurn, type CheckTurn } from "../harness/check-queue.ts";
-import { heavyCheck, lastCompleteMs, plannedTimeout, timeoutNote } from "../harness/check-timing.ts";
+import { heavyCheck, lastCompleteMs, plannedTimeout, provesDuration, timeoutNote } from "../harness/check-timing.ts";
 import { workflowWritePath } from "../harness/permissions.ts";
 import { afterDraft, assertCorrectionHead, assertCorrectionExecution } from "../harness/execution-scope.ts";
 import type { DevelopmentSession } from "./development-session.ts";
@@ -81,7 +81,7 @@ export async function executeCheck(session: DevelopmentSession, input: CheckInpu
 	if (result.timedOut) notes.push(timeoutNote(timeout.seconds, known, input.kind));
 	if (input.kind === "setup") {
 		const finishedAt = Date.parse(session.now()), ms = finishedAt - Date.parse(startedAt);
-		session.setups.record(state.id, { command: input.command, ms, finishedAt, complete: !result.timedOut && !result.interrupted && !signal.aborted && result.exitCode !== null && result.exitCode < 128 });
+		session.setups.record(state.id, { command: input.command, ms, finishedAt, complete: !result.timedOut && !result.interrupted && !signal.aborted && result.exitCode !== null && result.exitCode < 128 && provesDuration(result.exitCode === 0, ms) });
 	}
 	const after = await inspectCheckout(state.checkout, session.runner, session.lifecycle.signal);
 	const current = session.current(ctx);
