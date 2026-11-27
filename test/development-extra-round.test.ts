@@ -1,4 +1,5 @@
 // /omi-work extra-round con Git real: sólo una persona, en la TUI y con motivo, suma una vuelta con 0 retry.
+import { readFile } from "node:fs/promises";
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { updateWorkflow } from "../src/harness/store.ts";
@@ -48,4 +49,13 @@ test("development_extra_round sin TUI interactiva, con No o sin motivo no se sum
 	f.remote.answer = "x".repeat(2001); f.messages.length = 0; await f.command("extra-round");
 	assert.ok(f.messages.some((m) => /demasiado largo/.test(m)), JSON.stringify(f.messages));
 	assert.equal((await f.state()).maxRounds, 3);
+});
+
+// Review del incidente (2026-11-26, rules-readme-human-exits): el README listaba los controles de /omi-work sin las dos
+// salidas humanas que destraban un trabajo frenado.
+test("development_extra_round el README nombra las dos salidas humanas de /omi-work y que sólo las usa una persona en la TUI", async () => {
+	const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
+	const controls = readme.split("\n").find((line) => line.includes("permiten controlarlo")) ?? "";
+	for (const command of ["accept-risk", "extra-round"]) assert.ok(controls.includes(`\`/omi-work ${command}\``), `${command} en los controles`);
+	assert.match(controls, /sólo una persona en la TUI/);
 });
