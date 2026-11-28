@@ -4,6 +4,8 @@
 import { MAX_ACCEPTED_RISKS, type AcceptedRisk, type Review, type Severity, type Workflow, type WorkflowV2 } from "./model.ts";
 
 export const FAIL_WITHOUT_FINDINGS = "El lente de seguridad falló sin detallar hallazgos";
+/** El prefijo con el que la convergencia baja a aviso un blocker nuevo en un archivo sin cambios. */
+export const SECURITY_DOWNGRADED = "bajado a aviso: archivo sin cambios desde la revisión anterior";
 
 /** La severidad de cada hallazgo: aviso sólo si la lista está alineada y lo dice; si no, blocker. */
 export function severitiesOf(r: Pick<Review, "findings" | "severities">): Severity[] {
@@ -34,6 +36,15 @@ export function unacceptedBlockers(state: Workflow, r?: Review): string[] {
 }
 /** Había blockers y una persona los aceptó todos para este contenido. */
 export const riskAccepted = (state: Workflow, r?: Review): boolean => securityBlockers(r).length > 0 && !unacceptedBlockers(state, r).length;
+/** Las revisiones de este pedido: las de la vuelta y las que un retry archivó con el mismo pedido. */
+export const requestReviews = (state: Workflow): Review[] => [...(state.attempts ?? []).filter(a => a.sourceHash === state.source.hash).flatMap(a => a.reviews), ...state.reviews];
+const PART = /^parte \d+\/\d+ · /;
+/** Lo que el host bajó a aviso en este pedido, sin el prefijo. Lee el texto guardado y no mira veredicto ni severidad:
+ * falla cerrado. Un repetido que aceptó una persona lleva otro prefijo y no cuenta. */
+export function downgradedFindings(state: Workflow): string[] {
+ const mark = `${SECURITY_DOWNGRADED} · `;
+ return requestReviews(state).filter(r => r.lens === "security").flatMap(r => r.findings.map(f => f.replace(PART, "")).filter(f => f.startsWith(mark)).map(f => f.slice(mark.length)));
+}
 export const latestSecurity = (reviews: readonly Review[], fingerprint: string): Review | undefined => reviews.findLast(r => r.lens === "security" && r.fingerprint === fingerprint);
 /** El último security de este contenido tiene un blocker sin aceptar. */
 export const contentSecurityBlocks = (state: Workflow, reviews: readonly Review[], fingerprint: string): boolean => unacceptedBlockers(state, latestSecurity(reviews, fingerprint)).length > 0;
