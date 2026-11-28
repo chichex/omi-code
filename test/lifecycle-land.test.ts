@@ -264,6 +264,13 @@ test("un aviso común o un riesgo aceptado que se repite no retienen el merge: l
   assert.equal(readiness.auto, true, finding); assert.deepEqual(readiness.attention, [], finding);
  }
 });
+// Revisión adversarial (hold-riesgo-alto-tapa-lo-bajado): en riesgo alto, el motivo de riesgo alto tapaba al de lo bajado
+// y el diálogo de Land no nombraba sus archivos. Van los dos, cada uno en su párrafo.
+test("en riesgo alto, el diálogo de Land muestra el motivo de riesgo alto y también lo bajado a aviso", () => {
+ const r = highRisk(shipKnown(workflow("auto")), [{ ...downgraded(), fingerprint: "d".repeat(64) }, security("unknown", { noResult: true })]), readiness = landReadiness(r, facts(), highWitness(r));
+ assert.equal(readiness.auto, false); assert.deepEqual(readiness.attention, [SECURITY_HOLD, DOWNGRADED_HOLD]);
+ assert.deepEqual(firstKey(readiness.summary), ["attention", `${SECURITY_HOLD}. ${DOWNGRADED_HOLD}`]);
+});
 test("lo bajado en un intento archivado del mismo pedido retiene el merge; el de otro pedido no", () => {
  const r = lowRisk([]); r.attempts = [{ sourceHash: r.source.hash, round: 1, reason: "retry", at, evidence: [], reviews: [downgraded()] }];
  assert.deepEqual(landReadiness(r, facts(), risk(r)).attention, [DOWNGRADED_HOLD]);

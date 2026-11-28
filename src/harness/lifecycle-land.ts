@@ -10,7 +10,7 @@ import { landLedgerHash } from "./land-invariants.ts";
 import { LandFactsSchema, LandRiskSchema, type LandFacts, type LandRisk, type ReadyLand } from "./land-schema.ts";
 import { PullSchema } from "./lifecycle-github-schema.ts";
 import { effectiveGitHubReviews } from "./github-review-opinions.ts";
-import { landSecurityHold } from "./land-security.ts";
+import { landSecurityHolds } from "./land-security.ts";
 export { landPullRequest } from "./land-operation.ts";
 // attention: motivos por los que el merge pide el sí de la persona aunque Land diga auto; no lo bloquean.
 export interface LandReadiness { ready: boolean; auto: boolean; reasons: string[]; attention: string[]; summary: string; hash: string }
@@ -45,7 +45,7 @@ export function landReadiness(original: unknown, observed: unknown, witness: unk
    const o = entry.observations.at(-1); return o?.provider === "github" && o.externalId === finding.externalId && o.subjectId === subject.id && o.text === finding.body && o.resolved === (finding.resolved === true) && o.outdated === finding.outdated;
   }), "nuevo comentario/hallazgo sin disposición en ledger");
   lifecycleAssert(risk.scopeHash === recipeApprovalHash(state) && risk.risk !== "unknown" && (risk.risk !== "high" || config.land.maxRisk === "high"), "riesgo/alcance desconocido o superior al aceptado");
-  result.ready = true; const hold = landSecurityHold(state, risk, subject.contentHash); result.attention = hold ? [hold] : [];
+  result.ready = true; const holds = landSecurityHolds(state, risk, subject.contentHash), hold = holds.join(". "); result.attention = holds;
   result.auto = !hold && config.land.mode === "auto" && config.ship.status !== "unconfigured" && f.repo !== "chichex/omi-code" && risk.source !== "model" && !!risk.authorityHash;
   result.hash = landSnapshotHash(state, f, risk);
   result.summary = JSON.stringify({ ...(hold ? { attention: hold } : {}), objective: state.recipe?.objective, scope: state.recipe?.scope, outOfScope: state.recipe?.outOfScope, repo: f.repo, pr: f.number, headSha: f.headSha, baseSha: f.baseSha, base: subject.base, method: config.land.method,

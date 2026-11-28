@@ -1,7 +1,7 @@
 // Seguridad en un cambio de riesgo alto: sin pass, ni un fail completo de sólo avisos, ni un fail con sus blockers aceptados
 // por una persona sobre el contenido que se mergea, el merge pide el sí de la persona. Un fail parcial cuenta como sin veredicto.
 // En cualquier riesgo, lo que la convergencia bajó a aviso en el pedido también pide el sí: baja por la clase que declara el
-// lente y por la lista SECRET, y ninguna de las dos ve un secreto mal clasificado («arma la URL postgres://admin:clave@…»).
+// lente y por la lista SECRET, y ninguna de las dos ve un secreto mal clasificado («arma la URL postgres://admin:hunter2@…»).
 // No bloquea Verificar, el PR draft ni Land: sólo saca el auto-Land y pone el motivo primero.
 import type { Workflow } from "./model.ts";
 import type { LandRisk } from "./land-schema.ts";
@@ -14,9 +14,9 @@ const SECURITY_FAILED_HOLD = "Seguridad en fail en un cambio de riesgo alto: el 
 
 const MAX_HOLD_FILES = 3;
 
-/** El motivo por el que el merge pide el sí humano, o undefined. */
-export function landSecurityHold(state: Workflow, risk: LandRisk, contentHash: string): string | undefined {
-	return highRiskHold(state, risk, contentHash) ?? downgradedHold(state);
+/** Los motivos por los que el merge pide el sí humano, cada uno en su párrafo del diálogo; vacío si no hay. */
+export function landSecurityHolds(state: Workflow, risk: LandRisk, contentHash: string): string[] {
+	return [highRiskHold(state, risk, contentHash), downgradedHold(state)].filter((hold) => hold !== undefined);
 }
 /** Riesgo alto si lo dice la receta o el testigo de Land. Vale sólo el lente de Seguridad del contenido que se mergea:
  * uno de otro contenido no se arrastra. */

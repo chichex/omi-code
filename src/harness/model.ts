@@ -127,7 +127,7 @@ export const WorkflowV2Schema = Type.Object({
  pullRequest: PullRequestSchema,
  // Correcciones livianas de la vuelta actual: el contenido del que partió cada una. Opcional para estados previos.
  amends: Type.Optional(Type.Array(Type.Object({ from: text(128), reason: text(), at: text(100) }, { additionalProperties: false }), { maxItems: MAX_AMENDS })),
- // Riesgos de seguridad que una persona aceptó desde la TUI para un contenido exacto. Opcional para estados previos; retry, refresh y replan lo borran. Con el PR adoptado, una ronda conserva sólo lo aceptado sobre su HEAD de partida.
+ // Riesgos de seguridad que una persona aceptó desde la TUI para un contenido exacto. Opcional para estados previos; retry, refresh y replan lo borran. Con el PR adoptado, una ronda conserva sólo lo que vale sobre su HEAD de partida.
  acceptedRisks: Type.Optional(Type.Array(AcceptedRiskSchema, { maxItems: MAX_ACCEPTED_RISKS })),
  // El renderer v1 permanece ligado al pending legacy y no se cambia al migrar/reanudar.
  publicationFormat: Type.Literal(1),

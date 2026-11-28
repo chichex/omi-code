@@ -15,6 +15,7 @@ import { Value } from "typebox/value";
 import { CorrectionPushRequestSchema } from "../src/harness/correction-schema.ts";
 import { pushPostPrCorrection, acceptCorrectionPush } from "../src/harness/correction-push.ts";
 import { adoptPostPrWorkflow, preparePostPrCorrection, activatePostPrCorrection, verifyPostPrCorrection, retryPostPrCorrection } from "../src/harness/lifecycle-corrections.ts";
+import { SECURITY_ACCEPTED_REPEAT } from "../src/harness/security-convergence.ts";
 const at = "2026-01-01T00:00:00Z", repo = "acme/app", base = "a".repeat(40), head = "b".repeat(40), nextHead = "d".repeat(40), fingerprint = "c".repeat(64), nextFingerprint = "e".repeat(64);
 const plan: Plan = { classification: { type: "add", size: "small", risk: "low", riskAreas: [], causeKnown: true }, objective: "Feature", approach: "Extend", scope: ["app"], outOfScope: ["new functionality"], cases: [{ id: "D1", description: "works", command: "npm test" }], lenses: [], executor: { mode: "inline", writers: 0 } };
 const send = (r: WorkflowV2, event: Parameters<typeof transition>[1]) => transition(r, event, at);
@@ -188,6 +189,12 @@ test("una ronda post-PR conserva sólo lo aceptado sobre el HEAD del que parte; 
 test("una ronda post-PR sin nada aceptado sobre su HEAD de partida deja el estado sin el campo", () => {
  const r = coding({ ...reviewing(), acceptedRisks: older(3) });
  assert.equal("acceptedRisks" in r, false);
+});
+// Revisión adversarial (tope-repetido-aceptado-se-borra): lo aceptado sobre F0 que la convergencia bajó como repetido en F1
+// sigue en lo que se mergea. Si la ronda que parte de F1 lo descartaba, en F2 volvía a frenar aunque su archivo no cambió.
+test("una ronda post-PR conserva lo aceptado que la revisión de su HEAD de partida repite como aceptado", () => {
+ const repeated = (prefix: string) => ({ ...reviewing(), acceptedRisks: older(3), reviews: [{ lens: "security" as const, fingerprint, verdict: "fail" as const, findings: [`${prefix}${SECURITY_ACCEPTED_REPEAT} · app.ts:3 · manda el diff a otro servidor`], severities: ["aviso" as const], at }] });
+ for (const prefix of ["", "parte 2/2 · "]) assert.deepEqual(coding(repeated(prefix)).acceptedRisks, [older(3)[1]], prefix || "sin parte");
 });
 test("con el PR adoptado, el tope de riesgos aceptados no ofrece retry ni refresh, que el reducer rechaza", () => {
  // Un estado de v0.35.0, que llegó a 10 a mitad de una ronda: no se destraba, y el texto dice la única salida.

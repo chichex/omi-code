@@ -1,6 +1,6 @@
 // /omi-work accept-risk: una persona acepta, en la TUI, los blockers de security que no aplican al contenido actual.
 // Ninguna tool lo expone: ni el agente, ni el chat, ni un cliente RPC aceptan un riesgo. Retry, refresh y replan lo borran;
-// con el PR adoptado, una ronda de corrección conserva sólo lo aceptado sobre el HEAD del que parte.
+// con el PR adoptado, una ronda de corrección conserva lo que vale sobre el HEAD del que parte.
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Review, Workflow } from "../harness/model.ts";
 import { executionReviews } from "../harness/execution-scope.ts";
@@ -31,9 +31,9 @@ export function acceptRiskDocument(state: Workflow, head: string, fingerprint: s
 		...partialSection(review),
 		{ id: "meaning", title: "Qué implica", lines: [
 			line("Deja de frenar Verificar y Land (también el merge automático) para este contenido. Si un amend no toca su archivo y seguridad repite el mismo texto, sigue sin frenar, salvo un secreto o una exfiltración. Si su archivo cambia, o después de un retry, seguridad lo vuelve a evaluar."),
-			line("Con el PR adoptado, se descarta cuando una ronda de corrección parte de otro HEAD."),
+			line("Con el PR adoptado, se descarta cuando una ronda de corrección parte de otro HEAD y la revisión de seguridad de ese HEAD no lo repite."),
 			line("No corrige nada ni autoriza push, merge, comandos ni workflows."),
-			line("Queda en el estado del trabajo, en la sección del issue y en el PR draft."),
+			line("Queda en el estado del trabajo, en la sección del issue y en el PR draft mientras valga."),
 			line("Después de Ctrl+S se pide el motivo. Esc o un motivo vacío no aceptan nada.")] },
 		{ id: "content", title: "Contenido", lines: [line(`Issue #${state.source.number} · ${state.source.title}`), line(`HEAD: ${head}`), line(`Huella: ${fingerprint}`)] },
 	] };

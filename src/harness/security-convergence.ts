@@ -10,10 +10,10 @@
 // aceptó y baja a aviso con su propio prefijo. Aceptó un texto, no un archivo: otro hallazgo en ese archivo sigue la regla
 // (b). Un archivo cambiado, un secreto o un retry (que borra la aceptación) lo vuelven a frenar.
 import type { Runner } from "../core/exec.ts";
-import type { Review, Workflow } from "./model.ts";
+import type { AcceptedRisk, Review, Workflow } from "./model.ts";
 import { changedPaths, treePaths, type CheckoutSnapshot } from "./git.ts";
 import { prefixed, type LensResult } from "./lenses.ts";
-import { acceptedRisksOf, requestReviews, SECURITY_DOWNGRADED, securityBlockers, severitiesOf, unacceptedBlockers } from "./security-blockers.ts";
+import { acceptedRisksOf, latestSecurity, requestReviews, SECURITY_DOWNGRADED, securityBlockers, severitiesOf, unacceptedBlockers } from "./security-blockers.ts";
 
 export { SECURITY_DOWNGRADED };
 export const SECURITY_ACCEPTED_REPEAT = "bajado a aviso: repite en un archivo sin cambios un riesgo que aceptó una persona";
@@ -94,6 +94,12 @@ const REPEAT_PREFIX = `${SECURITY_ACCEPTED_REPEAT} · `;
 const acceptedText = (text: string): string => { const same = sameText(text); return same.startsWith(REPEAT_PREFIX) ? sameText(same.slice(REPEAT_PREFIX.length)) : same; };
 // Lo aceptado que la base ya bajó como repetido (un aviso con el prefijo del host), sin los prefijos.
 const repeatedInBaseline = (baseline: Review): string[] => baseline.findings.filter(f => sameText(f).startsWith(REPEAT_PREFIX)).map(acceptedText);
+/** Lo aceptado que sigue valiendo sobre ese contenido: lo que una persona aceptó sobre él y lo que su última revisión de
+ * security bajó como repetido aceptado, porque ese riesgo sigue en el código aunque la aceptación sea de otro contenido. */
+export function acceptedRisksFor(state: Workflow, fingerprint: string): AcceptedRisk[] {
+ const review = latestSecurity(requestReviews(state), fingerprint), repeated = new Set(review ? repeatedInBaseline(review) : []);
+ return acceptedRisksOf(state).filter(a => a.fingerprint === fingerprint || a.findings.some(f => repeated.has(sameText(f))));
+}
 /** Qué cambió desde la revisión anterior. Sin base no hay nada que comparar; si no se puede comparar, sólo una nota. */
 export async function securityComparison(state: Workflow, snapshot: Pick<CheckoutSnapshot, "head" | "fingerprint">, runner: Runner, signal?: AbortSignal): Promise<{ comparison?: SecurityComparison; note?: string }> {
  const baseline = securityBaseline(state);
