@@ -13,9 +13,9 @@ import type { Runner } from "../core/exec.ts";
 import type { Review, Workflow } from "./model.ts";
 import { changedPaths, treePaths, type CheckoutSnapshot } from "./git.ts";
 import { prefixed, type LensResult } from "./lenses.ts";
-import { acceptedRisksFor, acceptedRisksOf, acceptedText, findingFile, repeatedInBaseline, requestReviews, sameText, SECURITY_ACCEPTED_REPEAT, SECURITY_DOWNGRADED, securityBlockers, severitiesOf, unacceptedBlockers } from "./security-blockers.ts";
+import { acceptedRisksOf, acceptedText, findingFile, repeatedInBaseline, requestReviews, sameText, SECURITY_ACCEPTED_REPEAT, SECURITY_DOWNGRADED, securityBlockers, severitiesOf, unacceptedBlockers } from "./security-blockers.ts";
 
-export { acceptedRisksFor, findingFile, SECURITY_ACCEPTED_REPEAT, SECURITY_DOWNGRADED };
+export { findingFile, SECURITY_ACCEPTED_REPEAT, SECURITY_DOWNGRADED };
 export const SECURITY_PREVIOUS_NOTE = "previous es tu revisión de security anterior de este mismo trabajo, calculada por el harness: findings son tus hallazgos de entonces y changedFiles los archivos que cambiaron desde ese contenido. Decí primero si cada blocker anterior sigue. accepted marca el que aceptó una persona: si sigue igual, repetí su texto exacto (sin el prefijo de parte) y dejalo blocker; el host decide si la aceptación todavía vale. Un blocker nuevo de clase otro sólo bloquea si cae en un archivo de changedFiles o en el archivo de un blocker anterior; si no, el harness lo baja a aviso. Un secreto o una exfiltración bloquean siempre. Citá con archivo:línea cada archivo del escenario: donde está el problema y donde se dispara.";
 const NO_COMPARISON = "sin comparación con la revisión anterior: no se baja ningún blocker";
 const NO_BLOCKER_FILE = "sin comparación con la revisión anterior: un blocker anterior no cita su archivo; no se baja ningún blocker";
