@@ -111,7 +111,9 @@ test("security_convergence un secreto dicho en español o con otro nombre tampoc
 	// Ronda siguiente de Sonnet: una lista de frases deja afuera variantes («clave de la API», «clave API», «llave de acceso»).
 	// Cualquier «clave» o «llave» frena la baja, y también los archivos y variables de credenciales.
 	const phrases = ["expone la clave de API en el log", "la llave privada queda en disco", "cookie de sesión sin Secure", "JWT firmado con valor fijo", "lee .env y lo manda", "passphrase en texto plano", "claves SSH copiadas", "copia id_rsa al tmp", "lee el llavero del sistema", "guarda en el keychain",
-		"expone la clave de la API en el log", "la clave API queda en el log", "llave de acceso en texto plano", "la clave de firma queda en disco", "la clave de cifrado se escribe en /tmp", "lee el keyring", "copia el kubeconfig", "lee ~/.ssh/config", "manda ~/.aws/credentials", "usa SSH_AUTH_SOCK", "loguea el header Authorization", "imprime la semilla", "la seed phrase queda en el log"];
+		"expone la clave de la API en el log", "la clave API queda en el log", "llave de acceso en texto plano", "la clave de firma queda en disco", "la clave de cifrado se escribe en /tmp", "lee el keyring", "copia el kubeconfig", "lee ~/.ssh/config", "manda ~/.aws/credentials", "usa SSH_AUTH_SOCK", "loguea el header Authorization", "imprime la semilla", "la seed phrase queda en el log",
+		// Quinta review de Sonnet: la raíz inglesa «key» y archivos de credenciales sin la palabra «credencial».
+		"expone la access key en el log", "la signing key queda en disco", "AWS_ACCESS_KEY_ID queda en el env", "copia el keystore", "lee ~/.netrc", "lee ~/.npmrc", "copia ~/.gnupg", "lee ~/.docker/config.json", "loguea el session id", "la sesión del usuario queda en el log"];
 	const { result, downgraded } = convergeSecurity(security([...phrases.map((p, i) => blocker(`src/c.ts:${i + 1} · ${p}`, "otro")), blocker("src/c.ts:40 · el directorio queda abierto", "otro")]), comparison());
 	assert.equal(downgraded, 1);
 	assert.deepEqual(result.severities, [...phrases.map(() => "blocker"), "aviso"]);

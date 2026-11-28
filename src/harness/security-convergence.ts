@@ -23,9 +23,10 @@ const NO_BLOCKER_FILE = "sin comparación con la revisión anterior: un blocker 
 const NO_BLOCKER_IN_TREE = "sin comparación con la revisión anterior: un blocker anterior cita un archivo que no está en el árbol; no se baja ningún blocker";
 const PARTIAL_BASELINE = "sin comparación con la revisión anterior: no revisó todas las partes del cambio; no se baja ningún blocker";
 // Sin \b: con \b no corta en «_» y no reconoce CLAUDE_CODE_OAUTH_TOKEN. En inglés y en español, porque el lente responde en
-// español, y por raíz, no por frases: cualquier «clave» o «llave», también «clave primaria». Un falso positivo sólo deja el
+// español, y por raíz, no por frases: cualquier «key», «clave» o «llave», también «primary key» o «clave primaria». Es la
+// última barrera: la principal es la clase secreto o exfiltración que declara el lente. Un falso positivo sólo deja el
 // blocker como está.
-const SECRET = /secret|secreto|api[ _-]?key|password|contraseña|passphrase|credencial|credential|private[ _-]?key|clave|llave|ssh[ _-]?key|id_rsa|id_ed25519|\.pem\b|\.ssh\b|\.aws\b|ssh_auth_sock|kubeconfig|keyring|keychain|token|bearer|authorization|jwt|cookie|\.env\b|auth\.json|oauth|semilla|seed[ _-]?phrase/i;
+const SECRET = /secret|secreto|key|password|contraseña|passphrase|credencial|credential|clave|llave|id_rsa|id_ed25519|\.pem\b|\.ssh\b|\.aws\b|\.netrc|\.npmrc|\.gnupg|\.docker\b|ssh_auth_sock|kubeconfig|token|bearer|authorization|jwt|cookie|session[ _-]?id|sesi[oó]n|\.env\b|auth\.json|oauth|semilla|seed[ _-]?phrase/i;
 const MAX_PREVIOUS_FINDINGS = 10; const MAX_PREVIOUS_TEXT = 500; const MAX_CHANGED_FILES = 200;
 
 /** La última revisión de security con veredicto de este pedido, también la archivada por retry. */
