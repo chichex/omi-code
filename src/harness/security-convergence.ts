@@ -13,10 +13,9 @@ import type { Runner } from "../core/exec.ts";
 import type { Review, Workflow } from "./model.ts";
 import { changedPaths, treePaths, type CheckoutSnapshot } from "./git.ts";
 import { prefixed, type LensResult } from "./lenses.ts";
-import { acceptedRisksOf, securityBlockers, severitiesOf, unacceptedBlockers } from "./security-blockers.ts";
+import { acceptedRisksOf, acceptedText, findingFile, repeatedInBaseline, requestReviews, sameText, SECURITY_ACCEPTED_REPEAT, SECURITY_DOWNGRADED, securityBlockers, severitiesOf, unacceptedBlockers } from "./security-blockers.ts";
 
-export const SECURITY_DOWNGRADED = "bajado a aviso: archivo sin cambios desde la revisión anterior";
-export const SECURITY_ACCEPTED_REPEAT = "bajado a aviso: repite en un archivo sin cambios un riesgo que aceptó una persona";
+export { findingFile, SECURITY_ACCEPTED_REPEAT, SECURITY_DOWNGRADED };
 export const SECURITY_PREVIOUS_NOTE = "previous es tu revisión de security anterior de este mismo trabajo, calculada por el harness: findings son tus hallazgos de entonces y changedFiles los archivos que cambiaron desde ese contenido. Decí primero si cada blocker anterior sigue. accepted marca el que aceptó una persona: si sigue igual, repetí su texto exacto (sin el prefijo de parte) y dejalo blocker; el host decide si la aceptación todavía vale. Un blocker nuevo de clase otro sólo bloquea si cae en un archivo de changedFiles o en el archivo de un blocker anterior; si no, el harness lo baja a aviso. Un secreto o una exfiltración bloquean siempre. Citá con archivo:línea cada archivo del escenario: donde está el problema y donde se dispara.";
 const NO_COMPARISON = "sin comparación con la revisión anterior: no se baja ningún blocker";
 const NO_BLOCKER_FILE = "sin comparación con la revisión anterior: un blocker anterior no cita su archivo; no se baja ningún blocker";
@@ -31,21 +30,12 @@ const MAX_PREVIOUS_FINDINGS = 10; const MAX_PREVIOUS_TEXT = 500; const MAX_CHANG
 
 /** La última revisión de security con veredicto de este pedido, también la archivada por retry. */
 export function securityBaseline(state: Workflow): Review | undefined {
- const archived = (state.attempts ?? []).filter(a => a.sourceHash === state.source.hash).flatMap(a => a.reviews);
- return [...archived, ...state.reviews].findLast(r => r.lens === "security" && !r.noResult && r.verdict !== "unknown");
+ return requestReviews(state).findLast(r => r.lens === "security" && !r.noResult && r.verdict !== "unknown");
 }
 /** El commit del paso cuyo verde acreditó ese contenido. */
 export function reviewedCommit(state: Workflow, fingerprint: string): string | undefined {
  const evidence = [...(state.attempts ?? []).flatMap(a => a.evidence), ...state.evidence];
  return state.steps.findLast(s => s.status === "done" && s.commit && evidence.some(e => e.id === s.green && e.fingerprint === fingerprint))?.commit ?? undefined;
-}
-/** El archivo del primer tramo «archivo:línea» del hallazgo, sin «./»; null si ningún tramo empieza así. */
-export function findingFile(text: string): string | null {
- for (const part of text.split(" · ")) {
-  const match = /^[`"']?([^\s:`"'·]+):\d/.exec(part.trim());
-  if (match) return match[1]!.replace(/^\.\//, "");
- }
- return null;
 }
 
 // Qué archivos nombra un hallazgo, sin adivinar la forma de una ruta (Makefile, «acción.ts», «run task.ts», entre «» o **,
@@ -89,12 +79,6 @@ function resolvedFiles(blockers: readonly string[], known: readonly string[]): S
 // blockerFiles: los archivos de todos los blockers de la base. accepted: los textos que aceptó una persona, sin el prefijo
 // de parte ni espacios de más.
 export interface SecurityComparison { baseline: Review; changed: ReadonlySet<string>; tree: ReadonlySet<string>; blockerFiles: ReadonlySet<string>; accepted: ReadonlySet<string> }
-const sameText = (text: string): string => text.replace(/^\s*parte \d+\/\d+ · /, "").replace(/\s+/g, " ").trim();
-// El texto que aceptó una persona, sin los prefijos que pone el host: el de parte y el de repetido.
-const REPEAT_PREFIX = `${SECURITY_ACCEPTED_REPEAT} · `;
-const acceptedText = (text: string): string => { const same = sameText(text); return same.startsWith(REPEAT_PREFIX) ? sameText(same.slice(REPEAT_PREFIX.length)) : same; };
-// Lo aceptado que la base ya bajó como repetido (un aviso con el prefijo del host), sin los prefijos.
-const repeatedInBaseline = (baseline: Review): string[] => baseline.findings.filter(f => sameText(f).startsWith(REPEAT_PREFIX)).map(acceptedText);
 /** Qué cambió desde la revisión anterior. Sin base no hay nada que comparar; si no se puede comparar, sólo una nota. */
 export async function securityComparison(state: Workflow, snapshot: Pick<CheckoutSnapshot, "head" | "fingerprint">, runner: Runner, signal?: AbortSignal): Promise<{ comparison?: SecurityComparison; note?: string }> {
  const baseline = securityBaseline(state);

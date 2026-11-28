@@ -15,6 +15,7 @@ import { Value } from "typebox/value";
 import { CorrectionPushRequestSchema } from "../src/harness/correction-schema.ts";
 import { pushPostPrCorrection, acceptCorrectionPush } from "../src/harness/correction-push.ts";
 import { adoptPostPrWorkflow, preparePostPrCorrection, activatePostPrCorrection, verifyPostPrCorrection, retryPostPrCorrection } from "../src/harness/lifecycle-corrections.ts";
+import { SECURITY_ACCEPTED_REPEAT } from "../src/harness/security-convergence.ts";
 const at = "2026-01-01T00:00:00Z", repo = "acme/app", base = "a".repeat(40), head = "b".repeat(40), nextHead = "d".repeat(40), fingerprint = "c".repeat(64), nextFingerprint = "e".repeat(64);
 const plan: Plan = { classification: { type: "add", size: "small", risk: "low", riskAreas: [], causeKnown: true }, objective: "Feature", approach: "Extend", scope: ["app"], outOfScope: ["new functionality"], cases: [{ id: "D1", description: "works", command: "npm test" }], lenses: [], executor: { mode: "inline", writers: 0 } };
 const send = (r: WorkflowV2, event: Parameters<typeof transition>[1]) => transition(r, event, at);
@@ -38,13 +39,13 @@ function reviewing(): WorkflowV2 {
  lifecycle = life.disposeLifecycleFinding(lifecycle, { findingId: "F1", subjectId: "subject", observationHash: hash, status: "accepted", evidenceIds: [], reason: "validado", at }); return { ...r, lifecycle };
 }
 const proposal = (r: WorkflowV2) => ({ operationId: "correction1", findingIds: ["F1"], scope: { source: "person", scopeHash: recipeApprovalHash(r), withinScope: true, risk: "low" }, at });
-function coding() {
- let r = reviewing(); r = preparePostPrCorrection(r, proposal(r)); assert.equal(r.lifecycle.status, "enabled");
+function coding(start = reviewing()) {
+ let r = start; r = preparePostPrCorrection(r, proposal(r)); assert.equal(r.lifecycle.status, "enabled");
  const lifecycle = life.reserveLifecycleOperation(r.lifecycle, { id: "correction1", key: "correction1", kind: "correction", subjectId: "subject", targetId: null, correlationId: "correction-correlation", retryOf: null }, { id: "correction-decision", kind: "correction", subjectId: "subject", targetId: null, configHash: pin().accepted.blockHash, source: "person", at }, "process", at);
  return activatePostPrCorrection({ ...r, lifecycle }, "correction1", at);
 }
-function committed() {
- let r = coding(); const step = r.steps.at(-1); assert.ok(step); r = send(r, { type: "step_started", id: step.id });
+function committed(start = reviewing()) {
+ let r = coding(start); const step = r.steps.at(-1); assert.ok(step); r = send(r, { type: "step_started", id: step.id });
  r = send(r, { type: "evidence", evidence: evidence("red", "post-red", step.id, head, nextFingerprint) }); r = send(r, { type: "evidence", evidence: evidence("green", "post-green", step.id, head, nextFingerprint) }); r = send(r, { type: "step_completed", id: step.id, commit: nextHead, fingerprint: nextFingerprint });
  return r;
 }
@@ -170,6 +171,44 @@ test("seguridad fallada y aceptada por una persona sobre el commit de correcció
  const observed = { head: nextHead, fingerprint: nextFingerprint, clean: true };
  assert.throws(() => retryPostPrCorrection(flagged(nextFingerprint), "correction1", observed, "security marcó un blocker", at), /no hay fallo/);
  assert.equal(retryPostPrCorrection(flagged(fingerprint), "correction1", observed, "security marcó un blocker", at).phase, "review", "lo aceptado sobre otro contenido no cuenta");
+});
+
+// Riesgo pendiente de #100: con el PR adoptado no hay retry ni refresh, y lo aceptado sobre HEADs que ya no se mergean
+// llenaba el tope de 10 sin salida. Cada ronda conserva sólo lo aceptado sobre el HEAD del PR del que parte.
+const acceptance = (fp: string, line: number) => ({ fingerprint: fp, findings: [`app.ts:${line} · manda el diff a otro servidor`], reason: "Preexistente en main", at });
+const older = (n: number) => Array.from({ length: n }, (_, i) => acceptance(String(i).padStart(64, "0"), i + 2));
+const TOKEN = "app.ts:9 · manda el token a otro servidor";
+const flaggedNext = (r: WorkflowV2): WorkflowV2 => ({ ...r, reviews: [...r.reviews, { lens: "security", fingerprint: nextFingerprint, verdict: "fail", findings: [TOKEN], at }] });
+test("una ronda post-PR conserva sólo lo aceptado sobre el HEAD del que parte; la ronda acepta otro riesgo y lo conserva al verificar", () => {
+ assert.deepEqual(coding({ ...reviewing(), acceptedRisks: [acceptance(fingerprint, 1), ...older(9)] }).acceptedRisks, [acceptance(fingerprint, 1)], "lo de HEADs anteriores no pasa de ronda");
+ const r = send(flaggedNext(committed({ ...reviewing(), acceptedRisks: [acceptance(fingerprint, 1), ...older(9)] })), { type: "risk_accepted", fingerprint: nextFingerprint, findings: [TOKEN], reason: "Se sigue en #7" });
+ assert.deepEqual(r.acceptedRisks?.map(a => a.fingerprint), [fingerprint, nextFingerprint]);
+ let done = send(r, { type: "evidence", evidence: evidence("verification", "post-verification", null, nextHead, nextFingerprint) }); done = send(done, { type: "verified", fingerprint: nextFingerprint });
+ assert.deepEqual(verifyPostPrCorrection(done, "correction1", corrected(), { clean: true, ancestor: true }, at).acceptedRisks, r.acceptedRisks, "verificar la ronda no borra lo aceptado en ella");
+});
+test("una ronda post-PR sin nada aceptado sobre su HEAD de partida deja el estado sin el campo", () => {
+ const r = coding({ ...reviewing(), acceptedRisks: older(3) });
+ assert.equal("acceptedRisks" in r, false);
+});
+// Revisión adversarial (tope-repetido-aceptado-se-borra): lo aceptado sobre F0 que la convergencia bajó como repetido en F1
+// sigue en lo que se mergea. Si la ronda que parte de F1 lo descartaba, en F2 volvía a frenar aunque su archivo no cambió.
+test("una ronda post-PR conserva lo aceptado que la revisión de su HEAD de partida repite como aceptado", () => {
+ const repeated = (prefix: string) => ({ ...reviewing(), acceptedRisks: older(3), reviews: [{ lens: "security" as const, fingerprint, verdict: "fail" as const, findings: [`${prefix}${SECURITY_ACCEPTED_REPEAT} · app.ts:3 · manda el diff a otro servidor`], severities: ["aviso" as const], at }] });
+ for (const prefix of ["", "parte 2/2 · "]) assert.deepEqual(coding(repeated(prefix)).acceptedRisks, [older(3)[1]], prefix || "sin parte");
+ // Review 1 de Sonnet: de una aceptación de varios hallazgos pasa sólo lo que se repite; lo corregido no sigue aceptado.
+ const group = { ...repeated(""), acceptedRisks: [{ ...older(3)[1]!, findings: ["app.ts:3 · manda el diff a otro servidor", "app.ts:7 · loguea el diff"] }] };
+ assert.deepEqual(coding(group).acceptedRisks, [older(3)[1]]);
+});
+test("con el PR adoptado, el tope de riesgos aceptados no ofrece retry ni refresh, que el reducer rechaza", () => {
+ // Un estado de v0.35.0, que llegó a 10 a mitad de una ronda: no se destraba, y el texto dice la única salida.
+ const r = flaggedNext(committed()); r.acceptedRisks = older(10);
+ assert.throws(() => send(r, { type: "risk_accepted", fingerprint: nextFingerprint, findings: [TOKEN], reason: "Se sigue en #7" }), (e: Error) => /tope de 10/.test(e.message) && /\/omi-work stop/.test(e.message) && !/usá retry|\/omi-work refresh/.test(e.message));
+ // Review 2 de Sonnet: cada rechazo con su motivo. retry y extra-round tienen guard propio; refresh lo frena el invariante del
+ // PR adoptado, porque source_changed deja publication en none.
+ assert.throws(() => send(r, { type: "retry", reason: "tope" }), /post-PR usa corrección propia; retry no puede/);
+ assert.throws(() => send(r, { type: "source_changed", source: r.source }), /ownership sin identidad durable de PR/);
+ assert.throws(() => send(r, { type: "round_added", reason: "tope" }), /post-PR usa corrección propia; no suma vueltas/);
+ assert.equal(send(r, { type: "pause", reason: "tope" }).status, "paused");
 });
 
 test("verified nativo no acredita D históricos fuera del ámbito de la corrección", () => {

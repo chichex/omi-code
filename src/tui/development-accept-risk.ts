@@ -1,10 +1,11 @@
 // /omi-work accept-risk: una persona acepta, en la TUI, los blockers de security que no aplican al contenido actual.
-// Ninguna tool lo expone: ni el agente, ni el chat, ni un cliente RPC aceptan un riesgo. Retry, refresh y replan lo borran.
+// Ninguna tool lo expone: ni el agente, ni el chat, ni un cliente RPC aceptan un riesgo. Retry, refresh y replan lo borran;
+// con el PR adoptado, una ronda de corrección conserva lo que vale sobre el HEAD del que parte.
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Review, Workflow } from "../harness/model.ts";
 import { executionReviews } from "../harness/execution-scope.ts";
 import { inspectCheckout } from "../harness/git.ts";
-import { latestSecurity, reviewFindings, securityBlockers, unacceptedBlockers } from "../harness/security-blockers.ts";
+import { acceptedRiskCap, latestSecurity, reviewFindings, securityBlockers, unacceptedBlockers } from "../harness/security-blockers.ts";
 import type { ApprovalDocument, ApprovalLine } from "./development-approval.ts";
 import { showApprovalReview } from "./development-approval-view.ts";
 import { updateIssueSection } from "./development-issue.ts";
@@ -30,6 +31,7 @@ export function acceptRiskDocument(state: Workflow, head: string, fingerprint: s
 		...partialSection(review),
 		{ id: "meaning", title: "Qué implica", lines: [
 			line("Deja de frenar Verificar y Land (también el merge automático) para este contenido. Si un amend no toca su archivo y seguridad repite el mismo texto, sigue sin frenar, salvo un secreto o una exfiltración. Si su archivo cambia, o después de un retry, seguridad lo vuelve a evaluar."),
+			...(state.version === 2 && state.pullRequest?.ownership === "adopted" ? [line("Con el PR adoptado, se descarta cuando una ronda de corrección parte de otro HEAD y la revisión de seguridad de ese HEAD no lo repite. La sección del issue lo sigue mostrando hasta su próxima actualización.")] : []),
 			line("No corrige nada ni autoriza push, merge, comandos ni workflows."),
 			line("Queda en el estado del trabajo, en la sección del issue y en el PR draft."),
 			line("Después de Ctrl+S se pide el motivo. Esc o un motivo vacío no aceptan nada.")] },
@@ -47,6 +49,9 @@ export async function acceptRisk(session: DevelopmentSession, ctx: ExtensionCont
 	if (!snapshot.clean) throw new Error(`${TITLE}: hay cambios sin commitear; el riesgo se acepta sobre el contenido commiteado.`);
 	const review = latestSecurity(executionReviews(state), snapshot.fingerprint), findings = unacceptedBlockers(state, review);
 	if (!findings.length) throw new Error("No hay hallazgos de seguridad sin aceptar sobre el contenido actual.");
+	// Como extra-round: el tope se dice antes de la revisión, no después de que la persona escribió el motivo.
+	const cap = acceptedRiskCap(state);
+	if (cap) throw new Error(`${TITLE}: ${cap}.`);
 	const cancellation = AbortSignal.any([session.lifecycle.signal, ...(ctx.signal ? [ctx.signal] : [])]);
 	session.emit(`Esperando revisión · ${TITLE}`, true);
 	let reason: string | undefined;

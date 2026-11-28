@@ -46,6 +46,7 @@ test("development_accept_risk la persona revisa los hallazgos en la TUI, da el m
 	// Ronda 4 (rules-4-consentimiento-solo-este-contenido): la pantalla decía «sólo para este contenido», pero tras un amend el host
 	// lleva la aceptación al contenido nuevo, también al auto-Land. La persona tiene que leer el alcance real antes de aceptar.
 	assert.doesNotMatch(screen, /sólo para este contenido/);
+	assert.doesNotMatch(screen, /Con el PR adoptado/, "sin PR adoptado, esa regla no le aplica");
 	const state = await f.state();
 	assert.deepEqual(accepted(state)?.map((a) => [a.findings, a.reason]), [[[SECRET], "Preexistente en main; se sigue en otro issue"]]);
 	assert.ok(f.messages.some((m) => /^Riesgo aceptado sobre /.test(m)), JSON.stringify(f.messages));
@@ -87,6 +88,24 @@ test("development_accept_risk sin TUI interactiva, con Esc o sin motivo no se ac
 	assert.equal(accepted(await f.state()), undefined);
 });
 
+// Riesgo pendiente de #100: con el tope lleno, la revisión se abría y el rechazo llegaba recién después del motivo.
+test("development_accept_risk con el tope de riesgos aceptados lleno, lo dice antes de abrir la revisión", async (t) => {
+	const ten = Array.from({ length: 10 }, (_, i) => ({ fingerprint: String(i).padStart(64, "0"), findings: [`old.cjs:${i + 1} · otro riesgo`], reason: "Preexistente en main", at: "now" }));
+	const fill = async (g: Awaited<ReturnType<typeof verifying>>) => { const s = await g.state(); await updateWorkflow(s.checkout, s.source.number, s.revision, (saved) => ({ ...saved!, revision: saved!.revision + 1, acceptedRisks: ten })); };
+	const f = await insecure(t);
+	await fill(f);
+	const reviews = f.reviews(); f.messages.length = 0;
+	await f.command("accept-risk");
+	assert.equal(f.reviews(), reviews, "no abre la revisión");
+	assert.ok(f.messages.some((m) => /Aceptar riesgo de seguridad: se llegó al tope de 10/.test(m)), JSON.stringify(f.messages));
+	assert.equal(accepted(await f.state())?.length, 10);
+	// Review 1 de Sonnet: sin nada que aceptar, la respuesta es esa, no el tope.
+	const g = await verifying(t);
+	await fill(g);
+	g.messages.length = 0; await g.command("accept-risk");
+	assert.ok(g.messages.some((m) => /No hay hallazgos de seguridad sin aceptar/.test(m)), JSON.stringify(g.messages));
+});
+
 test("development_accept_risk el trabajo o el código cambian durante la revisión: no se acepta", async (t) => {
 	const f = await insecure(t);
 	f.uiControl.onReview = () => bump(f);
@@ -122,4 +141,9 @@ test("development_accept_risk con una revisión de security parcial, la pantalla
 	assert.match(shown, /Aceptar no las revisa/);
 	assert.match(shown, /• aviso · parte 2\/2 · Sin resultado del lente: conexión \(3 intentos\)/);
 	assert.doesNotMatch(text({ lens: "security", fingerprint: "tree", verdict: "fail", findings: [blocker], at: "now" }), /Revisión parcial/, "una revisión completa no lo dice");
+	// Review 1 de Sonnet: la regla del PR adoptado sale sólo con el PR adoptado.
+	const adopted = { ...state, pullRequest: { ownership: "adopted" } } as unknown as Workflow;
+	const lines = (w: Workflow) => acceptRiskDocument(w, "head", "tree", [blocker]).sections.flatMap((s) => s.lines.map((l) => l.kind === "text" ? l.text : "")).join("\n");
+	assert.match(lines(adopted), /Con el PR adoptado, se descarta cuando una ronda de corrección parte de otro HEAD y la revisión de seguridad de ese HEAD no lo repite\. La sección del issue lo sigue mostrando hasta su próxima actualización\./);
+	assert.doesNotMatch(lines(state), /Con el PR adoptado/);
 });

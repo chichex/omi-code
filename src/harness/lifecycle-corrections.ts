@@ -4,7 +4,7 @@ import { Value } from "typebox/value";
 import { parseWorkflow, MAX_STEPS, MAX_HISTORY, type WorkflowV2 } from "./model.ts";
 import { isApproved, recipeApprovalHash, successful } from "./state.ts";
 import { lifecycleAssert } from "./lifecycle-invariants.ts";
-import { unacceptedBlockers } from "./security-blockers.ts";
+import { acceptedRisksFor, unacceptedBlockers } from "./security-blockers.ts";
 import { initializeLifecycle, bindLifecycleSubject, confirmLifecycleOperation, registerLifecycleEvidence, disposeLifecycleFinding } from "./lifecycle-state.ts";
 import { SubjectSchema, AdoptionSchema, type EnabledLifecycle } from "./lifecycle-state-schema.ts";
 import { CorrectionProposalSchema, type CorrectionRound } from "./correction-schema.ts";
@@ -69,6 +69,11 @@ export function activatePostPrCorrection(original: unknown, operationId: string,
  const next = Math.max(0, ...state.steps.map(s => Number(/^C(\d+)$/.exec(s.id)?.[1] ?? 0))) + 1, stepId = `C${next}`;
  lifecycleAssert(state.recipe && lifecycle.corrections, "falta receta/ronda");
  state.steps.push({ id: stepId, title: `Corrección post-PR #${subject.number} · ronda ${lifecycle.budget.roundsUsed}`, cases: state.recipe.cases.map(c => c.id), status: "pending", red: null, green: null, commit: null });
+ // Pasa de ronda lo que vale sobre el HEAD del PR: lo aceptado sobre él y lo que su revisión repite como aceptado. Lo demás
+ // ya no lo marca security en lo que se mergea. Sin esto, con el PR adoptado (sin retry ni refresh) las rondas llenaban el
+ // tope de MAX_ACCEPTED_RISKS sin salida.
+ const kept = acceptedRisksFor(state, round.startFingerprint);
+ if (kept.length) state.acceptedRisks = kept; else delete state.acceptedRisks;
  lifecycle.corrections[index] = { ...round, status: "coding", stepId }; state.phase = "implement"; return finish(state, "Corrección autorizada: exige rojo, verde, commit y verificación nueva", at);
 }
 const VerifiedGitSchema = Type.Object({ clean: Type.Boolean(), ancestor: Type.Boolean() }, { additionalProperties: false });

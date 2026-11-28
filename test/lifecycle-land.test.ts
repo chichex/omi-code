@@ -5,6 +5,7 @@ import { sourceHash, type WorkflowV2, type Plan, type Review } from "../src/harn
 import { defaultLifecycleConfig, lifecycleHash } from "../src/harness/lifecycle-config.ts";
 import * as life from "../src/harness/lifecycle-state.ts";
 import { landReadiness, prepareLand, landPullRequest, acceptObservedMerge } from "../src/harness/lifecycle-land.ts";
+import { SECURITY_ACCEPTED_REPEAT, SECURITY_DOWNGRADED } from "../src/harness/security-convergence.ts";
 import { fakeRunner } from "./helpers/runner.ts";
 import { markDraftReady } from "../src/harness/draft-ready.ts";
 import { mkdtemp, mkdir, rm, realpath } from "node:fs/promises";
@@ -236,6 +237,52 @@ test("riesgo bajo con Seguridad unknown o sin correr: auto-Land no cambia", () =
 test("riesgo alto con Seguridad sin pass: una decisión por política no mergea", async () => {
  const original = highRisk(shipKnown(workflow("auto")), [security("unknown", { noResult: true })]);
  const r = prepareLand(original, facts(), highWitness(original), at); assert.ok(r.lifecycle.status === "enabled" && r.lifecycle.ready);
+ r.lifecycle = life.reserveLifecycleOperation(r.lifecycle, { id: "land1", key: "land1", kind: "land", subjectId: "subject", targetId: null, correlationId: "land1", retryOf: null }, { id: "land-decision", kind: "land", subjectId: "subject", targetId: null, configHash: r.lifecycle.pinHash, source: "policy", effectHash: r.lifecycle.ready.hash, at }, "process", at);
+ const p = ports(r); await assert.rejects(landPullRequest(r, "land1", p), /auto-Land no habilitado/); assert.equal(p.runner.commands.length, 0); assert.equal(p.claims(), 0);
+});
+
+// Riesgo pendiente de #100: la convergencia baja a aviso un blocker «otro» en un archivo sin cambios, y la lista SECRET no
+// reconoce todo secreto (una URL con clave, un PIN). Lo que el host bajó sin una persona retiene el merge en cualquier riesgo.
+const DOWNGRADED = `${SECURITY_DOWNGRADED} · src/db.ts:12 · arma la URL postgres://admin:hunter2@prod y la loguea`;
+const DOWNGRADED_HOLD = "Seguridad bajó a aviso 1 blocker en este pedido porque su archivo no había cambiado (src/db.ts): el merge pide tu sí";
+const downgraded = (findings = [DOWNGRADED]) => security("fail", { findings, severities: findings.map(() => "aviso" as const) });
+const lowRisk = (reviews: Review[]) => { const r = shipKnown(workflow("auto")); r.reviews = reviews; return r; };
+test("lo que el host bajó a aviso retiene el merge en riesgo alto y bajo, con el motivo primero", () => {
+ const high = highRisk(shipKnown(workflow("auto")), [downgraded()]), held = landReadiness(high, facts(), highWitness(high));
+ assert.equal(held.ready, true, held.reasons.join("; ")); assert.equal(held.auto, false);
+ assert.deepEqual(held.attention, [DOWNGRADED_HOLD]); assert.deepEqual(firstKey(held.summary), ["attention", DOWNGRADED_HOLD]);
+ for (const findings of [[DOWNGRADED], [`parte 2/2 · ${DOWNGRADED}`]]) {
+  const r = lowRisk([downgraded(findings)]), readiness = landReadiness(r, facts(), risk(r));
+  assert.equal(readiness.auto, false, findings[0]); assert.deepEqual(readiness.attention, [DOWNGRADED_HOLD], findings[0]);
+ }
+ const many = lowRisk([downgraded([DOWNGRADED, `${SECURITY_DOWNGRADED} · src/pay.ts:8 · manda el PIN de la tarjeta al log`])]);
+ assert.deepEqual(landReadiness(many, facts(), risk(many)).attention, ["Seguridad bajó a aviso 2 blockers en este pedido porque su archivo no había cambiado (src/db.ts, src/pay.ts): el merge pide tu sí"]);
+ // Review 1 de Sonnet: el lente repite el mismo hallazgo en cada revisión y el host lo vuelve a bajar; es uno solo.
+ const repeated = lowRisk([downgraded(), { ...downgraded(), fingerprint: "d".repeat(64) }, downgraded([`parte 1/2 · ${DOWNGRADED}`])]);
+ assert.deepEqual(landReadiness(repeated, facts(), risk(repeated)).attention, [DOWNGRADED_HOLD]);
+});
+test("un aviso común o un riesgo aceptado que se repite no retienen el merge: lo vio una persona o nunca fue blocker", () => {
+ for (const finding of ["src/log.ts:3 · el log crece", `${SECURITY_ACCEPTED_REPEAT} · src/db.ts:12 · arma la URL y la loguea`]) {
+  const r = lowRisk([downgraded([finding])]), readiness = landReadiness(r, facts(), risk(r));
+  assert.equal(readiness.auto, true, finding); assert.deepEqual(readiness.attention, [], finding);
+ }
+});
+// Revisión adversarial (hold-riesgo-alto-tapa-lo-bajado): en riesgo alto, el motivo de riesgo alto tapaba al de lo bajado
+// y el diálogo de Land no nombraba sus archivos. Van los dos, cada uno en su párrafo.
+test("en riesgo alto, el diálogo de Land muestra el motivo de riesgo alto y también lo bajado a aviso", () => {
+ const r = highRisk(shipKnown(workflow("auto")), [{ ...downgraded(), fingerprint: "d".repeat(64) }, security("unknown", { noResult: true })]), readiness = landReadiness(r, facts(), highWitness(r));
+ assert.equal(readiness.auto, false); assert.deepEqual(readiness.attention, [SECURITY_HOLD, DOWNGRADED_HOLD]);
+ assert.deepEqual(firstKey(readiness.summary), ["attention", `${SECURITY_HOLD}. ${DOWNGRADED_HOLD}`]);
+});
+test("lo bajado en un intento archivado del mismo pedido retiene el merge; el de otro pedido no", () => {
+ const r = lowRisk([]); r.attempts = [{ sourceHash: r.source.hash, round: 1, reason: "retry", at, evidence: [], reviews: [downgraded()] }];
+ assert.deepEqual(landReadiness(r, facts(), risk(r)).attention, [DOWNGRADED_HOLD]);
+ r.attempts = [{ sourceHash: "x".repeat(64), round: 1, reason: "retry", at, evidence: [], reviews: [downgraded()] }];
+ assert.equal(landReadiness(r, facts(), risk(r)).auto, true);
+});
+test("con algo bajado a aviso, una decisión por política no mergea", async () => {
+ const original = lowRisk([downgraded()]);
+ const r = prepareLand(original, facts(), risk(original), at); assert.ok(r.lifecycle.status === "enabled" && r.lifecycle.ready);
  r.lifecycle = life.reserveLifecycleOperation(r.lifecycle, { id: "land1", key: "land1", kind: "land", subjectId: "subject", targetId: null, correlationId: "land1", retryOf: null }, { id: "land-decision", kind: "land", subjectId: "subject", targetId: null, configHash: r.lifecycle.pinHash, source: "policy", effectHash: r.lifecycle.ready.hash, at }, "process", at);
  const p = ports(r); await assert.rejects(landPullRequest(r, "land1", p), /auto-Land no habilitado/); assert.equal(p.runner.commands.length, 0); assert.equal(p.claims(), 0);
 });
