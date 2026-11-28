@@ -244,7 +244,7 @@ test("riesgo alto con Seguridad sin pass: una decisión por política no mergea"
 // Riesgo pendiente de #100: la convergencia baja a aviso un blocker «otro» en un archivo sin cambios, y la lista SECRET no
 // reconoce todo secreto (una URL con clave, un PIN). Lo que el host bajó sin una persona retiene el merge en cualquier riesgo.
 const DOWNGRADED = `${SECURITY_DOWNGRADED} · src/db.ts:12 · arma la URL postgres://admin:hunter2@prod y la loguea`;
-const DOWNGRADED_HOLD = "Seguridad bajó a aviso 1 blocker en archivos sin cambios (src/db.ts): el merge pide tu sí";
+const DOWNGRADED_HOLD = "Seguridad bajó a aviso 1 blocker en este pedido porque su archivo no había cambiado (src/db.ts): el merge pide tu sí";
 const downgraded = (findings = [DOWNGRADED]) => security("fail", { findings, severities: findings.map(() => "aviso" as const) });
 const lowRisk = (reviews: Review[]) => { const r = shipKnown(workflow("auto")); r.reviews = reviews; return r; };
 test("lo que el host bajó a aviso retiene el merge en riesgo alto y bajo, con el motivo primero", () => {
@@ -256,7 +256,10 @@ test("lo que el host bajó a aviso retiene el merge en riesgo alto y bajo, con e
   assert.equal(readiness.auto, false, findings[0]); assert.deepEqual(readiness.attention, [DOWNGRADED_HOLD], findings[0]);
  }
  const many = lowRisk([downgraded([DOWNGRADED, `${SECURITY_DOWNGRADED} · src/pay.ts:8 · manda el PIN de la tarjeta al log`])]);
- assert.deepEqual(landReadiness(many, facts(), risk(many)).attention, ["Seguridad bajó a aviso 2 blockers en archivos sin cambios (src/db.ts, src/pay.ts): el merge pide tu sí"]);
+ assert.deepEqual(landReadiness(many, facts(), risk(many)).attention, ["Seguridad bajó a aviso 2 blockers en este pedido porque su archivo no había cambiado (src/db.ts, src/pay.ts): el merge pide tu sí"]);
+ // Review 1 de Sonnet: el lente repite el mismo hallazgo en cada revisión y el host lo vuelve a bajar; es uno solo.
+ const repeated = lowRisk([downgraded(), { ...downgraded(), fingerprint: "d".repeat(64) }, downgraded([`parte 1/2 · ${DOWNGRADED}`])]);
+ assert.deepEqual(landReadiness(repeated, facts(), risk(repeated)).attention, [DOWNGRADED_HOLD]);
 });
 test("un aviso común o un riesgo aceptado que se repite no retienen el merge: lo vio una persona o nunca fue blocker", () => {
  for (const finding of ["src/log.ts:3 · el log crece", `${SECURITY_ACCEPTED_REPEAT} · src/db.ts:12 · arma la URL y la loguea`]) {

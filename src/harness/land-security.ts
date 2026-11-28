@@ -31,9 +31,11 @@ function highRiskHold(state: Workflow, risk: LandRisk, contentHash: string): str
 }
 /** Lo bajado a aviso sí se arrastra entre contenidos del pedido, pero sólo para retener: el lente puede no repetirlo. */
 function downgradedHold(state: Workflow): string | undefined {
-	const found = downgradedFindings(state);
+	// El lente puede repetir el mismo hallazgo en cada revisión y el host lo vuelve a bajar: se cuenta una vez.
+	const found = [...new Set(downgradedFindings(state))];
 	if (!found.length) return undefined;
 	const files = [...new Set(found.map((f) => findingFile(f) ?? "sin archivo"))];
 	const shown = files.slice(0, MAX_HOLD_FILES).join(", ") + (files.length > MAX_HOLD_FILES ? ` y ${files.length - MAX_HOLD_FILES} más` : "");
-	return `Seguridad bajó a aviso ${found.length === 1 ? "1 blocker" : `${found.length} blockers`} en archivos sin cambios (${shown}): el merge pide tu sí`;
+	// No dice si el archivo cambió después: el hold vale para todo el pedido.
+	return `Seguridad bajó a aviso ${found.length === 1 ? "1 blocker" : `${found.length} blockers`} en este pedido porque su archivo no había cambiado (${shown}): el merge pide tu sí`;
 }

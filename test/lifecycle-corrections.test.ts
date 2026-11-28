@@ -195,6 +195,9 @@ test("una ronda post-PR sin nada aceptado sobre su HEAD de partida deja el estad
 test("una ronda post-PR conserva lo aceptado que la revisión de su HEAD de partida repite como aceptado", () => {
  const repeated = (prefix: string) => ({ ...reviewing(), acceptedRisks: older(3), reviews: [{ lens: "security" as const, fingerprint, verdict: "fail" as const, findings: [`${prefix}${SECURITY_ACCEPTED_REPEAT} · app.ts:3 · manda el diff a otro servidor`], severities: ["aviso" as const], at }] });
  for (const prefix of ["", "parte 2/2 · "]) assert.deepEqual(coding(repeated(prefix)).acceptedRisks, [older(3)[1]], prefix || "sin parte");
+ // Review 1 de Sonnet: de una aceptación de varios hallazgos pasa sólo lo que se repite; lo corregido no sigue aceptado.
+ const group = { ...repeated(""), acceptedRisks: [{ ...older(3)[1]!, findings: ["app.ts:3 · manda el diff a otro servidor", "app.ts:7 · loguea el diff"] }] };
+ assert.deepEqual(coding(group).acceptedRisks, [older(3)[1]]);
 });
 test("con el PR adoptado, el tope de riesgos aceptados no ofrece retry ni refresh, que el reducer rechaza", () => {
  // Un estado de v0.35.0, que llegó a 10 a mitad de una ronda: no se destraba, y el texto dice la única salida.

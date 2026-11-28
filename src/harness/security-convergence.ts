@@ -94,11 +94,15 @@ const REPEAT_PREFIX = `${SECURITY_ACCEPTED_REPEAT} · `;
 const acceptedText = (text: string): string => { const same = sameText(text); return same.startsWith(REPEAT_PREFIX) ? sameText(same.slice(REPEAT_PREFIX.length)) : same; };
 // Lo aceptado que la base ya bajó como repetido (un aviso con el prefijo del host), sin los prefijos.
 const repeatedInBaseline = (baseline: Review): string[] => baseline.findings.filter(f => sameText(f).startsWith(REPEAT_PREFIX)).map(acceptedText);
-/** Lo aceptado que sigue valiendo sobre ese contenido: lo que una persona aceptó sobre él y lo que su última revisión de
- * security bajó como repetido aceptado, porque ese riesgo sigue en el código aunque la aceptación sea de otro contenido. */
+/** Lo aceptado que sigue valiendo sobre ese contenido: lo que una persona aceptó sobre él y, de otro contenido, sólo los
+ * textos que su última revisión de security bajó como repetido aceptado, porque ese riesgo sigue en el código. */
 export function acceptedRisksFor(state: Workflow, fingerprint: string): AcceptedRisk[] {
  const review = latestSecurity(requestReviews(state), fingerprint), repeated = new Set(review ? repeatedInBaseline(review) : []);
- return acceptedRisksOf(state).filter(a => a.fingerprint === fingerprint || a.findings.some(f => repeated.has(sameText(f))));
+ return acceptedRisksOf(state).flatMap(a => {
+  if (a.fingerprint === fingerprint) return [a];
+  const findings = a.findings.filter(f => repeated.has(sameText(f)));
+  return findings.length ? [{ ...a, findings }] : [];
+ });
 }
 /** Qué cambió desde la revisión anterior. Sin base no hay nada que comparar; si no se puede comparar, sólo una nota. */
 export async function securityComparison(state: Workflow, snapshot: Pick<CheckoutSnapshot, "head" | "fingerprint">, runner: Runner, signal?: AbortSignal): Promise<{ comparison?: SecurityComparison; note?: string }> {
