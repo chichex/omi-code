@@ -6,6 +6,8 @@ import { MAX_ACCEPTED_RISKS, type AcceptedRisk, type Review, type Severity, type
 export const FAIL_WITHOUT_FINDINGS = "El lente de seguridad falló sin detallar hallazgos";
 /** El prefijo con el que la convergencia baja a aviso un blocker nuevo en un archivo sin cambios. */
 export const SECURITY_DOWNGRADED = "bajado a aviso: archivo sin cambios desde la revisión anterior";
+/** El prefijo con el que la convergencia baja a aviso un riesgo que aceptó una persona y que se repite igual. */
+export const SECURITY_ACCEPTED_REPEAT = "bajado a aviso: repite en un archivo sin cambios un riesgo que aceptó una persona";
 
 /** La severidad de cada hallazgo: aviso sólo si la lista está alineada y lo dice; si no, blocker. */
 export function severitiesOf(r: Pick<Review, "findings" | "severities">): Severity[] {
@@ -76,4 +78,20 @@ export function recordAcceptedRisk(state: WorkflowV2, reviews: readonly Review[]
  const cap = acceptedRiskCap(state);
  if (cap) reject(cap);
  state.acceptedRisks = [...acceptedRisksOf(state), { fingerprint: risk.fingerprint, findings: [...risk.findings], reason, at }];
+}
+export const sameText = (text: string): string => withoutPart(text).replace(/\s+/g, " ").trim();
+// El texto que aceptó una persona, sin los prefijos que pone el host: el de parte y el de repetido.
+const REPEAT_PREFIX = `${SECURITY_ACCEPTED_REPEAT} · `;
+export const acceptedText = (text: string): string => { const same = sameText(text); return same.startsWith(REPEAT_PREFIX) ? sameText(same.slice(REPEAT_PREFIX.length)) : same; };
+// Lo aceptado que la base ya bajó como repetido (un aviso con el prefijo del host), sin los prefijos.
+export const repeatedInBaseline = (baseline: Review): string[] => baseline.findings.filter(f => sameText(f).startsWith(REPEAT_PREFIX)).map(acceptedText);
+/** Lo aceptado que sigue valiendo sobre ese contenido: lo que una persona aceptó sobre él y, de otro contenido, sólo los
+ * textos que su última revisión de security bajó como repetido aceptado, porque ese riesgo sigue en el código. */
+export function acceptedRisksFor(state: Workflow, fingerprint: string): AcceptedRisk[] {
+ const review = latestSecurity(requestReviews(state), fingerprint), repeated = new Set(review ? repeatedInBaseline(review) : []);
+ return acceptedRisksOf(state).flatMap(a => {
+  if (a.fingerprint === fingerprint) return [a];
+  const findings = a.findings.filter(f => repeated.has(sameText(f)));
+  return findings.length ? [{ ...a, findings }] : [];
+ });
 }

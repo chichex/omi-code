@@ -10,13 +10,12 @@
 // aceptó y baja a aviso con su propio prefijo. Aceptó un texto, no un archivo: otro hallazgo en ese archivo sigue la regla
 // (b). Un archivo cambiado, un secreto o un retry (que borra la aceptación) lo vuelven a frenar.
 import type { Runner } from "../core/exec.ts";
-import type { AcceptedRisk, Review, Workflow } from "./model.ts";
+import type { Review, Workflow } from "./model.ts";
 import { changedPaths, treePaths, type CheckoutSnapshot } from "./git.ts";
 import { prefixed, type LensResult } from "./lenses.ts";
-import { acceptedRisksOf, findingFile, latestSecurity, requestReviews, SECURITY_DOWNGRADED, securityBlockers, severitiesOf, unacceptedBlockers, withoutPart } from "./security-blockers.ts";
+import { acceptedRisksFor, acceptedRisksOf, acceptedText, findingFile, repeatedInBaseline, requestReviews, sameText, SECURITY_ACCEPTED_REPEAT, SECURITY_DOWNGRADED, securityBlockers, severitiesOf, unacceptedBlockers } from "./security-blockers.ts";
 
-export { findingFile, SECURITY_DOWNGRADED };
-export const SECURITY_ACCEPTED_REPEAT = "bajado a aviso: repite en un archivo sin cambios un riesgo que aceptó una persona";
+export { acceptedRisksFor, findingFile, SECURITY_ACCEPTED_REPEAT, SECURITY_DOWNGRADED };
 export const SECURITY_PREVIOUS_NOTE = "previous es tu revisión de security anterior de este mismo trabajo, calculada por el harness: findings son tus hallazgos de entonces y changedFiles los archivos que cambiaron desde ese contenido. Decí primero si cada blocker anterior sigue. accepted marca el que aceptó una persona: si sigue igual, repetí su texto exacto (sin el prefijo de parte) y dejalo blocker; el host decide si la aceptación todavía vale. Un blocker nuevo de clase otro sólo bloquea si cae en un archivo de changedFiles o en el archivo de un blocker anterior; si no, el harness lo baja a aviso. Un secreto o una exfiltración bloquean siempre. Citá con archivo:línea cada archivo del escenario: donde está el problema y donde se dispara.";
 const NO_COMPARISON = "sin comparación con la revisión anterior: no se baja ningún blocker";
 const NO_BLOCKER_FILE = "sin comparación con la revisión anterior: un blocker anterior no cita su archivo; no se baja ningún blocker";
@@ -80,22 +79,6 @@ function resolvedFiles(blockers: readonly string[], known: readonly string[]): S
 // blockerFiles: los archivos de todos los blockers de la base. accepted: los textos que aceptó una persona, sin el prefijo
 // de parte ni espacios de más.
 export interface SecurityComparison { baseline: Review; changed: ReadonlySet<string>; tree: ReadonlySet<string>; blockerFiles: ReadonlySet<string>; accepted: ReadonlySet<string> }
-const sameText = (text: string): string => withoutPart(text).replace(/\s+/g, " ").trim();
-// El texto que aceptó una persona, sin los prefijos que pone el host: el de parte y el de repetido.
-const REPEAT_PREFIX = `${SECURITY_ACCEPTED_REPEAT} · `;
-const acceptedText = (text: string): string => { const same = sameText(text); return same.startsWith(REPEAT_PREFIX) ? sameText(same.slice(REPEAT_PREFIX.length)) : same; };
-// Lo aceptado que la base ya bajó como repetido (un aviso con el prefijo del host), sin los prefijos.
-const repeatedInBaseline = (baseline: Review): string[] => baseline.findings.filter(f => sameText(f).startsWith(REPEAT_PREFIX)).map(acceptedText);
-/** Lo aceptado que sigue valiendo sobre ese contenido: lo que una persona aceptó sobre él y, de otro contenido, sólo los
- * textos que su última revisión de security bajó como repetido aceptado, porque ese riesgo sigue en el código. */
-export function acceptedRisksFor(state: Workflow, fingerprint: string): AcceptedRisk[] {
- const review = latestSecurity(requestReviews(state), fingerprint), repeated = new Set(review ? repeatedInBaseline(review) : []);
- return acceptedRisksOf(state).flatMap(a => {
-  if (a.fingerprint === fingerprint) return [a];
-  const findings = a.findings.filter(f => repeated.has(sameText(f)));
-  return findings.length ? [{ ...a, findings }] : [];
- });
-}
 /** Qué cambió desde la revisión anterior. Sin base no hay nada que comparar; si no se puede comparar, sólo una nota. */
 export async function securityComparison(state: Workflow, snapshot: Pick<CheckoutSnapshot, "head" | "fingerprint">, runner: Runner, signal?: AbortSignal): Promise<{ comparison?: SecurityComparison; note?: string }> {
  const baseline = securityBaseline(state);
