@@ -85,7 +85,9 @@ while exit_status is None and time.monotonic() < deadline:
         done, code = os.waitpid(pid, os.WNOHANG)
         if done: exit_status = code
     except ChildProcessError: break
-    read(0.05)
+    # Con el PTY cerrado, read vuelve enseguida: sin la pausa, el bucle gira en vacío hasta el plazo.
+    if alive: read(0.05)
+    else: time.sleep(0.05)
 if exit_status is None and result == 'fin': result = 'falla: no terminó tras Ctrl+D'
 killgroup()
 os.close(fd)
