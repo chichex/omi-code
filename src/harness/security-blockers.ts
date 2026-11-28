@@ -38,6 +38,13 @@ export const latestSecurity = (reviews: readonly Review[], fingerprint: string):
 /** El último security de este contenido tiene un blocker sin aceptar. */
 export const contentSecurityBlocks = (state: Workflow, reviews: readonly Review[], fingerprint: string): boolean => unacceptedBlockers(state, latestSecurity(reviews, fingerprint)).length > 0;
 function reject(message: string): never { throw new Error(`Harness: ${message}`); }
+/** Por qué no entra otra aceptación, o "" si entra. Con el PR adoptado no hay retry ni refresh: el texto da la salida real. */
+export function acceptedRiskCap(state: Workflow): string {
+ if (acceptedRisksOf(state).length < MAX_ACCEPTED_RISKS) return "";
+ return state.version === 2 && state.pullRequest?.ownership === "adopted"
+  ? `se llegó al tope de ${MAX_ACCEPTED_RISKS} riesgos aceptados; con el PR adoptado no hay retry, refresh ni extra-round: salí con /omi-work stop y seguí el PR a mano`
+  : `se llegó al tope de ${MAX_ACCEPTED_RISKS} riesgos aceptados en esta vuelta; usá retry o /omi-work refresh`;
+}
 /** Registra la aceptación: tienen que ser exactamente los blockers sin aceptar del último security de ese contenido. */
 export function recordAcceptedRisk(state: WorkflowV2, reviews: readonly Review[], risk: { fingerprint: string; findings: string[]; reason: string }, at: string): void {
  const pending = unacceptedBlockers(state, latestSecurity(reviews, risk.fingerprint));
@@ -46,7 +53,7 @@ export function recordAcceptedRisk(state: WorkflowV2, reviews: readonly Review[]
  const reason = risk.reason.trim();
  if (!reason) reject("falta el motivo");
  if (reason.length > 2000) reject("el motivo es demasiado largo");
- const accepted = acceptedRisksOf(state);
- if (accepted.length >= MAX_ACCEPTED_RISKS) reject(`se llegó al tope de ${MAX_ACCEPTED_RISKS} riesgos aceptados en esta vuelta; usá retry o /omi-work refresh`);
- state.acceptedRisks = [...accepted, { fingerprint: risk.fingerprint, findings: [...risk.findings], reason, at }];
+ const cap = acceptedRiskCap(state);
+ if (cap) reject(cap);
+ state.acceptedRisks = [...acceptedRisksOf(state), { fingerprint: risk.fingerprint, findings: [...risk.findings], reason, at }];
 }

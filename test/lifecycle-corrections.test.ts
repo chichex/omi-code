@@ -38,13 +38,13 @@ function reviewing(): WorkflowV2 {
  lifecycle = life.disposeLifecycleFinding(lifecycle, { findingId: "F1", subjectId: "subject", observationHash: hash, status: "accepted", evidenceIds: [], reason: "validado", at }); return { ...r, lifecycle };
 }
 const proposal = (r: WorkflowV2) => ({ operationId: "correction1", findingIds: ["F1"], scope: { source: "person", scopeHash: recipeApprovalHash(r), withinScope: true, risk: "low" }, at });
-function coding() {
- let r = reviewing(); r = preparePostPrCorrection(r, proposal(r)); assert.equal(r.lifecycle.status, "enabled");
+function coding(start = reviewing()) {
+ let r = start; r = preparePostPrCorrection(r, proposal(r)); assert.equal(r.lifecycle.status, "enabled");
  const lifecycle = life.reserveLifecycleOperation(r.lifecycle, { id: "correction1", key: "correction1", kind: "correction", subjectId: "subject", targetId: null, correlationId: "correction-correlation", retryOf: null }, { id: "correction-decision", kind: "correction", subjectId: "subject", targetId: null, configHash: pin().accepted.blockHash, source: "person", at }, "process", at);
  return activatePostPrCorrection({ ...r, lifecycle }, "correction1", at);
 }
-function committed() {
- let r = coding(); const step = r.steps.at(-1); assert.ok(step); r = send(r, { type: "step_started", id: step.id });
+function committed(start = reviewing()) {
+ let r = coding(start); const step = r.steps.at(-1); assert.ok(step); r = send(r, { type: "step_started", id: step.id });
  r = send(r, { type: "evidence", evidence: evidence("red", "post-red", step.id, head, nextFingerprint) }); r = send(r, { type: "evidence", evidence: evidence("green", "post-green", step.id, head, nextFingerprint) }); r = send(r, { type: "step_completed", id: step.id, commit: nextHead, fingerprint: nextFingerprint });
  return r;
 }
@@ -170,6 +170,33 @@ test("seguridad fallada y aceptada por una persona sobre el commit de correcció
  const observed = { head: nextHead, fingerprint: nextFingerprint, clean: true };
  assert.throws(() => retryPostPrCorrection(flagged(nextFingerprint), "correction1", observed, "security marcó un blocker", at), /no hay fallo/);
  assert.equal(retryPostPrCorrection(flagged(fingerprint), "correction1", observed, "security marcó un blocker", at).phase, "review", "lo aceptado sobre otro contenido no cuenta");
+});
+
+// Riesgo pendiente de #100: con el PR adoptado no hay retry ni refresh, y lo aceptado sobre HEADs que ya no se mergean
+// llenaba el tope de 10 sin salida. Cada ronda conserva sólo lo aceptado sobre el HEAD del PR del que parte.
+const acceptance = (fp: string, line: number) => ({ fingerprint: fp, findings: [`app.ts:${line} · manda el diff a otro servidor`], reason: "Preexistente en main", at });
+const older = (n: number) => Array.from({ length: n }, (_, i) => acceptance(String(i).padStart(64, "0"), i + 2));
+const TOKEN = "app.ts:9 · manda el token a otro servidor";
+const flaggedNext = (r: WorkflowV2): WorkflowV2 => ({ ...r, reviews: [...r.reviews, { lens: "security", fingerprint: nextFingerprint, verdict: "fail", findings: [TOKEN], at }] });
+test("una ronda post-PR conserva sólo lo aceptado sobre el HEAD del que parte; la ronda acepta otro riesgo y lo conserva al verificar", () => {
+ assert.deepEqual(coding({ ...reviewing(), acceptedRisks: [acceptance(fingerprint, 1), ...older(9)] }).acceptedRisks, [acceptance(fingerprint, 1)], "lo de HEADs anteriores no pasa de ronda");
+ const r = send(flaggedNext(committed({ ...reviewing(), acceptedRisks: [acceptance(fingerprint, 1), ...older(9)] })), { type: "risk_accepted", fingerprint: nextFingerprint, findings: [TOKEN], reason: "Se sigue en #7" });
+ assert.deepEqual(r.acceptedRisks?.map(a => a.fingerprint), [fingerprint, nextFingerprint]);
+ let done = send(r, { type: "evidence", evidence: evidence("verification", "post-verification", null, nextHead, nextFingerprint) }); done = send(done, { type: "verified", fingerprint: nextFingerprint });
+ assert.deepEqual(verifyPostPrCorrection(done, "correction1", corrected(), { clean: true, ancestor: true }, at).acceptedRisks, r.acceptedRisks, "verificar la ronda no borra lo aceptado en ella");
+});
+test("una ronda post-PR sin nada aceptado sobre su HEAD de partida deja el estado sin el campo", () => {
+ const r = coding({ ...reviewing(), acceptedRisks: older(3) });
+ assert.equal("acceptedRisks" in r, false);
+});
+test("con el PR adoptado, el tope de riesgos aceptados no ofrece retry ni refresh, que el reducer rechaza", () => {
+ // Un estado de v0.35.0, que llegó a 10 a mitad de una ronda: no se destraba, y el texto dice la única salida.
+ const r = flaggedNext(committed()); r.acceptedRisks = older(10);
+ assert.throws(() => send(r, { type: "risk_accepted", fingerprint: nextFingerprint, findings: [TOKEN], reason: "Se sigue en #7" }), (e: Error) => /tope de 10/.test(e.message) && /\/omi-work stop/.test(e.message) && !/usá retry|\/omi-work refresh/.test(e.message));
+ assert.throws(() => send(r, { type: "retry", reason: "tope" }));
+ assert.throws(() => send(r, { type: "source_changed", source: r.source }));
+ assert.throws(() => send(r, { type: "round_added", reason: "tope" }));
+ assert.equal(send(r, { type: "pause", reason: "tope" }).status, "paused");
 });
 
 test("verified nativo no acredita D históricos fuera del ámbito de la corrección", () => {

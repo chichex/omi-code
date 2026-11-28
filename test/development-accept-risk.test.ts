@@ -42,7 +42,7 @@ test("development_accept_risk la persona revisa los hallazgos en la TUI, da el m
 	assert.equal(f.prompts.at(-1), "Aceptar riesgo de seguridad", JSON.stringify(f.messages));
 	// La revisión ajusta las líneas al ancho del modal: se compara el texto sin bordes ni saltos.
 	const screen = f.confirmationDetails.at(-1)!.replace(/[│┌┐└┘├┤─]/g, " ").replace(/\s+/g, " ");
-	for (const expected of [/Hallazgos que bloquean/, /value\.cjs:1 · expone un secreto/, /Qué implica/, /para este contenido\. Si un amend no toca su archivo y seguridad repite el mismo texto, sigue sin frenar, salvo un secreto o una exfiltración\. Si su archivo cambia, o después de un retry, seguridad lo vuelve a evaluar\./, /No corrige nada ni autoriza push, merge, comandos ni workflows/, /Esc o un motivo vacío no aceptan/, /Huella/]) assert.match(screen, expected);
+	for (const expected of [/Hallazgos que bloquean/, /value\.cjs:1 · expone un secreto/, /Qué implica/, /Con el PR adoptado, se descarta cuando una ronda de corrección parte de otro HEAD\./, /para este contenido\. Si un amend no toca su archivo y seguridad repite el mismo texto, sigue sin frenar, salvo un secreto o una exfiltración\. Si su archivo cambia, o después de un retry, seguridad lo vuelve a evaluar\./, /No corrige nada ni autoriza push, merge, comandos ni workflows/, /Esc o un motivo vacío no aceptan/, /Huella/]) assert.match(screen, expected);
 	// Ronda 4 (rules-4-consentimiento-solo-este-contenido): la pantalla decía «sólo para este contenido», pero tras un amend el host
 	// lleva la aceptación al contenido nuevo, también al auto-Land. La persona tiene que leer el alcance real antes de aceptar.
 	assert.doesNotMatch(screen, /sólo para este contenido/);
@@ -85,6 +85,18 @@ test("development_accept_risk sin TUI interactiva, con Esc o sin motivo no se ac
 	f.remote.answer = "x".repeat(2001); f.messages.length = 0; await f.command("accept-risk");
 	assert.ok(f.messages.some((m) => /demasiado largo/.test(m)), JSON.stringify(f.messages));
 	assert.equal(accepted(await f.state()), undefined);
+});
+
+// Riesgo pendiente de #100: con el tope lleno, la revisión se abría y el rechazo llegaba recién después del motivo.
+test("development_accept_risk con el tope de riesgos aceptados lleno, lo dice antes de abrir la revisión", async (t) => {
+	const f = await insecure(t);
+	const s = await f.state();
+	await updateWorkflow(s.checkout, s.source.number, s.revision, (saved) => ({ ...saved!, revision: saved!.revision + 1, acceptedRisks: Array.from({ length: 10 }, (_, i) => ({ fingerprint: String(i).padStart(64, "0"), findings: [`old.cjs:${i + 1} · otro riesgo`], reason: "Preexistente en main", at: "now" })) }));
+	const reviews = f.reviews(); f.messages.length = 0;
+	await f.command("accept-risk");
+	assert.equal(f.reviews(), reviews, "no abre la revisión");
+	assert.ok(f.messages.some((m) => /Aceptar riesgo de seguridad: se llegó al tope de 10/.test(m)), JSON.stringify(f.messages));
+	assert.equal(accepted(await f.state())?.length, 10);
 });
 
 test("development_accept_risk el trabajo o el código cambian durante la revisión: no se acepta", async (t) => {
