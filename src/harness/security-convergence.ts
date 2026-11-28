@@ -13,9 +13,9 @@ import type { Runner } from "../core/exec.ts";
 import type { AcceptedRisk, Review, Workflow } from "./model.ts";
 import { changedPaths, treePaths, type CheckoutSnapshot } from "./git.ts";
 import { prefixed, type LensResult } from "./lenses.ts";
-import { acceptedRisksOf, latestSecurity, requestReviews, SECURITY_DOWNGRADED, securityBlockers, severitiesOf, unacceptedBlockers } from "./security-blockers.ts";
+import { acceptedRisksOf, findingFile, latestSecurity, requestReviews, SECURITY_DOWNGRADED, securityBlockers, severitiesOf, unacceptedBlockers, withoutPart } from "./security-blockers.ts";
 
-export { SECURITY_DOWNGRADED };
+export { findingFile, SECURITY_DOWNGRADED };
 export const SECURITY_ACCEPTED_REPEAT = "bajado a aviso: repite en un archivo sin cambios un riesgo que aceptó una persona";
 export const SECURITY_PREVIOUS_NOTE = "previous es tu revisión de security anterior de este mismo trabajo, calculada por el harness: findings son tus hallazgos de entonces y changedFiles los archivos que cambiaron desde ese contenido. Decí primero si cada blocker anterior sigue. accepted marca el que aceptó una persona: si sigue igual, repetí su texto exacto (sin el prefijo de parte) y dejalo blocker; el host decide si la aceptación todavía vale. Un blocker nuevo de clase otro sólo bloquea si cae en un archivo de changedFiles o en el archivo de un blocker anterior; si no, el harness lo baja a aviso. Un secreto o una exfiltración bloquean siempre. Citá con archivo:línea cada archivo del escenario: donde está el problema y donde se dispara.";
 const NO_COMPARISON = "sin comparación con la revisión anterior: no se baja ningún blocker";
@@ -37,14 +37,6 @@ export function securityBaseline(state: Workflow): Review | undefined {
 export function reviewedCommit(state: Workflow, fingerprint: string): string | undefined {
  const evidence = [...(state.attempts ?? []).flatMap(a => a.evidence), ...state.evidence];
  return state.steps.findLast(s => s.status === "done" && s.commit && evidence.some(e => e.id === s.green && e.fingerprint === fingerprint))?.commit ?? undefined;
-}
-/** El archivo del primer tramo «archivo:línea» del hallazgo, sin «./»; null si ningún tramo empieza así. */
-export function findingFile(text: string): string | null {
- for (const part of text.split(" · ")) {
-  const match = /^[`"']?([^\s:`"'·]+):\d/.exec(part.trim());
-  if (match) return match[1]!.replace(/^\.\//, "");
- }
- return null;
 }
 
 // Qué archivos nombra un hallazgo, sin adivinar la forma de una ruta (Makefile, «acción.ts», «run task.ts», entre «» o **,
@@ -88,7 +80,7 @@ function resolvedFiles(blockers: readonly string[], known: readonly string[]): S
 // blockerFiles: los archivos de todos los blockers de la base. accepted: los textos que aceptó una persona, sin el prefijo
 // de parte ni espacios de más.
 export interface SecurityComparison { baseline: Review; changed: ReadonlySet<string>; tree: ReadonlySet<string>; blockerFiles: ReadonlySet<string>; accepted: ReadonlySet<string> }
-const sameText = (text: string): string => text.replace(/^\s*parte \d+\/\d+ · /, "").replace(/\s+/g, " ").trim();
+const sameText = (text: string): string => withoutPart(text).replace(/\s+/g, " ").trim();
 // El texto que aceptó una persona, sin los prefijos que pone el host: el de parte y el de repetido.
 const REPEAT_PREFIX = `${SECURITY_ACCEPTED_REPEAT} · `;
 const acceptedText = (text: string): string => { const same = sameText(text); return same.startsWith(REPEAT_PREFIX) ? sameText(same.slice(REPEAT_PREFIX.length)) : same; };

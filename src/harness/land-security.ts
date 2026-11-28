@@ -6,8 +6,7 @@
 import type { Workflow } from "./model.ts";
 import type { LandRisk } from "./land-schema.ts";
 import { lensReview } from "./lenses.ts";
-import { downgradedFindings, riskAccepted, unacceptedBlockers } from "./security-blockers.ts";
-import { findingFile } from "./security-convergence.ts";
+import { downgradedFindings, findingFile, riskAccepted, unacceptedBlockers } from "./security-blockers.ts";
 
 export const SECURITY_HOLD = "Seguridad sin veredicto en un cambio de riesgo alto: el merge pide tu sí";
 const SECURITY_FAILED_HOLD = "Seguridad en fail en un cambio de riesgo alto: el merge pide tu sí";

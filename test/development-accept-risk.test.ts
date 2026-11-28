@@ -144,6 +144,6 @@ test("development_accept_risk con una revisión de security parcial, la pantalla
 	// Review 1 de Sonnet: la regla del PR adoptado sale sólo con el PR adoptado.
 	const adopted = { ...state, pullRequest: { ownership: "adopted" } } as unknown as Workflow;
 	const lines = (w: Workflow) => acceptRiskDocument(w, "head", "tree", [blocker]).sections.flatMap((s) => s.lines.map((l) => l.kind === "text" ? l.text : "")).join("\n");
-	assert.match(lines(adopted), /Con el PR adoptado, se descarta cuando una ronda de corrección parte de otro HEAD y la revisión de seguridad de ese HEAD no lo repite\./);
+	assert.match(lines(adopted), /Con el PR adoptado, se descarta cuando una ronda de corrección parte de otro HEAD y la revisión de seguridad de ese HEAD no lo repite\. La sección del issue lo sigue mostrando hasta su próxima actualización\./);
 	assert.doesNotMatch(lines(state), /Con el PR adoptado/);
 });

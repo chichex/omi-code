@@ -38,12 +38,21 @@ export function unacceptedBlockers(state: Workflow, r?: Review): string[] {
 export const riskAccepted = (state: Workflow, r?: Review): boolean => securityBlockers(r).length > 0 && !unacceptedBlockers(state, r).length;
 /** Las revisiones de este pedido: las de la vuelta y las que un retry archivó con el mismo pedido. */
 export const requestReviews = (state: Workflow): Review[] => [...(state.attempts ?? []).filter(a => a.sourceHash === state.source.hash).flatMap(a => a.reviews), ...state.reviews];
-const PART = /^parte \d+\/\d+ · /;
+/** El hallazgo sin el prefijo «parte N/M · » que pone combineLensResults. Un solo lugar: si se desalinea, lo bajado no retiene. */
+export const withoutPart = (text: string): string => text.replace(/^\s*parte \d+\/\d+ · /, "");
+/** El archivo del primer tramo «archivo:línea» del hallazgo, sin «./»; null si ningún tramo empieza así. */
+export function findingFile(text: string): string | null {
+ for (const part of text.split(" · ")) {
+  const match = /^[`"']?([^\s:`"'·]+):\d/.exec(part.trim());
+  if (match) return match[1]!.replace(/^\.\//, "");
+ }
+ return null;
+}
 /** Lo que el host bajó a aviso en este pedido, sin el prefijo. Lee el texto guardado y no mira veredicto ni severidad:
  * falla cerrado. Un repetido que aceptó una persona lleva otro prefijo y no cuenta. */
 export function downgradedFindings(state: Workflow): string[] {
  const mark = `${SECURITY_DOWNGRADED} · `;
- return requestReviews(state).filter(r => r.lens === "security").flatMap(r => r.findings.map(f => f.replace(PART, "")).filter(f => f.startsWith(mark)).map(f => f.slice(mark.length)));
+ return requestReviews(state).filter(r => r.lens === "security").flatMap(r => r.findings.map(withoutPart).filter(f => f.startsWith(mark)).map(f => f.slice(mark.length)));
 }
 export const latestSecurity = (reviews: readonly Review[], fingerprint: string): Review | undefined => reviews.findLast(r => r.lens === "security" && r.fingerprint === fingerprint);
 /** El último security de este contenido tiene un blocker sin aceptar. */

@@ -31,9 +31,9 @@ export function acceptRiskDocument(state: Workflow, head: string, fingerprint: s
 		...partialSection(review),
 		{ id: "meaning", title: "Qué implica", lines: [
 			line("Deja de frenar Verificar y Land (también el merge automático) para este contenido. Si un amend no toca su archivo y seguridad repite el mismo texto, sigue sin frenar, salvo un secreto o una exfiltración. Si su archivo cambia, o después de un retry, seguridad lo vuelve a evaluar."),
-			...(state.version === 2 && state.pullRequest?.ownership === "adopted" ? [line("Con el PR adoptado, se descarta cuando una ronda de corrección parte de otro HEAD y la revisión de seguridad de ese HEAD no lo repite.")] : []),
+			...(state.version === 2 && state.pullRequest?.ownership === "adopted" ? [line("Con el PR adoptado, se descarta cuando una ronda de corrección parte de otro HEAD y la revisión de seguridad de ese HEAD no lo repite. La sección del issue lo sigue mostrando hasta su próxima actualización.")] : []),
 			line("No corrige nada ni autoriza push, merge, comandos ni workflows."),
-			line("Queda en el estado del trabajo, en la sección del issue y en el PR draft mientras valga."),
+			line("Queda en el estado del trabajo, en la sección del issue y en el PR draft."),
 			line("Después de Ctrl+S se pide el motivo. Esc o un motivo vacío no aceptan nada.")] },
 		{ id: "content", title: "Contenido", lines: [line(`Issue #${state.source.number} · ${state.source.title}`), line(`HEAD: ${head}`), line(`Huella: ${fingerprint}`)] },
 	] };

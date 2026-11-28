@@ -203,9 +203,11 @@ test("con el PR adoptado, el tope de riesgos aceptados no ofrece retry ni refres
  // Un estado de v0.35.0, que llegó a 10 a mitad de una ronda: no se destraba, y el texto dice la única salida.
  const r = flaggedNext(committed()); r.acceptedRisks = older(10);
  assert.throws(() => send(r, { type: "risk_accepted", fingerprint: nextFingerprint, findings: [TOKEN], reason: "Se sigue en #7" }), (e: Error) => /tope de 10/.test(e.message) && /\/omi-work stop/.test(e.message) && !/usá retry|\/omi-work refresh/.test(e.message));
- assert.throws(() => send(r, { type: "retry", reason: "tope" }));
- assert.throws(() => send(r, { type: "source_changed", source: r.source }));
- assert.throws(() => send(r, { type: "round_added", reason: "tope" }));
+ // Review 2 de Sonnet: cada rechazo con su motivo. retry y extra-round tienen guard propio; refresh lo frena el invariante del
+ // PR adoptado, porque source_changed deja publication en none.
+ assert.throws(() => send(r, { type: "retry", reason: "tope" }), /post-PR usa corrección propia; retry no puede/);
+ assert.throws(() => send(r, { type: "source_changed", source: r.source }), /ownership sin identidad durable de PR/);
+ assert.throws(() => send(r, { type: "round_added", reason: "tope" }), /post-PR usa corrección propia; no suma vueltas/);
  assert.equal(send(r, { type: "pause", reason: "tope" }).status, "paused");
 });
 
