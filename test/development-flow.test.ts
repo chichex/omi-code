@@ -206,6 +206,38 @@ test("development_flow una vuelta de corrección con Git real agrega un paso con
 	await f.action({ action: "verified" }); assert.equal((await f.state()).phase, "pr");
 });
 
+// #99 gastó 2 de 3 retry en tests propios que recién vio npm test en Verificar (2026-11-26): un gate rojo se corrige con amend.
+test("development_flow un gate rojo en Verificar se corrige con amend sin gastar vuelta: retry apunta a amend y el gate se repite", async (t) => {
+	const f = await implemented(t); const GATE = "node -e \"process.exit(require('node:fs').existsSync('NOTES.md') ? 0 : 1)\"";
+	await f.invoke("omi_workflow_check", { kind: "verification", command: "node test.cjs", caseId: "D1" });
+	await f.invoke("omi_workflow_lens", { lens: "quality" });
+	assert.equal((await f.invoke("omi_workflow_check", { kind: "gate", command: GATE })).isError, true);
+	await assert.rejects(f.action({ action: "retry", reason: "Falta NOTES.md" }), /amend/);
+	assert.deepEqual([(await f.state()).phase, (await f.state()).round], ["verify", 0], "retry rechazado no gasta vuelta");
+	await f.action({ action: "amend", reason: "Falta NOTES.md" });
+	assert.deepEqual([(await f.state()).phase, (await f.state()).round], ["implement", 0]);
+	await f.action({ action: "step", id: "C2" }); await f.invoke("omi_workflow_check", { kind: "red", command: GATE, stepId: "C2" });
+	await f.write("NOTES.md", "notas\n"); await f.invoke("omi_workflow_check", { kind: "green", command: GATE, stepId: "C2" });
+	await f.invoke("omi_workflow_commit", { stepId: "C2", paths: ["NOTES.md"], message: "docs: agregar notas" });
+	await assert.rejects(f.action({ action: "verified" }), /caso D1/);
+	await f.invoke("omi_workflow_check", { kind: "verification", command: "node test.cjs", caseId: "D1" });
+	// quality aprobó limpio antes del amend: vale. El gate que falló se repite sobre el contenido corregido.
+	await assert.rejects(f.action({ action: "verified" }), /gate fallido/);
+	assert.equal((await f.invoke("omi_workflow_check", { kind: "gate", command: GATE })).isError, false);
+	await f.action({ action: "verified" }); assert.deepEqual([(await f.state()).phase, (await f.state()).round], ["pr", 0]);
+});
+
+test("development_flow un gate con un comando que no existe dice que no cuenta y que hay que corregir el comando", async (t) => {
+	const f = await implemented(t);
+	await f.invoke("omi_workflow_check", { kind: "verification", command: "node test.cjs", caseId: "D1" });
+	await f.invoke("omi_workflow_lens", { lens: "quality" });
+	const missing = await f.invoke("omi_workflow_check", { kind: "gate", command: "omi-comando-que-no-existe" });
+	assert.equal(missing.isError, true); assert.equal((await f.state()).evidence.at(-1)?.exitCode, 127);
+	assert.match(JSON.stringify(missing.content), /El comando no existe o no es ejecutable \(exit 127\): no cuenta como gate de la vuelta\. Corregí el comando/);
+	await assert.rejects(f.action({ action: "amend", reason: "Corregir el gate" }), /no existe o no es ejecutable/);
+	await f.action({ action: "verified" }); assert.equal((await f.state()).phase, "pr", "un comando ausente no traba Verificar");
+});
+
 test("development_flow el modelo no puede volver a explorar sin un sí humano; la persona sí con /omi-work refresh", async (t) => {
 	const f = await developmentFixture(t, { foundations: ASK_ALL }); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" });
 	f.remote.confirmations = false; const prompts = f.prompts.length;

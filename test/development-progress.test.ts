@@ -110,3 +110,23 @@ test("waiting overlays target the current stage without changing durable executi
  assert.ok(events.some(e => e.progress?.status === "waiting" && e.progress.stages?.some(s => s.current && s.status === "waiting")));
  assert.equal((await f.state()).approval, null);
 });
+
+test("development_progress omi_workflow status y /omi-work status dicen la vuelta, los retry que quedan y los amends", async t => {
+ const f = await developmentFixture(t); await f.start(); await f.explore(); await f.action({ action: "planned", plan: f.plan() }); await f.action({ action: "approve" });
+ const state = await f.state(); assert.equal(state.phase, "implement");
+ const status = await f.action({ action: "status" });
+ assert.match(JSON.stringify(status.content), /Presupuesto: vuelta 0 de 3 · quedan 3 retry · amends 0 de 2\./);
+ f.messages.length = 0; await f.command("status");
+ assert.ok(f.messages.some(m => /vuelta 0 de 3 · quedan 3 retry · amends 0 de 2/.test(m)), JSON.stringify(f.messages));
+ assert.ok(developmentProgress(state).details?.includes("Etapa: Implementar · active · vuelta 0 de 3 · quedan 3 retry · amends 0 de 2"), "el detalle de /omi-progress");
+});
+
+test("development_progress la descripción de omi_workflow dice que pause es para una decisión humana nombrada y que el host frena al agotar los retry", async t => {
+ const f = await developmentFixture(t);
+ const description = f.tools.get("omi_workflow")?.description ?? "";
+ assert.match(description, /pause frena hasta una persona: es sólo para una decisión humana concreta que nombrás en reason, nunca por contar vueltas/);
+ assert.match(description, /el host frena solo al agotar los retry/);
+ assert.match(description, /status consulta y dice la vuelta, los retry que quedan y los amends/);
+ assert.match(description, /amend corrige sin gastar vuelta un D o un gate rojo, o un aviso de un lente \(hasta 2 por vuelta\)/);
+ assert.doesNotMatch(description, /pause bloquea/, "la regla vieja no decía para qué es pause");
+});

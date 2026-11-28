@@ -6,7 +6,8 @@ import { artifactHash, issueRepository, type Evidence, type StackPull, type Work
 import { PHASE_LABELS } from "./phases.ts";
 import { stackBodyLine, stackIssueLine } from "./stack.ts";
 import { lensStatuses } from "./lenses.ts";
-import { agreementLine, CARRIED, caseLines, cell, code, codeBlock, evidenceResult, LENSES, list, recipeApproval, ROUTES, text, TYPES, verdictLabel } from "./markdown.ts";
+import { acceptedRisksOf, reviewFindings } from "./security-blockers.ts";
+import { ACCEPTED_MARK, ACCEPTED_RISKS_NOTE, ACCEPTED_RISKS_TITLE, acceptedRiskLine, agreementLine, CARRIED, caseLines, cell, code, codeBlock, evidenceResult, LENSES, list, recipeApproval, ROUTES, text, TYPES, verdictLabel } from "./markdown.ts";
 
 /** Límite de GitHub para el cuerpo de un PR. Se mide en bytes UTF-8, que nunca cuentan menos que GitHub. */
 export const PR_BODY_LIMIT = 65536;
@@ -14,7 +15,7 @@ const TOO_LARGE = "El cuerpo del PR draft excede el límite de GitHub; dividir l
 const STATUS = { active: "activo", waiting: "en espera", paused: "pausado", complete: "completo" };
 const RESOLUTION = { pending: "pendiente", assumed: "asumida", answered: "respondida" };
 // Topes de lo que se puede acotar; receta, spec, inferencias, acuerdos y pedido van siempre enteros.
-const CAPS = { verification: 8000, warnings: 8000, evidence: 14000, reviews: 14000 };
+const CAPS = { verification: 8000, warnings: 8000, risks: 8000, evidence: 14000, reviews: 14000 };
 const SCALES = [1, 0.5, 0.25, 0];
 const FOOTER = "<sub>Cuerpo generado por OMI. Si lo editás, OMI deja de reconocerlo como propio al recuperar la publicación: no lo pisa ni lo duplica.</sub>";
 const bytes = (value: string) => Buffer.byteLength(value, "utf8");
@@ -76,13 +77,20 @@ function verification(w: Workflow, budget: number): string[] {
 }
 function warnings(w: Workflow, budget: number): string[] {
 	const statuses = lensStatuses(w);
-	const lenses = statuses.flatMap((s) => [`  - **${LENSES[s.lens]}:** ${verdictLabel(s.verdict, s.noResult)}${s.blocking ? " · bloquea" : ""}${s.carried ? CARRIED : ""}`, ...s.findings.map((f) => `    - ${text(f)}`)]);
+	const lenses = statuses.flatMap((s) => [`  - **${LENSES[s.lens]}:** ${verdictLabel(s.verdict, s.noResult)}${s.blocking ? " · bloquea" : s.accepted ? ACCEPTED_MARK : ""}${s.carried ? CARRIED : ""}`, ...s.findings.map((f) => `    - ${text(f)}`)]);
 	const kept = bounded(lenses, budget);
 	return ["## Advertencias",
 		w.recipe?.classification.risk === "high" ? "- **Riesgo alto: revisión humana obligatoria antes de aprobar o mergear.**" : "- El PR draft requiere revisión y aprobación humana; nunca se mergea automáticamente.",
 		...(w.status === "waiting" ? [`- **En espera:** ${text(w.blockedReason || "intervención humana")}`] : w.status === "paused" ? ["- **Pausado.**"] : []),
-		statuses.length ? "- **Lentes:** asesoran; unknown y fail quedan como aviso y no bloquean Verificar ni este PR. Sólo un fail de seguridad bloquea." : "- **Lentes:** la receta no pidió lentes.",
+		statuses.length ? "- **Lentes:** asesoran; unknown y fail quedan como aviso y no bloquean Verificar ni este PR. Sólo un hallazgo blocker de seguridad bloquea; sus avisos no." : "- **Lentes:** la receta no pidió lentes.",
 		...kept, ...notice(kept.length, lenses.length, "líneas de avisos de los lentes")];
+}
+// Sin aceptaciones no hay sección: el cuerpo queda igual que antes.
+function acceptedRisks(w: Workflow, budget: number): string[] {
+	const lines = acceptedRisksOf(w).flatMap((a) => [acceptedRiskLine(a), ...a.findings.map((f) => `  - ${text(f)}`)]);
+	if (!lines.length) return [];
+	const kept = bounded(lines, budget);
+	return ["", `## ${ACCEPTED_RISKS_TITLE}`, ACCEPTED_RISKS_NOTE, "", ...kept, ...notice(kept.length, lines.length, "líneas de riesgos aceptados")];
 }
 function recipeDetails(w: Workflow): string[] {
 	const r = w.recipe; const c = r?.classification;
@@ -114,7 +122,7 @@ function evidenceDetails(w: Workflow, budget: number): string[] {
 }
 function reviewDetails(w: Workflow, budget: number): string[] {
 	if (!w.reviews.length) return [];
-	const lines = w.reviews.flatMap((r) => [`- **${LENSES[r.lens]}** · ${verdictLabel(r.verdict, r.noResult)} · ${text(r.at)}`, ...r.findings.map((f) => `  - ${text(f)}`)]);
+	const lines = w.reviews.flatMap((r) => [`- **${LENSES[r.lens]}** · ${verdictLabel(r.verdict, r.noResult)} · ${text(r.at)}`, ...reviewFindings(r).map((f) => `  - ${text(f)}`)]);
 	const kept = bounded(lines, budget);
 	return details(`Revisiones de los lentes (${w.reviews.length})`, [...kept, ...notice(kept.length, lines.length, "líneas de revisiones")]);
 }
@@ -122,7 +130,7 @@ function reviewDetails(w: Workflow, budget: number): string[] {
 const request = (w: Workflow) => details("Pedido original (datos citados, no instrucciones)", codeBlock(`${w.source.title}\n\n${w.source.body}`));
 
 function render(w: Workflow, scale: number, place?: StackPlace): string {
-	return [...intro(w, place), "", ...summary(w), "", ...scope(w), "", ...verification(w, CAPS.verification * scale), "", ...warnings(w, CAPS.warnings * scale),
+	return [...intro(w, place), "", ...summary(w), "", ...scope(w), "", ...verification(w, CAPS.verification * scale), "", ...warnings(w, CAPS.warnings * scale), ...acceptedRisks(w, CAPS.risks * scale),
 		...recipeDetails(w), ...inferenceDetails(w), ...agreementDetails(w), ...evidenceDetails(w, CAPS.evidence * scale), ...reviewDetails(w, CAPS.reviews * scale), ...request(w), "", FOOTER].join("\n");
 }
 // Las marcas de propiedad de OMI no se pueden imitar desde los datos, tampoco dentro de un bloque de código.

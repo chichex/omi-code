@@ -4,12 +4,14 @@ import { resolve } from "node:path";
 import { Type, type Static, type TSchema } from "typebox";
 import { Value } from "typebox/value";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { ExplorationSchema, InferenceInputSchema, LensSchema, PlanSchema, SpecSchema, text } from "../harness/model.ts";
-import { expectedFailure, successful, transition, type WorkflowEvent } from "../harness/state.ts";
+import { ExplorationSchema, InferenceInputSchema, LensSchema, MAX_AMENDS, PlanSchema, SpecSchema, text } from "../harness/model.ts";
+import { expectedFailure, missingCommand, successful, transition, type WorkflowEvent } from "../harness/state.ts";
+import { unacceptedBlockers } from "../harness/security-blockers.ts";
 import { gitRead, inspectCheckout, validateReferences } from "../harness/git.ts";
 import { approvalPreview, DevelopmentSession } from "./development-session.ts";
 import { referenceDigest } from "../harness/references.ts";
 import { executeCheck, commitStep } from "./development-execution.ts";
+import { MAX_CHECK_TIMEOUT_SECONDS } from "../harness/check-timing.ts";
 import { lensDiffParts, runLens } from "./development-review.ts";
 import { developmentInstructions } from "./development-view.ts";
 import { registerAgreement } from "./development-agreement.ts";
@@ -22,7 +24,7 @@ const ActionSchema = Type.Object({
 	id: Type.Optional(text(100)), cause: Type.Optional(text()), reproduction: Type.Optional(text(100)), size: Type.Optional(Type.Union([Type.Literal("small"), Type.Literal("large")])), reason: Type.Optional(text()),
 	quote: Type.Optional(text(2000)), agreement: Type.Optional(text(2000)), replan: Type.Optional(Type.Boolean()),
 }, { additionalProperties: false });
-const CheckSchema = Type.Object({ kind: Type.Union([Type.Literal("setup"), Type.Literal("reproduction"), Type.Literal("red"), Type.Literal("green"), Type.Literal("verification"), Type.Literal("gate")]), command: text(8192), stepId: Type.Optional(text(32)), caseId: Type.Optional(text(32)), timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 1800 })) }, { additionalProperties: false });
+const CheckSchema = Type.Object({ kind: Type.Union([Type.Literal("setup"), Type.Literal("reproduction"), Type.Literal("red"), Type.Literal("green"), Type.Literal("verification"), Type.Literal("gate")]), command: text(8192), stepId: Type.Optional(text(32)), caseId: Type.Optional(text(32)), timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_CHECK_TIMEOUT_SECONDS })) }, { additionalProperties: false });
 const CommitSchema = Type.Object({ stepId: text(32), message: text(300), paths: Type.Array(text(8192), { maxItems: 100 }) }, { additionalProperties: false });
 function checked<S extends TSchema>(schema: S, value: unknown): Static<S> {
 	if (!Value.Check(schema, value)) throw new Error("Faltan datos o no tienen el formato de esta acción del harness");
@@ -30,6 +32,9 @@ function checked<S extends TSchema>(schema: S, value: unknown): Static<S> {
 }
 // Un unknown sin resultado no es un juicio del lente: repetirlo no re-tira un veredicto. La causa va en findings.
 const NO_RESULT = "Sin resultado: el lente no llegó a juzgar el cambio; la causa va en findings. Volvé a correr este lente antes de verified; no gasta veredictos. Si vuelve a quedar sin resultado, queda como aviso en el progreso y en el PR draft y no bloquea Verificar.";
+const SECURITY_BLOCKER = "Un hallazgo blocker de seguridad bloquea Verificar. Si es real, corregilo con retry. Si no aplica (preexistente en main, fuera del alcance o del modelo de amenazas), no gastes la vuelta: pausá con omi_workflow action:pause y el motivo. Sólo la persona puede aceptar el riesgo, con /omi-work accept-risk; ni el chat ni omi_ask lo aceptan.";
+// Un aviso se corrige con amend sólo si el arreglo no contradice lo que el repo ya decidió (#98: un lente pidió lo que store.ts prohíbe).
+const ADVISORY = "Aviso: queda visible en el progreso y en el PR draft y no bloquea Verificar. No repitas el lente para borrarlo ni uses retry. Si vale la pena corregirlo y no contradice una decisión documentada (un comentario del código, AGENTS.md o docs/), usá omi_workflow action:amend con el motivo: no gasta vuelta. Si la contradice, dejalo como aviso.";
 const result = async (session: DevelopmentSession) => {
 	const state = session.state;
 	const text = state && !session.lockedReason ? developmentInstructions(state, [], false, await singlePrPlanning(session, state)) : session.status();
@@ -59,7 +64,7 @@ async function currentExploration(session: DevelopmentSession, ctx: ExtensionCon
 export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentSession): void {
 	pi.registerTool({
 		name: "omi_workflow", label: "Desarrollo: flujo", defaultActive: false, exposure: "model-only", executionMode: "sequential", parameters: ActionSchema,
-		description: "Avanza el harness de desarrollo activo. Explorar, resolver inferencias, receta, diagnóstico/spec, aprobación (humana o de Foundations), pasos, verificar y PR draft. retry gasta una vuelta y es para un D, un gate o security fallados; amend corrige un hallazgo de un lente que sólo avisa sin gastar vuelta. No acepta evidencia ni aprobaciones declaradas por el modelo. status consulta; pause bloquea. stack actualiza un stack de PRs publicado (merge y push normal; pide el sí sólo con push_pr: ask). agreed registra un acuerdo de alcance dicho por la persona en el chat, con la cita textual de su mensaje (OMI la verifica). start/resume son comandos humanos /omi-work.",
+		description: `Avanza el harness de desarrollo activo. Explorar, resolver inferencias, receta, diagnóstico/spec, aprobación (humana o de Foundations), pasos, verificar y PR draft. amend corrige sin gastar vuelta un D o un gate rojo, o un aviso de un lente (hasta ${MAX_AMENDS} por vuelta); retry abre otra vuelta y es para un blocker de security, o para un rojo cuando ya no quedan amend; el host frena solo al agotar los retry. No acepta evidencia ni aprobaciones declaradas por el modelo. status consulta y dice la vuelta, los retry que quedan y los amends. pause frena hasta una persona: es sólo para una decisión humana concreta que nombrás en reason, nunca por contar vueltas. stack actualiza un stack de PRs publicado (merge y push normal; pide el sí sólo con push_pr: ask). agreed registra un acuerdo de alcance dicho por la persona en el chat, con la cita textual de su mensaje (OMI la verifica). start/resume son comandos humanos /omi-work.`,
 		promptSnippet: "Registrar el trabajo de desarrollo y su receta; pedir decisiones y permisos humanos",
 		async execute(_id, input, signal, _onUpdate, ctx) {
 			if (input.action === "status") return result(session);
@@ -106,7 +111,11 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 					}
 					break;
 				}
-				case "retry": await session.apply({ type: "retry", reason: checked(text(), input.reason) }, ctx); break;
+				case "retry": {
+					// Con el contenido limpio, el reducer sabe si un amend alcanza. Sucio o ilegible, amend no puede: retry sigue disponible.
+					const snapshot = await inspectCheckout(session.current(ctx).checkout, session.runner, signal).catch(() => undefined); signal?.throwIfAborted();
+					await session.apply({ type: "retry", reason: checked(text(), input.reason), ...(snapshot?.clean ? { fingerprint: snapshot.fingerprint } : {}) }, ctx); break;
+				}
 				case "amend": {
 					const snapshot = await inspectCheckout(session.current(ctx).checkout, session.runner, signal);
 					if (!snapshot.clean) throw new Error("La corrección liviana parte del cambio commiteado y limpio");
@@ -132,13 +141,16 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 	});
 	pi.registerTool({
 		name: "omi_workflow_check", label: "Desarrollo: ejecutar prueba", defaultActive: false, executionMode: "sequential", parameters: CheckSchema,
-		description: "Ejecuta un comando en el checkout del trabajo y registra salida/exit real para reproducción, rojo, verde o casos D. setup prepara el checkout (por ejemplo, instalar dependencias) en cualquier etapa activa hasta el PR draft y no acredita pruebas; después del PR, sólo corre durante una corrección en curso. Sin Foundations v2 aceptada, nada pregunta. Con v2, sólo las líneas simples que no coinciden con un patrón corren sin preguntar; patrones y sintaxis no soportada piden sí, salvo un grant humano exacto del trabajo/pedido. Aprobar la receta no dispensa esa confirmación. Salida limitada a 12.000 caracteres. No es sandbox.",
+		description: "Ejecuta un comando en el checkout del trabajo y registra salida/exit real para reproducción, rojo, verde o casos D. setup prepara el checkout (por ejemplo, instalar dependencias) en cualquier etapa activa hasta el PR draft y no acredita pruebas; después del PR, sólo corre durante una corrección en curso. Sin Foundations v2 aceptada, nada pregunta. Con v2, sólo las líneas simples que no coinciden con un patrón corren sin preguntar; patrones y sintaxis no soportada piden sí, salvo un grant humano exacto del trabajo/pedido. Aprobar la receta no dispensa esa confirmación. Un check pesado (un gate o un setup la primera vez, o un comando que ya tardó 30 s o más) espera su turno si otro worktree del repo corre uno; con 15 min de espera corre igual. Un timeoutSeconds menor que 1,5× la última corrida completa del mismo comando sube a ese piso, con tope de 1800; la salida dice ese ajuste, la espera y, si Pi lo cortó por tiempo, con cuánto volver a correrlo. Salida limitada a 12.000 caracteres. No es sandbox.",
 		async execute(_id, input, signal, _update, ctx) {
 			const observation = await executeCheck(session, input, ctx, AbortSignal.any([signal ?? new AbortController().signal, session.lifecycle.signal]));
-			if ("setup" in observation) return { content: [{ type: "text", text: `Comando auxiliar; no acredita pruebas ni casos.\n${JSON.stringify(observation.setup)}` }], details: { setup: observation.setup }, isError: observation.setup.interrupted || observation.setup.exitCode !== 0 };
-			const evidence = observation;
+			const notes = observation.notes.map((note) => ({ type: "text" as const, text: note }));
+			if ("setup" in observation) return { content: [{ type: "text", text: `Comando auxiliar; no acredita pruebas ni casos.\n${JSON.stringify(observation.setup)}` }, ...notes], details: { setup: observation.setup }, isError: observation.setup.interrupted || observation.setup.exitCode !== 0 };
+			const evidence = observation.evidence;
 			const success = evidence.kind === "red" ? expectedFailure(evidence) : evidence.kind === "reproduction" ? successful(evidence) || expectedFailure(evidence) : successful(evidence);
-			return { content: [{ type: "text", text: JSON.stringify(evidence) }], details: { evidence }, isError: !success };
+			const content = [{ type: "text" as const, text: JSON.stringify(evidence) }];
+			if (evidence.kind === "gate" && missingCommand(evidence)) content.push({ type: "text", text: `El comando no existe o no es ejecutable (exit ${evidence.exitCode}): no cuenta como gate de la vuelta. Corregí el comando y correlo otra vez.` });
+			return { content: [...content, ...notes], details: { evidence }, isError: !success };
 		},
 	});
 	pi.registerTool({
@@ -150,11 +162,12 @@ export function registerDevelopmentTools(pi: ExtensionAPI, session: DevelopmentS
 	});
 	pi.registerTool({
 		name: "omi_workflow_lens", label: "Desarrollo: lente de verificación", defaultActive: false, exposure: "model-only", executionMode: "sequential", parameters: Type.Object({ lens: LensSchema }, { additionalProperties: false }),
-		description: "Ejecuta un lente de Verificar en contexto aislado, sin tools ni conversación del implementador. Evalúa los casos D, la evidencia registrada por el harness y el diff completo, por partes si no entra en una llamada; registra verdict pass/fail/unknown ligado al contenido. Asesora: unknown y fail quedan como aviso y no bloquean verified; sólo un fail de security bloquea. No es Review externa del PR. Conserva uso del modelo.",
+		description: "Ejecuta un lente de Verificar en contexto aislado, sin tools ni conversación del implementador. Evalúa los casos D, la evidencia registrada por el harness, los precedentes de Explorar leídos de la base (security, sin la nota del implementador) y el diff completo, por partes si no entra en una llamada; registra verdict pass/fail/unknown ligado al contenido. Asesora: unknown y fail quedan como aviso y no bloquean verified; sólo un hallazgo blocker de security bloquea; sus avisos no. No es Review externa del PR. Conserva uso del modelo.",
 		async execute(_id, { lens }, signal, _update, ctx) {
 			const result = await runLens(session, lens, ctx, AbortSignal.any([signal ?? new AbortController().signal, session.lifecycle.signal]));
-			const blocking = result.review.lens === "security" && result.review.verdict === "fail";
-			const notice = result.review.verdict === "pass" ? undefined : blocking ? "El fail de seguridad bloquea Verificar: corregí el cambio con retry." : result.review.noResult ? NO_RESULT : "Aviso: queda visible en el progreso y en el PR draft y no bloquea Verificar. No repitas el lente para borrarlo ni uses retry. Si vale la pena corregirlo, usá omi_workflow action:amend con el motivo: no gasta vuelta.";
+			const blocking = !!session.state && unacceptedBlockers(session.state, result.review).length > 0;
+			const advice = result.review.verdict === "pass" ? undefined : blocking ? SECURITY_BLOCKER : result.review.noResult ? NO_RESULT : ADVISORY;
+			const notice = advice && result.downgraded > 0 ? `${advice} ${result.downgraded} blocker(s) bajados a aviso: archivo sin cambios desde la revisión anterior de security.` : advice;
 			return { content: [{ type: "text", text: JSON.stringify({ ...result.review, ...(notice ? { notice } : {}), ...(result.error ? { error: result.error } : {}) }) }], details: result.review, usage: result.usage, isError: !!result.error || blocking };
 		},
 	});

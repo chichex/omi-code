@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, rm, symlink, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Runner } from "../src/core/exec.ts";
+import { execFileSync } from "node:child_process";
+import { processRunner, type Runner } from "../src/core/exec.ts";
 import type { Evidence } from "../src/harness/model.ts";
 import { inspectCheckout, validateReferences, readWorkflowDiffFiles, assertStepCommit } from "../src/harness/git.ts";
 
@@ -82,4 +83,19 @@ test("step commits require green evidence of the same tree and immediate parent"
  f.state.head = "c".repeat(40); await assertStepCommit(f.checkout, evidence, f.state.head, f.runner);
  await assert.rejects(assertStepCommit(f.checkout, { ...evidence, head: "d".repeat(40) }, f.state.head, f.runner));
  await assert.rejects(assertStepCommit(f.checkout, { ...evidence, fingerprint: "stale" }, f.state.head, f.runner));
+});
+
+// El lente tiene que ver las rutas como las compara la convergencia: crudas, no escapadas en octal por core.quotePath.
+test("the lens diff names a non-ASCII path raw, as changedPaths and treePaths do", async (t) => {
+ const root = await mkdtemp(join(tmpdir(), "omi-harness-git-quote-")); t.after(() => rm(root, { recursive: true, force: true }));
+ const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_COUNT: "0" };
+ const git = (...args: string[]) => execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: root, encoding: "utf8", env }).trim();
+ git("init", "-q", "-b", "main"); await writeFile(join(root, "base"), "base\n"); git("add", "."); git("commit", "-qm", "base");
+ const baseCommit = git("rev-parse", "HEAD"); git("switch", "-qc", "feat/task");
+ await mkdir(join(root, "src")); await writeFile(join(root, "src", "integración.ts"), "export const a = 1;\n"); git("add", "."); git("commit", "-qm", "c");
+ const files = await readWorkflowDiffFiles({ root, commonDir: join(root, ".git"), branch: "feat/task", baseCommit }, processRunner);
+ assert.equal(files.length, 1);
+ assert.match(files[0] ?? "", /^diff --git a\/src\/integración\.ts b\/src\/integración\.ts$/m);
+ assert.match(files[0] ?? "", /^\+\+\+ b\/src\/integración\.ts$/m);
+ assert.doesNotMatch(files[0] ?? "", /\\303/);
 });

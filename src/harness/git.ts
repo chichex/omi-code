@@ -11,10 +11,13 @@ export interface CheckoutSnapshot { root: string; branch: string; head: string; 
 const sha = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/;
 const diffFlags = ["--no-ext-diff", "--no-textconv", "--no-renames", "--color=never"];
 
-export async function gitRead(checkout: Checkout, args: string[], runner: Runner, signal?: AbortSignal): Promise<string> {
+const GIT_ENV = { GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat" };
+const BASE_FILE_BYTES = 1024 * 1024;
+
+export async function gitRead(checkout: Checkout, args: string[], runner: Runner, signal?: AbortSignal, config: readonly string[] = []): Promise<string> {
  signal?.throwIfAborted();
- const result = await runner.run("git", ["-c", "core.fsmonitor=false", "-C", checkout.root, ...args], {
-  env: { GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat" }, ...(signal ? { signal } : {}),
+ const result = await runner.run("git", ["-c", "core.fsmonitor=false", ...config.flatMap(c => ["-c", c]), "-C", checkout.root, ...args], {
+  env: GIT_ENV, ...(signal ? { signal } : {}),
  });
  signal?.throwIfAborted();
  if (result.code !== 0) throw new Error(`No se pudo verificar Git (${args[0]}); no se considera limpio`);
@@ -106,7 +109,8 @@ export async function validateReferences(checkout: Checkout, references: Explora
 // " ", "+", "-", una barra invertida o "@", así que "diff --git " sólo puede abrir el encabezado de un archivo.
 export async function readWorkflowDiffFiles(checkout: Checkout, runner: Runner = processRunner, signal?: AbortSignal): Promise<string[]> {
  await inspectCheckout(checkout, runner, signal);
- const files = (await gitRead(checkout, ["diff", ...diffFlags, checkout.baseCommit, "--"], runner, signal)).split(/^(?=diff --git )/m).filter(Boolean);
+ // Con core.quotePath=false, el lente ve las rutas crudas, como las compara la convergencia (changedPaths y treePaths).
+ const files = (await gitRead(checkout, ["diff", ...diffFlags, checkout.baseCommit, "--"], runner, signal, ["core.quotePath=false"])).split(/^(?=diff --git )/m).filter(Boolean);
  const root = await realpath(checkout.root);
  for (const path of paths(await gitRead(checkout, ["ls-files", "--others", "--exclude-standard", "-z"], runner, signal)).sort()) {
   const target = await localPath(root, path); const entry = await lstat(target);
@@ -114,6 +118,32 @@ export async function readWorkflowDiffFiles(checkout: Checkout, runner: Runner =
   files.push(`Archivo nuevo ${JSON.stringify(path)}\n${body}\n`);
  }
  return files;
+}
+/** Los archivos que cambiaron entre dos commits. Con --no-renames, un renombre cuenta por sus dos lados. */
+export async function changedPaths(checkout: Checkout, from: string, to: string, runner: Runner = processRunner, signal?: AbortSignal): Promise<string[]> {
+ if (!sha.test(from) || !sha.test(to)) throw new Error("Commit inválido para comparar");
+ return paths(await gitRead(checkout, ["diff", ...diffFlags, "--name-only", "-z", from, to, "--"], runner, signal));
+}
+/** Todos los archivos del árbol de un commit, desde la raíz del repo. */
+export async function treePaths(checkout: Checkout, commit: string, runner: Runner = processRunner, signal?: AbortSignal): Promise<string[]> {
+ if (!sha.test(commit)) throw new Error("Commit inválido para listar");
+ return paths(await gitRead(checkout, ["ls-tree", "-r", "-z", "--name-only", "--full-tree", commit], runner, signal));
+}
+/** Cada archivo como está en la base del trabajo, en el orden pedido y leído una vez por path. Sólo lectura.
+ * null si no está en la base, es binario, pasa de 1 MiB o no se pudo leer: un precedente nunca hace fallar un lente. */
+export async function readBaseFiles(checkout: Checkout, files: readonly string[], runner: Runner = processRunner, signal?: AbortSignal): Promise<(string | null)[]> {
+ signal?.throwIfAborted();
+ if (!sha.test(checkout.baseCommit)) return files.map(() => null);
+ const read = new Map<string, string | null>();
+ for (const path of files) {
+  if (read.has(path)) continue;
+  try {
+   const result = await runner.run("git", ["-c", "core.fsmonitor=false", "-C", checkout.root, "cat-file", "blob", `${checkout.baseCommit}:${path}`], { env: GIT_ENV, maxOutputBytes: BASE_FILE_BYTES, ...(signal ? { signal } : {}) });
+   read.set(path, result.code === 0 && !result.stdout.includes("\0") ? result.stdout : null);
+  } catch (error) { if (signal?.aborted) throw error; read.set(path, null); }
+ }
+ signal?.throwIfAborted();
+ return files.map((path) => read.get(path) ?? null);
 }
 export async function assertStepCommit(checkout: Checkout, evidence: Evidence, commit: string, runner: Runner = processRunner, signal?: AbortSignal): Promise<void> {
  const snapshot = await inspectCheckout(checkout, runner, signal);

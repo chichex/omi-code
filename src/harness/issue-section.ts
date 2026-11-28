@@ -3,8 +3,9 @@
 import type { Evidence, Workflow } from "./model.ts";
 import { PHASE_LABELS } from "./phases.ts";
 import { lensStatuses } from "./lenses.ts";
+import { acceptedRisksOf } from "./security-blockers.ts";
 import { fences } from "./fences.ts";
-import { agreementLine, CARRIED, caseLines, cell, code, evidenceResult, LENSES, list, recipeApproval, revising, ROUTES, text, TYPES, verdictLabel } from "./markdown.ts";
+import { ACCEPTED_MARK, ACCEPTED_RISKS_NOTE, ACCEPTED_RISKS_TITLE, acceptedRiskLine, agreementLine, CARRIED, caseLines, cell, code, evidenceResult, LENSES, list, recipeApproval, revising, ROUTES, text, TYPES, verdictLabel } from "./markdown.ts";
 import { STACK_STATUS, stackRows } from "./stack.ts";
 export const SECTION_START = "<!-- omi:harness:start -->";
 export const SECTION_END = "<!-- omi:harness:end -->";
@@ -107,8 +108,15 @@ function lenses(w: Workflow, detail: Detail | "verdicts"): string[] {
 	if (!statuses.length || (!w.reviews.length && !["verify", "pr", "done"].includes(w.phase))) return [];
 	const findings = (all: string[]) => detail === "verdicts" ? [] : detail === "full" || all.length <= 1 ? all.map((f) => `  - ${text(f)}`)
 		: [`  - ${text(all[0]!)}`, `  - _y ${all.length - 1} hallazgos más en OMI_`];
-	return ["", "### Avisos de los lentes", "Los lentes asesoran: unknown y fail quedan como aviso y no bloquean Verificar ni el PR draft. Sólo un fail de seguridad bloquea.",
-		...statuses.flatMap((st) => [`- **${LENSES[st.lens]}:** ${verdictLabel(st.verdict, st.noResult)}${st.blocking ? " · bloquea" : ""}${st.carried ? CARRIED : ""}`, ...findings(st.findings)])];
+	return ["", "### Avisos de los lentes", "Los lentes asesoran: unknown y fail quedan como aviso y no bloquean Verificar ni el PR draft. Sólo un hallazgo blocker de seguridad bloquea; sus avisos no.",
+		...statuses.flatMap((st) => [`- **${LENSES[st.lens]}:** ${verdictLabel(st.verdict, st.noResult)}${st.blocking ? " · bloquea" : st.accepted ? ACCEPTED_MARK : ""}${st.carried ? CARRIED : ""}`, ...findings(st.findings)])];
+}
+// Lo que una persona aceptó va siempre, también en la variante mínima. Resumida, cada aceptación con su primer hallazgo.
+function acceptedRisks(w: Workflow, detail: Detail | "verdicts"): string[] {
+	const all = acceptedRisksOf(w); if (!all.length) return [];
+	const findings = (f: string[]) => detail === "verdicts" ? [`  - _${f.length} hallazgos en OMI_`] : detail === "full" || f.length <= 1 ? f.map((x) => `  - ${text(x)}`)
+		: [`  - ${text(f[0]!)}`, `  - _y ${f.length - 1} hallazgos más en OMI_`];
+	return ["", `### ${ACCEPTED_RISKS_TITLE}`, ACCEPTED_RISKS_NOTE, ...all.flatMap((a) => [acceptedRiskLine(a), ...findings(a.findings)])];
 }
 const FOOTER = "<sub>Sección administrada por OMI: se reescribe entera y lo que se edite acá se pierde. El pedido es el texto de arriba.</sub>";
 const DETAIL = "El detalle completo está en OMI (`/omi-progress`) y en el PR draft.";
@@ -122,11 +130,11 @@ function link(w: Workflow): string[] {
 }
 function render(w: Workflow, detail: Detail): string {
 	const note = detail === "summary" ? ["", `> **Resumida** para entrar en el límite de 65.536 caracteres de GitHub: la evidencia muestra sólo la última prueba de cada caso y cada lente su primer hallazgo. ${DETAIL}`] : [];
-	return [...header(w), ...note, ...recipe(w), ...steps(w), ...stack(w), ...decisions(w), ...agreements(w), ...evidence(w, detail), ...lenses(w, detail), ...link(w), "", FOOTER].join("\n");
+	return [...header(w), ...note, ...recipe(w), ...steps(w), ...stack(w), ...decisions(w), ...agreements(w), ...evidence(w, detail), ...lenses(w, detail), ...acceptedRisks(w, detail), ...link(w), "", FOOTER].join("\n");
 }
 export function renderIssueSection(w: Workflow): string { return render(w, "full"); }
 // De la más completa a la mínima. Cada una que resume lo dice; nada se corta en silencio.
 export function issueSectionVariants(w: Workflow): string[] {
-	const minimal = [...header(w), "", `La sección completa no entra en el cuerpo del issue (límite de 65.536 caracteres de GitHub): se omiten receta, pasos, decisiones, acuerdos, evidencia y hallazgos de los lentes. ${DETAIL}`, ...stack(w), ...lenses(w, "verdicts"), ...link(w), "", FOOTER].join("\n");
+	const minimal = [...header(w), "", `La sección completa no entra en el cuerpo del issue (límite de 65.536 caracteres de GitHub): se omiten receta, pasos, decisiones, acuerdos, evidencia y hallazgos de los lentes. ${DETAIL}`, ...stack(w), ...lenses(w, "verdicts"), ...acceptedRisks(w, "verdicts"), ...link(w), "", FOOTER].join("\n");
 	return [render(w, "full"), render(w, "summary"), minimal];
 }

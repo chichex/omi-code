@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { combineLensResults, LENS_PART_BUDGET, lensEvidence, lensParts, lensRequests } from "../src/harness/lenses.ts";
-import { createWorkflow } from "../src/harness/state.ts";
+import { createWorkflow, lensRunBlock, transition } from "../src/harness/state.ts";
+import { withoutPrecedents } from "../src/harness/lens-precedents.ts";
 import type { Evidence, Workflow } from "../src/harness/model.ts";
 
 const file = (name: string, lines: number, width = 40) => `diff --git a/${name} b/${name}\n--- a/${name}\n+++ b/${name}\n@@ -0,0 +1,${lines} @@\n` + `+${"x".repeat(width)}\n`.repeat(lines);
@@ -50,6 +51,44 @@ test("lens results combine by part: sin resultado sólo si ninguna parte juzgó 
 	assert.deepEqual(combineLensResults([{ verdict: "unknown", findings: ["falta contexto"] }, missing]), { verdict: "unknown", findings: ["parte 1/2 · falta contexto", "parte 2/2 · Sin resultado del lente: conexión (3 intentos)"] }, "un unknown juzgado no se re-tira: no queda como sin resultado");
 	assert.deepEqual(combineLensResults([{ verdict: "fail", findings: ["a.ts:1 · bug"] }, missing]).noResult, undefined);
 	assert.equal(combineLensResults([]).noResult, true, "ninguna parte revisada");
+});
+
+test("combine en security: severidades por parte, blocker primero, sin avisos no guarda la lista y una parte sin resultado no es un blocker", () => {
+	const aviso = { verdict: "fail" as const, findings: ["x"], severities: ["aviso" as const] };
+	const blocker = { verdict: "fail" as const, findings: ["y"], severities: ["blocker" as const] };
+	const missing = { verdict: "unknown" as const, findings: ["Sin resultado del lente: conexión (3 intentos)"], noResult: true as const };
+	assert.deepEqual(combineLensResults([aviso, blocker], true), { verdict: "fail", findings: ["parte 2/2 · y", "parte 1/2 · x"], severities: ["blocker", "aviso"] }, "el blocker va primero y cada hallazgo conserva su severidad");
+	assert.deepEqual(combineLensResults([{ verdict: "fail", findings: ["a"] }, blocker], true), { verdict: "fail", findings: ["parte 1/2 · a", "parte 2/2 · y"] }, "sin avisos no se guarda la lista: un estado viejo la lee igual");
+	const pending = combineLensResults([aviso, missing], true);
+	assert.deepEqual(pending, { verdict: "unknown", noResult: true, findings: ["parte 1/2 · x", "parte 2/2 · Sin resultado del lente: conexión (3 intentos)"] }, "sin un blocker juzgado, la parte que faltó deja la review sin resultado");
+	const s = createWorkflow({ number: 42, title: "P", body: "P\n", url: "https://github.com/acme/repo/issues/42", hash: "h" }, { root: "/r", commonDir: "/r/.git", branch: "feat/x", baseCommit: "a".repeat(40) }, "w", "now");
+	s.phase = "verify";
+	s.recipe = { route: "direct", classification: { type: "add", size: "small", risk: "low", riskAreas: [], causeKnown: true }, objective: "o", approach: "a", scope: ["s"], outOfScope: [], cases: [{ id: "D1", description: "d", command: "npm test" }], lenses: ["security"], executor: { mode: "inline", writers: 0 } };
+	const recorded = transition(s, { type: "reviewed", review: { lens: "security", fingerprint: "fp", ...pending, at: "now" } }, "now");
+	assert.equal(lensRunBlock(recorded, "security", "fp"), "", "se vuelve a correr sin gastar veredictos");
+	assert.deepEqual(combineLensResults([blocker, missing], true), { verdict: "fail", findings: ["parte 1/2 · y", "parte 2/2 · Sin resultado del lente: conexión (3 intentos)"], severities: ["blocker", "aviso"], partial: true }, "con un blocker juzgado bloquea por ese blocker, no por la parte que faltó, y queda marcada parcial");
+	const many = combineLensResults([{ verdict: "fail", findings: Array.from({ length: 50 }, (_, i) => `a${i}`), severities: Array.from({ length: 50 }, () => "aviso" as const) }, { verdict: "fail", findings: Array.from({ length: 50 }, (_, i) => `b${i}`), severities: Array.from({ length: 50 }, () => "aviso" as const) }, blocker], true);
+	assert.equal(many.findings.length, 100); assert.equal(many.findings[0], "parte 3/3 · y"); assert.match(many.findings.at(-1)!, /^… y 2 hallazgos más de las partes no entran/);
+	assert.deepEqual(many.severities, ["blocker", ...Array.from({ length: 99 }, () => "aviso")], "la línea de los omitidos es aviso si ninguno era blocker");
+	const hidden = combineLensResults([{ verdict: "fail", findings: Array.from({ length: 100 }, (_, i) => `c${i}`) }, aviso], true);
+	assert.equal(hidden.findings.length, 100); assert.match(hidden.findings.at(-1)!, /^… y 2 hallazgos más/); assert.equal(hidden.severities, undefined, "un blocker omitido hace blocker a la línea que lo cuenta");
+	assert.deepEqual(combineLensResults([{ verdict: "fail", findings: [] }, aviso], true), { verdict: "fail", findings: ["parte 1/2 · El lente de seguridad falló sin detallar hallazgos", "parte 2/2 · x"], severities: ["blocker", "aviso"] }, "un fail sin hallazgos de una parte es blocker: los avisos de otra no lo tapan");
+});
+
+// Review del incidente (2026-11-26, bypass-1): un fail con una parte sin juicio servía de base para la convergencia, y en la
+// vuelta siguiente un blocker nuevo en un archivo de esa parte bajaba a aviso sin que nadie lo hubiera revisado.
+test("combine en security: un fail con alguna parte sin juicio (sin resultado, unknown o un unknown vuelto fail) queda partial; uno completo no", () => {
+	const blocker = { verdict: "fail" as const, findings: ["src/a.ts:1 · y"], severities: ["blocker" as const] };
+	const missing = { verdict: "unknown" as const, findings: ["Sin resultado del lente: conexión (3 intentos)"], noResult: true as const };
+	assert.equal(combineLensResults([blocker, missing], true).partial, true, "una parte sin resultado");
+	assert.equal(combineLensResults([blocker, { verdict: "unknown", findings: [] }], true).partial, true, "una parte unknown juzgada, aunque no tenga hallazgos");
+	assert.equal(combineLensResults([{ verdict: "fail", findings: ["src/b.ts:1 · x"], severities: ["aviso"] }, { verdict: "unknown", findings: ["falta contexto"] }], true).partial, true, "un fail de sólo avisos con una parte unknown");
+	assert.equal(combineLensResults([{ ...blocker, unjudged: true }], true).partial, true, "una sola parte: el lente dijo unknown y un blocker marcado la volvió fail");
+	assert.equal(combineLensResults([{ verdict: "pass", findings: [] }, blocker], true).partial, undefined, "todas las partes juzgadas: no se marca");
+	assert.equal(combineLensResults([blocker], true).partial, undefined);
+	assert.equal(combineLensResults([{ verdict: "pass", findings: [] }, missing], true).partial, undefined, "sin resultado y sin blocker queda unknown: nunca es base");
+	assert.equal("unjudged" in combineLensResults([{ ...blocker, unjudged: true }], true), false, "la marca de la parte no se guarda");
+	assert.equal(combineLensResults([blocker, missing]).partial, undefined, "sólo security");
 });
 
 // El escenario medido en la review: 5 pasos con rojo y verde, un caso D y 2 gates × 3 vueltas, todo con
@@ -105,4 +144,24 @@ test("lens requests: evidence that fits travels whole, and a small diff fits wit
 test("lens requests: material that does not fit even summarized fails explicitly instead of sending it", () => {
 	const w = heavy();
 	assert.throws(() => lensRequests({ cases: Array.from({ length: 30 }, (_, i) => ({ id: `D${i}`, description: "x".repeat(4000), command: "npm test" })) }, w, diffFiles()), /no entra en una llamada/);
+});
+
+test("lens requests: si con los precedentes o la revisión anterior no entra, van vacíos y lo dicen, en vez de fallar", () => {
+	const w = heavy(); w.evidence = w.evidence.slice(0, 2).map((e) => ({ ...e, output: "corto" }));
+	const precedents = { items: Array.from({ length: 30 }, (_, i) => ({ path: `src/f${i}.ts`, line: 1, detail: "regla", excerpt: { from: 1, lines: ["x".repeat(1500)] } })), omitted: 0 };
+	const previous = { fingerprint: "f".repeat(64), verdict: "fail", findings: [{ blocker: true, text: "src/a.ts:1 · y" }], changedFiles: ["src/a.ts"] };
+	assert.ok(JSON.stringify(precedents).length > 45_000, `${JSON.stringify(precedents).length}`);
+	const files = [file("a.ts", 200)]; const budget = 40_000;
+	const texts = lensRequests({ cases: w.recipe!.cases, precedents, previous }, w, files, budget);
+	for (const text of texts) assert.ok(text.length <= budget, `${text.length} > ${budget}`);
+	const sent = texts.map((t) => JSON.parse(t));
+	for (const m of sent) {
+		assert.deepEqual(m.precedents.items, []); assert.equal(m.precedents.omitted, 30); assert.match(m.precedents.note, /no entraron en la llamada/);
+		assert.deepEqual(m.previous, { omitted: true, note: "La revisión anterior no entró en la llamada; el harness igual compara los archivos cambiados." });
+	}
+	assert.equal(unlabeledDiff(texts), files.join(""), "el diff llega entero");
+	const roomy = JSON.parse(lensRequests({ cases: w.recipe!.cases, precedents, previous }, w, files)[0]!);
+	assert.deepEqual(roomy.precedents, precedents, "con lugar, viajan enteros"); assert.deepEqual(roomy.previous, previous);
+	const cases = Array.from({ length: 30 }, (_, i) => ({ id: `D${i}`, description: "x".repeat(4000), command: "npm test" }));
+	assert.throws(() => lensRequests({ cases, precedents: withoutPrecedents(precedents) }, heavy(), diffFiles()), /no entra en una llamada/, "sin nada que vaciar, el error de siempre");
 });

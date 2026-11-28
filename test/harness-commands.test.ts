@@ -32,3 +32,21 @@ test("backend errors are failed evidence without dumping potentially secret mess
  const result = await runWorkflowCommand(checkout, "safe", new AbortController().signal, 1, backend);
  assert.equal(result.exitCode, null); assert.equal(result.interrupted, false); assert.ok(!result.output.includes("TOKEN"));
 });
+
+test("workflow commands distinguish a timeout from a cancellation", async () => {
+ const timedOut: BashOperations = { async exec() { throw new Error("timeout:240"); } };
+ const timeout = await runWorkflowCommand(checkout, "npm test", new AbortController().signal, 240, timedOut);
+ assert.equal(timeout.timedOut, true); assert.equal(timeout.interrupted, true); assert.equal(timeout.exitCode, null);
+ const aborted: BashOperations = { async exec() { throw new Error("aborted"); } };
+ const cancel = await runWorkflowCommand(checkout, "npm test", new AbortController().signal, 240, aborted);
+ assert.equal(cancel.interrupted, true); assert.equal("timedOut" in cancel, false, "cancelar no es un corte por tiempo");
+ // Si la persona cancela justo cuando vence el plazo, gana la cancelación.
+ const controller = new AbortController();
+ const both: BashOperations = { async exec() { controller.abort(); throw new Error("timeout:240"); } };
+ const race = await runWorkflowCommand(checkout, "npm test", controller.signal, 240, both);
+ assert.equal(race.interrupted, true); assert.equal("timedOut" in race, false);
+ const passed: BashOperations = { async exec() { return { exitCode: 0 }; } };
+ assert.equal("timedOut" in await runWorkflowCommand(checkout, "npm test", new AbortController().signal, 240, passed), false);
+ const failed: BashOperations = { async exec() { throw new Error("TOKEN=do-not-print"); } };
+ assert.equal("timedOut" in await runWorkflowCommand(checkout, "npm test", new AbortController().signal, 240, failed), false, "otro error del backend no es un corte por tiempo");
+});

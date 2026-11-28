@@ -7,7 +7,8 @@ import { beginFixture } from "./helpers/development-begin.ts";
 import { ASK_ALL } from "./helpers/foundations.ts";
 import { memoryKb } from "./helpers/mock-kb.ts";
 import { developmentInstructions } from "../src/tui/development-view.ts";
-import type { Phase } from "../src/harness/model.ts";
+import { createWorkflow, transition, type WorkflowEvent } from "../src/harness/state.ts";
+import { sourceHash, type Evidence, type Phase, type Plan, type Review, type Workflow } from "../src/harness/model.ts";
 
 const OUTSIDE = "node -e \"process.exit(0)\"";
 const OTHER = "node -e \"process.exitCode = 0\"";
@@ -125,4 +126,65 @@ test("autonomía: el push y el PR draft cierran el flujo; la receta no los exclu
 	const state = await f.state();
 	assert.match(developmentInstructions({ ...state, phase: "recipe" }), /push y el PR draft[^.]*no van en outOfScope/, "la receta no excluye el cierre del flujo");
 	assert.match(developmentInstructions({ ...state, phase: "pr" }), /publish es parte de la receta aprobada, aunque outOfScope nombre push o PR/, "un outOfScope que los nombra no frena publish");
+});
+
+// #99 gastó 2 de 3 retry en fixtures propios que recién vio npm test en Verificar, y #98 pausó con un retry disponible
+// porque la guía decía «a la tercera frená» (2026-11-26).
+test("autonomía: un D o gate rojo se corrige con amend; retry queda para security, y la suite corre antes del último commit", async (t) => {
+	const f = await developmentFixture(t); await f.start();
+	const state = await f.state();
+	const verify = developmentInstructions({ ...state, phase: "verify" });
+	assert.match(verify, /Si falla un D o un gate, corregilo con amend/);
+	assert.match(verify, /retry gasta una vuelta: es para un blocker de security o para un D o gate rojo cuando ya no quedan amend/);
+	assert.match(verify, /OMI rechaza retry mientras un amend alcance/);
+	assert.doesNotMatch(verify, /Si falla un D, un gate o el lente de seguridad, usá retry/);
+	assert.doesNotMatch(verify, /o security marca un blocker, usá retry/);
+	assert.doesNotMatch(verify, /a la tercera frená/, "el código permite la vuelta que la guía mandaba frenar");
+	assert.match(verify, /interrupted[^.]*no es un rojo/);
+	assert.match(verify, /OMI rechaza amend y retry por eso\. Cortado con el tope de 1800 s, más tiempo no hay: ahí cuenta como rojo y pide retry/, "la regla de retry del reducer");
+	assert.match(verify, /vale la última corrida de cada check sobre este contenido: no hace falta amend ni retry/);
+	assert.match(verify, /dos veces seguidas por la misma señal \(exit 128 o más\) sobre este contenido, es un crash del cambio: cuenta como rojo y se corrige con amend/, "un crash repetido, como en el reducer");
+	assert.match(developmentInstructions({ ...state, phase: "implement" }), /Antes del commit del último C, corré con kind setup los gates/);
+});
+
+/** Un trabajo en Verificar sobre el contenido A, armado con el reducer real: un D (D1) y el lente quality. */
+function verifyingGates() {
+	const at = "2026-11-26T00:00:00Z"; let ids = 0;
+	const send = (s: Workflow, event: WorkflowEvent) => transition(s, event, at);
+	const run = (kind: Evidence["kind"], fingerprint: string, changes: Partial<Evidence> = {}): Evidence => ({ id: `e${ids++}`, kind, command: "node test.cjs", stepId: null, caseId: kind === "gate" ? null : "D1", exitCode: kind === "red" ? 1 : 0, outcome: kind === "red" ? "failed" : "passed", output: "", fingerprint, head: fingerprint, startedAt: at, finishedAt: at, ...changes });
+	const record = (s: Workflow, e: Evidence) => send(s, { type: "evidence", evidence: e });
+	const implement = (s: Workflow, id: string, fingerprint: string) => {
+		s = record(record(send(s, { type: "step_started", id }), run("red", fingerprint, { stepId: id })), run("green", fingerprint, { stepId: id }));
+		return send(s, { type: "step_completed", id, commit: `commit-${id}`, fingerprint });
+	};
+	const quality = (s: Workflow, fingerprint: string, findings: string[] = []): Workflow => send(s, { type: "reviewed", review: { lens: "quality", fingerprint, verdict: findings.length ? "fail" : "pass", findings, at } satisfies Review });
+	const source = { number: 42, title: "Valor", body: "Debe dar 2", url: "https://example.test/42", hash: sourceHash("Valor", "Debe dar 2") };
+	const plan: Plan = { classification: { type: "fix", size: "small", risk: "low", riskAreas: [], causeKnown: true }, objective: "Devolver 2", approach: "Corregir el valor", scope: ["valor"], outOfScope: [], cases: [{ id: "D1", description: "Devuelve 2", command: "node test.cjs" }], lenses: ["quality"], executor: { mode: "inline", writers: 0 } };
+	let s = send(createWorkflow(source, { root: "/repo", commonDir: "/repo/.git", branch: "work", baseCommit: "base" }, "w", at), { type: "explored", exploration: { references: [{ path: "value.cjs", line: 1, detail: "valor" }], findings: [], approach: "corregir", missingFoundation: [], dependencies: [], disposition: "continue", reason: "listo" } });
+	s = send(send(send(s, { type: "inferences", inferences: [] }), { type: "planned", plan }), { type: "approved" });
+	s = record(implement(s, "C1", "A"), run("verification", "A"));
+	const gate = (exitCode: number | null, outcome: Evidence["outcome"] = exitCode === 0 ? "passed" : "failed") => (w: Workflow, fingerprint: string) => record(w, run("gate", fingerprint, { command: "npm test", exitCode, outcome }));
+	/** amend desde A y el paso C2 commiteado en B, con D1 verificado sobre B. */
+	const amended = (w: Workflow) => record(implement(send(w, { type: "amend", reason: "corregir", fingerprint: "A" }), "C2", "B"), run("verification", "B"));
+	return { s, gate, quality, amended, verified: (w: Workflow, fingerprint: string) => send(w, { type: "verified", fingerprint }) };
+}
+
+test("autonomía: la regla de gates que dice Verificar es la que aplica el reducer", async (t) => {
+	const f = await developmentFixture(t); await f.start();
+	const verify = developmentInstructions({ ...(await f.state()), phase: "verify" });
+	assert.match(verify, /Cada gate que corriste en la vuelta tiene que pasar: vale su última corrida sobre este contenido o, si no lo repetiste después de un amend, la última que pasó o falló de verdad/);
+	assert.match(verify, /Un comando que no existe \(exit 126 o 127\) no cuenta como gate/);
+	const { s, gate, quality, amended, verified } = verifyingGates();
+	// Un pass sobre A y un amend por un aviso: el gate vale sobre B sin repetirlo.
+	const pass = amended(quality(gate(0)(s, "A"), "A", ["value.cjs:1 · nombre poco claro"]));
+	assert.equal(verified(quality(pass, "B"), "B").phase, "pr");
+	// Un rojo sobre A y un amend: sin repetirlo sobre B, frena.
+	const red = amended(gate(1)(quality(s, "A"), "A"));
+	assert.throws(() => verified(red, "B"), /gate fallido: npm test/);
+	assert.equal(verified(gate(0)(red, "B"), "B").phase, "pr");
+	// Un comando ausente nunca corrió: no frena, ni sobre este contenido.
+	assert.equal(verified(gate(127)(quality(s, "A"), "A"), "A").phase, "pr");
+	assert.equal(verified(gate(126)(quality(s, "A"), "A"), "A").phase, "pr");
+	// Una interrumpida sobre este contenido sí frena: hay que volver a correrla.
+	assert.throws(() => verified(gate(null, "interrupted")(quality(s, "A"), "A"), "A"), /gate fallido/);
 });

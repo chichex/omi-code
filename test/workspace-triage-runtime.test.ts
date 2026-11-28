@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { access, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -9,127 +9,83 @@ import { fileURLToPath } from "node:url";
 import { tempDir } from "./helpers/io.ts";
 import { acceptFoundations, ASK_ALL } from "./helpers/foundations.ts";
 import { plainTerminal } from "./helpers/workspace-pty.ts";
+import { ptyReport, runPty } from "./helpers/pty-driver.ts";
 import { MAX_IDLE_CONTINUATIONS } from "../src/tui/development-continue.ts";
 
-const driver = `
-import fcntl, os, pty, select, signal, struct, sys, termios, time
-pid, fd = pty.fork()
-if pid == 0:
-    os.execv(sys.argv[1], sys.argv[1:])
-fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', 42, 150, 0, 0))
-os.kill(pid, signal.SIGWINCH)
-start, phase, phase_at, mark, output = time.monotonic(), 0, 0, 0, b''
-failure = os.environ.get('TRIAGE_FAILURE', '')
-while time.monotonic() - start < 32:
-    elapsed = time.monotonic() - start
-    if phase == 0 and b'Enter enviar' in output:
-        os.write(fd, b'\\x1b[50;5u'); phase = 1
-    elif phase == 1 and b'ISSUE_RUNTIME_TRIAGE' in output:
-        os.write(fd, b'\\r'); phase = 2
-    elif phase == 2 and b'iniciar trabajo' in output:
-        os.write(fd, b'\\r'); phase, mark = 3, len(output)
-    elif phase == 3 and b'Empezar el trabajo del issue #42' in output[mark:]:
-        open(os.environ['TRIAGE_CONFIRMED'], 'w').close()
-        os.write(fd, b'\\r'); phase = 4
-    elif phase == 4 and failure == 'cancel' and os.path.exists(os.environ['TRIAGE_STARTED']):
-        os.write(fd, b'\\x1b'); phase, phase_at = 20, elapsed
-    elif phase == 4 and failure == 'invalid' and os.path.exists(os.environ['TRIAGE_STARTED']):
-        phase, phase_at = 20, elapsed
-    elif phase == 20 and elapsed - phase_at > (1.0 if failure == 'invalid' else 0.5):
-        os.write(fd, b'\\x04'); phase = 21
-    elif phase == 4 and os.path.exists(os.environ['TRIAGE_READY']) and os.path.exists(os.environ['TRIAGE_REPLY']) and b'PROGRESO' in output:
-        phase, phase_at = 6, elapsed
-    elif phase == 6 and elapsed - phase_at > 0.4:
-        os.write(fd, b'/omi-workspace\\r'); phase, phase_at = 7, elapsed
-    elif phase == 7 and elapsed - phase_at > 0.4:
-        os.write(fd, b'\\x1b'); phase, phase_at = 8, elapsed
-    elif phase == 8 and elapsed - phase_at > 0.2:
-        os.write(fd, b'/reload\\r'); phase = 9
-    elif phase == 9 and os.path.exists(os.environ['TRIAGE_RELOADED']):
-        phase, phase_at = 10, elapsed
-    elif phase == 10 and elapsed - phase_at > 0.7:
-        os.write(fd, b'\\x1b[50;5u'); phase, phase_at, detail_at = 11, elapsed, len(output)
-    elif phase == 11 and b'[issue-42]' in output[detail_at:]:
-        os.write(fd, b'\\r'); phase, detail_at = 12, len(output)
-    elif phase == 12 and b'retomar trabajo' in output[detail_at:]:
-        os.write(fd, b'\\x1b'); phase, phase_at = 13, elapsed
-    elif phase == 13 and elapsed - phase_at > 0.3:
-        os.write(fd, b'\\r'); phase, detail_at = 14, len(output)
-    elif phase == 14 and b'retomar trabajo' in output[detail_at:]:
-        os.write(fd, b'\\r'); phase, detail_at = 15, len(output)
-    elif phase == 15 and b'Ya est' in output[detail_at:]:
-        os.write(fd, b'\\x04'); phase = 16
-    if select.select([fd], [], [], 0.1)[0]:
-        try:
-            chunk = os.read(fd, 65536)
-        except OSError:
-            break
-        if not chunk: break
-        output += chunk
-    if elapsed > 30:
-        try: os.write(fd, b'\\x04')
-        except OSError: break
-else:
-    os.kill(pid, signal.SIGKILL)
-status = os.waitpid(pid, 0)[1]
-sys.stdout.buffer.write(output)
-sys.stderr.write('\\nTRIAGE_DRIVER_PHASE=' + str(phase) + '\\n')
-sys.exit(os.waitstatus_to_exitcode(status))
+// Cada paso espera lo que la TUI pintó desde su tecla: bajo carga el guion tarda más, no pierde teclas.
+// Ctrl+2 (\x1b[50;5u) abre Issues. Después de un Esc, la próxima tecla espera a ver su efecto.
+const firstRun = String.raw`
+def run():
+    failure = os.environ.get('TRIAGE_FAILURE', '')
+    wait('chat', lambda: painted('Enter enviar'))
+    m = mark(); send(b'\x1b[50;5u')
+    wait('issues', lambda: painted('ISSUE_RUNTIME_TRIAGE', m))
+    m = mark(); send(b'\r')
+    wait('detalle', lambda: painted('iniciar trabajo', m))
+    m = mark(); send(b'\r')
+    wait('confirmación', lambda: painted('Empezar el trabajo del issue #42', m))
+    touch('TRIAGE_CONFIRMED'); m = mark(); send(b'\r')
+    if failure:
+        wait('clasificando', lambda: exists('TRIAGE_STARTED'))
+        if failure == 'cancel':
+            m = mark(); send(b'\x1b')
+            wait('cancelación', lambda: painted('Clasificación cancelada', m) and closed(m))
+        else: wait('formato inválido', lambda: painted('formato válido', m))
+        leave('salida sin trabajo'); return
+    wait('harness', lambda: exists('TRIAGE_READY') and exists('TRIAGE_REPLY') and painted('PROGRESO'))
+    wait('reposo', lambda: status() == 'Listo')
+    m = mark(); send(b'/omi-workspace\r')
+    wait('ubicación', lambda: opened('Ubicación de trabajo', m))
+    # «Listo» tras el Esc: cerró el modal y no hay un turno en curso; Pi no rechaza /reload.
+    m = mark(); send(b'\x1b')
+    wait('ubicación cerrada', lambda: closed(m))
+    m = mark(); send(b'/reload\r')
+    # Pi pinta «Reloaded» al terminar, después de devolverle el foco al editor: recién ahí Ctrl+2 no se pierde.
+    wait('recarga', lambda: painted('Wait for the current response', m) or (exists('TRIAGE_RELOADED') and painted('Reloaded', m)))
+    if painted('Wait for the current response', m): fail('Pi rechazó /reload: el agente seguía respondiendo')
+    m = mark(); send(b'\x1b[50;5u')
+    wait('issues tras recarga', lambda: painted('[issue-42]', m))
+    m = mark(); send(b'\r')
+    wait('detalle del worktree', lambda: opened('retomar trabajo', m))
+    m = mark(); send(b'\x1b')
+    wait('detalle cerrado', lambda: closed(m))
+    m = mark(); send(b'\r')
+    wait('detalle otra vez', lambda: painted('retomar trabajo', m))
+    m = mark(); send(b'\r')
+    wait('ya estás', lambda: painted('Ya est', m) and closed(m))
+    leave('salida')
 `;
-const resumeDriver = `
-import fcntl, os, pty, select, signal, struct, sys, termios, time
-pid, fd = pty.fork()
-if pid == 0:
-    os.execv(sys.argv[1], sys.argv[1:])
-fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', 42, 150, 0, 0))
-os.kill(pid, signal.SIGWINCH)
-start, phase, phase_at, detail_at, output = time.monotonic(), 0, 0, 0, b''
-while time.monotonic() - start < 26:
-    elapsed = time.monotonic() - start
-    if phase == 0 and b'Enter enviar' in output:
-        os.write(fd, b'\\x1b[50;5u'); phase, detail_at = 1, len(output)
-    elif phase == 1 and b'[issue-42]' in output[detail_at:] and b'[Fix]' in output[detail_at:]:
-        os.write(fd, b'\\r'); phase, detail_at = 2, len(output)
-    elif phase == 2 and b'retomar trabajo' in output[detail_at:]:
-        # Haber abierto el detalle no debe reemplazar la sesión de main.
-        if os.path.exists(os.environ['TRIAGE_RESUME_READY']): raise RuntimeError('Se retomó antes del segundo Enter')
-        os.write(fd, b'\\x1b'); phase, phase_at = 3, elapsed
-    elif phase == 3 and elapsed - phase_at > 0.3:
-        if os.path.exists(os.environ['TRIAGE_RESUME_READY']): raise RuntimeError('Esc cambió la sesión')
-        os.write(fd, b'\\r'); phase, detail_at = 4, len(output)
-    elif phase == 4 and b'retomar trabajo' in output[detail_at:]:
-        os.write(fd, b'\\r'); phase, detail_at = 5, len(output)
-    elif phase == 5 and b'Retomar el trabajo del issue #42' in output[detail_at:]:
-        # Sin el sí no se cambia de sesión.
-        if os.path.exists(os.environ['TRIAGE_RESUME_READY']): raise RuntimeError('Se retomó antes de confirmar')
-        open(os.environ['TRIAGE_RESUME_ENTER'], 'w').close()
-        os.write(fd, b'\\r'); phase = 51
-    elif phase == 51 and os.path.exists(os.environ['TRIAGE_RESUME_READY']) and os.path.exists(os.environ['TRIAGE_RESUME_REPLY']):
-        phase, phase_at = 6, elapsed
-    elif phase == 6 and elapsed - phase_at > 0.5:
-        os.write(fd, b'\\x04'); phase = 7
-    if select.select([fd], [], [], 0.1)[0]:
-        try:
-            chunk = os.read(fd, 65536)
-        except OSError:
-            break
-        if not chunk: break
-        output += chunk
-    if elapsed > 24:
-        try: os.write(fd, b'\\x04')
-        except OSError: break
-else:
-    os.kill(pid, signal.SIGKILL)
-status = os.waitpid(pid, 0)[1]
-sys.stdout.buffer.write(output)
-sys.stderr.write('\\nRESUME_DRIVER_PHASE=' + str(phase) + '\\n')
-sys.exit(os.waitstatus_to_exitcode(status))
+const resumeRun = String.raw`
+def run():
+    wait('chat', lambda: painted('Enter enviar'))
+    m = mark(); send(b'\x1b[50;5u')
+    wait('issues', lambda: painted('[issue-42]', m) and painted('[Fix]', m))
+    m = mark(); send(b'\r')
+    wait('detalle', lambda: opened('retomar trabajo', m))
+    # Haber abierto el detalle no debe reemplazar la sesión de main.
+    if exists('TRIAGE_RESUME_READY'): fail('Se retomó antes del segundo Enter')
+    m = mark(); send(b'\x1b')
+    wait('detalle cerrado', lambda: closed(m))
+    hold(0.3)
+    if exists('TRIAGE_RESUME_READY'): fail('Esc cambió la sesión')
+    m = mark(); send(b'\r')
+    wait('detalle otra vez', lambda: painted('retomar trabajo', m))
+    m = mark(); send(b'\r')
+    wait('confirmación', lambda: painted('Retomar el trabajo del issue #42', m))
+    # Sin el sí no se cambia de sesión.
+    if exists('TRIAGE_RESUME_READY'): fail('Se retomó antes de confirmar')
+    touch('TRIAGE_RESUME_ENTER'); send(b'\r')
+    wait('retomado', lambda: exists('TRIAGE_RESUME_READY') and exists('TRIAGE_RESUME_REPLY'))
+    wait('reposo', lambda: status() == 'Listo')
+    leave('salida')
 `;
+/** Lo que tardan a propósito la última continuación y la recarga: el guion no depende de que sean rápidas. */
+const SLOW_MS = 2500;
 function chunk(delta: unknown, finish: string | null): string {
 	return `data: ${JSON.stringify({ id: "triage", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: finish }], ...(finish ? { usage: { prompt_tokens: 128, completion_tokens: 128, total_tokens: 256 } } : {}) })}\n\n`;
 }
 
-for (const mode of ["ready", "cancel", "invalid"] as const) test(`workspace_begin real · ${mode}: Enter en Issues pide el sí, Esc cancela la clasificación y sólo un resultado válido crea el worktree y arranca el harness`, { skip: process.platform === "win32", timeout: 70000 }, async (t) => {
+for (const mode of ["ready", "cancel", "invalid"] as const) test(`workspace_begin real · ${mode}: Enter en Issues pide el sí, Esc cancela la clasificación y sólo un resultado válido crea el worktree y arranca el harness`, { skip: process.platform === "win32", timeout: 300_000 }, async (t) => {
 	const home = await tempDir(t); const root = join(home, "repo"); const agent = join(home, ".omi/agent"); const bin = join(home, "bin");
 	for (const path of [root, agent, bin]) await mkdir(path, { recursive: true });
 	const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -149,6 +105,8 @@ export default function(pi) { pi.on('session_start', async (event,ctx) => {
  if (process.env.TRIAGE_RESUME_READY) await writeFile(process.env.TRIAGE_RESUME_READY, JSON.stringify({cwd:ctx.cwd,session:ctx.sessionManager.getSessionFile()}));
  await writeFile(ctx.cwd + '/worktree-only.txt', 'WORKTREE_READ_OK');
  await writeFile(event.reason === 'reload' ? ${JSON.stringify(reloaded)} : ${JSON.stringify(ready)}, JSON.stringify({cwd:ctx.cwd,session:ctx.sessionManager.getSessionFile()}));
+ // Una recarga lenta: el workspace de OMI, que carga después de esta sonda, arranca ${SLOW_MS} ms más tarde.
+ if (event.reason === 'reload') await new Promise((done) => setTimeout(done, ${SLOW_MS}));
 }); }\n`);
 	// La continuación de OMI llega como último mensaje; se cuenta aparte de la secuencia del flujo.
 	const requests: string[] = []; const continuations: string[] = []; let confirmedFirst = false;
@@ -161,8 +119,10 @@ export default function(pi) { pi.on('session_start', async (event,ctx) => {
 			if (continuation(body)) {
 				// El modelo vuelve a cortar en Explorar: OMI retoma dos veces y frena. Recién ahí terminó el turno.
 				continuations.push(body);
-				response.end(chunk({ role: "assistant", content: "CONTINUE_OK" }, null) + chunk({}, "stop") + "data: [DONE]\n\n");
-				if (continuations.length === MAX_IDLE_CONTINUATIONS) await writeFile(reply, "done");
+				const send = () => response.end(chunk({ role: "assistant", content: "CONTINUE_OK" }, null) + chunk({}, "stop") + "data: [DONE]\n\n");
+				// El aviso llega antes que la respuesta, que tarda: el fin del turno lo dice la TUI, no el mock.
+				if (continuations.length === MAX_IDLE_CONTINUATIONS) { await writeFile(reply, "done"); setTimeout(send, SLOW_MS); return; }
+				send();
 				if (continuations.length === 2 * MAX_IDLE_CONTINUATIONS) await writeFile(resumeReply, "done");
 				return;
 			}
@@ -172,7 +132,8 @@ export default function(pi) { pi.on('session_start', async (event,ctx) => {
 				await writeFile(started, "ready");
 				const result = { type: mode === "invalid" ? "unknown" : "fix", summary: "Corregir el filtro roto", rationale: "El issue describe un bug", scope: ["Revisar el filtro"], acceptanceCriteria: ["El filtro funciona"], questions: [] };
 				const send = () => response.end(chunk({ role: "assistant", content: JSON.stringify(result) }, null) + chunk({}, "stop") + "data: [DONE]\n\n");
-				if (mode === "cancel") setTimeout(send, 1500); else send();
+				// Con cancel no responde: sólo el Esc termina la clasificación, sin carrera contra un plazo.
+				if (mode !== "cancel") send();
 			} else if (requests.length === 2) {
 				response.end(chunk({ role: "assistant", tool_calls: [{ index: 0, id: "read", type: "function", function: { name: "read", arguments: JSON.stringify({ path: "worktree-only.txt" }) } }] }, null) + chunk({}, "tool_calls") + "data: [DONE]\n\n");
 			} else if (requests.length === 3) response.end(chunk({ role: "assistant", content: "WORKTREE_PROBE_COMPLETED" }, null) + chunk({}, "stop") + "data: [DONE]\n\n");
@@ -184,17 +145,14 @@ export default function(pi) { pi.on('session_start', async (event,ctx) => {
 	const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`;
 	await writeFile(join(agent, "models.json"), JSON.stringify({ providers: { mock: { baseUrl, api: "openai-completions", apiKey: "test-not-a-key", models: [{ id: "triage", name: "Test triage", contextWindow: 200000, maxTokens: 8192 }] } } }));
 	const binary = fileURLToPath(new URL("../bin/omi.ts", import.meta.url));
-	const run = (script: string, extra: NodeJS.ProcessEnv = {}) => new Promise<{ code: number | null; output: string }>((resolve, reject) => {
-		const child = spawn("python3", ["-I", "-c", script, process.execPath, binary, "--provider", "mock", "--model", "triage", "--no-extensions", "--extension", extension, "--no-context-files", "--no-skills", "--approve"], {
-			cwd: root, env: { ...process.env, HOME: home, OMI_HOME: "", TERM: "xterm-256color", HERDR_ENV: "0", PI_TELEMETRY: "0", PATH: bin + delimiter + process.env.PATH, TRIAGE_READY: ready, TRIAGE_RELOADED: reloaded, TRIAGE_CONFIRMED: confirmed, TRIAGE_REPLY: reply, TRIAGE_RESUME_REPLY: resumeReply, TRIAGE_FAILURE: mode === "ready" ? "" : mode, TRIAGE_STARTED: started, ...extra }, stdio: ["ignore", "pipe", "pipe"],
-		});
-		let output = ""; child.stdout.on("data", (data: Buffer) => { output += data; }); child.stderr.on("data", (data: Buffer) => { output += data; }); child.on("error", reject); child.on("close", (code) => resolve({ code, output }));
+	const run = (body: string, totalSeconds: number, extra: NodeJS.ProcessEnv = {}) => runPty(body, process.execPath, [binary, "--provider", "mock", "--model", "triage", "--no-extensions", "--extension", extension, "--no-context-files", "--no-skills", "--approve"], {
+		cwd: root, totalSeconds, env: { ...process.env, HOME: home, OMI_HOME: "", PATH: bin + delimiter + process.env.PATH, TRIAGE_READY: ready, TRIAGE_RELOADED: reloaded, TRIAGE_CONFIRMED: confirmed, TRIAGE_REPLY: reply, TRIAGE_RESUME_REPLY: resumeReply, TRIAGE_FAILURE: mode === "ready" ? "" : mode, TRIAGE_STARTED: started, ...extra },
 	});
-	const result = await run(driver);
+	const result = await run(firstRun, 120);
 	const plain = plainTerminal(result.output);
-	assert.equal(result.code, 0, plain);
-	// Salir por tiempo también da 0: la fase final prueba que el guion recorrió todo el flujo.
-	assert.match(plain, mode === "ready" ? /TRIAGE_DRIVER_PHASE=16\b/ : /TRIAGE_DRIVER_PHASE=21\b/);
+	// El guion recorrió todo el flujo de su modo y la TUI salió limpia.
+	assert.equal(result.result, "fin", ptyReport(result)); assert.equal(result.phase, mode === "ready" ? "salida" : "salida sin trabajo", ptyReport(result));
+	assert.equal(result.code, 0, ptyReport(result));
 	assert.equal(confirmedFirst, true, "no se clasifica antes del sí");
 	if (mode !== "ready") {
 		assert.equal(requests.length, 1, plain); await assert.rejects(access(worktree)); await assert.rejects(access(ready));
@@ -222,8 +180,9 @@ export default function(pi) { pi.on('session_start', async (event,ctx) => {
 	const record = JSON.parse(await readFile(join(root, ".git/omi/issue-workspaces/42.json"), "utf8"));
 	const sessionFile = record.sessionFile as string; const conversation = await readFile(sessionFile, "utf8");
 	await writeFile(join(worktree, "keep-uncommitted.txt"), "NO PISAR AL RETOMAR\n");
-	const resumedReady = join(home, "resumed-ready"); const resumed = await run(resumeDriver, { TRIAGE_RESUME_READY: resumedReady, TRIAGE_RESUME_ENTER: join(home, "resume-enter") });
-	const resumedPlain = plainTerminal(resumed.output); assert.equal(resumed.code, 0, resumedPlain); assert.match(resumedPlain, /RESUME_DRIVER_PHASE=7\b/);
+	const resumedReady = join(home, "resumed-ready"); const resumed = await run(resumeRun, 90, { TRIAGE_RESUME_READY: resumedReady, TRIAGE_RESUME_ENTER: join(home, "resume-enter") });
+	assert.equal(resumed.result, "fin", ptyReport(resumed)); assert.equal(resumed.phase, "salida", ptyReport(resumed)); assert.equal(resumed.code, 0, ptyReport(resumed));
+	const resumedPlain = plainTerminal(resumed.output);
 	assert.deepEqual(JSON.parse(await readFile(resumedReady, "utf8")), { cwd: worktree, session: sessionFile });
 	assert.equal(requests.length, 4, "retomar desde main no vuelve a clasificar: sólo sigue el trabajo");
 	assert.equal(continuations.length, 2 * MAX_IDLE_CONTINUATIONS, "al retomar, el tope vuelve a empezar");

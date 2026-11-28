@@ -1,5 +1,7 @@
 // Material de los lentes de Verificar: hechos que registró el harness, nunca texto del implementador.
-import type { Evidence, Lens, Review, Workflow } from "./model.ts";
+import type { Evidence, Lens, Review, Severity, Workflow } from "./model.ts";
+import { FAIL_WITHOUT_FINDINGS, reviewFindings, riskAccepted, severitiesOf, unacceptedBlockers } from "./security-blockers.ts";
+import { withoutPrecedents, type LensPrecedents } from "./lens-precedents.ts";
 
 type Recorded = Omit<Evidence, "id" | "stepId" | "caseId"> & { archived?: true };
 const recorded = ({ id: _id, stepId: _step, caseId: _case, ...e }: Evidence, archived = false): Recorded => (archived ? { ...e, archived: true } : e);
@@ -49,23 +51,37 @@ function summarizedEvidence(full: LensEvidence, cap: number) {
 		cases: full.cases.map((c) => ({ ...c, verification: c.verification && tail(c.verification, cap) })), steps, gates: gates.map((g) => tail(g, cap)),
 	};
 }
+type LensContext = { precedents?: LensPrecedents; previous?: object; [key: string]: unknown };
+const PREVIOUS_OMITTED = { omitted: true, note: "La revisión anterior no entró en la llamada; el harness igual compara los archivos cambiados." };
+// Los precedentes y la revisión anterior nunca hacen fallar un lente: si no entran, van vacíos y lo dicen.
+function withoutExtras(context: LensContext): LensContext | undefined {
+	const { precedents, previous } = context;
+	const dropPrevious = previous !== undefined && !("omitted" in previous);
+	if (!precedents?.items.length && !dropPrevious) return undefined;
+	return { ...context, ...(precedents ? { precedents: withoutPrecedents(precedents) } : {}), ...(dropPrevious ? { previous: PREVIOUS_OMITTED } : {}) };
+}
 /** El JSON de cada llamada de un lente: el contexto, la evidencia y una parte del diff, sin pasar el presupuesto. */
-export function lensRequests(context: Record<string, unknown>, state: Workflow, files: string[], budget = LENS_PART_BUDGET): string[] {
+export function lensRequests(context: LensContext, state: Workflow, files: string[], budget = LENS_PART_BUDGET): string[] {
 	// Sin el diff y con el número de parte más largo posible: lo que ocupa todo lo demás en cada llamada.
 	const fixed = (evidence: unknown) => JSON.stringify({ ...context, evidence, part: { index: 99999, total: 99999 }, diff: "" }).length;
 	const needed = Math.min(LENS_MIN_DIFF_BUDGET, files.reduce((sum, file) => sum + jsonCost(file), 0));
 	const full = lensEvidence(state);
 	const candidates = [full, ...OUTPUT_CAPS.map((cap) => summarizedEvidence(full, cap))];
 	const evidence = candidates.find((e) => budget - fixed(e) >= needed);
-	if (!evidence) throw new Error(`El material del lente no entra en una llamada ni con la evidencia resumida: casos, alcance y evidencia ocupan ${fixed(candidates.at(-1))} de ${budget} caracteres y el diff necesita ${needed}. Achicá la receta o dividí la tarea.`);
+	if (!evidence) {
+		const slim = withoutExtras(context);
+		if (slim) return lensRequests(slim, state, files, budget);
+		throw new Error(`El material del lente no entra en una llamada ni con la evidencia resumida: casos, alcance y evidencia ocupan ${fixed(candidates.at(-1))} de ${budget} caracteres y el diff necesita ${needed}. Achicá la receta o dividí la tarea.`);
+	}
 	const parts = lensParts(files, budget - fixed(evidence));
 	return parts.map((diff, index) => JSON.stringify({ ...context, evidence, part: { index: index + 1, total: parts.length }, diff }));
 }
 
-// Los lentes asesoran: su fail/unknown es un aviso visible. Sólo un fail de seguridad bloquea.
+// Los lentes asesoran: su fail/unknown es un aviso visible. Sólo un blocker de seguridad que ninguna persona aceptó bloquea.
 // carried: el lente aprobó limpio el contenido del que partió una corrección liviana y no se repitió.
 // noResult: el unknown es falta de resultado (conexión, plazo, formato), no un juicio del lente.
-export interface LensStatus { lens: Lens; verdict: Review["verdict"] | "not-run"; findings: string[]; blocking: boolean; carried: boolean; noResult: boolean }
+// accepted: una persona aceptó todos sus bloqueos para este contenido.
+export interface LensStatus { lens: Lens; verdict: Review["verdict"] | "not-run"; findings: string[]; blocking: boolean; accepted: boolean; carried: boolean; noResult: boolean }
 /** La revisión que vale para un lente sobre este contenido. Tras una corrección liviana, el pass limpio del contenido
  * de partida sigue valiendo, salvo el de security: lo único que bloquea se revisa siempre sobre el contenido final. */
 export function lensReview(reviews: readonly Review[], lens: Lens, fingerprint: string | undefined, amends: readonly { from: string }[] = []): { review: Review; carried: boolean } | undefined {
@@ -83,13 +99,15 @@ export function lensStatuses(state: Workflow): LensStatus[] {
 	const fingerprint = reviewedFingerprint(state);
 	return (state.recipe?.lenses ?? []).map((lens) => {
 		const found = lensReview(state.reviews, lens, fingerprint, amendsOf(state)); const review = found?.review;
-		return { lens, verdict: review?.verdict ?? "not-run", findings: review?.findings ?? [], blocking: lens === "security" && review?.verdict === "fail", carried: found?.carried ?? false, noResult: review?.noResult === true };
+		return { lens, verdict: review?.verdict ?? "not-run", findings: review ? reviewFindings(review) : [], blocking: review !== undefined && unacceptedBlockers(state, review).length > 0,
+			accepted: riskAccepted(state, review), carried: found?.carried ?? false, noResult: review?.noResult === true };
 	});
 }
 export const lensWarnings = (state: Workflow): LensStatus[] => lensStatuses(state).filter((s) => s.verdict === "fail" || s.verdict === "unknown");
 export function lensWarningLine(s: LensStatus): string {
 	const more = s.findings.length > 1 ? ` (+${s.findings.length - 1} hallazgos)` : "";
-	return `Lente ${s.lens} · ${s.verdict}${s.noResult ? " · sin resultado" : ""}${s.blocking ? " · bloquea" : ""}${s.findings[0] ? ` · ${s.findings[0]}` : ""}${more}`;
+	const mark = s.blocking ? " · bloquea · la persona puede aceptarlo con /omi-work accept-risk" : s.accepted ? " · riesgo aceptado por una persona" : "";
+	return `Lente ${s.lens} · ${s.verdict}${s.noResult ? " · sin resultado" : ""}${mark}${s.findings[0] ? ` · ${s.findings[0]}` : ""}${more}`;
 }
 
 // Un diff que no entra en una llamada se reparte por archivo en partes de hasta `budget` caracteres, medidos
@@ -137,19 +155,45 @@ export function lensParts(files: string[], budget: number): string[] {
 }
 // Se corre el lente por parte y se combina: el peor veredicto gana y se juntan los hallazgos con su parte.
 // Queda sin resultado sólo si ninguna parte juzgó unknown: un unknown del modelo no se re-tira.
-export interface LensResult { verdict: Review["verdict"]; findings: string[]; noResult?: true }
+// downgradable y unjudged: sólo en memoria, por parte: combineLensResults nunca los copia y no se guardan. unjudged: el
+// lente dijo unknown y un blocker marcado lo volvió fail. partial: un fail de security con alguna parte sin juicio.
+export interface LensResult { verdict: Review["verdict"]; findings: string[]; noResult?: true; severities?: Severity[]; downgradable?: boolean[]; unjudged?: true; partial?: true }
 const SEVERITY: Record<Review["verdict"], number> = { pass: 0, unknown: 1, fail: 2 };
 const MAX_FINDINGS = 100; const MAX_FINDING = 4000;
-const prefixed = (prefix: string, finding: string): string => {
+export const prefixed = (prefix: string, finding: string): string => {
 	const value = prefix + finding;
 	return value.length <= MAX_FINDING ? value : `${value.slice(0, cut(value, MAX_FINDING - 1))}…`;
 };
-export function combineLensResults(results: LensResult[]): LensResult {
+const more = (omitted: number) => `… y ${omitted} hallazgos más de las partes no entran en el registro del lente (tope de ${MAX_FINDINGS}); volvé a correr el lente sobre un cambio más chico para verlos.`;
+export function combineLensResults(results: LensResult[], security = false): LensResult {
 	if (!results.length) return { verdict: "unknown", findings: ["No se revisó ninguna parte del cambio."], noResult: true };
 	const verdict = results.reduce<Review["verdict"]>((worst, r) => SEVERITY[r.verdict] > SEVERITY[worst] ? r.verdict : worst, "pass");
+	const label = (i: number, finding: string) => results.length === 1 ? finding : prefixed(`parte ${i + 1}/${results.length} · `, finding);
+	if (security) return combineSecurity(results, verdict, label);
 	const noResult = verdict === "unknown" && results.every((r) => r.verdict !== "unknown" || r.noResult) ? { noResult: true as const } : {};
-	const findings = results.flatMap((r, i) => r.findings.map((f) => results.length === 1 ? f : prefixed(`parte ${i + 1}/${results.length} · `, f)));
+	const findings = results.flatMap((r, i) => r.findings.map((f) => label(i, f)));
 	if (findings.length <= MAX_FINDINGS) return { verdict, findings, ...noResult };
 	const kept = findings.slice(0, MAX_FINDINGS - 1);
-	return { verdict, ...noResult, findings: [...kept, `… y ${findings.length - kept.length} hallazgos más de las partes no entran en el registro del lente (tope de ${MAX_FINDINGS}); volvé a correr el lente sobre un cambio más chico para verlos.`] };
+	return { verdict, ...noResult, findings: [...kept, more(findings.length - kept.length)] };
+}
+// En security cada hallazgo lleva su severidad y los blocker van primero. Sólo una parte en fail aporta blockers: un
+// fail sin hallazgos es uno, y lo de una parte unknown (juzgada o sin resultado) es aviso, como el unknown de una sola
+// parte. Si faltó una parte y no hay ningún blocker juzgado, la review queda sin resultado y se vuelve a correr.
+type Entry = { finding: string; severity: Severity };
+function partEntries(r: LensResult): Entry[] {
+	if (r.verdict === "fail" && !r.findings.length) return [{ finding: FAIL_WITHOUT_FINDINGS, severity: "blocker" }];
+	const severities = r.verdict === "fail" ? severitiesOf(r) : r.findings.map((): Severity => "aviso");
+	return r.findings.map((finding, i) => ({ finding, severity: severities[i]! }));
+}
+function combineSecurity(results: LensResult[], verdict: Review["verdict"], label: (i: number, finding: string) => string): LensResult {
+	const all = results.flatMap((r, i) => partEntries(r).map((e) => ({ ...e, finding: label(i, e.finding) })));
+	const sorted = [...all.filter((e) => e.severity === "blocker"), ...all.filter((e) => e.severity === "aviso")];
+	const omitted = sorted.slice(MAX_FINDINGS - 1);
+	const entries: Entry[] = sorted.length <= MAX_FINDINGS ? sorted : [...sorted.slice(0, MAX_FINDINGS - 1), { finding: more(omitted.length), severity: omitted.some((e) => e.severity === "blocker") ? "blocker" : "aviso" }];
+	const findings = entries.map((e) => e.finding); const severities = entries.map((e) => e.severity);
+	if (results.some((r) => r.noResult) && !severities.includes("blocker")) return { verdict: "unknown", noResult: true, findings };
+	// Un fail con una parte que nadie juzgó del todo bloquea igual, pero no sirve de base para comparar la vuelta siguiente.
+	const partial = verdict === "fail" && results.some((r) => r.verdict === "unknown" || r.unjudged);
+	// La lista sólo cuenta en un fail y sólo se guarda con algún aviso: así un binario viejo sigue leyendo el resto.
+	return { verdict, findings, ...(verdict === "fail" && severities.includes("aviso") ? { severities } : {}), ...(partial ? { partial: true as const } : {}) };
 }

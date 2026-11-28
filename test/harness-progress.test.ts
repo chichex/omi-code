@@ -111,3 +111,12 @@ test("advisory lens results show Verify with warnings, during and after it; only
  const clean = send(withLenses(["security"]), review("security", "pass"));
  assert.equal(stage(clean, "verify").status, "active"); assert.deepEqual(developmentProgress(clean).warnings, []);
 });
+
+test("a security fail with only avisos shows Verify with warnings, not failed", () => {
+ let s = send(send(send(explored(), { type: "inferences", inferences: [] }), { type: "planned", plan: { ...plan(), lenses: ["security"] } }), { type: "approved" });
+ s = send(s, { type: "step_started", id: "C1" }); s = send(s, { type: "evidence", evidence: evidence("red") }); s = send(s, { type: "evidence", evidence: evidence("green") }); s = send(s, { type: "step_completed", id: "C1", commit: "head", fingerprint: "tree" });
+ s = send(s, { type: "evidence", evidence: evidence("verification") });
+ s = send(s, { type: "reviewed", review: { lens: "security", fingerprint: "tree", verdict: "fail", findings: ["src/a.ts:1 · finding"], severities: ["aviso"], at } });
+ assert.equal(stage(s, "verify").status, "warning");
+ assert.deepEqual(developmentProgress(s).warnings, ["Lente security · fail · aviso · src/a.ts:1 · finding"]);
+});

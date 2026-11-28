@@ -4,9 +4,11 @@ import type { BashOperations } from "@earendil-works/pi-coding-agent";
 import { childEnvironment } from "../core/process-environment.ts";
 import type { Workflow } from "./model.ts";
 
-export interface WorkflowCommandResult { exitCode: number | null; output: string; interrupted: boolean }
+export const DEFAULT_COMMAND_TIMEOUT_SECONDS = 300;
+/** timedOut: Pi lo cortó por su plazo, no la persona; también es interrupted. */
+export interface WorkflowCommandResult { exitCode: number | null; output: string; interrupted: boolean; timedOut?: true }
 export async function runWorkflowCommand(
- checkout: Workflow["checkout"], command: string, signal: AbortSignal, timeoutSeconds = 300, backend?: BashOperations,
+ checkout: Workflow["checkout"], command: string, signal: AbortSignal, timeoutSeconds = DEFAULT_COMMAND_TIMEOUT_SECONDS, backend?: BashOperations,
 ): Promise<WorkflowCommandResult> {
  if (!command.trim()) throw new Error("Comando vacío");
  if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0 || timeoutSeconds > 2147483) throw new Error("Timeout inválido");
@@ -23,6 +25,8 @@ export async function runWorkflowCommand(
  } catch (error) {
   append(decoder.end());
   const interrupted = signal.aborted || (error instanceof Error && (error.message === "aborted" || error.message.startsWith("timeout:")));
-  return { exitCode: null, output, interrupted };
+  // `timeout:<s>` es el mensaje del ShellTimeoutError de Pi. Si la persona canceló, gana la cancelación.
+  const timedOut = !signal.aborted && error instanceof Error && error.message.startsWith("timeout:");
+  return { exitCode: null, output, interrupted, ...(timedOut ? { timedOut: true as const } : {}) };
  }
 }
